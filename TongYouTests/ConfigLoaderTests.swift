@@ -1,0 +1,365 @@
+import AppKit
+import Testing
+import Foundation
+@testable import TongYou
+
+@Suite("Config")
+struct ConfigTests {
+
+    // MARK: - Config.from(entries:)
+
+    @Test func defaultConfig() {
+        let config = Config.default
+        #expect(config.fontFamily == "Menlo")
+        #expect(config.fontSize == 14)
+        #expect(config.background == RGBColor(0x1e, 0x1e, 0x26))
+        #expect(config.foreground == RGBColor(0xdc, 0xdc, 0xdc))
+        #expect(config.scrollbackLimit == 10000)
+        #expect(config.tabWidth == 8)
+        #expect(config.cursorStyle == .block)
+        #expect(config.cursorBlink == false)
+        #expect(config.bell == .audible)
+        #expect(config.optionAsAlt == true)
+    }
+
+    @Test func fontConfig() {
+        let entries: [ConfigParser.Entry] = [
+            .init(key: "font-family", value: "JetBrains Mono"),
+            .init(key: "font-size", value: "16"),
+        ]
+        let config = Config.from(entries: entries)
+        #expect(config.fontFamily == "JetBrains Mono")
+        #expect(config.fontSize == 16)
+    }
+
+    @Test func quotedFontFamily() {
+        let entries: [ConfigParser.Entry] = [
+            .init(key: "font-family", value: "\"Fira Code\""),
+        ]
+        let config = Config.from(entries: entries)
+        #expect(config.fontFamily == "Fira Code")
+    }
+
+    @Test func colorConfig() {
+        let entries: [ConfigParser.Entry] = [
+            .init(key: "background", value: "282c34"),
+            .init(key: "foreground", value: "abb2bf"),
+        ]
+        let config = Config.from(entries: entries)
+        #expect(config.background == RGBColor(0x28, 0x2c, 0x34))
+        #expect(config.foreground == RGBColor(0xab, 0xb2, 0xbf))
+    }
+
+    @Test func paletteOverrides() {
+        let entries: [ConfigParser.Entry] = [
+            .init(key: "palette-0", value: "282c34"),
+            .init(key: "palette-1", value: "e06c75"),
+        ]
+        let config = Config.from(entries: entries)
+        // Explicit overrides take effect on top of default theme palette
+        #expect(config.palette[0] == RGBColor(0x28, 0x2c, 0x34))
+        #expect(config.palette[1] == RGBColor(0xe0, 0x6c, 0x75))
+        // Non-overridden entries come from default theme (iterm2-dark-background)
+        let theme = BuiltinTheme.named("iterm2-dark-background")!
+        #expect(config.palette[2] == theme.palette[2])
+    }
+
+    @Test func behaviorConfig() {
+        let entries: [ConfigParser.Entry] = [
+            .init(key: "cursor-style", value: "bar"),
+            .init(key: "cursor-blink", value: "false"),
+            .init(key: "scrollback-limit", value: "5000"),
+            .init(key: "tab-width", value: "4"),
+            .init(key: "bell", value: "none"),
+            .init(key: "option-as-alt", value: "false"),
+        ]
+        let config = Config.from(entries: entries)
+        #expect(config.cursorStyle == .bar)
+        #expect(config.cursorBlink == false)
+        #expect(config.scrollbackLimit == 5000)
+        #expect(config.tabWidth == 4)
+        #expect(config.bell == .none)
+        #expect(config.optionAsAlt == false)
+    }
+
+    @Test func emptyValueResetsToDefault() {
+        let entries: [ConfigParser.Entry] = [
+            .init(key: "font-size", value: "20"),
+            .init(key: "font-size", value: ""),
+        ]
+        let config = Config.from(entries: entries)
+        #expect(config.fontSize == Config.default.fontSize)
+    }
+
+    @Test func laterEntriesOverride() {
+        let entries: [ConfigParser.Entry] = [
+            .init(key: "font-size", value: "14"),
+            .init(key: "font-size", value: "18"),
+        ]
+        let config = Config.from(entries: entries)
+        #expect(config.fontSize == 18)
+    }
+
+    @Test func invalidValuesSkipped() {
+        let entries: [ConfigParser.Entry] = [
+            .init(key: "font-size", value: "abc"),
+            .init(key: "background", value: "xyz"),
+            .init(key: "cursor-style", value: "triangle"),
+        ]
+        let config = Config.from(entries: entries)
+        // All invalid — should remain at defaults
+        #expect(config.fontSize == Config.default.fontSize)
+        #expect(config.background == Config.default.background)
+        #expect(config.cursorStyle == Config.default.cursorStyle)
+    }
+
+    @Test func unknownKeysIgnored() {
+        let entries: [ConfigParser.Entry] = [
+            .init(key: "unknown-key", value: "whatever"),
+            .init(key: "font-size", value: "14"),
+        ]
+        let config = Config.from(entries: entries)
+        #expect(config.fontSize == 14)
+    }
+
+    @Test func keybindingsAccumulate() {
+        let entries: [ConfigParser.Entry] = [
+            .init(key: "keybind", value: "cmd+t=new_tab"),
+            .init(key: "keybind", value: "cmd+w=close_tab"),
+        ]
+        let config = Config.from(entries: entries)
+        #expect(config.keybindings.count == 2)
+        #expect(config.keybindings[0].action == .newTab)
+        #expect(config.keybindings[1].action == .closeTab)
+    }
+
+    @Test func noKeybindsUsesDefaults() {
+        let entries: [ConfigParser.Entry] = [
+            .init(key: "font-size", value: "14"),
+        ]
+        let config = Config.from(entries: entries)
+        #expect(config.keybindings == Keybinding.defaults)
+    }
+
+    @Test func invalidFontSizeRange() {
+        // Negative
+        let entries1: [ConfigParser.Entry] = [.init(key: "font-size", value: "-1")]
+        let config1 = Config.from(entries: entries1)
+        #expect(config1.fontSize == Config.default.fontSize)
+
+        // Zero
+        let entries2: [ConfigParser.Entry] = [.init(key: "font-size", value: "0")]
+        let config2 = Config.from(entries: entries2)
+        #expect(config2.fontSize == Config.default.fontSize)
+
+        // Too large
+        let entries3: [ConfigParser.Entry] = [.init(key: "font-size", value: "999")]
+        let config3 = Config.from(entries: entries3)
+        #expect(config3.fontSize == Config.default.fontSize)
+    }
+
+    @Test func colorWithHashPrefix() {
+        let entries: [ConfigParser.Entry] = [
+            .init(key: "background", value: "#282c34"),
+        ]
+        let config = Config.from(entries: entries)
+        #expect(config.background == RGBColor(0x28, 0x2c, 0x34))
+    }
+
+    @Test func invalidPaletteIndex() {
+        let entries: [ConfigParser.Entry] = [
+            .init(key: "palette-256", value: "ffffff"),
+            .init(key: "palette--1", value: "000000"),
+        ]
+        let config = Config.from(entries: entries)
+        // Invalid indices are ignored; palette only contains default theme entries (0-15)
+        #expect(config.palette[256] == nil)
+        #expect(config.palette.keys.allSatisfy { (0...15).contains($0) })
+    }
+
+    @Test func debugMetrics() {
+        let entries: [ConfigParser.Entry] = [
+            .init(key: "debug-metrics", value: "true"),
+        ]
+        let config = Config.from(entries: entries)
+        #expect(config.debugMetrics == true)
+    }
+}
+
+@Suite("RGBColor")
+struct RGBColorTests {
+
+    @Test func validHex() throws {
+        let color = try RGBColor(hex: "ff8800")
+        #expect(color.r == 0xff)
+        #expect(color.g == 0x88)
+        #expect(color.b == 0x00)
+    }
+
+    @Test func invalidHex() {
+        #expect(throws: ConfigError.self) { try RGBColor(hex: "xyz") }
+        #expect(throws: ConfigError.self) { try RGBColor(hex: "ff88") }
+        #expect(throws: ConfigError.self) { try RGBColor(hex: "ff880011") }
+    }
+}
+
+@Suite("Keybinding")
+struct KeybindingTests {
+
+    @Test func parseSimple() throws {
+        let kb = try Keybinding.parse("cmd+t=new_tab")
+        #expect(kb.modifiers == .command)
+        #expect(kb.key == "t")
+        #expect(kb.action == .newTab)
+    }
+
+    @Test func parseMultipleModifiers() throws {
+        let kb = try Keybinding.parse("cmd+shift+left=previous_tab")
+        #expect(kb.modifiers == [.command, .shift])
+        #expect(kb.key == "left")
+        #expect(kb.action == .previousTab)
+    }
+
+    @Test func parseCtrl() throws {
+        let kb = try Keybinding.parse("ctrl+c=copy")
+        #expect(kb.modifiers == .control)
+        #expect(kb.key == "c")
+        #expect(kb.action == .copy)
+    }
+
+    @Test func parseAlt() throws {
+        let kb = try Keybinding.parse("alt+v=paste")
+        #expect(kb.modifiers == .option)
+        #expect(kb.key == "v")
+        #expect(kb.action == .paste)
+    }
+
+    @Test func invalidAction() {
+        #expect(throws: ConfigError.self) {
+            try Keybinding.parse("cmd+t=nonexistent_action")
+        }
+    }
+
+    @Test func noEquals() {
+        #expect(throws: ConfigError.self) {
+            try Keybinding.parse("cmd+t")
+        }
+    }
+
+    @Test func noKey() {
+        #expect(throws: ConfigError.self) {
+            try Keybinding.parse("cmd+=new_tab")
+        }
+    }
+}
+
+@Suite("ConfigLoader")
+struct ConfigLoaderTests {
+
+    @Test func configFilePathsNotEmpty() {
+        let paths = ConfigLoader.configFilePaths()
+        #expect(paths.count >= 2)
+    }
+
+    @Test func loadWithNoConfigFiles() {
+        let loader = ConfigLoader()
+        // When no config files exist, should fall back to defaults
+        // (We can't guarantee no config files exist on the test machine,
+        // but at minimum this shouldn't crash)
+        loader.load()
+        #expect(loader.config.fontFamily.isEmpty == false)
+    }
+
+    @Test func generatedDefaultConfigIsValidAndAllCommented() throws {
+        let content = ConfigLoader.generateDefaultConfig()
+
+        // Should not be empty
+        #expect(!content.isEmpty)
+
+        // Every non-blank line should be a comment
+        for line in content.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { continue }
+            #expect(trimmed.hasPrefix("#"),
+                    "Non-comment line found in default config: '\(trimmed)'")
+        }
+
+        // Parsing the file should produce zero entries (all commented out)
+        let dir = NSTemporaryDirectory() + "tongyou-test-\(UUID().uuidString)/"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        let url = URL(fileURLWithPath: dir + "config")
+        try content.write(to: url, atomically: true, encoding: .utf8)
+
+        let entries = try ConfigParser().parse(contentsOf: url)
+        #expect(entries.isEmpty, "Default config should have no active entries")
+    }
+
+    @Test func generatedConfigDocumentsAllKeys() {
+        let content = ConfigLoader.generateDefaultConfig()
+
+        // Verify key configuration options are documented
+        let expectedKeys = [
+            "font-family", "font-size",
+            "background", "foreground", "palette-0",
+            "cursor-style", "cursor-blink",
+            "option-as-alt", "scrollback-limit", "tab-width", "bell",
+            "keybind", "config-file", "debug-metrics",
+        ]
+        for key in expectedKeys {
+            #expect(content.contains(key),
+                    "Default config should document '\(key)'")
+        }
+    }
+
+    @Test func fullIntegrationParse() throws {
+        let content = """
+        # TongYou test config
+        font-family = SF Mono
+        font-size = 15
+        background = 1a1b26
+        foreground = c0caf5
+
+        palette-0 = 15161e
+        palette-1 = f7768e
+
+        cursor-style = underline
+        cursor-blink = false
+        scrollback-limit = 20000
+        tab-width = 4
+        bell = visual
+        option-as-alt = true
+
+        keybind = cmd+t=new_tab
+        keybind = cmd+w=close_tab
+
+        debug-metrics = true
+        """
+        let dir = NSTemporaryDirectory() + "tongyou-test-\(UUID().uuidString)/"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        let url = URL(fileURLWithPath: dir + "config")
+        try content.write(to: url, atomically: true, encoding: .utf8)
+
+        let parser = ConfigParser()
+        let entries = try parser.parse(contentsOf: url)
+        let config = Config.from(entries: entries)
+
+        #expect(config.fontFamily == "SF Mono")
+        #expect(config.fontSize == 15)
+        #expect(config.background == RGBColor(0x1a, 0x1b, 0x26))
+        #expect(config.foreground == RGBColor(0xc0, 0xca, 0xf5))
+        #expect(config.palette[0] == RGBColor(0x15, 0x16, 0x1e))
+        #expect(config.palette[1] == RGBColor(0xf7, 0x76, 0x8e))
+        #expect(config.cursorStyle == .underline)
+        #expect(config.cursorBlink == false)
+        #expect(config.scrollbackLimit == 20000)
+        #expect(config.tabWidth == 4)
+        #expect(config.bell == .visual)
+        #expect(config.optionAsAlt == true)
+        #expect(config.keybindings.count == 2)
+        #expect(config.debugMetrics == true)
+    }
+}

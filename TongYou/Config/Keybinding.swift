@@ -1,0 +1,169 @@
+import AppKit
+
+/// A keyboard shortcut bound to a terminal action.
+struct Keybinding: Equatable {
+
+    /// Modifier keys (command, shift, control, option).
+    let modifiers: NSEvent.ModifierFlags
+
+    /// The key character (lowercased, ignoring modifiers). e.g. "t", "w", "left".
+    let key: String
+
+    /// The action to perform.
+    let action: Action
+
+    /// Actions that can be triggered by keybindings.
+    enum Action: Equatable {
+        case newTab
+        case closeTab
+        case previousTab
+        case nextTab
+        case gotoTab(Int)  // 1-based tab number
+        case copy
+        case paste
+        case search
+        case resetFontSize
+        case increaseFontSize
+        case decreaseFontSize
+
+        /// Raw string used in config files.
+        var rawValue: String {
+            switch self {
+            case .newTab: "new_tab"
+            case .closeTab: "close_tab"
+            case .previousTab: "previous_tab"
+            case .nextTab: "next_tab"
+            case .gotoTab(let n): "goto_tab:\(n)"
+            case .copy: "copy"
+            case .paste: "paste"
+            case .search: "search"
+            case .resetFontSize: "reset_font_size"
+            case .increaseFontSize: "increase_font_size"
+            case .decreaseFontSize: "decrease_font_size"
+            }
+        }
+
+        /// Parse from config string.
+        init?(rawValue: String) {
+            switch rawValue {
+            case "new_tab": self = .newTab
+            case "close_tab": self = .closeTab
+            case "previous_tab": self = .previousTab
+            case "next_tab": self = .nextTab
+            case "copy": self = .copy
+            case "paste": self = .paste
+            case "search": self = .search
+            case "reset_font_size": self = .resetFontSize
+            case "increase_font_size": self = .increaseFontSize
+            case "decrease_font_size": self = .decreaseFontSize
+            default:
+                if rawValue.hasPrefix("goto_tab:"),
+                   let n = Int(rawValue.dropFirst("goto_tab:".count)),
+                   (1...9).contains(n) {
+                    self = .gotoTab(n)
+                    return
+                }
+                return nil
+            }
+        }
+    }
+
+    /// Default keybindings.
+    static let defaults: [Keybinding] = [
+        // Tab management
+        Keybinding(modifiers: .command, key: "t", action: .newTab),
+        Keybinding(modifiers: .command, key: "w", action: .closeTab),
+        Keybinding(modifiers: [.command, .shift], key: "left", action: .previousTab),
+        Keybinding(modifiers: [.command, .shift], key: "right", action: .nextTab),
+        Keybinding(modifiers: [.command, .shift], key: "[", action: .previousTab),
+        Keybinding(modifiers: [.command, .shift], key: "]", action: .nextTab),
+        // Cmd+1 through Cmd+9
+        Keybinding(modifiers: .command, key: "1", action: .gotoTab(1)),
+        Keybinding(modifiers: .command, key: "2", action: .gotoTab(2)),
+        Keybinding(modifiers: .command, key: "3", action: .gotoTab(3)),
+        Keybinding(modifiers: .command, key: "4", action: .gotoTab(4)),
+        Keybinding(modifiers: .command, key: "5", action: .gotoTab(5)),
+        Keybinding(modifiers: .command, key: "6", action: .gotoTab(6)),
+        Keybinding(modifiers: .command, key: "7", action: .gotoTab(7)),
+        Keybinding(modifiers: .command, key: "8", action: .gotoTab(8)),
+        Keybinding(modifiers: .command, key: "9", action: .gotoTab(9)),
+        // Clipboard
+        Keybinding(modifiers: .command, key: "c", action: .copy),
+        Keybinding(modifiers: .command, key: "v", action: .paste),
+        // Search
+        Keybinding(modifiers: .command, key: "f", action: .search),
+        // Font size
+        Keybinding(modifiers: .command, key: "0", action: .resetFontSize),
+        Keybinding(modifiers: .command, key: "+", action: .increaseFontSize),
+        Keybinding(modifiers: .command, key: "-", action: .decreaseFontSize),
+    ]
+
+    /// Parse a keybinding string like "cmd+shift+t=new_tab".
+    static func parse(_ string: String) throws -> Keybinding {
+        guard let eqIndex = string.firstIndex(of: "=") else {
+            throw ConfigError.invalidValue(key: "keybind", value: string)
+        }
+
+        let combo = string[string.startIndex..<eqIndex]
+            .trimmingCharacters(in: .whitespaces)
+            .lowercased()
+        let actionStr = string[string.index(after: eqIndex)...]
+            .trimmingCharacters(in: .whitespaces)
+
+        guard let action = Action(rawValue: actionStr) else {
+            throw ConfigError.invalidValue(key: "keybind", value: string)
+        }
+
+        let parts = combo.split(separator: "+").map(String.init)
+        guard !parts.isEmpty else {
+            throw ConfigError.invalidValue(key: "keybind", value: string)
+        }
+
+        var modifiers: NSEvent.ModifierFlags = []
+        var keyPart: String?
+
+        for part in parts {
+            switch part {
+            case "cmd", "command", "super":
+                modifiers.insert(.command)
+            case "shift":
+                modifiers.insert(.shift)
+            case "ctrl", "control":
+                modifiers.insert(.control)
+            case "alt", "opt", "option":
+                modifiers.insert(.option)
+            default:
+                keyPart = part
+            }
+        }
+
+        guard let key = keyPart else {
+            throw ConfigError.invalidValue(key: "keybind", value: string)
+        }
+
+        return Keybinding(modifiers: modifiers, key: key, action: action)
+    }
+
+    /// Look up the action for a key event in a list of keybindings.
+    static func match(
+        event: NSEvent,
+        in bindings: [Keybinding]
+    ) -> Action? {
+        let eventMods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let eventKey = event.charactersIgnoringModifiers?.lowercased() ?? ""
+
+        for binding in bindings {
+            if eventMods == binding.modifiers && eventKey == binding.key {
+                return binding.action
+            }
+        }
+        return nil
+    }
+}
+
+// MARK: - ModifierFlags Equatable for matching
+
+extension NSEvent.ModifierFlags {
+    /// The modifier flags we care about for keybinding matching.
+    static let relevantFlags: NSEvent.ModifierFlags = [.command, .shift, .control, .option]
+}
