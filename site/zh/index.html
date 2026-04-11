@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>通幽 — macOS GPU 加速终端模拟器</title>
+  <meta name="description" content="基于 Metal 和 SwiftUI 构建的 macOS GPU 加速终端模拟器。三重缓冲渲染、热重载配置、原生性能体验。" />
+  <link rel="icon" href="../images/icon.png" />
+  <link rel="canonical" href="https://airead.github.io/TongYou/zh/" />
+  <link rel="alternate" hreflang="zh" href="https://airead.github.io/TongYou/zh/" />
+  <link rel="alternate" hreflang="en" href="https://airead.github.io/TongYou/" />
+  <!-- Open Graph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="通幽 — macOS GPU 加速终端模拟器" />
+  <meta property="og:description" content="基于 Metal 和 SwiftUI 构建的 macOS GPU 加速终端模拟器。三重缓冲渲染、热重载配置、原生性能体验。" />
+  <meta property="og:image" content="https://airead.github.io/TongYou/images/icon.png" />
+  <meta property="og:url" content="https://airead.github.io/TongYou/zh/" />
+  <meta property="og:locale" content="zh_CN" />
+  <meta property="og:locale:alternate" content="en" />
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="通幽 — macOS GPU 加速终端模拟器" />
+  <meta name="twitter:description" content="基于 Metal 和 SwiftUI 的 macOS GPU 加速终端。三重缓冲、热重载配置。" />
+  <meta name="twitter:image" content="https://airead.github.io/TongYou/images/icon.png" />
+  <!-- Structured Data -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "通幽 (TongYou)",
+    "operatingSystem": "macOS",
+    "applicationCategory": "DeveloperApplication",
+    "description": "基于 Metal 和 SwiftUI 构建的 macOS GPU 加速终端模拟器。",
+    "url": "https://airead.github.io/TongYou/zh/",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    },
+    "license": "https://opensource.org/licenses/MIT"
+  }
+  </script>
+  <link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+
+<!-- ========== Header ========== -->
+<header class="site-header">
+  <nav class="nav container">
+    <a class="nav-brand" href="./">
+      <img src="../images/icon.png" alt="通幽图标" />
+      通幽
+    </a>
+    <ul class="nav-links">
+      <li><a href="#features" class="nav-link-text">功能</a></li>
+      <li><a href="#architecture" class="nav-link-text">架构</a></li>
+      <li><a href="#keybindings" class="nav-link-text">快捷键</a></li>
+      <li><a href="#installation" class="nav-link-text">安装</a></li>
+      <li><a href="https://github.com/Airead/TongYou" target="_blank">GitHub</a></li>
+      <li><a href="https://discord.gg/a5HzmNMC7P" target="_blank">Discord</a></li>
+      <li><a href="../" class="lang-switch">English</a></li>
+    </ul>
+  </nav>
+</header>
+
+<!-- ========== Hero ========== -->
+<section class="hero">
+  <div class="container">
+    <img src="../images/icon.png" alt="通幽" class="hero-icon" />
+    <h1>终端，<span>加速</span></h1>
+    <p class="tagline">基于 Metal 和 SwiftUI 的 macOS GPU 加速终端模拟器。</p>
+    <div class="hero-buttons">
+      <a id="download-btn" href="https://github.com/Airead/TongYou/releases/latest" class="btn btn-primary">
+        &#11015; 下载
+      </a>
+      <a href="https://github.com/Airead/TongYou" class="btn btn-secondary" target="_blank">
+        &#9733; GitHub
+      </a>
+    </div>
+    <span id="version-badge" class="version-badge">最新版本</span>
+  </div>
+</section>
+
+<!-- ========== Features ========== -->
+<section id="features">
+  <div class="container">
+    <h2 class="section-title fade-in">功能特性</h2>
+    <p class="section-subtitle fade-in">为速度和简洁而生的现代终端</p>
+    <div class="features-grid">
+
+      <div class="feature-card fade-in">
+        <div class="feature-icon">&#9889;</div>
+        <h3>Metal GPU 渲染</h3>
+        <p>每个字形都通过 Metal 实例化绘制调用直接在 GPU 上渲染。任意分辨率下都能流畅滚动、文字清晰。</p>
+      </div>
+
+      <div class="feature-card fade-in">
+        <div class="feature-icon">&#128247;</div>
+        <h3>三重缓冲</h3>
+        <p>三帧管线通过 CADisplayLink 与显示器刷新率同步。无撕裂、无丢帧。</p>
+      </div>
+
+      <div class="feature-card fade-in">
+        <div class="feature-icon">&#128279;</div>
+        <h3>URL 检测</h3>
+        <p>自动检测终端输出中的可点击链接。Cmd + 点击即可在浏览器中打开。</p>
+      </div>
+
+      <div class="feature-card fade-in">
+        <div class="feature-icon">&#9881;</div>
+        <h3>配置热重载</h3>
+        <p>Ghostty 风格的 <code>key = value</code> 配置文件。保存即生效，无需重启。</p>
+      </div>
+
+      <div class="feature-card fade-in">
+        <div class="feature-icon">&#127912;</div>
+        <h3>内置主题</h3>
+        <p>自带 9 款精心设计的配色主题。完整支持 256 色和真彩色，使用预乘 Alpha 混合。</p>
+      </div>
+
+      <div class="feature-card fade-in">
+        <div class="feature-icon">&#128736;</div>
+        <h3>原生 macOS</h3>
+        <p>使用 SwiftUI 构建，原生窗口管理、标签页和系统集成。macOS 上的原生体验。</p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ========== Architecture ========== -->
+<section id="architecture">
+  <div class="container">
+    <h2 class="section-title fade-in">工作原理</h2>
+    <p class="section-subtitle fade-in">从按键到像素 — 渲染管线</p>
+    <div class="steps">
+      <div class="step fade-in">
+        <div class="step-number">1</div>
+        <h3>VT 解析</h3>
+        <p>输入字节通过状态机 VT100/ANSI 解析器解码。转义序列、SGR 属性和 UTF-8 在一次遍历中完成处理。</p>
+      </div>
+      <div class="step fade-in">
+        <div class="step-number">2</div>
+        <h3>字形图集</h3>
+        <p>字形光栅化后缓存在 GPU 纹理图集中。字体查找使用 CoreText 回退链，完整覆盖 Unicode。</p>
+      </div>
+      <div class="step fade-in">
+        <div class="step-number">3</div>
+        <h3>Metal 绘制</h3>
+        <p>可见单元格批量提交为 Metal 渲染管线上的实例化绘制调用。使用 <code>floor()</code> 像素对齐消除子像素间隙。</p>
+      </div>
+    </div>
+
+    <div class="table-wrapper fade-in" style="margin-top: 56px;">
+      <table class="compare-table">
+        <thead>
+          <tr>
+            <th>组件</th>
+            <th>技术</th>
+            <th>详情</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>渲染</strong></td>
+            <td>Metal</td>
+            <td>实例化绘制调用，预乘 Alpha 混合</td>
+          </tr>
+          <tr>
+            <td><strong>帧同步</strong></td>
+            <td>CADisplayLink</td>
+            <td>基于 DispatchSemaphore 的三重缓冲</td>
+          </tr>
+          <tr>
+            <td><strong>UI 框架</strong></td>
+            <td>SwiftUI</td>
+            <td>NSViewRepresentable 桥接 MetalView</td>
+          </tr>
+          <tr>
+            <td><strong>终端</strong></td>
+            <td>VT100/ANSI</td>
+            <td>状态机解析器，完整 SGR 支持</td>
+          </tr>
+          <tr>
+            <td><strong>字体</strong></td>
+            <td>CoreText</td>
+            <td>GPU 纹理图集，字形缓存</td>
+          </tr>
+          <tr>
+            <td><strong>PTY</strong></td>
+            <td>POSIX forkpty</td>
+            <td>原生伪终端，环境变量透传</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ========== Keybindings ========== -->
+<section id="keybindings">
+  <div class="container">
+    <h2 class="section-title fade-in">快捷键</h2>
+    <p class="section-subtitle fade-in">熟悉的快捷键，完全可配置</p>
+    <div class="keybinding-grid fade-in">
+      <div class="keybinding-item">
+        <span>新建标签页</span>
+        <kbd>Cmd + T</kbd>
+      </div>
+      <div class="keybinding-item">
+        <span>关闭标签页</span>
+        <kbd>Cmd + W</kbd>
+      </div>
+      <div class="keybinding-item">
+        <span>下一个标签页</span>
+        <kbd>Ctrl + Tab</kbd>
+      </div>
+      <div class="keybinding-item">
+        <span>上一个标签页</span>
+        <kbd>Ctrl + Shift + Tab</kbd>
+      </div>
+      <div class="keybinding-item">
+        <span>复制</span>
+        <kbd>Cmd + C</kbd>
+      </div>
+      <div class="keybinding-item">
+        <span>粘贴</span>
+        <kbd>Cmd + V</kbd>
+      </div>
+      <div class="keybinding-item">
+        <span>增大字号</span>
+        <kbd>Cmd + =</kbd>
+      </div>
+      <div class="keybinding-item">
+        <span>减小字号</span>
+        <kbd>Cmd + -</kbd>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== Installation ========== -->
+<section id="installation">
+  <div class="container">
+    <h2 class="section-title fade-in">安装</h2>
+    <p class="section-subtitle fade-in">几秒钟即可开始使用</p>
+    <div class="install-options fade-in">
+
+      <div class="install-card">
+        <h3>&#11015; 下载安装</h3>
+        <p>从 GitHub Releases 获取最新 <code>.dmg</code> 文件，拖拽至应用程序文件夹即可。</p>
+        <a href="https://github.com/Airead/TongYou/releases/latest" class="btn btn-primary">下载最新版</a>
+      </div>
+
+      <div class="install-card">
+        <h3>&#128736; 源码编译</h3>
+        <p>需要 Xcode 和 macOS 15+。</p>
+        <pre class="code-block">git clone https://github.com/Airead/TongYou.git
+cd TongYou
+make build-release
+make install</pre>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ========== Footer ========== -->
+<footer class="site-footer">
+  <div class="container">
+    <ul class="footer-links">
+      <li><a href="https://github.com/Airead/TongYou" target="_blank">GitHub</a></li>
+      <li><a href="https://github.com/Airead/TongYou/releases" target="_blank">版本发布</a></li>
+      <li><a href="https://github.com/Airead/TongYou/issues" target="_blank">问题反馈</a></li>
+      <li><a href="https://discord.gg/a5HzmNMC7P" target="_blank">Discord</a></li>
+      <li><a href="../">English</a></li>
+    </ul>
+    <p>MIT License &copy; 通幽 (TongYou)</p>
+  </div>
+</footer>
+
+<script src="../js/main.js"></script>
+</body>
+</html>

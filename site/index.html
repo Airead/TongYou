@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TongYou — GPU-Accelerated Terminal Emulator for macOS</title>
+  <meta name="description" content="A fast, GPU-accelerated terminal emulator for macOS built with Metal and SwiftUI. Triple-buffered rendering, hot-reload configuration, and native performance." />
+  <link rel="icon" href="images/icon.png" />
+  <link rel="canonical" href="https://airead.github.io/TongYou/" />
+  <link rel="alternate" hreflang="zh" href="https://airead.github.io/TongYou/zh/" />
+  <link rel="alternate" hreflang="en" href="https://airead.github.io/TongYou/" />
+  <!-- Open Graph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="TongYou — GPU-Accelerated Terminal Emulator for macOS" />
+  <meta property="og:description" content="A fast, GPU-accelerated terminal emulator for macOS built with Metal and SwiftUI. Triple-buffered rendering, hot-reload configuration, and native performance." />
+  <meta property="og:image" content="https://airead.github.io/TongYou/images/icon.png" />
+  <meta property="og:url" content="https://airead.github.io/TongYou/" />
+  <meta property="og:locale" content="en" />
+  <meta property="og:locale:alternate" content="zh_CN" />
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="TongYou — GPU-Accelerated Terminal Emulator for macOS" />
+  <meta name="twitter:description" content="Fast, GPU-accelerated terminal emulator for macOS. Metal rendering, triple buffering, hot-reload config." />
+  <meta name="twitter:image" content="https://airead.github.io/TongYou/images/icon.png" />
+  <!-- Structured Data -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "TongYou",
+    "operatingSystem": "macOS",
+    "applicationCategory": "DeveloperApplication",
+    "description": "A GPU-accelerated terminal emulator for macOS built with Metal and SwiftUI.",
+    "url": "https://airead.github.io/TongYou/",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    },
+    "license": "https://opensource.org/licenses/MIT"
+  }
+  </script>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+<!-- ========== Header ========== -->
+<header class="site-header">
+  <nav class="nav container">
+    <a class="nav-brand" href="./">
+      <img src="images/icon.png" alt="TongYou icon" />
+      TongYou
+    </a>
+    <ul class="nav-links">
+      <li><a href="#features" class="nav-link-text">Features</a></li>
+      <li><a href="#architecture" class="nav-link-text">Architecture</a></li>
+      <li><a href="#keybindings" class="nav-link-text">Keybindings</a></li>
+      <li><a href="#installation" class="nav-link-text">Install</a></li>
+      <li><a href="https://github.com/Airead/TongYou" target="_blank">GitHub</a></li>
+      <li><a href="https://discord.gg/a5HzmNMC7P" target="_blank">Discord</a></li>
+      <li><a href="zh/" class="lang-switch">中文</a></li>
+    </ul>
+  </nav>
+</header>
+
+<!-- ========== Hero ========== -->
+<section class="hero">
+  <div class="container">
+    <img src="images/icon.png" alt="TongYou" class="hero-icon" />
+    <h1>Terminal, <span>Accelerated</span></h1>
+    <p class="tagline">GPU-powered terminal emulator for macOS — built with Metal and SwiftUI.</p>
+    <div class="hero-buttons">
+      <a id="download-btn" href="https://github.com/Airead/TongYou/releases/latest" class="btn btn-primary">
+        &#11015; Download
+      </a>
+      <a href="https://github.com/Airead/TongYou" class="btn btn-secondary" target="_blank">
+        &#9733; GitHub
+      </a>
+    </div>
+    <span id="version-badge" class="version-badge">Latest release</span>
+  </div>
+</section>
+
+<!-- ========== Features ========== -->
+<section id="features">
+  <div class="container">
+    <h2 class="section-title fade-in">Features</h2>
+    <p class="section-subtitle fade-in">A modern terminal built for speed and simplicity</p>
+    <div class="features-grid">
+
+      <div class="feature-card fade-in">
+        <div class="feature-icon">&#9889;</div>
+        <h3>Metal GPU Rendering</h3>
+        <p>Every glyph is rendered via Metal instanced draw calls directly on your GPU. Smooth scrolling and crisp text at any resolution.</p>
+      </div>
+
+      <div class="feature-card fade-in">
+        <div class="feature-icon">&#128247;</div>
+        <h3>Triple Buffering</h3>
+        <p>Three-frame pipeline synchronized to your display's refresh rate via CADisplayLink. No tearing, no dropped frames.</p>
+      </div>
+
+      <div class="feature-card fade-in">
+        <div class="feature-icon">&#128279;</div>
+        <h3>URL Detection</h3>
+        <p>Clickable URLs are automatically detected in terminal output. Cmd-click to open links directly in your browser.</p>
+      </div>
+
+      <div class="feature-card fade-in">
+        <div class="feature-icon">&#9881;</div>
+        <h3>Hot-Reload Config</h3>
+        <p>Ghostty-style <code>key = value</code> configuration file. Edit and save — changes apply instantly, no restart needed.</p>
+      </div>
+
+      <div class="feature-card fade-in">
+        <div class="feature-icon">&#127912;</div>
+        <h3>Built-in Themes</h3>
+        <p>Ships with 9 carefully crafted color themes. Full 256-color and true-color support with premultiplied alpha blending.</p>
+      </div>
+
+      <div class="feature-card fade-in">
+        <div class="feature-icon">&#128736;</div>
+        <h3>Native macOS</h3>
+        <p>Built with SwiftUI for native window management, tabs, and system integration. Feels right at home on macOS.</p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ========== Architecture ========== -->
+<section id="architecture">
+  <div class="container">
+    <h2 class="section-title fade-in">How It Works</h2>
+    <p class="section-subtitle fade-in">From keypress to pixel — the rendering pipeline</p>
+    <div class="steps">
+      <div class="step fade-in">
+        <div class="step-number">1</div>
+        <h3>VT Parsing</h3>
+        <p>Input bytes are decoded through a state-machine VT100/ANSI parser. Escape sequences, SGR attributes, and UTF-8 are handled in a single pass.</p>
+      </div>
+      <div class="step fade-in">
+        <div class="step-number">2</div>
+        <h3>Glyph Atlas</h3>
+        <p>Glyphs are rasterized once and cached in a GPU texture atlas. Font lookups use CoreText with fallback chains for full Unicode coverage.</p>
+      </div>
+      <div class="step fade-in">
+        <div class="step-number">3</div>
+        <h3>Metal Draw</h3>
+        <p>Visible cells are batched into instanced draw calls on a Metal render pipeline. Pixel-aligned with <code>floor()</code> to eliminate subpixel gaps.</p>
+      </div>
+    </div>
+
+    <div class="table-wrapper fade-in" style="margin-top: 56px;">
+      <table class="compare-table">
+        <thead>
+          <tr>
+            <th>Component</th>
+            <th>Technology</th>
+            <th>Detail</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Rendering</strong></td>
+            <td>Metal</td>
+            <td>Instanced draw calls with premultiplied alpha</td>
+          </tr>
+          <tr>
+            <td><strong>Frame Sync</strong></td>
+            <td>CADisplayLink</td>
+            <td>Triple-buffered with DispatchSemaphore</td>
+          </tr>
+          <tr>
+            <td><strong>UI Framework</strong></td>
+            <td>SwiftUI</td>
+            <td>NSViewRepresentable bridge for MetalView</td>
+          </tr>
+          <tr>
+            <td><strong>Terminal</strong></td>
+            <td>VT100/ANSI</td>
+            <td>State-machine parser with full SGR support</td>
+          </tr>
+          <tr>
+            <td><strong>Font</strong></td>
+            <td>CoreText</td>
+            <td>GPU texture atlas with glyph caching</td>
+          </tr>
+          <tr>
+            <td><strong>PTY</strong></td>
+            <td>POSIX forkpty</td>
+            <td>Native pseudo-terminal with environment passthrough</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ========== Keybindings ========== -->
+<section id="keybindings">
+  <div class="container">
+    <h2 class="section-title fade-in">Keybindings</h2>
+    <p class="section-subtitle fade-in">Familiar shortcuts, fully configurable</p>
+    <div class="keybinding-grid fade-in">
+      <div class="keybinding-item">
+        <span>New Tab</span>
+        <kbd>Cmd + T</kbd>
+      </div>
+      <div class="keybinding-item">
+        <span>Close Tab</span>
+        <kbd>Cmd + W</kbd>
+      </div>
+      <div class="keybinding-item">
+        <span>Next Tab</span>
+        <kbd>Ctrl + Tab</kbd>
+      </div>
+      <div class="keybinding-item">
+        <span>Previous Tab</span>
+        <kbd>Ctrl + Shift + Tab</kbd>
+      </div>
+      <div class="keybinding-item">
+        <span>Copy</span>
+        <kbd>Cmd + C</kbd>
+      </div>
+      <div class="keybinding-item">
+        <span>Paste</span>
+        <kbd>Cmd + V</kbd>
+      </div>
+      <div class="keybinding-item">
+        <span>Increase Font Size</span>
+        <kbd>Cmd + =</kbd>
+      </div>
+      <div class="keybinding-item">
+        <span>Decrease Font Size</span>
+        <kbd>Cmd + -</kbd>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== Installation ========== -->
+<section id="installation">
+  <div class="container">
+    <h2 class="section-title fade-in">Installation</h2>
+    <p class="section-subtitle fade-in">Get started in seconds</p>
+    <div class="install-options fade-in">
+
+      <div class="install-card">
+        <h3>&#11015; Download</h3>
+        <p>Grab the latest <code>.dmg</code> from GitHub Releases. Drag to Applications and launch.</p>
+        <a id="download-btn-install" href="https://github.com/Airead/TongYou/releases/latest" class="btn btn-primary">Download Latest</a>
+      </div>
+
+      <div class="install-card">
+        <h3>&#128736; Build from Source</h3>
+        <p>Requires Xcode and macOS 15+.</p>
+        <pre class="code-block">git clone https://github.com/Airead/TongYou.git
+cd TongYou
+make build-release
+make install</pre>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ========== Footer ========== -->
+<footer class="site-footer">
+  <div class="container">
+    <ul class="footer-links">
+      <li><a href="https://github.com/Airead/TongYou" target="_blank">GitHub</a></li>
+      <li><a href="https://github.com/Airead/TongYou/releases" target="_blank">Releases</a></li>
+      <li><a href="https://github.com/Airead/TongYou/issues" target="_blank">Issues</a></li>
+      <li><a href="https://discord.gg/a5HzmNMC7P" target="_blank">Discord</a></li>
+      <li><a href="zh/">中文</a></li>
+    </ul>
+    <p>MIT License &copy; TongYou</p>
+  </div>
+</footer>
+
+<script src="js/main.js"></script>
+</body>
+</html>
