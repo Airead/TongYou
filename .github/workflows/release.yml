@@ -82,6 +82,7 @@ jobs:
             -configuration Release \
             SYMROOT="$BUILD_DIR" \
             CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="" \
             CODE_SIGN_IDENTITY="${{ steps.identity.outputs.name }}" \
             OTHER_CODE_SIGN_FLAGS="--keychain $RUNNER_TEMP/signing.keychain-db"
 
