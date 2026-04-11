@@ -89,13 +89,30 @@ jobs:
       - name: Verify signature
         run: codesign -dvv "$BUILD_DIR/Release/TongYou.app"
 
+      - name: Generate DMG resources
+        run: |
+          swift scripts/generate_dmg_background.swift
+          swift scripts/generate_dmg_volume_icon.swift
+
+      - name: Install create-dmg
+        run: brew install create-dmg
+
       - name: Create DMG
         run: |
           DMG_NAME="TongYou-${{ steps.version.outputs.version }}-arm64.dmg"
-          hdiutil create -volname "TongYou" \
-            -srcfolder "$BUILD_DIR/Release/TongYou.app" \
-            -ov -format UDZO \
-            "$BUILD_DIR/$DMG_NAME"
+          create-dmg \
+            --volname "TongYou" \
+            --volicon "resources/dmg-volume.icns" \
+            --background "resources/dmg-background.png" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 128 \
+            --icon "TongYou.app" 175 190 \
+            --app-drop-link 425 190 \
+            --hide-extension "TongYou.app" \
+            --no-internet-enable \
+            "$BUILD_DIR/$DMG_NAME" \
+            "$BUILD_DIR/Release/TongYou.app"
           echo "DMG_PATH=$BUILD_DIR/$DMG_NAME" >> "$GITHUB_ENV"
           echo "DMG_NAME=$DMG_NAME" >> "$GITHUB_ENV"
 

@@ -1,4 +1,4 @@
-.PHONY: build build-release test clean run install icon
+.PHONY: build build-release test clean run install icon dmg-resources build-dmg
 
 SCHEME = TongYou
 DESTINATION = platform=macOS
@@ -29,3 +29,10 @@ run: build
 
 icon:
 	swift scripts/generate_icon.swift
+
+dmg-resources: icon
+	swift scripts/generate_dmg_background.swift
+	swift scripts/generate_dmg_volume_icon.swift
+
+build-dmg: build-release dmg-resources
+	./scripts/build-dmg.sh
