@@ -56,11 +56,22 @@ jobs:
 
           security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
 
+          # Extract certificate from p12 and trust it (needed for self-signed certs)
+          openssl pkcs12 -in "$CERT_PATH" -passin pass:"$P12_PASSWORD" -nokeys -legacy \
+            -out "$RUNNER_TEMP/cert.pem"
+          sudo security add-trusted-cert -d -r trustRoot \
+            -k "$KEYCHAIN_PATH" "$RUNNER_TEMP/cert.pem"
+
       - name: Extract signing identity
         id: identity
         run: |
           KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
           IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | head -1 | sed 's/.*"\(.*\)"/\1/')
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::No valid codesigning identity found"
+            exit 1
+          fi
+          echo "Signing identity: $IDENTITY"
           echo "name=$IDENTITY" >> "$GITHUB_OUTPUT"
 
       - name: Build release
