@@ -241,6 +241,7 @@ public final class SocketServer: @unchecked Sendable {
     // MARK: - Private: Message Dispatch
 
     private func handleClientMessage(_ message: ClientMessage, from client: ClientConnection) {
+        Log.debug("RECV [\(client.id.uuidString.prefix(8))] \(message.debugDescription)")
         switch message {
         case .listSessions:
             client.send(.sessionList(sessionManager.listSessions()))

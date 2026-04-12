@@ -1,6 +1,13 @@
 import Foundation
 import TYTerminal
 
+// MARK: - Debug Helpers
+
+private func truncate(_ string: String, maxLength: Int) -> String {
+    if string.count <= maxLength { return string }
+    return "\(string.prefix(maxLength))... (len=\(string.count))"
+}
+
 // MARK: - Message Type Codes
 
 /// Wire type codes for server-to-client messages (0x01xx).
@@ -73,6 +80,32 @@ public enum ServerMessage: Sendable {
         }
     }
 
+    /// Human-readable summary for debug logging. Long payloads are truncated.
+    public var debugDescription: String {
+        switch self {
+        case .sessionList(let sessions):
+            return "sessionList(count=\(sessions.count))"
+        case .sessionCreated(let info):
+            return "sessionCreated(id=\(info.id))"
+        case .sessionClosed(let id):
+            return "sessionClosed(id=\(id))"
+        case .screenFull(let sid, let pid, let snap):
+            return "screenFull(session=\(sid), pane=\(pid), \(snap.columns)x\(snap.rows), cells=\(snap.cells.count))"
+        case .screenDiff(let sid, let pid, let diff):
+            return "screenDiff(session=\(sid), pane=\(pid), dirtyRows=\(diff.dirtyRows.count), cells=\(diff.cellData.count))"
+        case .titleChanged(let sid, let pid, let title):
+            return "titleChanged(session=\(sid), pane=\(pid), title=\(truncate(title, maxLength: 80)))"
+        case .bell(let sid, let pid):
+            return "bell(session=\(sid), pane=\(pid))"
+        case .paneExited(let sid, let pid, let exitCode):
+            return "paneExited(session=\(sid), pane=\(pid), exitCode=\(exitCode))"
+        case .layoutUpdate(let sid, _):
+            return "layoutUpdate(session=\(sid))"
+        case .clipboardSet(let text):
+            return "clipboardSet(text=\(truncate(text, maxLength: 80)))"
+        }
+    }
+
     /// The wire type code for this message.
     public var typeCode: ServerMessageType {
         switch self {
@@ -111,6 +144,38 @@ public enum ClientMessage: Sendable {
     case splitPane(SessionID, PaneID, SplitDirection)
     case closePane(SessionID, PaneID)
     case focusPane(SessionID, PaneID)
+
+    /// Human-readable summary for debug logging. Long payloads are truncated.
+    public var debugDescription: String {
+        switch self {
+        case .listSessions:
+            return "listSessions"
+        case .createSession(let name):
+            return "createSession(name=\(name ?? "nil"))"
+        case .attachSession(let id):
+            return "attachSession(id=\(id))"
+        case .detachSession(let id):
+            return "detachSession(id=\(id))"
+        case .closeSession(let id):
+            return "closeSession(id=\(id))"
+        case .input(let sid, let pid, let bytes):
+            let preview = bytes.prefix(32).map { String(format: "%02x", $0) }.joined(separator: " ")
+            let suffix = bytes.count > 32 ? "... (len=\(bytes.count))" : ""
+            return "input(session=\(sid), pane=\(pid), data=[\(preview)\(suffix)])"
+        case .resize(let sid, let pid, let cols, let rows):
+            return "resize(session=\(sid), pane=\(pid), \(cols)x\(rows))"
+        case .createTab(let sid):
+            return "createTab(session=\(sid))"
+        case .closeTab(let sid, let tid):
+            return "closeTab(session=\(sid), tab=\(tid))"
+        case .splitPane(let sid, let pid, let dir):
+            return "splitPane(session=\(sid), pane=\(pid), dir=\(dir))"
+        case .closePane(let sid, let pid):
+            return "closePane(session=\(sid), pane=\(pid))"
+        case .focusPane(let sid, let pid):
+            return "focusPane(session=\(sid), pane=\(pid))"
+        }
+    }
 
     /// The wire type code for this message.
     public var typeCode: ClientMessageType {

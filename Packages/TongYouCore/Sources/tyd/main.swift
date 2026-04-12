@@ -4,7 +4,7 @@ import TYServer
 // MARK: - Argument Parsing
 
 enum Command {
-    case run(daemon: Bool)
+    case run(daemon: Bool, debug: Bool)
     case stop
     case status
 }
@@ -12,10 +12,15 @@ enum Command {
 func parseArguments() -> Command {
     let args = CommandLine.arguments.dropFirst()
 
+    var daemon = false
+    var debug = false
+
     for arg in args {
         switch arg {
         case "--daemon", "-d":
-            return .run(daemon: true)
+            daemon = true
+        case "--debug":
+            debug = true
         case "--stop":
             return .stop
         case "--status":
@@ -30,7 +35,7 @@ func parseArguments() -> Command {
         }
     }
 
-    return .run(daemon: false)
+    return .run(daemon: daemon, debug: debug)
 }
 
 func printUsage() {
@@ -42,6 +47,7 @@ func printUsage() {
     Options:
       (none)       Start in foreground (for development)
       --daemon     Start as background daemon
+      --debug      Enable debug logging (prints all messages)
       --stop       Stop a running tyd process
       --status     Check if tyd is running
       --help       Show this help message
@@ -51,9 +57,9 @@ func printUsage() {
 
 // MARK: - Commands
 
-func runServer(daemon: Bool) {
+func runServer(daemon: Bool, debug: Bool) {
     // Configure logging before anything else.
-    Log.configure(useSyslog: daemon)
+    Log.configure(useSyslog: daemon, minLevel: debug ? .debug : .info)
 
     if let existingPID = DaemonLifecycle.checkExistingProcess() {
         fputs("tyd: already running (pid \(existingPID))\n", stderr)
@@ -124,8 +130,8 @@ func showStatus() {
 let command = parseArguments()
 
 switch command {
-case .run(let daemon):
-    runServer(daemon: daemon)
+case .run(let daemon, let debug):
+    runServer(daemon: daemon, debug: debug)
 case .stop:
     stopDaemon()
 case .status:

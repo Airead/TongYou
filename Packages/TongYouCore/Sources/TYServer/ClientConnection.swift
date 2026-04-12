@@ -87,6 +87,7 @@ public final class ClientConnection: @unchecked Sendable {
     /// `maxPendingScreenUpdates` are already queued, the message is dropped.
     /// Non-screen messages (session lifecycle, layout, etc.) are always sent.
     func send(_ message: ServerMessage) {
+        Log.debug("SEND [\(id.uuidString.prefix(8))] \(message.debugDescription)", category: .client)
         let isScreen = message.isScreenUpdate
         if isScreen {
             pendingLock.lock()
