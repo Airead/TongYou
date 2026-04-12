@@ -436,6 +436,9 @@ final class SessionManager {
     /// Attach to a tyd server using a pre-established connection.
     /// Must be called on the main thread.
     func attachToTYD(connectionManager: TYDConnectionManager, connection: TYDConnection) {
+        // Clean up stale state from a previous connection before wiring the new one.
+        cleanupRemoteState()
+
         let client = RemoteSessionClient(connectionManager: connectionManager)
 
         client.onSessionList = { [weak self] infos in
@@ -456,6 +459,9 @@ final class SessionManager {
         client.onPaneExited = { [weak self] _, paneID, _ in
             self?.handleRemotePaneExited(paneID)
         }
+        client.onDisconnected = { [weak self] in
+            self?.handleRemoteDisconnected()
+        }
 
         client.attachConnection(connection)
         remoteClient = client
@@ -465,8 +471,13 @@ final class SessionManager {
     func disconnectFromTYD() {
         remoteClient?.disconnect()
         remoteClient = nil
+        cleanupRemoteState()
+    }
 
-        // Stop all remote controllers before dropping references.
+    /// Remove all remote sessions, controllers, and mappings.
+    /// Called on explicit disconnect and before wiring a new connection
+    /// so stale state from a previous connection doesn't block re-attach.
+    private func cleanupRemoteState() {
         for controller in remoteControllers.values {
             controller.stop()
         }
@@ -479,6 +490,12 @@ final class SessionManager {
         } else {
             activeSessionIndex = 0
         }
+    }
+
+    /// Called when the tyd connection drops unexpectedly.
+    private func handleRemoteDisconnected() {
+        remoteClient = nil
+        cleanupRemoteState()
     }
 
     /// Whether we are connected to a tyd server.

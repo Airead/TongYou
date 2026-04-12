@@ -641,7 +641,8 @@ final class MetalView: NSView {
             }
         }
 
-        if terminalController == nil, let grid = renderer?.gridSize {
+        if terminalController == nil, let grid = renderer?.gridSize,
+           grid.columns > 0, grid.rows > 0 {
             let controller: any TerminalControlling
             if let external = externalController {
                 external.resize(

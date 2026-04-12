@@ -327,6 +327,122 @@ struct TYClientTests {
         server.stop()
     }
 
+    @Test("RemoteSessionClient reconnect attaches and receives screen updates")
+    func remoteSessionClientReconnect() throws {
+        let socketPath = NSTemporaryDirectory() + "tyc-reconnect-\(UUID().uuidString.prefix(8)).sock"
+        defer { try? FileManager.default.removeItem(atPath: socketPath) }
+
+        let config = ServerConfig(socketPath: socketPath, autoExitOnNoSessions: false)
+        let sessionManager = ServerSessionManager(defaultColumns: 80, defaultRows: 24)
+        let server = SocketServer(config: config, sessionManager: sessionManager)
+
+        try server.start()
+        Thread.sleep(forTimeInterval: 0.1)
+
+        // --- First connection: create a session ---
+        let connManager1 = TYDConnectionManager(socketPath: socketPath, autoStart: false)
+        let client1 = RemoteSessionClient(connectionManager: connManager1)
+
+        let createdSession = Mutex<SessionInfo?>(nil)
+        client1.onSessionCreated = { info in
+            createdSession.withLock { $0 = info }
+        }
+        try client1.connect()
+        Thread.sleep(forTimeInterval: 0.2)
+
+        client1.createSession(name: "ReconnectTest")
+
+        let deadline1 = Date().addingTimeInterval(2.0)
+        while Date() < deadline1 {
+            if createdSession.withLock({ $0 }) != nil { break }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        let sessionInfo = createdSession.withLock { $0 }
+        #expect(sessionInfo != nil)
+
+        // Disconnect the first client.
+        client1.disconnect()
+        Thread.sleep(forTimeInterval: 0.2)
+
+        // --- Second connection: should see existing session and attach ---
+        let connManager2 = TYDConnectionManager(socketPath: socketPath, autoStart: false)
+        let client2 = RemoteSessionClient(connectionManager: connManager2)
+
+        let receivedSessions = Mutex<[SessionInfo]?>(nil)
+        let screenUpdated = Mutex(false)
+
+        client2.onSessionList = { sessions in
+            receivedSessions.withLock { $0 = sessions }
+            // Attach to the existing session (mimics what addOrUpdateRemoteSession should do).
+            for info in sessions {
+                client2.attachSession(info.id)
+            }
+        }
+        client2.onScreenUpdated = { _, _ in
+            screenUpdated.withLock { $0 = true }
+        }
+
+        try client2.connect()
+
+        // Wait for session list.
+        let deadline2 = Date().addingTimeInterval(2.0)
+        while Date() < deadline2 {
+            if receivedSessions.withLock({ $0 }) != nil { break }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        let sessions = receivedSessions.withLock { $0 }
+        #expect(sessions?.count == 1)
+        #expect(sessions?.first?.name == "ReconnectTest")
+
+        // Wait for screen update after attach.
+        let deadline3 = Date().addingTimeInterval(3.0)
+        while Date() < deadline3 {
+            if screenUpdated.withLock({ $0 }) { break }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        #expect(screenUpdated.withLock { $0 } == true)
+
+        client2.disconnect()
+        server.stop()
+    }
+
+    @Test("RemoteSessionClient onDisconnected fires when server closes connection")
+    func remoteSessionClientDisconnected() throws {
+        let socketPath = NSTemporaryDirectory() + "tyc-ondisconnect-\(UUID().uuidString.prefix(8)).sock"
+        defer { try? FileManager.default.removeItem(atPath: socketPath) }
+
+        let config = ServerConfig(socketPath: socketPath, autoExitOnNoSessions: false)
+        let sessionManager = ServerSessionManager(defaultColumns: 80, defaultRows: 24)
+        let server = SocketServer(config: config, sessionManager: sessionManager)
+
+        try server.start()
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let connManager = TYDConnectionManager(socketPath: socketPath, autoStart: false)
+        let client = RemoteSessionClient(connectionManager: connManager)
+
+        let disconnected = Mutex(false)
+        client.onDisconnected = {
+            disconnected.withLock { $0 = true }
+        }
+
+        try client.connect()
+        Thread.sleep(forTimeInterval: 0.2)
+
+        // Stop the server — should trigger client disconnect.
+        server.stop()
+
+        let deadline = Date().addingTimeInterval(2.0)
+        while Date() < deadline {
+            if disconnected.withLock({ $0 }) { break }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+
+        #expect(disconnected.withLock { $0 } == true)
+
+        client.disconnect()
+    }
+
     @Test("RemoteSessionClient screen replica receives updates")
     func remoteSessionClientScreenUpdate() throws {
         let socketPath = NSTemporaryDirectory() + "tyc-screen-\(UUID().uuidString.prefix(8)).sock"
