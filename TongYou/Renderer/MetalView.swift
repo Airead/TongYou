@@ -93,6 +93,22 @@ final class MetalView: NSView {
 
     override var acceptsFirstResponder: Bool { true }
 
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder()
+        if result {
+            startCursorBlinkTimer()
+        }
+        return result
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let result = super.resignFirstResponder()
+        if result {
+            hideCursor()
+        }
+        return result
+    }
+
     override func keyDown(with event: NSEvent) {
         // Bypass interpretKeyEvents for Option+key when optionAsAlt is on,
         // otherwise macOS turns e.g. Option+F into "ƒ" instead of ESC f.
@@ -447,15 +463,12 @@ final class MetalView: NSView {
     }
 
     @objc private func windowDidBecomeKey(_ notification: Notification) {
+        guard window?.firstResponder === self else { return }
         startCursorBlinkTimer()
     }
 
     @objc private func windowDidResignKey(_ notification: Notification) {
-        stopCursorBlinkTimer()
-        // Show a steady cursor when unfocused
-        renderer?.cursorBlinkOn = true
-        renderer?.markCursorDirty()
-        wakeDisplayLink()
+        hideCursor()
     }
 
     private func setupIfNeeded() {
@@ -591,6 +604,13 @@ final class MetalView: NSView {
     private func stopCursorBlinkTimer() {
         cursorBlinkTimer?.invalidate()
         cursorBlinkTimer = nil
+    }
+
+    private func hideCursor() {
+        stopCursorBlinkTimer()
+        renderer?.cursorBlinkOn = false
+        renderer?.markCursorDirty()
+        wakeDisplayLink()
     }
 
     private func wakeDisplayLink() {

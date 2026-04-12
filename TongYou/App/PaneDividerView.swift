@@ -7,43 +7,58 @@ struct PaneDividerView: View {
     let onDrag: (CGFloat) -> Void
     let onDragEnd: () -> Void
 
+    @State private var isHovered = false
+
     /// Width/height of the interactive drag area.
     static let thickness: CGFloat = 6
 
+    /// Width/height of the visible line.
+    private static let lineThickness: CGFloat = 1
+
     var body: some View {
-        Rectangle()
-            .fill(Color(nsColor: .separatorColor))
-            .frame(
-                width: direction == .vertical ? Self.thickness : nil,
-                height: direction == .horizontal ? Self.thickness : nil
-            )
-            .contentShape(Rectangle())
-            .cursor(direction == .vertical ? .resizeLeftRight : .resizeUpDown)
-            .gesture(
-                DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                    .onChanged { value in
-                        let delta = direction == .vertical
-                            ? value.translation.width
-                            : value.translation.height
-                        onDrag(delta)
-                    }
-                    .onEnded { _ in
-                        onDragEnd()
-                    }
-            )
-    }
-}
+        ZStack {
+            Color.black
+                .frame(
+                    width: direction == .vertical ? Self.thickness : nil,
+                    height: direction == .horizontal ? Self.thickness : nil
+                )
 
-// MARK: - Cursor Helper
-
-private extension View {
-    func cursor(_ cursor: NSCursor) -> some View {
-        onHover { inside in
-            if inside {
+            Rectangle()
+                .fill(Color.white.opacity(isHovered ? 0.3 : 0.15))
+                .frame(
+                    width: direction == .vertical ? Self.lineThickness : nil,
+                    height: direction == .horizontal ? Self.lineThickness : nil
+                )
+                .allowsHitTesting(false)
+        }
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            isHovered = hovering
+            if hovering {
+                let cursor: NSCursor = direction == .vertical
+                    ? .resizeLeftRight : .resizeUpDown
                 cursor.push()
             } else {
                 NSCursor.pop()
             }
         }
+        .onDisappear {
+            if isHovered {
+                NSCursor.pop()
+            }
+        }
+        .gesture(
+            DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                .onChanged { value in
+                    let delta = direction == .vertical
+                        ? value.translation.width
+                        : value.translation.height
+                    onDrag(delta)
+                }
+                .onEnded { _ in
+                    onDragEnd()
+                }
+        )
     }
 }
+

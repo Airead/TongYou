@@ -46,7 +46,7 @@ struct PaneSplitView: View {
         .id(pane.id)
         .overlay(
             Rectangle()
-                .stroke(Color.accentColor, lineWidth: 2)
+                .stroke(Color.accentColor, lineWidth: 1)
                 .opacity(isFocused ? 1 : 0)
                 .allowsHitTesting(false)
         )
