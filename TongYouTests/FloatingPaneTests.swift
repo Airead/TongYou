@@ -123,7 +123,7 @@ struct FloatingPaneTests {
 
     // MARK: - Visibility Toggle
 
-    @Test func toggleFloatingPanesVisibility() {
+    @Test func setFloatingPanesVisibility() {
         let mgr = TabManager()
         mgr.createTab(title: "test")
         _ = mgr.createFloatingPane()
@@ -133,24 +133,29 @@ struct FloatingPaneTests {
         let allVisibleInitially = mgr.activeTab!.floatingPanes.allSatisfy(\.isVisible)
         #expect(allVisibleInitially)
 
-        // Toggle → all hidden
-        mgr.toggleFloatingPanesVisibility()
+        // Hide all
+        mgr.setFloatingPanesVisibility(visible: false)
         let allHidden = mgr.activeTab!.floatingPanes.allSatisfy { !$0.isVisible }
         #expect(allHidden)
 
-        // Toggle again → all visible
-        mgr.toggleFloatingPanesVisibility()
+        // Show all
+        mgr.setFloatingPanesVisibility(visible: true)
         let allVisibleAgain = mgr.activeTab!.floatingPanes.allSatisfy(\.isVisible)
         #expect(allVisibleAgain)
+
+        // Idempotent when already visible
+        mgr.setFloatingPanesVisibility(visible: true)
+        let stillVisible = mgr.activeTab!.floatingPanes.allSatisfy(\.isVisible)
+        #expect(stillVisible)
     }
 
-    @Test func toggleWithMixedVisibility() {
+    @Test func setVisibilityWithMixedState() {
         let mgr = TabManager()
         mgr.createTab(title: "test")
         _ = mgr.createFloatingPane()
 
-        // Toggle to hide all existing panes
-        mgr.toggleFloatingPanesVisibility()
+        // Hide existing pane
+        mgr.setFloatingPanesVisibility(visible: false)
         let allHidden = mgr.activeTab!.floatingPanes.allSatisfy { !$0.isVisible }
         #expect(allHidden)
 
@@ -159,8 +164,8 @@ struct FloatingPaneTests {
         let mixed = !mgr.activeTab!.floatingPanes.allSatisfy(\.isVisible)
         #expect(mixed)
 
-        // Toggle with mixed state → makes all visible
-        mgr.toggleFloatingPanesVisibility()
+        // Show all resolves mixed state
+        mgr.setFloatingPanesVisibility(visible: true)
         let allVisibleAfterMixed = mgr.activeTab!.floatingPanes.allSatisfy(\.isVisible)
         #expect(allVisibleAfterMixed)
     }

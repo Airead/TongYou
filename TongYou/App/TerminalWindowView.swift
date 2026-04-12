@@ -195,8 +195,27 @@ struct TerminalWindowView: View {
         guard let activeTab = tabManager.activeTab else { return }
         if activeTab.floatingPanes.isEmpty {
             createFloatingPane()
+            return
+        }
+
+        let floatingIDs = Set(activeTab.floatingPanes.map(\.pane.id))
+        let isFocusingFloat = focusManager.focusedPaneID.map(floatingIDs.contains) ?? false
+
+        if isFocusingFloat {
+            // Currently on a floating pane → hide and return to previous tree pane
+            tabManager.setFloatingPanesVisibility(visible: false)
+            let treeIDs = Set(activeTab.allPaneIDs)
+            let targetID = focusManager.previousFocusedPane(existingIn: treeIDs)
+                ?? activeTab.paneTree.firstPane.id
+            focusAndActivate(paneID: targetID)
         } else {
-            tabManager.toggleFloatingPanesVisibility()
+            // Currently on a tree pane → show all and focus floating
+            tabManager.setFloatingPanesVisibility(visible: true)
+            let targetID = focusManager.previousFocusedPane(existingIn: floatingIDs)
+                ?? activeTab.floatingPanes.last?.pane.id
+            if let id = targetID {
+                focusAndActivate(paneID: id)
+            }
         }
     }
 

@@ -269,13 +269,13 @@ final class TabManager {
         activeFloatingPanes[idx].clampFrame()
     }
 
-    /// Toggle visibility of all floating panes in the active tab.
-    func toggleFloatingPanesVisibility() {
+    /// Explicitly show or hide all floating panes in the active tab.
+    func setFloatingPanesVisibility(visible: Bool) {
         guard tabs.indices.contains(activeTabIndex) else { return }
-        let allVisible = activeFloatingPanes.allSatisfy(\.isVisible)
-        let newVisibility = !allVisible
         for i in activeFloatingPanes.indices {
-            activeFloatingPanes[i].isVisible = newVisibility
+            if activeFloatingPanes[i].isVisible != visible {
+                activeFloatingPanes[i].isVisible = visible
+            }
         }
     }
 

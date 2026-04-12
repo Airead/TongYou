@@ -627,6 +627,8 @@ final class MetalView: NSView {
         stopCursorBlinkTimer()
         guard configLoader.config.cursorBlink else {
             renderer?.cursorBlinkOn = true
+            renderer?.markCursorDirty()
+            wakeDisplayLink()
             return
         }
         let timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
