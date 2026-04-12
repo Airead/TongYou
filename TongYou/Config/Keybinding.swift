@@ -29,6 +29,8 @@ struct Keybinding: Equatable {
         case copy
         case paste
         case search
+        case searchNext
+        case searchPrevious
         case resetFontSize
         case increaseFontSize
         case decreaseFontSize
@@ -59,6 +61,8 @@ struct Keybinding: Equatable {
             case .copy: "copy"
             case .paste: "paste"
             case .search: "search"
+            case .searchNext: "search_next"
+            case .searchPrevious: "search_previous"
             case .resetFontSize: "reset_font_size"
             case .increaseFontSize: "increase_font_size"
             case .decreaseFontSize: "decrease_font_size"
@@ -97,7 +101,8 @@ struct Keybinding: Equatable {
             case .focusPane(let dir): .focusPane(dir)
             case .newFloatingPane: .newFloatingPane
             case .toggleOrCreateFloatingPane: .toggleOrCreateFloatingPane
-            case .copy, .paste, .search, .resetFontSize, .increaseFontSize, .decreaseFontSize,
+            case .copy, .paste, .search, .searchNext, .searchPrevious,
+                 .resetFontSize, .increaseFontSize, .decreaseFontSize,
                  .unbind:
                 nil
             }
@@ -118,6 +123,8 @@ struct Keybinding: Equatable {
             case "copy": self = .copy
             case "paste": self = .paste
             case "search": self = .search
+            case "search_next": self = .searchNext
+            case "search_previous": self = .searchPrevious
             case "reset_font_size": self = .resetFontSize
             case "increase_font_size": self = .increaseFontSize
             case "decrease_font_size": self = .decreaseFontSize
@@ -174,6 +181,8 @@ struct Keybinding: Equatable {
         Keybinding(modifiers: .command, key: "v", action: .paste),
         // Search
         Keybinding(modifiers: .command, key: "f", action: .search),
+        Keybinding(modifiers: .command, key: "g", action: .searchNext),
+        Keybinding(modifiers: [.command, .shift], key: "g", action: .searchPrevious),
         // Font size
         Keybinding(modifiers: .command, key: "0", action: .resetFontSize),
         Keybinding(modifiers: .command, key: "+", action: .increaseFontSize),

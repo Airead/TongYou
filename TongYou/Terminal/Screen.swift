@@ -1196,6 +1196,12 @@ final class Screen {
         dirtyRegion.markFull()
     }
 
+    /// Set viewport offset directly (clamped to valid range).
+    func setViewportOffset(_ offset: Int) {
+        viewportOffset = max(0, min(offset, scrollbackCount))
+        dirtyRegion.markFull()
+    }
+
     /// Whether the viewport is scrolled up from the bottom.
     var isScrolledUp: Bool { viewportOffset > 0 }
 
@@ -1311,6 +1317,76 @@ final class Screen {
         while result.last == "\n" { result.removeLast() }
 
         return result
+    }
+
+    // MARK: - Search
+
+    /// Search all content (scrollback + active screen) for the given query.
+    /// Returns matches ordered from top (oldest scrollback) to bottom (latest screen line).
+    /// Case-insensitive substring search.
+    func search(query: String) -> [SearchMatch] {
+        guard !query.isEmpty else { return [] }
+        let lowerQuery = query.lowercased()
+        let queryScalars = Array(lowerQuery.unicodeScalars)
+        guard !queryScalars.isEmpty else { return [] }
+
+        var matches: [SearchMatch] = []
+        let totalLines = scrollbackCount + rows
+
+        for absLine in 0..<totalLines {
+            let cols: Int
+            if absLine < scrollbackCount {
+                cols = scrollbackColumns
+            } else {
+                cols = columns
+            }
+            guard cols > 0 else { continue }
+
+            // Extract and lowercase codepoints for this line.
+            // ASCII fast path avoids heap allocations for the common case.
+            var lineScalars = [Unicode.Scalar]()
+            lineScalars.reserveCapacity(cols)
+            for col in 0..<cols {
+                let cp = codepoint(atAbsoluteLine: absLine, col: col)
+                lineScalars.append(Self.lowercaseScalar(cp))
+            }
+
+            // Find all occurrences of the query in this line
+            var searchFrom = 0
+            while searchFrom <= cols - queryScalars.count {
+                var found = true
+                for qi in 0..<queryScalars.count {
+                    if lineScalars[searchFrom + qi] != queryScalars[qi] {
+                        found = false
+                        break
+                    }
+                }
+                if found {
+                    matches.append(SearchMatch(
+                        line: absLine,
+                        startCol: searchFrom,
+                        endCol: searchFrom + queryScalars.count - 1
+                    ))
+                    searchFrom += queryScalars.count
+                } else {
+                    searchFrom += 1
+                }
+            }
+        }
+
+        return matches
+    }
+
+    /// Lowercase a Unicode scalar. Uses direct arithmetic for ASCII (no allocation),
+    /// falls back to Character.lowercased() for non-ASCII.
+    @inline(__always)
+    private static func lowercaseScalar(_ s: Unicode.Scalar) -> Unicode.Scalar {
+        let v = s.value
+        if v >= 0x41 && v <= 0x5A { // A-Z
+            return Unicode.Scalar(v + 32)!
+        }
+        if v < 0x80 { return s } // other ASCII — already lowercase or non-letter
+        return Character(s).lowercased().unicodeScalars.first ?? s
     }
 
     /// Clear the entire screen and reset cursor.

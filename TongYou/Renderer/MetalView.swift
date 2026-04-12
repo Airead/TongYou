@@ -46,6 +46,13 @@ final class MetalView: NSView {
     /// Non-nil means we are inside a keyDown → interpretKeyEvents flow.
     private var keyTextAccumulator: [String]?
 
+    // MARK: - Search State
+
+    /// The search bar overlay (nil when search is inactive).
+    private var searchBar: SearchBarView?
+    /// Current search result with matches and focused index.
+    private var searchResult: SearchResult = .empty
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         commonInit()
@@ -188,7 +195,14 @@ final class MetalView: NSView {
         case .copy:
             return terminalController?.copySelection() == true
         case .search:
-            return false
+            toggleSearchBar()
+            return true
+        case .searchNext:
+            navigateSearch(forward: true)
+            return true
+        case .searchPrevious:
+            navigateSearch(forward: false)
+            return true
         case .resetFontSize, .increaseFontSize, .decreaseFontSize:
             return false
         default:
@@ -223,6 +237,91 @@ final class MetalView: NSView {
         guard let string = NSPasteboard.general.string(forType: .string),
               !string.isEmpty else { return }
         terminalController?.handlePaste(string)
+    }
+
+    // MARK: - Search
+
+    private func toggleSearchBar() {
+        if searchBar != nil {
+            closeSearchBar()
+        } else {
+            openSearchBar()
+        }
+    }
+
+    private func openSearchBar() {
+        guard searchBar == nil else {
+            searchBar?.activate()
+            return
+        }
+        let bar = SearchBarView(frame: .zero)
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(bar)
+
+        NSLayoutConstraint.activate([
+            bar.topAnchor.constraint(equalTo: topAnchor),
+            bar.leadingAnchor.constraint(equalTo: leadingAnchor),
+            bar.trailingAnchor.constraint(equalTo: trailingAnchor),
+            bar.heightAnchor.constraint(equalToConstant: SearchBarView.barHeight + 8),
+        ])
+
+        bar.onQueryChanged = { [weak self] query in
+            self?.performSearch(query: query)
+        }
+        bar.onNext = { [weak self] in
+            self?.navigateSearch(forward: true)
+        }
+        bar.onPrevious = { [weak self] in
+            self?.navigateSearch(forward: false)
+        }
+        bar.onClose = { [weak self] in
+            self?.closeSearchBar()
+        }
+
+        searchBar = bar
+        bar.activate()
+    }
+
+    private func closeSearchBar() {
+        searchBar?.removeFromSuperview()
+        searchBar = nil
+        searchResult = .empty
+        renderer?.searchResult = nil  // didSet triggers markDirty
+        wakeDisplayLink()
+        window?.makeFirstResponder(self)
+    }
+
+    private func performSearch(query: String) {
+        guard let tc = terminalController, !query.isEmpty else {
+            searchResult = .empty
+            renderer?.searchResult = nil  // didSet triggers markDirty
+            wakeDisplayLink()
+            searchBar?.updateMatchCount(current: nil, total: 0)
+            return
+        }
+
+        searchResult = tc.search(query: query)
+        renderer?.searchResult = searchResult
+        searchBar?.updateMatchCount(current: searchResult.focusedIndex, total: searchResult.count)
+
+        // Scroll to the focused match if it exists.
+        if let match = searchResult.focusedMatch {
+            tc.scrollToLine(match.line)
+        }
+
+        wakeDisplayLink()
+    }
+
+    private func navigateSearch(forward: Bool) {
+        guard !searchResult.isEmpty else { return }
+        if forward { searchResult.focusNext() } else { searchResult.focusPrevious() }
+        renderer?.searchResult = searchResult
+        searchBar?.updateMatchCount(current: searchResult.focusedIndex, total: searchResult.count)
+
+        if let match = searchResult.focusedMatch {
+            terminalController?.scrollToLine(match.line)
+        }
+        wakeDisplayLink()
     }
 
     // MARK: - Mouse Events

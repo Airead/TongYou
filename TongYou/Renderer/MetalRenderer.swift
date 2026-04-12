@@ -61,6 +61,41 @@ final class MetalRenderer {
         }
     }
 
+    /// Search highlights: all matches and the focused match index.
+    /// Set by MetalView when search is active.
+    var searchResult: SearchResult? {
+        didSet {
+            if searchResult != oldValue {
+                pendingDirtyRegion.markFull()
+                markAllFramesDirty()
+            }
+        }
+    }
+
+    /// A search match range on a single line, used for per-cell highlight lookups.
+    struct SearchMatchRange {
+        let startCol: Int
+        let endCol: Int
+        let isFocused: Bool
+    }
+
+    /// Per-line index of search matches. Key = absolute line number.
+    typealias SearchLineMap = [Int: [SearchMatchRange]]
+
+    /// Build the search line map from the current search result.
+    /// Returns an empty map if no search is active.
+    private func buildSearchLineMap() -> SearchLineMap {
+        guard let sr = searchResult, !sr.isEmpty else { return [:] }
+        var map: SearchLineMap = [:]
+        let focusedIdx = sr.focusedIndex
+        for (i, m) in sr.matches.enumerated() {
+            map[m.line, default: []].append(
+                SearchMatchRange(startCol: m.startCol, endCol: m.endCol, isFocused: i == focusedIdx)
+            )
+        }
+        return map
+    }
+
     /// Cursor blink state. Toggled externally by the view's blink timer.
     var cursorBlinkOn: Bool = true
 
@@ -366,10 +401,13 @@ final class MetalRenderer {
             if rebuildInstances {
                 frameMetrics?.beginInstanceBuild()
                 let snapshot = currentSnapshot
-                fillBgInstanceBuffer(frame: frame, grid: currentGrid, snapshot: snapshot, dirtyRegion: dirtyRegion)
+                let searchMap = buildSearchLineMap()
+                fillBgInstanceBuffer(frame: frame, grid: currentGrid, snapshot: snapshot,
+                                     dirtyRegion: dirtyRegion, searchLineMap: searchMap)
                 fillUnderlineInstanceBuffer(frame: frame, grid: currentGrid, snapshot: snapshot, url: currentHighlightedURL)
                 fillTextInstanceBuffer(frame: frame, grid: currentGrid, snapshot: snapshot,
-                                       dirtyRegion: dirtyRegion, contentChanged: textContentDirty)
+                                       dirtyRegion: dirtyRegion, contentChanged: textContentDirty,
+                                       searchLineMap: searchMap)
                 if textContentDirty {
                     glyphAtlas.evictIfNeeded(frameNumber: frameNumber, fontSystem: fontSystem)
                 }
@@ -493,7 +531,8 @@ final class MetalRenderer {
 
     private func fillBgInstanceBuffer(
         frame: UnsafeMutablePointer<FrameState>, grid: GridSize,
-        snapshot: ScreenSnapshot?, dirtyRegion: DirtyRegion
+        snapshot: ScreenSnapshot?, dirtyRegion: DirtyRegion,
+        searchLineMap: SearchLineMap
     ) {
         let cols = Int(grid.columns)
         let rows = Int(grid.rows)
@@ -544,10 +583,17 @@ final class MetalRenderer {
         let selBgColor = palette.selectionBg ?? palette.defaultFg
         let cursorBgColor = palette.cursorColor ?? palette.defaultFg
 
+        // Search highlight colors: yellow for matches, orange for focused match.
+        let searchMatchBg = SIMD4<UInt8>(180, 150, 40, 255)
+        let searchFocusBg = SIMD4<UInt8>(220, 120, 20, 255)
+
         for row in rowStart..<rowEnd {
             var idx = row * cols
             let absLine = snapshot?.absoluteLine(forViewportRow: row)
                 ?? row
+
+            let lineMatches = searchLineMap[absLine]
+
             if row < snapRows, let snapshot {
                 let rowBase = row * snapshot.columns
                 for col in 0..<snapCols {
@@ -559,6 +605,14 @@ final class MetalRenderer {
                             bg = selBgColor
                         } else {
                             swap(&fg, &bg)
+                        }
+                    }
+
+                    // Search highlight (overrides selection)
+                    if let matches = lineMatches {
+                        for m in matches where col >= m.startCol && col <= m.endCol {
+                            bg = m.isFocused ? searchFocusBg : searchMatchBg
+                            break
                         }
                     }
 
@@ -663,6 +717,11 @@ final class MetalRenderer {
         let cursorShape: CursorShape
         let cursorRow: Int
         let cursorCol: Int
+        /// Per-line search match ranges for visible lines.
+        let searchLineMap: SearchLineMap
+
+        /// Dark text color for cells with search highlight background.
+        private static let searchTextColor = SIMD4<UInt8>(20, 20, 20, 255)
 
         func foreground(attrs: CellAttributes, row: Int, col: Int, absLine: Int) -> SIMD4<UInt8> {
             var (fg, bg) = palette.resolveDisplay(attrs)
@@ -673,6 +732,13 @@ final class MetalRenderer {
                     swap(&fg, &bg)
                 }
             }
+            // Search highlight: use dark text for readability on yellow/orange bg.
+            if let matches = searchLineMap[absLine] {
+                for m in matches where col >= m.startCol && col <= m.endCol {
+                    fg = Self.searchTextColor
+                    break
+                }
+            }
             if showCursor && cursorShape == .block
                 && row == cursorRow && col == cursorCol {
                 fg = palette.cursorText ?? bg
@@ -681,14 +747,15 @@ final class MetalRenderer {
         }
     }
 
-    private func makeTextColorState(snapshot: ScreenSnapshot) -> TextColorState {
-        TextColorState(
+    private func makeTextColorState(snapshot: ScreenSnapshot, searchLineMap: SearchLineMap) -> TextColorState {
+        return TextColorState(
             palette: colorPalette,
             selBounds: snapshot.selection?.ordered,
             showCursor: snapshot.cursorVisible && cursorBlinkOn,
             cursorShape: snapshot.cursorShape,
             cursorRow: snapshot.cursorRow,
-            cursorCol: snapshot.cursorCol
+            cursorCol: snapshot.cursorCol,
+            searchLineMap: searchLineMap
         )
     }
 
@@ -696,7 +763,8 @@ final class MetalRenderer {
 
     private func fillTextInstanceBuffer(
         frame: UnsafeMutablePointer<FrameState>, grid: GridSize,
-        snapshot: ScreenSnapshot?, dirtyRegion: DirtyRegion, contentChanged: Bool
+        snapshot: ScreenSnapshot?, dirtyRegion: DirtyRegion, contentChanged: Bool,
+        searchLineMap: SearchLineMap
     ) {
         let cols = Int(grid.columns)
         let rows = Int(grid.rows)
@@ -711,7 +779,8 @@ final class MetalRenderer {
         if !contentChanged, !dirtyRegion.fullRebuild, let range = dirtyRegion.lineRange,
            frame.pointee.textInstanceCount > 0 {
             patchTextInstanceColors(
-                frame: frame, snapshot: snapshot, dirtyRowRange: range)
+                frame: frame, snapshot: snapshot, dirtyRowRange: range,
+                searchLineMap: searchLineMap)
             return
         }
 
@@ -729,7 +798,7 @@ final class MetalRenderer {
 
         let snapRows = min(rows, snapshot.rows)
         let snapCols = min(cols, snapshot.columns)
-        let colorState = makeTextColorState(snapshot: snapshot)
+        let colorState = makeTextColorState(snapshot: snapshot, searchLineMap: searchLineMap)
 
         for row in 0..<snapRows {
             let absLine = snapshot.absoluteLine(forViewportRow: row)
@@ -767,14 +836,15 @@ final class MetalRenderer {
     private func patchTextInstanceColors(
         frame: UnsafeMutablePointer<FrameState>,
         snapshot: ScreenSnapshot,
-        dirtyRowRange: Range<Int>
+        dirtyRowRange: Range<Int>,
+        searchLineMap: SearchLineMap
     ) {
         let instanceCount = frame.pointee.textInstanceCount
         let ptr = frame.pointee.textInstanceBuffer.contents()
             .bindMemory(to: CellTextInstance.self, capacity: instanceCount)
 
         let snapCols = snapshot.columns
-        let colorState = makeTextColorState(snapshot: snapshot)
+        let colorState = makeTextColorState(snapshot: snapshot, searchLineMap: searchLineMap)
         var enteredDirtyRange = false
 
         for i in 0..<instanceCount {

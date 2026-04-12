@@ -432,6 +432,38 @@ final class TerminalController {
         }
     }
 
+    // MARK: - Search
+
+    /// Search all terminal content for the given query. Runs on ptyQueue.
+    /// Returns a SearchResult with matches and the focused index nearest to the viewport center.
+    func search(query: String) -> SearchResult {
+        guard !query.isEmpty else { return .empty }
+        let matches = ptyQueue.sync { screen.search(query: query) }
+        guard !matches.isEmpty else {
+            return SearchResult(matches: [], query: query, focusedIndex: nil)
+        }
+        // Focus the match nearest to the center of the current viewport.
+        let viewportCenter = screen.scrollbackCount - screen.viewportOffset + screen.rows / 2
+        var result = SearchResult(matches: matches, query: query, focusedIndex: 0)
+        result.focusNearest(toAbsoluteLine: viewportCenter)
+        return result
+    }
+
+    /// Scroll the viewport so that the given absolute line is visible.
+    func scrollToLine(_ absoluteLine: Int) {
+        ptyQueue.async { [weak self] in
+            guard let self else { return }
+            let sbCount = self.screen.scrollbackCount
+            let rows = self.screen.rows
+            // Calculate the viewport offset that places the target line near the center.
+            let targetOffset = sbCount - absoluteLine + rows / 2
+            let clamped = max(0, min(targetOffset, sbCount))
+            guard self.screen.viewportOffset != clamped else { return }
+            self.screen.setViewportOffset(clamped)
+            self.markScreenDirty()
+        }
+    }
+
     // MARK: - Paste
 
     /// Paste text into the terminal. Applies safety filtering and bracketed paste encoding.
