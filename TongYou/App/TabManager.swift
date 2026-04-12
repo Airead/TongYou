@@ -1,12 +1,19 @@
 import Foundation
 
-/// Actions that can be performed on tabs, communicated from MetalView to the window.
+/// Actions communicated from MetalView up to the window for dispatch.
 enum TabAction {
+    // Tab management
     case newTab
     case closeTab
     case previousTab
     case nextTab
     case gotoTab(Int)  // 1-based index
+    // Pane management
+    case splitVertical
+    case splitHorizontal
+    case closePane
+    case focusPane(FocusDirection)
+    case paneExited(UUID)
 }
 
 /// A single terminal tab containing a tree of panes.
@@ -129,6 +136,44 @@ final class TabManager {
         }
     }
 
+    // MARK: - Pane Operations
+
+    @discardableResult
+    func splitPane(id paneID: UUID, direction: SplitDirection, newPane: TerminalPane) -> Bool {
+        for i in tabs.indices {
+            if let newTree = tabs[i].paneTree.split(
+                paneID: paneID, direction: direction, newPane: newPane
+            ) {
+                tabs[i].paneTree = newTree
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Close a specific pane. If it's the last pane in its tab, close the tab.
+    /// Returns the ID of a sibling pane to focus, or nil if the tab was closed.
+    @discardableResult
+    func closePane(id paneID: UUID) -> UUID? {
+        for i in tabs.indices {
+            guard tabs[i].paneTree.contains(paneID: paneID) else { continue }
+            if let newTree = tabs[i].paneTree.removePane(id: paneID) {
+                tabs[i].paneTree = newTree
+                return newTree.firstPane.id
+            } else {
+                closeTab(at: i)
+                return nil
+            }
+        }
+        return nil
+    }
+
+    /// Replace the active tab's pane tree (e.g. after a divider drag).
+    func updateActivePaneTree(_ newTree: PaneNode) {
+        guard tabs.indices.contains(activeTabIndex) else { return }
+        tabs[activeTabIndex].paneTree = newTree
+    }
+
     // MARK: - Title Updates
 
     func updateTitle(_ title: String, for tabID: UUID) {
@@ -155,6 +200,10 @@ final class TabManager {
         case .gotoTab(let number):
             selectTabByNumber(number)
             return true
+        case .splitVertical, .splitHorizontal, .closePane,
+             .focusPane, .paneExited:
+            // Pane actions are handled by TerminalWindowView, not TabManager.
+            return false
         }
     }
 }

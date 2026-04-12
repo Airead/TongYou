@@ -26,11 +26,17 @@ final class MetalView: NSView {
     /// Lines per discrete mouse-wheel tick.
     private static let discreteScrollMultiplier = 3
 
+    /// The pane ID this MetalView belongs to (set by TerminalPaneContainerView).
+    var paneID: UUID?
+
     /// Callback for tab-related keybinding actions (forwarded to TabManager).
     var onTabAction: ((TabAction) -> Void)?
 
     /// Callback when the window title changes (from OSC 0/2).
     var onTitleChanged: ((String) -> Void)?
+
+    /// Callback when this pane receives focus (mouse click).
+    var onFocused: (() -> Void)?
 
     // MARK: - IME State
 
@@ -136,32 +142,23 @@ final class MetalView: NSView {
     }
 
     private func performAction(_ action: Keybinding.Action) -> Bool {
+        // Actions that map directly to TabAction.
+        if let tabAction = action.tabAction {
+            onTabAction?(tabAction)
+            return true
+        }
+        // Actions handled locally by the MetalView.
         switch action {
         case .paste:
             handlePaste()
             return true
         case .copy:
             return terminalController?.copySelection() == true
-        case .newTab:
-            onTabAction?(.newTab)
-            return true
-        case .closeTab:
-            onTabAction?(.closeTab)
-            return true
-        case .previousTab:
-            onTabAction?(.previousTab)
-            return true
-        case .nextTab:
-            onTabAction?(.nextTab)
-            return true
-        case .gotoTab(let n):
-            onTabAction?(.gotoTab(n))
-            return true
         case .search:
-            // Will be implemented in P5.5
             return false
         case .resetFontSize, .increaseFontSize, .decreaseFontSize:
-            // Font size adjustment — future enhancement
+            return false
+        default:
             return false
         }
     }
@@ -202,6 +199,7 @@ final class MetalView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        onFocused?()
         let inMouseMode = isMouseTrackingActive
 
         // Cmd+Click: open URL
@@ -499,7 +497,8 @@ final class MetalView: NSView {
                 }
             }
             tc.onProcessExited = { [weak self] in
-                self?.onTabAction?(.closeTab)
+                guard let self, let paneID = self.paneID else { return }
+                self.onTabAction?(.paneExited(paneID))
             }
             tc.onTitleChanged = { [weak self] title in
                 self?.onTitleChanged?(title)

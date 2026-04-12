@@ -9,24 +9,31 @@ struct TerminalPaneContainerView: NSViewRepresentable {
     let initialWorkingDirectory: String?
     let onTabAction: (TabAction) -> Void
     let onTitleChanged: (String) -> Void
+    let onFocused: () -> Void
 
     func makeNSView(context: Context) -> MetalView {
         if let existing = viewStore.view(for: paneID) {
+            existing.paneID = paneID
             existing.onTabAction = onTabAction
             existing.onTitleChanged = onTitleChanged
+            existing.onFocused = onFocused
             return existing
         }
         let view = MetalView()
+        view.paneID = paneID
         view.initialWorkingDirectory = initialWorkingDirectory
         view.onTabAction = onTabAction
         view.onTitleChanged = onTitleChanged
+        view.onFocused = onFocused
         viewStore.store(view, for: paneID)
         return view
     }
 
     func updateNSView(_ nsView: MetalView, context: Context) {
+        nsView.paneID = paneID
         nsView.onTabAction = onTabAction
         nsView.onTitleChanged = onTitleChanged
+        nsView.onFocused = onFocused
     }
 
     static func dismantleNSView(_ nsView: MetalView, coordinator: ()) {

@@ -25,6 +25,11 @@ struct Keybinding: Equatable {
         case resetFontSize
         case increaseFontSize
         case decreaseFontSize
+        // Pane management
+        case splitVertical
+        case splitHorizontal
+        case closePane
+        case focusPane(FocusDirection)
 
         /// Raw string used in config files.
         var rawValue: String {
@@ -40,6 +45,33 @@ struct Keybinding: Equatable {
             case .resetFontSize: "reset_font_size"
             case .increaseFontSize: "increase_font_size"
             case .decreaseFontSize: "decrease_font_size"
+            case .splitVertical: "split_vertical"
+            case .splitHorizontal: "split_horizontal"
+            case .closePane: "close_pane"
+            case .focusPane(let dir):
+                switch dir {
+                case .left: "focus_pane_left"
+                case .right: "focus_pane_right"
+                case .up: "focus_pane_up"
+                case .down: "focus_pane_down"
+                }
+            }
+        }
+
+        /// Map to TabAction for actions that pass straight through to the window.
+        var tabAction: TabAction? {
+            switch self {
+            case .newTab: .newTab
+            case .closeTab: .closeTab
+            case .previousTab: .previousTab
+            case .nextTab: .nextTab
+            case .gotoTab(let n): .gotoTab(n)
+            case .splitVertical: .splitVertical
+            case .splitHorizontal: .splitHorizontal
+            case .closePane: .closePane
+            case .focusPane(let dir): .focusPane(dir)
+            case .copy, .paste, .search, .resetFontSize, .increaseFontSize, .decreaseFontSize:
+                nil
             }
         }
 
@@ -56,6 +88,13 @@ struct Keybinding: Equatable {
             case "reset_font_size": self = .resetFontSize
             case "increase_font_size": self = .increaseFontSize
             case "decrease_font_size": self = .decreaseFontSize
+            case "split_vertical": self = .splitVertical
+            case "split_horizontal": self = .splitHorizontal
+            case "close_pane": self = .closePane
+            case "focus_pane_left": self = .focusPane(.left)
+            case "focus_pane_right": self = .focusPane(.right)
+            case "focus_pane_up": self = .focusPane(.up)
+            case "focus_pane_down": self = .focusPane(.down)
             default:
                 if rawValue.hasPrefix("goto_tab:"),
                    let n = Int(rawValue.dropFirst("goto_tab:".count)),
@@ -96,6 +135,14 @@ struct Keybinding: Equatable {
         Keybinding(modifiers: .command, key: "0", action: .resetFontSize),
         Keybinding(modifiers: .command, key: "+", action: .increaseFontSize),
         Keybinding(modifiers: .command, key: "-", action: .decreaseFontSize),
+        // Pane management
+        Keybinding(modifiers: .command, key: "d", action: .splitVertical),
+        Keybinding(modifiers: [.command, .shift], key: "d", action: .splitHorizontal),
+        Keybinding(modifiers: [.command, .shift], key: "w", action: .closePane),
+        Keybinding(modifiers: [.command, .option], key: "left", action: .focusPane(.left)),
+        Keybinding(modifiers: [.command, .option], key: "right", action: .focusPane(.right)),
+        Keybinding(modifiers: [.command, .option], key: "up", action: .focusPane(.up)),
+        Keybinding(modifiers: [.command, .option], key: "down", action: .focusPane(.down)),
     ]
 
     /// Parse a keybinding string like "cmd+shift+t=new_tab".
