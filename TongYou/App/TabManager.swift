@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// Actions communicated from MetalView up to the window for dispatch.
@@ -14,6 +15,10 @@ enum TabAction {
     case closePane
     case focusPane(FocusDirection)
     case paneExited(UUID)
+    // Floating pane management
+    case newFloatingPane
+    case closeFloatingPane(UUID)
+    case toggleOrCreateFloatingPane
 }
 
 /// A single terminal tab containing a tree of panes.
@@ -21,9 +26,15 @@ struct TerminalTab: Identifiable {
     let id: UUID
     var title: String
     var paneTree: PaneNode
+    var floatingPanes: [FloatingPane] = []
 
-    /// All pane IDs in this tab's pane tree.
+    /// All pane IDs in this tab's pane tree (does not include floating panes).
     var allPaneIDs: [UUID] { paneTree.allPaneIDs }
+
+    /// All pane IDs including both tree panes and floating panes.
+    var allPaneIDsIncludingFloating: [UUID] {
+        paneTree.allPaneIDs + floatingPanes.map(\.pane.id)
+    }
 
     init(title: String = "shell", initialWorkingDirectory: String? = nil) {
         self.id = UUID()
@@ -174,6 +185,96 @@ final class TabManager {
         tabs[activeTabIndex].paneTree = newTree
     }
 
+    // MARK: - Floating Pane Operations
+
+    /// Mutable access to the active tab's floating panes.
+    /// Callers must guard `tabs.indices.contains(activeTabIndex)` first.
+    private var activeFloatingPanes: [FloatingPane] {
+        get { tabs[activeTabIndex].floatingPanes }
+        set { tabs[activeTabIndex].floatingPanes = newValue }
+    }
+
+    /// Create a new floating pane in the active tab.
+    /// If existing floating panes overlap the default position, the new pane
+    /// is cascaded (offset) so it doesn't stack directly on top.
+    @discardableResult
+    func createFloatingPane(initialWorkingDirectory: String? = nil) -> UUID? {
+        guard tabs.indices.contains(activeTabIndex) else { return nil }
+        let pane = TerminalPane(initialWorkingDirectory: initialWorkingDirectory)
+        let nextZ = (activeFloatingPanes.max(by: { $0.zIndex < $1.zIndex })?.zIndex ?? -1) + 1
+        let frame = nextFloatingPaneFrame()
+        var floating = FloatingPane(pane: pane, frame: frame, zIndex: nextZ)
+        floating.clampFrame()
+        activeFloatingPanes.append(floating)
+        return pane.id
+    }
+
+    private func nextFloatingPaneFrame() -> CGRect {
+        let base = FloatingPane.defaultFrame
+        let step: CGFloat = 0.03
+        let existing = activeFloatingPanes
+
+        guard !existing.isEmpty else { return base }
+
+        var candidate = base
+        for i in 0..<existing.count {
+            let offset = step * CGFloat(i + 1)
+            candidate = CGRect(
+                x: base.origin.x + offset,
+                y: base.origin.y + offset,
+                width: base.width,
+                height: base.height
+            )
+            let collision = existing.contains { pane in
+                abs(pane.frame.origin.x - candidate.origin.x) < step / 2
+                    && abs(pane.frame.origin.y - candidate.origin.y) < step / 2
+            }
+            if !collision { break }
+        }
+        return candidate
+    }
+
+    /// Close a floating pane by its pane ID. Returns true if found and removed.
+    /// Searches all tabs (not just active) because a PTY exit may arrive after
+    /// the user has switched away from the tab that owns the floating pane.
+    @discardableResult
+    func closeFloatingPane(paneID: UUID) -> Bool {
+        for i in tabs.indices {
+            if let idx = tabs[i].floatingPanes.firstIndex(where: { $0.pane.id == paneID }) {
+                tabs[i].floatingPanes.remove(at: idx)
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Bring a floating pane to the front by updating its zIndex.
+    func bringFloatingPaneToFront(paneID: UUID) {
+        guard tabs.indices.contains(activeTabIndex) else { return }
+        guard let idx = activeFloatingPanes.firstIndex(where: { $0.pane.id == paneID }) else { return }
+        let maxZ = activeFloatingPanes.max(by: { $0.zIndex < $1.zIndex })?.zIndex ?? 0
+        guard activeFloatingPanes[idx].zIndex < maxZ else { return }
+        activeFloatingPanes[idx].zIndex = maxZ + 1
+    }
+
+    /// Update the normalized frame of a floating pane.
+    func updateFloatingPaneFrame(paneID: UUID, frame: CGRect) {
+        guard tabs.indices.contains(activeTabIndex) else { return }
+        guard let idx = activeFloatingPanes.firstIndex(where: { $0.pane.id == paneID }) else { return }
+        activeFloatingPanes[idx].frame = frame
+        activeFloatingPanes[idx].clampFrame()
+    }
+
+    /// Toggle visibility of all floating panes in the active tab.
+    func toggleFloatingPanesVisibility() {
+        guard tabs.indices.contains(activeTabIndex) else { return }
+        let allVisible = activeFloatingPanes.allSatisfy(\.isVisible)
+        let newVisibility = !allVisible
+        for i in activeFloatingPanes.indices {
+            activeFloatingPanes[i].isVisible = newVisibility
+        }
+    }
+
     // MARK: - Title Updates
 
     func updateTitle(_ title: String, for tabID: UUID) {
@@ -201,7 +302,8 @@ final class TabManager {
             selectTabByNumber(number)
             return true
         case .splitVertical, .splitHorizontal, .closePane,
-             .focusPane, .paneExited:
+             .focusPane, .paneExited,
+             .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane:
             // Pane actions are handled by TerminalWindowView, not TabManager.
             return false
         }

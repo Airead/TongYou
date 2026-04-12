@@ -1,0 +1,251 @@
+import CoreGraphics
+import Foundation
+import Testing
+@testable import TongYou
+
+@Suite("Floating Panes")
+struct FloatingPaneTests {
+
+    // MARK: - FloatingPane Model
+
+    @Test func defaultFrameIsCentered() {
+        let pane = FloatingPane(pane: TerminalPane())
+        #expect(pane.frame == FloatingPane.defaultFrame)
+        #expect(pane.isVisible)
+        #expect(pane.zIndex == 0)
+    }
+
+    @Test func clampFrameEnforcesMinSize() {
+        var fp = FloatingPane(pane: TerminalPane(), frame: CGRect(x: 0.5, y: 0.5, width: 0.01, height: 0.01))
+        fp.clampFrame()
+        #expect(fp.frame.width >= FloatingPane.minSize.width)
+        #expect(fp.frame.height >= FloatingPane.minSize.height)
+    }
+
+    @Test func clampFrameKeepsInBounds() {
+        var fp = FloatingPane(pane: TerminalPane(), frame: CGRect(x: -0.5, y: -0.5, width: 0.4, height: 0.4))
+        fp.clampFrame()
+        #expect(fp.frame.origin.x >= 0)
+        #expect(fp.frame.origin.y >= 0)
+    }
+
+    @Test func clampFrameHandlesOverflow() {
+        var fp = FloatingPane(pane: TerminalPane(), frame: CGRect(x: 0.9, y: 0.9, width: 0.4, height: 0.4))
+        fp.clampFrame()
+        #expect(fp.frame.maxX <= 1.0)
+        #expect(fp.frame.maxY <= 1.0)
+    }
+
+    @Test func pixelFrameConversion() {
+        let fp = FloatingPane(pane: TerminalPane(), frame: CGRect(x: 0.25, y: 0.5, width: 0.5, height: 0.25))
+        let pixel = fp.pixelFrame(in: CGSize(width: 800, height: 600))
+        #expect(pixel.origin.x == 200)
+        #expect(pixel.origin.y == 300)
+        #expect(pixel.width == 400)
+        #expect(pixel.height == 150)
+    }
+
+    // MARK: - TabManager Floating Pane Operations
+
+    @Test func createFloatingPane() {
+        let mgr = TabManager()
+        mgr.createTab(title: "test")
+        let paneID = mgr.createFloatingPane()
+        #expect(paneID != nil)
+        #expect(mgr.activeTab!.floatingPanes.count == 1)
+        #expect(mgr.activeTab!.floatingPanes[0].pane.id == paneID)
+    }
+
+    @Test func createFloatingPaneWithNoTab() {
+        let mgr = TabManager()
+        let paneID = mgr.createFloatingPane()
+        #expect(paneID == nil)
+    }
+
+    @Test func closeFloatingPane() {
+        let mgr = TabManager()
+        mgr.createTab(title: "test")
+        let paneID = mgr.createFloatingPane()!
+        let removed = mgr.closeFloatingPane(paneID: paneID)
+        #expect(removed)
+        #expect(mgr.activeTab!.floatingPanes.isEmpty)
+    }
+
+    @Test func closeNonexistentFloatingPane() {
+        let mgr = TabManager()
+        mgr.createTab(title: "test")
+        let removed = mgr.closeFloatingPane(paneID: UUID())
+        #expect(!removed)
+    }
+
+    @Test func allPaneIDsIncludingFloating() {
+        let mgr = TabManager()
+        mgr.createTab(title: "test")
+        let treePaneID = mgr.activeTab!.paneTree.firstPane.id
+        let floatingPaneID = mgr.createFloatingPane()!
+        let allIDs = mgr.activeTab!.allPaneIDsIncludingFloating
+        #expect(allIDs.contains(treePaneID))
+        #expect(allIDs.contains(floatingPaneID))
+        #expect(allIDs.count == 2)
+    }
+
+    // MARK: - Z-Order Management
+
+    @Test func bringToFrontUpdatesZIndex() {
+        let mgr = TabManager()
+        mgr.createTab(title: "test")
+        let id1 = mgr.createFloatingPane()!
+        let id2 = mgr.createFloatingPane()!
+
+        // id2 should be on top (higher zIndex)
+        let z1Before = mgr.activeTab!.floatingPanes.first(where: { $0.pane.id == id1 })!.zIndex
+        let z2Before = mgr.activeTab!.floatingPanes.first(where: { $0.pane.id == id2 })!.zIndex
+        #expect(z2Before > z1Before)
+
+        // Bring id1 to front
+        mgr.bringFloatingPaneToFront(paneID: id1)
+        let z1After = mgr.activeTab!.floatingPanes.first(where: { $0.pane.id == id1 })!.zIndex
+        let z2After = mgr.activeTab!.floatingPanes.first(where: { $0.pane.id == id2 })!.zIndex
+        #expect(z1After > z2After)
+    }
+
+    @Test func bringToFrontAlreadyOnTop() {
+        let mgr = TabManager()
+        mgr.createTab(title: "test")
+        _ = mgr.createFloatingPane()!
+        let id2 = mgr.createFloatingPane()!
+
+        let zBefore = mgr.activeTab!.floatingPanes.first(where: { $0.pane.id == id2 })!.zIndex
+        mgr.bringFloatingPaneToFront(paneID: id2) // already on top
+        let zAfter = mgr.activeTab!.floatingPanes.first(where: { $0.pane.id == id2 })!.zIndex
+        #expect(zAfter == zBefore) // unchanged
+    }
+
+    // MARK: - Visibility Toggle
+
+    @Test func toggleFloatingPanesVisibility() {
+        let mgr = TabManager()
+        mgr.createTab(title: "test")
+        _ = mgr.createFloatingPane()
+        _ = mgr.createFloatingPane()
+
+        // All visible by default
+        let allVisibleInitially = mgr.activeTab!.floatingPanes.allSatisfy(\.isVisible)
+        #expect(allVisibleInitially)
+
+        // Toggle → all hidden
+        mgr.toggleFloatingPanesVisibility()
+        let allHidden = mgr.activeTab!.floatingPanes.allSatisfy { !$0.isVisible }
+        #expect(allHidden)
+
+        // Toggle again → all visible
+        mgr.toggleFloatingPanesVisibility()
+        let allVisibleAgain = mgr.activeTab!.floatingPanes.allSatisfy(\.isVisible)
+        #expect(allVisibleAgain)
+    }
+
+    @Test func toggleWithMixedVisibility() {
+        let mgr = TabManager()
+        mgr.createTab(title: "test")
+        _ = mgr.createFloatingPane()
+
+        // Toggle to hide all existing panes
+        mgr.toggleFloatingPanesVisibility()
+        let allHidden = mgr.activeTab!.floatingPanes.allSatisfy { !$0.isVisible }
+        #expect(allHidden)
+
+        // Add a new one (visible by default) to create mixed state
+        _ = mgr.createFloatingPane()
+        let mixed = !mgr.activeTab!.floatingPanes.allSatisfy(\.isVisible)
+        #expect(mixed)
+
+        // Toggle with mixed state → makes all visible
+        mgr.toggleFloatingPanesVisibility()
+        let allVisibleAfterMixed = mgr.activeTab!.floatingPanes.allSatisfy(\.isVisible)
+        #expect(allVisibleAfterMixed)
+    }
+
+    // MARK: - Frame Update
+
+    @Test func updateFloatingPaneFrame() {
+        let mgr = TabManager()
+        mgr.createTab(title: "test")
+        let paneID = mgr.createFloatingPane()!
+
+        let newFrame = CGRect(x: 0.1, y: 0.2, width: 0.3, height: 0.4)
+        mgr.updateFloatingPaneFrame(paneID: paneID, frame: newFrame)
+        let updated = mgr.activeTab!.floatingPanes.first(where: { $0.pane.id == paneID })!
+        #expect(updated.frame == newFrame)
+    }
+
+    @Test func updateFloatingPaneFrameClamps() {
+        let mgr = TabManager()
+        mgr.createTab(title: "test")
+        let paneID = mgr.createFloatingPane()!
+
+        // Frame that overflows
+        mgr.updateFloatingPaneFrame(paneID: paneID, frame: CGRect(x: 0.9, y: 0.9, width: 0.5, height: 0.5))
+        let updated = mgr.activeTab!.floatingPanes.first(where: { $0.pane.id == paneID })!
+        #expect(updated.frame.maxX <= 1.0)
+        #expect(updated.frame.maxY <= 1.0)
+    }
+
+    // MARK: - Cascade Offset
+
+    @Test func createFloatingPaneWithOffset() {
+        let mgr = TabManager()
+        mgr.createTab(title: "test")
+
+        let id1 = mgr.createFloatingPane()!
+        let id2 = mgr.createFloatingPane()!
+
+        let frame1 = mgr.activeTab!.floatingPanes.first(where: { $0.pane.id == id1 })!.frame
+        let frame2 = mgr.activeTab!.floatingPanes.first(where: { $0.pane.id == id2 })!.frame
+
+        // Second pane should be offset from the first
+        #expect(frame2.origin.x > frame1.origin.x)
+        #expect(frame2.origin.y > frame1.origin.y)
+        // Same size
+        #expect(frame2.width == frame1.width)
+        #expect(frame2.height == frame1.height)
+    }
+
+    @Test func createThreeFloatingPanesAllOffset() {
+        let mgr = TabManager()
+        mgr.createTab(title: "test")
+
+        let id1 = mgr.createFloatingPane()!
+        let id2 = mgr.createFloatingPane()!
+        let id3 = mgr.createFloatingPane()!
+
+        let fp = mgr.activeTab!.floatingPanes
+        let f1 = fp.first(where: { $0.pane.id == id1 })!.frame
+        let f2 = fp.first(where: { $0.pane.id == id2 })!.frame
+        let f3 = fp.first(where: { $0.pane.id == id3 })!.frame
+
+        // All three should have distinct origins
+        #expect(f1.origin.x != f2.origin.x)
+        #expect(f2.origin.x != f3.origin.x)
+        #expect(f1.origin.x != f3.origin.x)
+    }
+
+    // MARK: - Keybinding Parsing
+
+    @Test func floatingPaneActionRawValueRoundTrip() {
+        let actions: [Keybinding.Action] = [
+            .newFloatingPane, .toggleOrCreateFloatingPane,
+        ]
+        for action in actions {
+            let parsed = Keybinding.Action(rawValue: action.rawValue)
+            #expect(parsed == action, "Round-trip failed for \(action.rawValue)")
+        }
+    }
+
+    @Test func floatingPaneTabActionMapping() {
+        let newMapped = Keybinding.Action.newFloatingPane.tabAction
+        let toggleMapped = Keybinding.Action.toggleOrCreateFloatingPane.tabAction
+
+        #expect(newMapped != nil)
+        #expect(toggleMapped != nil)
+    }
+}

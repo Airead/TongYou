@@ -6,7 +6,9 @@ import SwiftUI
 /// ```
 /// TerminalWindowView
 ///   +-- TabBarView (visible when tab count > 1, or configured)
-///   +-- PaneSplitView (active tab's pane tree)
+///   +-- ZStack
+///       +-- PaneSplitView (active tab's pane tree)
+///       +-- FloatingPaneOverlay (floating panes sorted by z-order)
 /// ```
 struct TerminalWindowView: View {
 
@@ -41,18 +43,39 @@ struct TerminalWindowView: View {
             }
 
             if let activeTab = tabManager.activeTab {
-                PaneSplitView(
-                    node: activeTab.paneTree,
-                    viewStore: viewStore,
-                    focusManager: focusManager,
-                    onTabAction: handleTabAction,
-                    onTitleChanged: { title in
-                        tabManager.updateTitle(title, for: activeTab.id)
-                    },
-                    onNodeChanged: { newTree in
-                        tabManager.updateActivePaneTree(newTree)
-                    }
-                )
+                let updateTabTitle: (String) -> Void = { title in
+                    tabManager.updateTitle(title, for: activeTab.id)
+                }
+
+                ZStack {
+                    PaneSplitView(
+                        node: activeTab.paneTree,
+                        viewStore: viewStore,
+                        focusManager: focusManager,
+                        onTabAction: handleTabAction,
+                        onTitleChanged: updateTabTitle,
+                        onNodeChanged: { newTree in
+                            tabManager.updateActivePaneTree(newTree)
+                        }
+                    )
+
+                    FloatingPaneOverlay(
+                        floatingPanes: activeTab.floatingPanes,
+                        viewStore: viewStore,
+                        focusManager: focusManager,
+                        onTabAction: handleTabAction,
+                        onTitleChanged: updateTabTitle,
+                        onFrameChanged: { paneID, frame in
+                            tabManager.updateFloatingPaneFrame(paneID: paneID, frame: frame)
+                        },
+                        onBringToFront: { paneID in
+                            tabManager.bringFloatingPaneToFront(paneID: paneID)
+                        },
+                        onClose: { paneID in
+                            closeFloatingPane(id: paneID)
+                        }
+                    )
+                }
                 .id(activeTab.id)
             }
         }
@@ -86,8 +109,8 @@ struct TerminalWindowView: View {
         guard tabManager.tabs.indices.contains(index) else { return }
         let tab = tabManager.tabs[index]
 
-        // Tear down all MetalViews in this tab's pane tree.
-        for paneID in tab.allPaneIDs {
+        // Tear down all MetalViews in this tab's pane tree and floating panes.
+        for paneID in tab.allPaneIDsIncludingFloating {
             viewStore.tearDown(for: paneID)
         }
 
@@ -126,17 +149,47 @@ struct TerminalWindowView: View {
 
     /// Tear down a pane and focus the nearest sibling or close the tab/window.
     private func removePane(id paneID: UUID) {
+        // Check if this is a floating pane first.
+        if tabManager.activeTab?.floatingPanes.contains(where: { $0.pane.id == paneID }) == true {
+            closeFloatingPane(id: paneID)
+            return
+        }
+
         viewStore.tearDown(for: paneID)
 
         if let siblingID = tabManager.closePane(id: paneID) {
-            focusManager.focusPane(id: siblingID)
-            if let metalView = viewStore.view(for: siblingID) {
-                metalView.window?.makeFirstResponder(metalView)
-            }
+            focusAndActivate(paneID: siblingID)
         } else if tabManager.tabs.isEmpty {
             NSApp.keyWindow?.close()
         } else if let activeTab = tabManager.activeTab {
             focusManager.focusPane(id: activeTab.paneTree.firstPane.id)
+        }
+    }
+
+    // MARK: - Floating Pane Operations
+
+    private func createFloatingPane() {
+        let cwd = focusedPaneCWD
+        guard let paneID = tabManager.createFloatingPane(initialWorkingDirectory: cwd) else { return }
+        focusManager.focusPane(id: paneID)
+    }
+
+    /// Toggle floating panes visibility, or create one if none exist.
+    private func toggleOrCreateFloatingPane() {
+        guard let activeTab = tabManager.activeTab else { return }
+        if activeTab.floatingPanes.isEmpty {
+            createFloatingPane()
+        } else {
+            tabManager.toggleFloatingPanesVisibility()
+        }
+    }
+
+    private func closeFloatingPane(id paneID: UUID) {
+        viewStore.tearDown(for: paneID)
+        tabManager.closeFloatingPane(paneID: paneID)
+
+        if let activeTab = tabManager.activeTab {
+            focusAndActivate(paneID: activeTab.paneTree.firstPane.id)
         }
     }
 
@@ -164,20 +217,36 @@ struct TerminalWindowView: View {
             moveFocus(direction)
         case .paneExited(let paneID):
             removePane(id: paneID)
+        case .newFloatingPane:
+            createFloatingPane()
+        case .closeFloatingPane(let paneID):
+            closeFloatingPane(id: paneID)
+        case .toggleOrCreateFloatingPane:
+            toggleOrCreateFloatingPane()
         }
     }
 
     private func moveFocus(_ direction: FocusDirection) {
         guard let activeTab = tabManager.activeTab else { return }
         focusManager.moveFocus(direction: direction, in: activeTab.paneTree)
-        // Make the focused MetalView first responder so it receives keyboard input.
-        if let focusedID = focusManager.focusedPaneID,
-           let metalView = viewStore.view(for: focusedID) {
-            metalView.window?.makeFirstResponder(metalView)
+        if let focusedID = focusManager.focusedPaneID {
+            activateFirstResponder(for: focusedID)
         }
     }
 
     // MARK: - Helpers
+
+    /// Focus a pane and make its MetalView the first responder for keyboard input.
+    private func focusAndActivate(paneID: UUID) {
+        focusManager.focusPane(id: paneID)
+        activateFirstResponder(for: paneID)
+    }
+
+    private func activateFirstResponder(for paneID: UUID) {
+        if let metalView = viewStore.view(for: paneID) {
+            metalView.window?.makeFirstResponder(metalView)
+        }
+    }
 
     /// Get the CWD from the currently focused pane.
     private var focusedPaneCWD: String? {

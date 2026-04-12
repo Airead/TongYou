@@ -30,6 +30,9 @@ struct Keybinding: Equatable {
         case splitHorizontal
         case closePane
         case focusPane(FocusDirection)
+        // Floating pane management
+        case newFloatingPane
+        case toggleOrCreateFloatingPane
 
         /// Raw string used in config files.
         var rawValue: String {
@@ -55,6 +58,8 @@ struct Keybinding: Equatable {
                 case .up: "focus_pane_up"
                 case .down: "focus_pane_down"
                 }
+            case .newFloatingPane: "new_floating_pane"
+            case .toggleOrCreateFloatingPane: "toggle_or_create_floating_pane"
             }
         }
 
@@ -70,6 +75,8 @@ struct Keybinding: Equatable {
             case .splitHorizontal: .splitHorizontal
             case .closePane: .closePane
             case .focusPane(let dir): .focusPane(dir)
+            case .newFloatingPane: .newFloatingPane
+            case .toggleOrCreateFloatingPane: .toggleOrCreateFloatingPane
             case .copy, .paste, .search, .resetFontSize, .increaseFontSize, .decreaseFontSize:
                 nil
             }
@@ -95,6 +102,8 @@ struct Keybinding: Equatable {
             case "focus_pane_right": self = .focusPane(.right)
             case "focus_pane_up": self = .focusPane(.up)
             case "focus_pane_down": self = .focusPane(.down)
+            case "new_floating_pane": self = .newFloatingPane
+            case "toggle_or_create_floating_pane": self = .toggleOrCreateFloatingPane
             default:
                 if rawValue.hasPrefix("goto_tab:"),
                    let n = Int(rawValue.dropFirst("goto_tab:".count)),
@@ -143,6 +152,9 @@ struct Keybinding: Equatable {
         Keybinding(modifiers: [.command, .option], key: "right", action: .focusPane(.right)),
         Keybinding(modifiers: [.command, .option], key: "up", action: .focusPane(.up)),
         Keybinding(modifiers: [.command, .option], key: "down", action: .focusPane(.down)),
+        // Floating pane management
+        Keybinding(modifiers: .option, key: "f", action: .toggleOrCreateFloatingPane),
+        Keybinding(modifiers: .option, key: "n", action: .newFloatingPane),
     ]
 
     /// Parse a keybinding string like "cmd+shift+t=new_tab".

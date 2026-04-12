@@ -110,11 +110,22 @@ final class MetalView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
+        // Check keybindings first for Option+key combinations that
+        // performKeyEquivalent may not intercept (macOS routes these
+        // through keyDown rather than performKeyEquivalent).
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if mods.contains(.option) && !mods.contains(.command) {
+            let bindings = configLoader.config.keybindings
+            if let action = Keybinding.match(event: event, in: bindings),
+               performAction(action) {
+                return
+            }
+        }
+
         // Bypass interpretKeyEvents for Option+key when optionAsAlt is on,
         // otherwise macOS turns e.g. Option+F into "ƒ" instead of ESC f.
         // Still route through interpretKeyEvents when IME has marked text.
         let optionAsAlt = configLoader.config.optionAsAlt
-        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if optionAsAlt
             && mods.contains(.option)
             && !mods.contains(.command)
