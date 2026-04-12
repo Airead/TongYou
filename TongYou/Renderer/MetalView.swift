@@ -641,30 +641,7 @@ final class MetalView: NSView {
             }
         }
 
-        if terminalController == nil, let grid = renderer?.gridSize,
-           grid.columns > 0, grid.rows > 0 {
-            let controller: any TerminalControlling
-            if let external = externalController {
-                external.resize(
-                    columns: Int(grid.columns),
-                    rows: Int(grid.rows),
-                    cellWidth: 0, cellHeight: 0
-                )
-                external.applyConfig(configLoader.config)
-                controller = external
-            } else {
-                let config = configLoader.config
-                let tc = TerminalController(
-                    columns: Int(grid.columns),
-                    rows: Int(grid.rows),
-                    config: config
-                )
-                tc.start(workingDirectory: initialWorkingDirectory)
-                controller = tc
-            }
-            wireControllerCallbacks(controller)
-            terminalController = controller
-        }
+        setupTerminalControllerIfNeeded()
     }
 
     private func wireControllerCallbacks(_ controller: any TerminalControlling) {
@@ -845,6 +822,8 @@ final class MetalView: NSView {
         metalLayer.drawableSize = CGSize(width: Int(width), height: Int(height))
         renderer?.resize(screen: ScreenSize(width: width, height: height))
 
+        setupTerminalControllerIfNeeded()
+
         if let grid = renderer?.gridSize, let fs = fontSystem {
             terminalController?.resize(
                 columns: Int(grid.columns),
@@ -854,6 +833,34 @@ final class MetalView: NSView {
             )
         }
         wakeDisplayLink()
+    }
+
+    private func setupTerminalControllerIfNeeded() {
+        guard terminalController == nil,
+              let grid = renderer?.gridSize,
+              grid.columns > 0, grid.rows > 0 else { return }
+
+        let controller: any TerminalControlling
+        if let external = externalController {
+            external.resize(
+                columns: Int(grid.columns),
+                rows: Int(grid.rows),
+                cellWidth: 0, cellHeight: 0
+            )
+            external.applyConfig(configLoader.config)
+            controller = external
+        } else {
+            let config = configLoader.config
+            let tc = TerminalController(
+                columns: Int(grid.columns),
+                rows: Int(grid.rows),
+                config: config
+            )
+            tc.start(workingDirectory: initialWorkingDirectory)
+            controller = tc
+        }
+        wireControllerCallbacks(controller)
+        terminalController = controller
     }
 
     deinit {
