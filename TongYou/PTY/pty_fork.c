@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <libproc.h>
+#include <termios.h>
 
 pid_t pty_fork_exec(int slave_fd, int master_fd,
                     const char *shell_path,
@@ -62,5 +63,20 @@ int pty_get_cwd(pid_t pid, char *buf, int bufsize)
         return -1;
     }
     strlcpy(buf, vpi.pvi_cdir.vip_path, bufsize);
+    return 0;
+}
+
+int pty_get_foreground_process_name(int master_fd, char *buf, int bufsize)
+{
+    pid_t fg_pid = tcgetpgrp(master_fd);
+    if (fg_pid < 0) {
+        return -1;
+    }
+    struct proc_bsdinfo info;
+    int ret = proc_pidinfo(fg_pid, PROC_PIDTBSDINFO, 0, &info, sizeof(info));
+    if (ret != (int)sizeof(info)) {
+        return -1;
+    }
+    strlcpy(buf, info.pbi_comm, bufsize);
     return 0;
 }

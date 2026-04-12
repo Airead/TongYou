@@ -203,6 +203,47 @@ struct RGBColorTests {
     }
 }
 
+@Suite("AutoPassthroughPrograms")
+struct AutoPassthroughProgramsTests {
+
+    @Test func parsedFromConfig() {
+        let entries: [ConfigParser.Entry] = [
+            .init(key: "auto-passthrough-programs", value: "zellij, tmux, Vim"),
+        ]
+        let config = Config.from(entries: entries)
+        #expect(config.autoPassthroughPrograms == ["zellij", "tmux", "vim"])
+    }
+
+    @Test func emptyValueClearsPrograms() {
+        let entries: [ConfigParser.Entry] = [
+            .init(key: "auto-passthrough-programs", value: "zellij"),
+            .init(key: "auto-passthrough-programs", value: ""),
+        ]
+        let config = Config.from(entries: entries)
+        #expect(config.autoPassthroughPrograms.isEmpty)
+    }
+
+    @Test func defaultIncludesZellij() {
+        #expect(Config.default.autoPassthroughPrograms == ["zellij"])
+    }
+
+    @Test func singleProgram() {
+        let entries: [ConfigParser.Entry] = [
+            .init(key: "auto-passthrough-programs", value: "zellij"),
+        ]
+        let config = Config.from(entries: entries)
+        #expect(config.autoPassthroughPrograms == ["zellij"])
+    }
+
+    @Test func trailingCommaIgnored() {
+        let entries: [ConfigParser.Entry] = [
+            .init(key: "auto-passthrough-programs", value: "zellij,tmux,"),
+        ]
+        let config = Config.from(entries: entries)
+        #expect(config.autoPassthroughPrograms == ["zellij", "tmux"])
+    }
+}
+
 @Suite("Keybinding")
 struct KeybindingTests {
 
@@ -232,6 +273,14 @@ struct KeybindingTests {
         #expect(kb.modifiers == .option)
         #expect(kb.key == "v")
         #expect(kb.action == .paste)
+    }
+
+    @Test func parseUnbind() throws {
+        let kb = try Keybinding.parse("opt+f=unbind")
+        #expect(kb.modifiers == .option)
+        #expect(kb.key == "f")
+        #expect(kb.action == .unbind)
+        #expect(kb.action.tabAction == nil)
     }
 
     @Test func invalidAction() {

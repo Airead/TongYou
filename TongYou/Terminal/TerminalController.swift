@@ -84,6 +84,11 @@ final class TerminalController {
         ptyProcess?.currentWorkingDirectory
     }
 
+    /// Query the name of the foreground process in this terminal.
+    var foregroundProcessName: String? {
+        ptyProcess?.foregroundProcessName
+    }
+
     private static let defaultWorkingDirectory: String =
         ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
 

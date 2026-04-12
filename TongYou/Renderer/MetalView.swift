@@ -114,7 +114,8 @@ final class MetalView: NSView {
         // performKeyEquivalent may not intercept (macOS routes these
         // through keyDown rather than performKeyEquivalent).
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if mods.contains(.option) && !mods.contains(.command) {
+        if mods.contains(.option) && !mods.contains(.command)
+            && !shouldPassthrough(modifiers: mods) {
             let bindings = configLoader.config.keybindings
             if let action = Keybinding.match(event: event, in: bindings),
                performAction(action) {
@@ -160,6 +161,10 @@ final class MetalView: NSView {
             return false
         }
 
+        if shouldPassthrough(modifiers: deviceMods) {
+            return false
+        }
+
         let bindings = configLoader.config.keybindings
         if let action = Keybinding.match(event: event, in: bindings) {
             return performAction(action)
@@ -169,6 +174,7 @@ final class MetalView: NSView {
     }
 
     private func performAction(_ action: Keybinding.Action) -> Bool {
+        if action == .unbind { return false }
         // Actions that map directly to TabAction.
         if let tabAction = action.tabAction {
             onTabAction?(tabAction)
@@ -188,6 +194,18 @@ final class MetalView: NSView {
         default:
             return false
         }
+    }
+
+    /// Whether the foreground process is in the auto-passthrough list.
+    /// When true, non-Cmd keybindings are skipped so the key reaches the PTY.
+    private func shouldPassthrough(modifiers: NSEvent.ModifierFlags) -> Bool {
+        guard !modifiers.contains(.command) else { return false }
+        let programs = configLoader.config.autoPassthroughPrograms
+        guard !programs.isEmpty else { return false }
+        guard let name = terminalController?.foregroundProcessName?.lowercased() else {
+            return false
+        }
+        return programs.contains(name)
     }
 
     private func handlePaste() {

@@ -42,6 +42,9 @@ struct Config: Equatable {
 
     var keybindings: [Keybinding] = Keybinding.defaults
 
+    /// Programs that automatically receive non-Cmd keybindings when in foreground.
+    var autoPassthroughPrograms: Set<String> = ["zellij"]
+
     // MARK: - Debug
 
     var debugMetrics: Bool = false
@@ -217,6 +220,18 @@ extension Config {
         case "keybind":
             if !value.isEmpty {
                 keybindings.append(try Keybinding.parse(value))
+            }
+
+        // Auto passthrough programs (comma-separated)
+        case "auto-passthrough-programs":
+            if value.isEmpty {
+                autoPassthroughPrograms = []
+            } else {
+                autoPassthroughPrograms = Set(
+                    value.split(separator: ",")
+                        .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+                        .filter { !$0.isEmpty }
+                )
             }
 
         // Debug

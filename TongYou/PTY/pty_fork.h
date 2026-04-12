@@ -29,4 +29,15 @@ pid_t pty_fork_exec(int slave_fd, int master_fd,
 /// @return 0 on success, -1 on failure.
 int pty_get_cwd(pid_t pid, char *buf, int bufsize);
 
+/// Query the name of the foreground process running in a PTY.
+///
+/// Uses tcgetpgrp() to find the foreground process group leader,
+/// then proc_pidinfo(PROC_PIDTBSDINFO) to get its executable name.
+///
+/// @param master_fd  Master side of the PTY pair.
+/// @param buf        Buffer to receive the process name.
+/// @param bufsize    Size of the buffer (MAXCOMLEN+1 = 17 is sufficient).
+/// @return 0 on success, -1 on failure.
+int pty_get_foreground_process_name(int master_fd, char *buf, int bufsize);
+
 #endif /* PTY_FORK_H */

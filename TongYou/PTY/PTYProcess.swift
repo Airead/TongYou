@@ -197,6 +197,16 @@ final class PTYProcess {
         return String(cString: buf)
     }
 
+    /// Query the name of the foreground process running in this PTY.
+    var foregroundProcessName: String? {
+        guard masterFD >= 0 else { return nil }
+        var buf = [CChar](repeating: 0, count: 17) // MAXCOMLEN + 1
+        guard pty_get_foreground_process_name(masterFD, &buf, Int32(buf.count)) == 0 else {
+            return nil
+        }
+        return String(cString: buf)
+    }
+
     // MARK: - Private: Read Source
 
     private func startReadSource() {

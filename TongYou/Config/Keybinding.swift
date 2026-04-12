@@ -33,6 +33,8 @@ struct Keybinding: Equatable {
         // Floating pane management
         case newFloatingPane
         case toggleOrCreateFloatingPane
+        // Pass through to PTY (disables the keybinding)
+        case unbind
 
         /// Raw string used in config files.
         var rawValue: String {
@@ -60,6 +62,7 @@ struct Keybinding: Equatable {
                 }
             case .newFloatingPane: "new_floating_pane"
             case .toggleOrCreateFloatingPane: "toggle_or_create_floating_pane"
+            case .unbind: "unbind"
             }
         }
 
@@ -77,7 +80,8 @@ struct Keybinding: Equatable {
             case .focusPane(let dir): .focusPane(dir)
             case .newFloatingPane: .newFloatingPane
             case .toggleOrCreateFloatingPane: .toggleOrCreateFloatingPane
-            case .copy, .paste, .search, .resetFontSize, .increaseFontSize, .decreaseFontSize:
+            case .copy, .paste, .search, .resetFontSize, .increaseFontSize, .decreaseFontSize,
+                 .unbind:
                 nil
             }
         }
@@ -104,6 +108,7 @@ struct Keybinding: Equatable {
             case "focus_pane_down": self = .focusPane(.down)
             case "new_floating_pane": self = .newFloatingPane
             case "toggle_or_create_floating_pane": self = .toggleOrCreateFloatingPane
+            case "unbind": self = .unbind
             default:
                 if rawValue.hasPrefix("goto_tab:"),
                    let n = Int(rawValue.dropFirst("goto_tab:".count)),
