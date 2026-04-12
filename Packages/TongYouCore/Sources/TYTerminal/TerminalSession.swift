@@ -12,6 +12,11 @@ public enum SessionSource: Sendable, Equatable {
         if case .remote = self { return true }
         return false
     }
+
+    public var serverSessionID: UUID? {
+        if case .remote(let id) = self { return id }
+        return nil
+    }
 }
 
 /// A terminal session containing a group of tabs.

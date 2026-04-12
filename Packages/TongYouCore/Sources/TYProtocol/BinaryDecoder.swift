@@ -334,9 +334,7 @@ public struct BinaryDecoder: Sendable {
             return .paneExited(sessionID, paneID, exitCode: exitCode)
 
         case .layoutUpdate:
-            let sessionID = try readSessionID()
-            let tree = try readLayoutTree()
-            return .layoutUpdate(sessionID, tree)
+            return .layoutUpdate(try readSessionInfo())
 
         case .clipboardSet:
             return .clipboardSet(try readString())

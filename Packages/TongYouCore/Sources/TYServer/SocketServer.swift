@@ -115,13 +115,11 @@ public final class SocketServer: @unchecked Sendable {
         for client in allClients { client.send(message) }
     }
 
-    /// Broadcast a layout update for the active tab of a session.
+    /// Broadcast a full session layout update to all attached clients.
     /// If the session no longer exists, broadcasts sessionClosed and checks auto-exit.
     private func broadcastLayoutOrClosed(sessionID: SessionID) {
-        if let info = sessionManager.sessionInfo(for: sessionID),
-           info.activeTabIndex < info.tabs.count {
-            let layout = info.tabs[info.activeTabIndex].layout
-            broadcast(.layoutUpdate(sessionID, layout), toSession: sessionID)
+        if let info = sessionManager.sessionInfo(for: sessionID) {
+            broadcast(.layoutUpdate(info), toSession: sessionID)
         } else {
             broadcastAll(.sessionClosed(sessionID))
             checkAutoExit()

@@ -20,8 +20,15 @@ final class SessionManager {
 
     /// Controllers for remote panes, keyed by local pane UUID.
     private var remoteControllers: [UUID: ClientTerminalController] = [:]
-    /// Maps server pane UUID → local pane UUID for routing screen updates.
+    /// Bidirectional mapping between server pane UUID and local pane UUID.
     private var serverToLocalPaneID: [UUID: UUID] = [:]
+    /// Maps session UUID → ordered list of server TabIDs (parallel to session.tabs).
+    private var serverTabIDs: [UUID: [TabID]] = [:]
+
+    /// Reverse lookup: find the server pane UUID for a local pane UUID.
+    private func serverPaneUUID(for localID: UUID) -> UUID? {
+        serverToLocalPaneID.first(where: { $0.value == localID })?.key
+    }
 
     /// The currently active session, if any.
     var activeSession: TerminalSession? {
@@ -55,17 +62,9 @@ final class SessionManager {
         let paneIDs = session.allPaneIDs
 
         // Clean up remote controllers if this is a remote session.
-        if session.source.isRemote {
-            let paneIDSet = Set(paneIDs)
-            for paneID in paneIDSet {
-                remoteControllers.removeValue(forKey: paneID)?.stop()
-            }
-            serverToLocalPaneID = serverToLocalPaneID.filter { _, localID in
-                !paneIDSet.contains(localID)
-            }
-            if case .remote(let serverSessionID) = session.source {
-                remoteClient?.closeSession(SessionID(serverSessionID))
-            }
+        if let serverSessionID = session.source.serverSessionID {
+            teardownRemotePanes(Set(paneIDs), sessionID: session.id)
+            remoteClient?.closeSession(SessionID(serverSessionID))
         }
 
         sessions.remove(at: index)
@@ -121,11 +120,21 @@ final class SessionManager {
 
     // MARK: - Tab Lifecycle (scoped to active session)
 
+    /// Create a new tab in the active session.
+    /// For remote sessions, sends the request to the server and returns nil —
+    /// the tab will be created when the server broadcasts a layoutUpdate.
     @discardableResult
-    func createTab(title: String = "shell", initialWorkingDirectory: String? = nil) -> UUID {
+    func createTab(title: String = "shell", initialWorkingDirectory: String? = nil) -> UUID? {
         guard sessions.indices.contains(activeSessionIndex) else {
             return createSession(initialWorkingDirectory: initialWorkingDirectory)
         }
+        let session = sessions[activeSessionIndex]
+
+        if let serverSessionID = session.source.serverSessionID {
+            remoteClient?.createTab(sessionID: SessionID(serverSessionID))
+            return nil
+        }
+
         let tab = TerminalTab(title: title, initialWorkingDirectory: initialWorkingDirectory)
         sessions[activeSessionIndex].tabs.append(tab)
         sessions[activeSessionIndex].activeTabIndex = sessions[activeSessionIndex].tabs.count - 1
@@ -133,12 +142,23 @@ final class SessionManager {
     }
 
     /// Close a tab. Returns true if the tab was found.
+    /// For remote sessions, sends the request to the server — local state
+    /// updates when the server broadcasts a layoutUpdate.
     /// When the last tab is closed, the session remains with an empty tab list
     /// — the caller decides whether to close the session.
     @discardableResult
     func closeTab(at index: Int) -> Bool {
         guard sessions.indices.contains(activeSessionIndex),
               sessions[activeSessionIndex].tabs.indices.contains(index) else { return false }
+
+        let session = sessions[activeSessionIndex]
+
+        if let serverSessionID = session.source.serverSessionID,
+           let tabIDs = serverTabIDs[session.id],
+           tabIDs.indices.contains(index) {
+            remoteClient?.closeTab(sessionID: SessionID(serverSessionID), tabID: tabIDs[index])
+            return true
+        }
 
         sessions[activeSessionIndex].tabs.remove(at: index)
 
@@ -221,9 +241,24 @@ final class SessionManager {
 
     // MARK: - Pane Operations
 
+    /// Split a pane. For remote sessions, sends the request to the server
+    /// and returns false — the local tree updates via layoutUpdate.
     @discardableResult
     func splitPane(id paneID: UUID, direction: SplitDirection, newPane: TerminalPane) -> Bool {
         guard sessions.indices.contains(activeSessionIndex) else { return false }
+
+        let session = sessions[activeSessionIndex]
+
+        if let sid = session.source.serverSessionID,
+           let serverPaneUUID = serverPaneUUID(for: paneID) {
+            remoteClient?.splitPane(
+                sessionID: SessionID(sid),
+                paneID: PaneID(serverPaneUUID),
+                direction: direction
+            )
+            return false
+        }
+
         for i in sessions[activeSessionIndex].tabs.indices {
             if let newTree = sessions[activeSessionIndex].tabs[i].paneTree.split(
                 paneID: paneID, direction: direction, newPane: newPane
@@ -235,11 +270,25 @@ final class SessionManager {
         return false
     }
 
-    /// Close a specific pane. If it's the last pane in its tab, close the tab.
+    /// Close a specific pane. For remote sessions, sends the request to the server
+    /// and returns a sentinel value — local state updates via layoutUpdate.
+    /// For local sessions, if it's the last pane in its tab, closes the tab.
     /// Returns the ID of a sibling pane to focus, or nil if the tab was closed.
     @discardableResult
     func closePane(id paneID: UUID) -> UUID? {
         guard sessions.indices.contains(activeSessionIndex) else { return nil }
+
+        let session = sessions[activeSessionIndex]
+
+        if let sid = session.source.serverSessionID,
+           let serverPaneUUID = serverPaneUUID(for: paneID) {
+            remoteClient?.closePane(
+                sessionID: SessionID(sid),
+                paneID: PaneID(serverPaneUUID)
+            )
+            return nil
+        }
+
         for i in sessions[activeSessionIndex].tabs.indices {
             guard sessions[activeSessionIndex].tabs[i].paneTree.contains(paneID: paneID)
             else { continue }
@@ -459,6 +508,9 @@ final class SessionManager {
         client.onPaneExited = { [weak self] _, paneID, _ in
             self?.handleRemotePaneExited(paneID)
         }
+        client.onLayoutUpdate = { [weak self] info in
+            self?.handleRemoteLayoutUpdate(info)
+        }
         client.onDisconnected = { [weak self] in
             self?.handleRemoteDisconnected()
         }
@@ -484,6 +536,7 @@ final class SessionManager {
         sessions.removeAll { $0.source.isRemote }
         remoteControllers.removeAll()
         serverToLocalPaneID.removeAll()
+        serverTabIDs.removeAll()
 
         if !sessions.isEmpty {
             activeSessionIndex = min(activeSessionIndex, sessions.count - 1)
@@ -508,6 +561,30 @@ final class SessionManager {
         remoteControllers[paneID]
     }
 
+    // MARK: - Private: Remote Helpers
+
+    /// Stop controllers and remove ID mappings for the given local pane IDs.
+    private func teardownRemotePanes(_ paneIDs: Set<UUID>, sessionID: UUID? = nil) {
+        for paneID in paneIDs {
+            remoteControllers.removeValue(forKey: paneID)?.stop()
+            if let serverUUID = serverPaneUUID(for: paneID) {
+                serverToLocalPaneID.removeValue(forKey: serverUUID)
+            }
+        }
+        if let sessionID {
+            serverTabIDs.removeValue(forKey: sessionID)
+        }
+    }
+
+    /// Build tabs from server SessionInfo, reusing existing controllers.
+    private func buildTabs(from info: SessionInfo) -> [TerminalTab] {
+        info.tabs.map { tabInfo -> TerminalTab in
+            var tab = TerminalTab(title: tabInfo.title)
+            tab.paneTree = buildPaneNode(from: tabInfo.layout, sessionID: info.id)
+            return tab
+        }
+    }
+
     // MARK: - Private: Remote Event Handlers
 
     private func handleRemoteSessionList(_ infos: [SessionInfo]) {
@@ -525,13 +602,7 @@ final class SessionManager {
             $0.source == .remote(serverSessionID: sessionID.uuid)
         }) else { return }
 
-        let paneIDSet = Set(sessions[index].allPaneIDs)
-        for paneID in paneIDSet {
-            remoteControllers.removeValue(forKey: paneID)?.stop()
-        }
-        serverToLocalPaneID = serverToLocalPaneID.filter { _, localID in
-            !paneIDSet.contains(localID)
-        }
+        teardownRemotePanes(Set(sessions[index].allPaneIDs), sessionID: sessions[index].id)
 
         sessions.remove(at: index)
 
@@ -563,6 +634,34 @@ final class SessionManager {
         controllerForServerPane(paneID)?.handleProcessExited()
     }
 
+    /// Reconcile local state with the authoritative server layout.
+    /// Returns the local pane IDs that were removed and need MetalView teardown.
+    @discardableResult
+    private func handleRemoteLayoutUpdate(_ info: SessionInfo) -> [UUID] {
+        guard let sessionIndex = sessions.firstIndex(where: {
+            $0.source == .remote(serverSessionID: info.id.uuid)
+        }) else { return [] }
+
+        let oldPaneIDs = Set(sessions[sessionIndex].allPaneIDs)
+
+        let newTabs = buildTabs(from: info)
+        sessions[sessionIndex].tabs = newTabs.isEmpty ? [TerminalTab()] : newTabs
+        sessions[sessionIndex].activeTabIndex = min(
+            info.activeTabIndex, max(sessions[sessionIndex].tabs.count - 1, 0)
+        )
+        serverTabIDs[sessions[sessionIndex].id] = info.tabs.map(\.id)
+
+        let removedPaneIDs = oldPaneIDs.subtracting(Set(sessions[sessionIndex].allPaneIDs))
+        teardownRemotePanes(removedPaneIDs)
+
+        onRemoteLayoutChanged?(sessions[sessionIndex].id, Array(removedPaneIDs))
+        return Array(removedPaneIDs)
+    }
+
+    /// Callback for the view layer to handle layout changes (e.g. teardown MetalViews, refocus).
+    /// Parameters: (sessionID, removedPaneIDs)
+    var onRemoteLayoutChanged: ((UUID, [UUID]) -> Void)?
+
     private func addOrUpdateRemoteSession(_ info: SessionInfo) {
         let sessionUUID = info.id.uuid
 
@@ -571,20 +670,15 @@ final class SessionManager {
             return
         }
 
-        // Build tabs from server info.
-        let tabs = info.tabs.map { tabInfo -> TerminalTab in
-            var tab = TerminalTab(title: tabInfo.title)
-            // Re-create the pane tree from the layout, creating controllers for each leaf pane.
-            tab.paneTree = buildPaneNode(from: tabInfo.layout, sessionID: info.id)
-            return tab
-        }
-
         let session = TerminalSession(
             remoteSessionID: sessionUUID,
             name: info.name,
-            tabs: tabs
+            tabs: buildTabs(from: info)
         )
         sessions.append(session)
+
+        // Store server tab IDs (parallel to tabs array).
+        serverTabIDs[session.id] = info.tabs.map(\.id)
 
         // Auto-attach so we receive screen updates.
         remoteClient?.attachSession(info.id)
@@ -592,9 +686,15 @@ final class SessionManager {
 
     /// Recursively build a PaneNode from a server LayoutTree,
     /// creating a ClientTerminalController for each leaf pane.
+    /// Reuses existing controllers for panes that already have a local mapping.
     private func buildPaneNode(from layout: LayoutTree, sessionID: SessionID) -> PaneNode {
         switch layout {
         case .leaf(let paneID):
+            // Reuse existing local pane if we already have a mapping.
+            if let existingLocalID = serverToLocalPaneID[paneID.uuid] {
+                return .leaf(TerminalPane(id: existingLocalID))
+            }
+
             let pane = TerminalPane()
             if let client = remoteClient {
                 let controller = ClientTerminalController(

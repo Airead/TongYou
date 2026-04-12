@@ -41,8 +41,8 @@ public final class RemoteSessionClient: @unchecked Sendable {
     /// Called when a pane's process exits.
     public var onPaneExited: ((SessionID, PaneID, Int32) -> Void)?
 
-    /// Called when a session's layout changes.
-    public var onLayoutUpdate: ((SessionID, LayoutTree) -> Void)?
+    /// Called when a session's layout changes (full tab list + active index).
+    public var onLayoutUpdate: ((SessionInfo) -> Void)?
 
     /// Called when the server sets the clipboard.
     public var onClipboardSet: ((String) -> Void)?
@@ -234,9 +234,9 @@ public final class RemoteSessionClient: @unchecked Sendable {
                 self?.onPaneExited?(sessionID, paneID, exitCode)
             }
 
-        case .layoutUpdate(let sessionID, let layout):
+        case .layoutUpdate(let info):
             DispatchQueue.main.async { [weak self] in
-                self?.onLayoutUpdate?(sessionID, layout)
+                self?.onLayoutUpdate?(info)
             }
 
         case .clipboardSet(let text):

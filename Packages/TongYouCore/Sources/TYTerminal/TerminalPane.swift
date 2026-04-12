@@ -9,4 +9,10 @@ public struct TerminalPane: Identifiable, Equatable, Sendable {
         self.id = UUID()
         self.initialWorkingDirectory = initialWorkingDirectory
     }
+
+    /// Create a pane with a specific ID (used to reconstruct from server state).
+    public init(id: UUID, initialWorkingDirectory: String? = nil) {
+        self.id = id
+        self.initialWorkingDirectory = initialWorkingDirectory
+    }
 }

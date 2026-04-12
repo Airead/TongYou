@@ -68,7 +68,7 @@ public enum ServerMessage: Sendable {
     case titleChanged(SessionID, PaneID, String)
     case bell(SessionID, PaneID)
     case paneExited(SessionID, PaneID, exitCode: Int32)
-    case layoutUpdate(SessionID, LayoutTree)
+    case layoutUpdate(SessionInfo)
     case clipboardSet(String)
 
     /// Whether this message is a screen update (screenFull or screenDiff).
@@ -100,8 +100,8 @@ public enum ServerMessage: Sendable {
             return "bell(session=\(sid), pane=\(pid))"
         case .paneExited(let sid, let pid, let exitCode):
             return "paneExited(session=\(sid), pane=\(pid), exitCode=\(exitCode))"
-        case .layoutUpdate(let sid, _):
-            return "layoutUpdate(session=\(sid))"
+        case .layoutUpdate(let info):
+            return "layoutUpdate(session=\(info.id), tabs=\(info.tabs.count))"
         case .clipboardSet(let text):
             return "clipboardSet(text=\(truncate(text, maxLength: 80)))"
         }

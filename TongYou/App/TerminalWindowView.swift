@@ -136,6 +136,7 @@ struct TerminalWindowView: View {
             }
             focusActiveTabRootPane()
             loadWindowBackground()
+            wireRemoteLayoutCallback()
         }
         .onChange(of: focusManager.focusedPaneID) { _, newID in
             sessionManager.updateFloatingPanesVisibilityForFocus(focusedPaneID: newID)
@@ -208,12 +209,22 @@ struct TerminalWindowView: View {
 
     private func createNewTab() {
         let cwd: String? = focusedPaneCWD
-        sessionManager.createTab(initialWorkingDirectory: cwd)
-        focusActiveTabRootPane()
+        let tabID = sessionManager.createTab(initialWorkingDirectory: cwd)
+        // Remote sessions return nil — focus happens when layoutUpdate arrives.
+        if tabID != nil {
+            focusActiveTabRootPane()
+        }
     }
 
     private func closeTab(at index: Int) {
         guard sessionManager.tabs.indices.contains(index) else { return }
+
+        // Remote session: just send to server; layoutUpdate handles the rest.
+        if sessionManager.activeSession?.source.isRemote == true {
+            sessionManager.closeTab(at: index)
+            return
+        }
+
         let tab = sessionManager.tabs[index]
 
         // Tear down all MetalViews in this tab's pane tree and floating panes.
@@ -257,6 +268,12 @@ struct TerminalWindowView: View {
         // Check if this is a floating pane first.
         if sessionManager.activeTab?.floatingPanes.contains(where: { $0.pane.id == paneID }) == true {
             closeFloatingPane(id: paneID)
+            return
+        }
+
+        // Remote session: just send to server; layoutUpdate handles the rest.
+        if sessionManager.activeSession?.source.isRemote == true {
+            sessionManager.closePane(id: paneID)
             return
         }
 
@@ -431,6 +448,34 @@ struct TerminalWindowView: View {
             } catch {
                 DispatchQueue.main.async {
                     print("[TongYou] Failed to connect to tyd: \(error)")
+                }
+            }
+        }
+    }
+
+    /// Wire the callback that fires when the server updates a remote session's layout.
+    /// Handles MetalView teardown for removed panes and refocuses the active pane.
+    private func wireRemoteLayoutCallback() {
+        sessionManager.onRemoteLayoutChanged = { [viewStore, focusManager, sessionManager] sessionID, removedPaneIDs in
+            // Tear down MetalViews for removed panes.
+            for paneID in removedPaneIDs {
+                viewStore.tearDown(for: paneID)
+                focusManager.removeFromHistory(id: paneID)
+            }
+
+            // If the focused pane was removed, refocus the active tab's root pane.
+            if let focused = focusManager.focusedPaneID,
+               removedPaneIDs.contains(focused) {
+                if let activeTab = sessionManager.activeSession?.activeTab {
+                    focusManager.focusPane(id: activeTab.paneTree.firstPane.id)
+                }
+            }
+
+            // If no pane is focused (e.g. new tab created), focus the active tab's root.
+            if focusManager.focusedPaneID == nil,
+               sessionManager.activeSession?.id == sessionID {
+                if let activeTab = sessionManager.activeSession?.activeTab {
+                    focusManager.focusPane(id: activeTab.paneTree.firstPane.id)
                 }
             }
         }

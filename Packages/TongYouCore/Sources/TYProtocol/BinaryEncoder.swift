@@ -222,9 +222,8 @@ public struct BinaryEncoder: Sendable {
             writePaneID(paneID)
             writeInt32(exitCode)
 
-        case .layoutUpdate(let sessionID, let tree):
-            writeSessionID(sessionID)
-            writeLayoutTree(tree)
+        case .layoutUpdate(let info):
+            writeSessionInfo(info)
 
         case .clipboardSet(let text):
             writeString(text)
