@@ -338,4 +338,167 @@ import Testing
     @Test func osc52EmptyPayloadIsIgnored() {
         #expect(feedOSC52("\u{1B}]52;c;\u{07}") == nil)
     }
+
+    // MARK: - Title Test Helpers
+
+    /// Feed multiple escape sequences through a fresh parser+handler, returning
+    /// the handler for further inspection. Callbacks must be configured via `configure`.
+    private func feedSequences(
+        _ inputs: [String],
+        configure: (inout StreamHandler) -> Void
+    ) -> StreamHandler {
+        let screen = Screen(columns: 80, rows: 24)
+        var handler = StreamHandler(screen: screen)
+        var parser = VTParser()
+        configure(&handler)
+        for input in inputs {
+            let bytes = Array(input.utf8)
+            bytes.withUnsafeBufferPointer { ptr in
+                parser.feed(ptr) { action in handler.handle(action) }
+            }
+        }
+        return handler
+    }
+
+    // MARK: - Title Sanitization
+
+    @Test func titleStripsControlCharacters() {
+        var title: String?
+        _ = processWithHandler("\u{1B}]0;Hello\u{01}\u{0A}World\u{07}") { handler in
+            handler.onTitleChanged = { title = $0 }
+        }
+        #expect(title == "HelloWorld")
+    }
+
+    @Test func titleStripsC1ControlCharacters() {
+        // U+0085 (NEL) is a C1 control that must be stripped.
+        // Build OSC manually because U+0085 can't appear in a Swift string literal
+        // inside an escape sequence without being interpreted.
+        let screen = Screen(columns: 80, rows: 24)
+        var handler = StreamHandler(screen: screen)
+        var parser = VTParser()
+        var title: String?
+        handler.onTitleChanged = { title = $0 }
+
+        // ESC ] 0 ; A <U+0085 = 0xC2 0x85> B BEL
+        let bytes: [UInt8] = [0x1B, 0x5D, 0x30, 0x3B,
+                              0x41, 0xC2, 0x85, 0x42, 0x07]
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        #expect(title == "AB")
+    }
+
+    @Test func titleTruncatesLongString() {
+        let longTitle = String(repeating: "A", count: 2000)
+        var title: String?
+        _ = processWithHandler("\u{1B}]0;\(longTitle)\u{07}") { handler in
+            handler.onTitleChanged = { title = $0 }
+        }
+        #expect(title?.count == 1024)
+    }
+
+    @Test func titlePreservesNormalUnicode() {
+        var title: String?
+        _ = processWithHandler("\u{1B}]0;你好世界 🎉\u{07}") { handler in
+            handler.onTitleChanged = { title = $0 }
+        }
+        #expect(title == "你好世界 🎉")
+    }
+
+    @Test func emptyTitleCallsCallback() {
+        var title: String?
+        _ = processWithHandler("\u{1B}]0;\u{07}") { handler in
+            handler.onTitleChanged = { title = $0 }
+        }
+        // Empty title should still trigger the callback with ""
+        #expect(title == "")
+    }
+
+    // MARK: - Title Stack (CSI 22/23 t)
+
+    @Test func titleStackPushPop() {
+        var titles: [String] = []
+        let handler = feedSequences([
+            "\u{1B}]2;First\u{07}",   // set title
+            "\u{1B}[22;2t",            // push
+            "\u{1B}]2;Second\u{07}",   // set title
+            "\u{1B}[23;2t",            // pop — should restore "First"
+        ]) { $0.onTitleChanged = { titles.append($0) } }
+
+        #expect(titles == ["First", "Second", "First"])
+        #expect(handler.currentTitle == "First")
+    }
+
+    @Test func titleStackPopEmptyIsNoOp() {
+        var titleCallCount = 0
+        _ = feedSequences(["\u{1B}[23;2t"]) {
+            $0.onTitleChanged = { _ in titleCallCount += 1 }
+        }
+        #expect(titleCallCount == 0)
+    }
+
+    @Test func titleStackDepthLimit() {
+        // Push 12 titles (limit is 10), then pop all
+        var pushInputs: [String] = []
+        for i in 0..<12 {
+            pushInputs.append("\u{1B}]2;Title\(i)\u{07}")
+            pushInputs.append("\u{1B}[22;2t")
+        }
+        let popInputs = Array(repeating: "\u{1B}[23;2t", count: 12)
+
+        var restored: [String] = []
+        var handler = feedSequences(pushInputs) { $0.onTitleChanged = { _ in } }
+
+        // Re-wire callback to capture pops, then feed pop sequences
+        handler.onTitleChanged = { restored.append($0) }
+        var parser = VTParser()
+        for input in popInputs {
+            let bytes = Array(input.utf8)
+            bytes.withUnsafeBufferPointer { ptr in
+                parser.feed(ptr) { action in handler.handle(action) }
+            }
+        }
+
+        #expect(restored.count == 10)
+        #expect(restored.first == "Title11")
+        #expect(restored.last == "Title2")
+    }
+
+    // MARK: - Title Report (CSI 21 t)
+
+    @Test func titleReport() {
+        var response: Data?
+        _ = feedSequences([
+            "\u{1B}]2;My App\u{07}",  // set title
+            "\u{1B}[21t",              // request report
+        ]) {
+            $0.onWriteBack = { response = $0 }
+            $0.onTitleChanged = { _ in }
+        }
+        #expect(response == Data("\u{1B}]lMy App\u{1B}\\".utf8))
+    }
+
+    @Test func titleReportEmptyTitle() {
+        var response: Data?
+        _ = feedSequences(["\u{1B}[21t"]) {
+            $0.onWriteBack = { response = $0 }
+        }
+        #expect(response == Data("\u{1B}]l\u{1B}\\".utf8))
+    }
+
+    // MARK: - sanitizeTitle unit tests
+
+    @Test func sanitizeTitleRemovesDEL() {
+        #expect(StreamHandler.sanitizeTitle("A\u{7F}B") == "AB")
+    }
+
+    @Test func sanitizeTitleKeepsNormalText() {
+        #expect(StreamHandler.sanitizeTitle("hello world") == "hello world")
+    }
+
+    @Test func sanitizeTitleTruncates() {
+        let long = String(repeating: "X", count: 1500)
+        #expect(StreamHandler.sanitizeTitle(long).count == 1024)
+    }
 }

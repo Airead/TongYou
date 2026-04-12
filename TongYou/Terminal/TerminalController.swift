@@ -24,6 +24,8 @@ final class TerminalController {
 
     /// Window title as reported by the running program via OSC 0/2.
     nonisolated(unsafe) private(set) var windowTitle: String = ""
+    /// Pending debounce work item for title changes (runs on ptyQueue).
+    nonisolated(unsafe) private var titleDebounceWork: DispatchWorkItem?
 
     /// Command currently running in the shell, reported via OSC 7727.
     /// nil means the shell is at a prompt.
@@ -112,11 +114,21 @@ final class TerminalController {
             self?.ptyProcess?.write(data)
         }
         streamHandler.onTitleChanged = { [weak self] title in
-            guard let self, self.windowTitle != title else { return }
-            self.windowTitle = title
-            DispatchQueue.main.async {
-                self.onTitleChanged?(title)
+            guard let self else { return }
+
+            if title.isEmpty {
+                let fallback = self.ptyProcess?.currentWorkingDirectory
+                    .flatMap { URL(filePath: $0).lastPathComponent }
+                    ?? ""
+                guard !fallback.isEmpty, self.windowTitle != fallback else { return }
+                self.windowTitle = fallback
+                self.dispatchTitleToMain(fallback)
+                return
             }
+
+            guard self.windowTitle != title else { return }
+            self.windowTitle = title
+            self.dispatchTitleToMain(title)
         }
         streamHandler.onBell = { [weak self] in
             self?.handleBell()
@@ -473,6 +485,29 @@ final class TerminalController {
         if !wasDirty {
             onNeedsDisplay?()
         }
+    }
+
+    // MARK: - Title Debounce
+
+    /// Debounce interval for coalescing rapid title changes (seconds).
+    private static let titleDebounceInterval: TimeInterval = 0.075
+
+    /// Dispatch a title change to the main thread with debouncing.
+    /// Called on ptyQueue.
+    private func dispatchTitleToMain(_ title: String) {
+        titleDebounceWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.titleDebounceWork = nil
+            DispatchQueue.main.async {
+                self.onTitleChanged?(title)
+            }
+        }
+        titleDebounceWork = work
+        ptyQueue.asyncAfter(
+            deadline: .now() + Self.titleDebounceInterval,
+            execute: work
+        )
     }
 
 }

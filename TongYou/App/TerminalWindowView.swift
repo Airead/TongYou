@@ -116,9 +116,10 @@ struct TerminalWindowView: View {
                 }
             }
         }
+        .preferredColorScheme(.dark)
         .background(WindowConfigurator(
             backgroundColor: windowBackgroundColor,
-            title: sessionManager.activeSession?.name ?? "TongYou"
+            title: windowTitle
         ))
         .onAppear {
             if sessionManager.sessions.isEmpty {
@@ -130,6 +131,14 @@ struct TerminalWindowView: View {
         .onChange(of: focusManager.focusedPaneID) { _, newID in
             sessionManager.updateFloatingPanesVisibilityForFocus(focusedPaneID: newID)
         }
+    }
+
+    /// Window title derived from the active tab's OSC title, falling back to session name.
+    private var windowTitle: String {
+        if let tab = sessionManager.activeTab, tab.title != TerminalTab.defaultTitle {
+            return tab.title
+        }
+        return sessionManager.activeSession?.name ?? "TongYou"
     }
 
     private var shouldShowSidebar: Bool {
@@ -431,44 +440,56 @@ struct WindowConfigurator: NSViewRepresentable {
     let title: String
 
     func makeNSView(context: Context) -> NSView {
-        let view = ConfiguratorView()
-        view.onWindowAvailable = { window in
+        ConfiguratorView()
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        guard let view = nsView as? ConfiguratorView else { return }
+        view.desiredBackgroundColor = backgroundColor
+        view.desiredTitle = title
+        view.applyIfNeeded()
+    }
+}
+
+/// Applies window-level NSWindow configuration that SwiftUI cannot
+/// express declaratively: transparent titlebar, background color, title.
+///
+/// The dark titlebar appearance (light text, colored traffic lights) is
+/// driven by `.preferredColorScheme(.dark)` on the SwiftUI side, which
+/// SwiftUI propagates to the NSWindow's effective appearance.
+private class ConfiguratorView: NSView {
+    var desiredBackgroundColor: NSColor = .black
+    var desiredTitle: String = "TongYou"
+    private var didConfigureStyle = false
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        applyIfNeeded()
+    }
+
+    override func layout() {
+        super.layout()
+        applyIfNeeded()
+    }
+
+    func applyIfNeeded() {
+        guard let window else { return }
+
+        if !didConfigureStyle {
             if !window.styleMask.contains(.fullSizeContentView) {
                 window.styleMask.insert(.fullSizeContentView)
             }
             window.titlebarAppearsTransparent = true
             window.titlebarSeparatorStyle = .none
-            window.appearance = NSAppearance(named: .darkAqua)
-            window.backgroundColor = backgroundColor
-            window.title = title
+            didConfigureStyle = true
         }
-        return view
-    }
 
-    func updateNSView(_ nsView: NSView, context: Context) {
-        guard let window = nsView.window else { return }
-        if window.backgroundColor != backgroundColor {
-            window.backgroundColor = backgroundColor
+        if window.backgroundColor != desiredBackgroundColor {
+            window.backgroundColor = desiredBackgroundColor
         }
-        if window.title != title {
-            window.title = title
+        if window.title != desiredTitle {
+            window.title = desiredTitle
         }
-    }
-}
-
-/// NSView subclass that fires a one-time callback when added to a window.
-/// This ensures window configuration runs after the NSWindow is available,
-/// which may not be the case during `makeNSView`.
-private class ConfiguratorView: NSView {
-    var onWindowAvailable: ((NSWindow) -> Void)?
-    private var didConfigure = false
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        guard let window, !didConfigure else { return }
-        didConfigure = true
-        onWindowAvailable?(window)
-        onWindowAvailable = nil
     }
 }
 

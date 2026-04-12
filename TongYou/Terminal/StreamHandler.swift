@@ -14,6 +14,11 @@ struct StreamHandler {
     private var savedCursor: SavedCursorState?
     private var lastPrintedScalar: Unicode.Scalar?
 
+    private(set) var currentTitle: String = ""
+    private var titleStack: [String] = []
+    private static let maxTitleStackDepth = 10
+    private static let maxTitleLength = 1024
+
     /// Callback: PTY write-back for device status reports.
     var onWriteBack: ((Data) -> Void)?
     /// Callback: window title changed.
@@ -218,6 +223,10 @@ struct StreamHandler {
                 }
             }
 
+        // --- Window Manipulation ---
+        case 0x74: // 't' - XTWINOPS (Window manipulation)
+            handleWindowManipulation(params)
+
         default:
             break
         }
@@ -255,7 +264,7 @@ struct StreamHandler {
 
     // MARK: - OSC Dispatch
 
-    private func handleOSC(_ data: [UInt8]) {
+    private mutating func handleOSC(_ data: [UInt8]) {
         // Parse "number;string" format
         guard let separatorIdx = data.firstIndex(of: 0x3B) else { return }
         let numBytes = data[0..<separatorIdx]
@@ -266,7 +275,9 @@ struct StreamHandler {
 
         switch oscNum {
         case 0, 2: // Set window title
-            if let title = String(bytes: stringData, encoding: .utf8) {
+            if let raw = String(bytes: stringData, encoding: .utf8) {
+                let title = Self.sanitizeTitle(raw)
+                currentTitle = title
                 onTitleChanged?(title)
             }
         case 52:
@@ -276,6 +287,18 @@ struct StreamHandler {
         default:
             break
         }
+    }
+
+    /// Strip C0/C1 control characters and truncate to maxTitleLength in a single pass.
+    static func sanitizeTitle(_ raw: String) -> String {
+        var scalars = String.UnicodeScalarView()
+        for scalar in raw.unicodeScalars {
+            let v = scalar.value
+            if v <= 0x1F || v == 0x7F || (v >= 0x80 && v <= 0x9F) { continue }
+            scalars.append(scalar)
+            if scalars.count >= maxTitleLength { break }
+        }
+        return String(scalars)
     }
 
     // MARK: - OSC 52 (Clipboard)
@@ -315,6 +338,39 @@ struct StreamHandler {
             }
         } else if str == "shell-prompt" {
             onRunningCommandChanged?(nil)
+        }
+    }
+
+    // MARK: - Window Manipulation (CSI t)
+
+    private mutating func handleWindowManipulation(_ params: CSIParams) {
+        guard params.count >= 1 else { return }
+        switch params[0] {
+        case 21: // Report window title: respond with OSC l <title> ST
+            let response = "\u{1B}]l\(currentTitle)\u{1B}\\"
+            onWriteBack?(Data(response.utf8))
+
+        case 22: // Push title onto stack
+            let kind = params.count >= 2 ? params[1] : 0
+            // kind 0 = both icon and window title, 2 = window title only
+            if kind == 0 || kind == 2 {
+                if titleStack.count >= Self.maxTitleStackDepth {
+                    titleStack.removeFirst()
+                }
+                titleStack.append(currentTitle)
+            }
+
+        case 23: // Pop title from stack
+            let kind = params.count >= 2 ? params[1] : 0
+            if kind == 0 || kind == 2 {
+                if let restored = titleStack.popLast() {
+                    currentTitle = restored
+                    onTitleChanged?(restored)
+                }
+            }
+
+        default:
+            break
         }
     }
 

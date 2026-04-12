@@ -29,6 +29,8 @@ enum TabAction {
 
 /// A single terminal tab containing a tree of panes.
 struct TerminalTab: Identifiable {
+    static let defaultTitle = "shell"
+
     let id: UUID
     var title: String
     var paneTree: PaneNode
