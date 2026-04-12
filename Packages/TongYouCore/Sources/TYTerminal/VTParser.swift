@@ -4,7 +4,7 @@
 /// https://vt100.net/emu/dec_ansi_parser
 ///
 /// Reference: Ghostty `src/terminal/Parser.zig` and `src/terminal/parse_table.zig`.
-struct VTParser {
+public struct VTParser: Sendable {
 
     // MARK: - State
 
@@ -20,10 +20,12 @@ struct VTParser {
     private var printBuffer = PrintBatchBuffer()
     private var printBufferCount: Int = 0
 
+    public init() {}
+
     // MARK: - Public API
 
     /// Feed a buffer of raw bytes and emit actions via the callback.
-    mutating func feed(_ bytes: UnsafeBufferPointer<UInt8>, emit: (VTAction) -> Void) {
+    public mutating func feed(_ bytes: UnsafeBufferPointer<UInt8>, emit: (VTAction) -> Void) {
         var i = 0
         let count = bytes.count
         while i < count {
@@ -341,7 +343,7 @@ struct VTParser {
 
 // MARK: - VT State
 
-enum VTState: UInt8, CaseIterable {
+public enum VTState: UInt8, CaseIterable, Sendable {
     case ground = 0
     case escape
     case escapeIntermediate
@@ -357,7 +359,7 @@ enum VTState: UInt8, CaseIterable {
     case oscString
     case sosPmApcString
 
-    static let count = VTState.allCases.count
+    public static let count = VTState.allCases.count
 }
 
 // MARK: - Transition Table
@@ -378,7 +380,7 @@ private enum TransitionAction: UInt8 {
 }
 
 /// A single entry in the state transition table.
-private struct Transition {
+private struct Transition: Sendable {
     let state: VTState
     let action: TransitionAction
 }

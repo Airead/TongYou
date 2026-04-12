@@ -1,8 +1,8 @@
 /// Parameters accumulated during CSI sequence parsing.
 /// Fixed-size storage (no heap allocation). Max 24 params matching Ghostty.
-struct CSIParams {
-    static let maxParams = 24
-    static let maxIntermediates = 4
+public struct CSIParams: Sendable {
+    public static let maxParams = 24
+    public static let maxIntermediates = 4
 
     /// Parameter values. Uninitialized entries beyond `count` are undefined.
     private var storage: (
@@ -12,29 +12,31 @@ struct CSIParams {
     ) = (0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0)
 
     /// Number of finalized parameters.
-    private(set) var count: Int = 0
+    public private(set) var count: Int = 0
 
     /// Bitset tracking colon separators. Bit N set means the separator
     /// after param N was ':' (sub-parameter) rather than ';'.
-    private(set) var colonMask: UInt32 = 0
+    public private(set) var colonMask: UInt32 = 0
 
     /// Intermediate bytes (e.g. '?' for DEC private modes).
     private var intermediateStorage: (UInt8, UInt8, UInt8, UInt8) = (0, 0, 0, 0)
-    private(set) var intermediateCount: Int = 0
+    public private(set) var intermediateCount: Int = 0
 
     /// Final byte of the sequence (e.g. 'H' for CUP, 'm' for SGR).
-    var finalByte: UInt8 = 0
+    public var finalByte: UInt8 = 0
+
+    public init() {}
 
     // MARK: - Parameter Access
 
     /// Get param at index, returning `defaultValue` if out of range or zero.
-    func param(_ index: Int, default defaultValue: UInt16 = 0) -> UInt16 {
+    public func param(_ index: Int, default defaultValue: UInt16 = 0) -> UInt16 {
         guard index < count else { return defaultValue }
         let val = self[index]
         return val == 0 ? defaultValue : val
     }
 
-    subscript(index: Int) -> UInt16 {
+    public subscript(index: Int) -> UInt16 {
         get {
             precondition(index >= 0 && index < Self.maxParams)
             return withUnsafeBytes(of: storage) { buf in
@@ -50,13 +52,13 @@ struct CSIParams {
     }
 
     /// Whether the separator after param at `index` was a colon.
-    func isColon(at index: Int) -> Bool {
+    public func isColon(at index: Int) -> Bool {
         (colonMask >> UInt32(index)) & 1 != 0
     }
 
     // MARK: - Intermediate Access
 
-    func intermediate(_ index: Int) -> UInt8 {
+    public func intermediate(_ index: Int) -> UInt8 {
         precondition(index >= 0 && index < Self.maxIntermediates)
         return withUnsafeBytes(of: intermediateStorage) { buf in
             buf.load(fromByteOffset: index, as: UInt8.self)
@@ -64,7 +66,7 @@ struct CSIParams {
     }
 
     /// Check if intermediates contain the given byte (e.g. '?' or ' ').
-    func hasIntermediate(_ byte: UInt8) -> Bool {
+    public func hasIntermediate(_ byte: UInt8) -> Bool {
         for i in 0..<intermediateCount {
             if intermediate(i) == byte { return true }
         }
@@ -73,7 +75,7 @@ struct CSIParams {
 
     // MARK: - Building (used by VTParser)
 
-    mutating func addIntermediate(_ byte: UInt8) {
+    public mutating func addIntermediate(_ byte: UInt8) {
         guard intermediateCount < Self.maxIntermediates else { return }
         withUnsafeMutableBytes(of: &intermediateStorage) { buf in
             buf.storeBytes(of: byte, toByteOffset: intermediateCount, as: UInt8.self)
@@ -82,19 +84,19 @@ struct CSIParams {
     }
 
     /// Finalize the current parameter accumulator value and advance to next slot.
-    mutating func finalizeParam(_ value: UInt16) {
+    public mutating func finalizeParam(_ value: UInt16) {
         guard count < Self.maxParams else { return }
         self[count] = value
         count += 1
     }
 
     /// Mark the separator before the current slot as colon.
-    mutating func markColon() {
+    public mutating func markColon() {
         guard count > 0 else { return }
         colonMask |= 1 << UInt32(count - 1)
     }
 
-    mutating func reset() {
+    public mutating func reset() {
         count = 0
         colonMask = 0
         intermediateCount = 0
@@ -105,7 +107,7 @@ struct CSIParams {
 // MARK: - VT Action
 
 /// Actions emitted by the VT parser to be handled by the stream dispatcher.
-enum VTAction {
+public enum VTAction: Sendable {
     /// Print a Unicode codepoint to the screen.
     case print(Unicode.Scalar)
 
@@ -145,8 +147,8 @@ enum VTAction {
 
 /// Fixed-size inline buffer for batched ASCII print data.
 /// 128 bytes keeps the VTAction enum small while covering typical terminal line widths.
-struct PrintBatchBuffer {
-    static let capacity = 128
+public struct PrintBatchBuffer: Sendable {
+    public static let capacity = 128
 
     // 128 bytes stored as 16 × UInt64 (inline, no heap)
     private var s: (
@@ -154,7 +156,9 @@ struct PrintBatchBuffer {
         UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64
     ) = (0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0)
 
-    subscript(index: Int) -> UInt8 {
+    public init() {}
+
+    public subscript(index: Int) -> UInt8 {
         get {
             precondition(index >= 0 && index < Self.capacity)
             return withUnsafeBytes(of: s) { $0[index] }
@@ -167,7 +171,7 @@ struct PrintBatchBuffer {
 
     /// Bulk-copy bytes from source buffer into this buffer at the given offset.
     /// Single withUnsafeMutableBytes call avoids per-byte overhead.
-    mutating func copyFrom(_ src: UnsafeBufferPointer<UInt8>, srcOffset: Int, count: Int, at destOffset: Int) {
+    public mutating func copyFrom(_ src: UnsafeBufferPointer<UInt8>, srcOffset: Int, count: Int, at destOffset: Int) {
         precondition(destOffset + count <= Self.capacity)
         withUnsafeMutableBytes(of: &s) { buf in
             buf.baseAddress!.advanced(by: destOffset)

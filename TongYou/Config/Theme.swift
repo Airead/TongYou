@@ -1,3 +1,5 @@
+import TYTerminal
+
 /// A terminal color theme defining palette colors 0-15 and semantic colors.
 struct Theme: Equatable {
     /// The 16 ANSI palette colors (indices 0-15).

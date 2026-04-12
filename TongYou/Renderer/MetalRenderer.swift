@@ -1,6 +1,7 @@
 import Metal
 import QuartzCore
 import simd
+import TYTerminal
 
 /// Core Metal rendering engine.
 /// Manages device, command queue, pipeline states, triple-buffered frame rendering.

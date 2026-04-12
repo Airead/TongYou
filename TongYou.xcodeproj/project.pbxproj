@@ -6,6 +6,15 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		2CC9C57D2F8B7A7E00E10AD3 /* TYTerminal in Frameworks */ = {isa = PBXBuildFile; productRef = A1000002300000000000001 /* TYTerminal */; };
+		2CC9C57E2F8B7A7E00E10AD3 /* TYPTY in Frameworks */ = {isa = PBXBuildFile; productRef = A1000002300000000000002 /* TYPTY */; };
+		2CC9C57F2F8B7A7E00E10AD3 /* TYShell in Frameworks */ = {isa = PBXBuildFile; productRef = A1000002300000000000003 /* TYShell */; };
+		2CC9C6C72F8B7B9500E10AD3 /* TYTerminal in Frameworks */ = {isa = PBXBuildFile; productRef = A1000002300000000000004 /* TYTerminal */; };
+		2CC9C6C82F8B7B9500E10AD3 /* TYPTY in Frameworks */ = {isa = PBXBuildFile; productRef = A1000002300000000000005 /* TYPTY */; };
+		2CC9C6C92F8B7B9500E10AD3 /* TYShell in Frameworks */ = {isa = PBXBuildFile; productRef = A1000002300000000000006 /* TYShell */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		2C42371D2F88817C00DE6FC2 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +61,9 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2CC9C57F2F8B7A7E00E10AD3 /* TYShell in Frameworks */,
+				2CC9C57E2F8B7A7E00E10AD3 /* TYPTY in Frameworks */,
+				2CC9C57D2F8B7A7E00E10AD3 /* TYTerminal in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -59,6 +71,9 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2CC9C6C92F8B7B9500E10AD3 /* TYShell in Frameworks */,
+				2CC9C6C82F8B7B9500E10AD3 /* TYPTY in Frameworks */,
+				2CC9C6C72F8B7B9500E10AD3 /* TYTerminal in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +127,9 @@
 			);
 			name = TongYou;
 			packageProductDependencies = (
+				A1000002300000000000001 /* TYTerminal */,
+				A1000002300000000000002 /* TYPTY */,
+				A1000002300000000000003 /* TYShell */,
 			);
 			productName = TongYou;
 			productReference = 2C42370F2F88817B00DE6FC2 /* TongYou.app */;
@@ -135,6 +153,9 @@
 			);
 			name = TongYouTests;
 			packageProductDependencies = (
+				A1000002300000000000004 /* TYTerminal */,
+				A1000002300000000000005 /* TYPTY */,
+				A1000002300000000000006 /* TYShell */,
 			);
 			productName = TongYouTests;
 			productReference = 2C42371C2F88817C00DE6FC2 /* TongYouTests.xctest */;
@@ -195,6 +216,9 @@
 			);
 			mainGroup = 2C4237062F88817B00DE6FC2;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				A1000001300000000000001 /* XCLocalSwiftPackageReference "Packages/TongYouCore" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 2C4237102F88817B00DE6FC2 /* Products */;
 			projectDirPath = "";
@@ -573,6 +597,40 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		A1000001300000000000001 /* XCLocalSwiftPackageReference "Packages/TongYouCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/TongYouCore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A1000002300000000000001 /* TYTerminal */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TYTerminal;
+		};
+		A1000002300000000000002 /* TYPTY */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TYPTY;
+		};
+		A1000002300000000000003 /* TYShell */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TYShell;
+		};
+		A1000002300000000000004 /* TYTerminal */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TYTerminal;
+		};
+		A1000002300000000000005 /* TYPTY */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TYPTY;
+		};
+		A1000002300000000000006 /* TYShell */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TYShell;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 2C4237072F88817B00DE6FC2 /* Project object */;
 }

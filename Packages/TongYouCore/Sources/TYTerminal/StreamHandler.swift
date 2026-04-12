@@ -6,37 +6,37 @@ import Foundation
 /// Confined to ptyQueue alongside Screen.
 ///
 /// Reference: Ghostty `src/terminal/stream.zig`.
-struct StreamHandler {
+public struct StreamHandler {
 
     private let screen: Screen
-    private(set) var modes = TerminalModes()
+    public private(set) var modes = TerminalModes()
     private var currentAttributes = CellAttributes.default
     private var savedCursor: SavedCursorState?
     private var lastPrintedScalar: Unicode.Scalar?
 
-    private(set) var currentTitle: String = ""
+    public private(set) var currentTitle: String = ""
     private var titleStack: [String] = []
     private static let maxTitleStackDepth = 10
     private static let maxTitleLength = 1024
 
     /// Callback: PTY write-back for device status reports.
-    var onWriteBack: ((Data) -> Void)?
+    public var onWriteBack: ((Data) -> Void)?
     /// Callback: window title changed.
-    var onTitleChanged: ((String) -> Void)?
+    public var onTitleChanged: ((String) -> Void)?
     /// Callback: BEL (0x07) received.
-    var onBell: (() -> Void)?
+    public var onBell: (() -> Void)?
     /// Callback: OSC 52 clipboard set request (decoded text).
-    var onClipboardSet: ((String) -> Void)?
+    public var onClipboardSet: ((String) -> Void)?
     /// Callback: shell integration reported the running command (nil = shell prompt).
-    var onRunningCommandChanged: ((String?) -> Void)?
+    public var onRunningCommandChanged: ((String?) -> Void)?
 
-    init(screen: Screen) {
+    public init(screen: Screen) {
         self.screen = screen
     }
 
     // MARK: - Public
 
-    mutating func handle(_ action: VTAction) {
+    public mutating func handle(_ action: VTAction) {
         switch action {
         case .print(let scalar):
             lastPrintedScalar = scalar
@@ -290,7 +290,7 @@ struct StreamHandler {
     }
 
     /// Strip C0/C1 control characters and truncate to maxTitleLength in a single pass.
-    static func sanitizeTitle(_ raw: String) -> String {
+    public static func sanitizeTitle(_ raw: String) -> String {
         var scalars = String.UnicodeScalarView()
         for scalar in raw.unicodeScalars {
             let v = scalar.value
@@ -304,8 +304,6 @@ struct StreamHandler {
     // MARK: - OSC 52 (Clipboard)
 
     /// Handle OSC 52 clipboard operations.
-    /// Format: `52 ; <selection> ; <base64-data>` where selection is typically "c" (clipboard).
-    /// Query (`?`) is rejected to prevent unauthorized clipboard reads.
     private func handleOSC52(_ data: ArraySlice<UInt8>) {
         guard let sepIdx = data.firstIndex(of: 0x3B) else { return }
         let payload = data[(sepIdx + 1)...]
@@ -325,10 +323,6 @@ struct StreamHandler {
 
     // MARK: - OSC 7727 (Shell Integration)
 
-    /// Handle TongYou shell integration sequences.
-    /// Format: `7727;key=value`
-    ///   - `running-command=<cmd>` — a command is about to execute
-    ///   - `shell-prompt` — shell is back at a prompt (no value)
     private func handleOSC7727(_ data: ArraySlice<UInt8>) {
         guard let str = String(bytes: data, encoding: .utf8) else { return }
         if str.hasPrefix("running-command=") {

@@ -1,4 +1,5 @@
 import Foundation
+import TYTerminal
 
 /// Tracks which pane currently has keyboard focus within the window.
 @Observable

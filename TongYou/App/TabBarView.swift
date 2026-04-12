@@ -1,4 +1,5 @@
 import SwiftUI
+import TYTerminal
 import UniformTypeIdentifiers
 
 /// Tab bar displayed above the terminal area.

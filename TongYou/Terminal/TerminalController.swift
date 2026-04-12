@@ -1,5 +1,7 @@
 import AppKit
 import Foundation
+import TYTerminal
+import TYPTY
 
 /// Coordinates PTY process, VT parser, stream handler, and screen buffer.
 ///

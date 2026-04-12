@@ -1,15 +1,20 @@
 /// A point in the terminal buffer, using absolute line numbers
 /// (scrollback + visible area combined).
-struct SelectionPoint: Equatable {
+public struct SelectionPoint: Equatable, Sendable {
     /// Absolute line index: 0 = oldest scrollback line,
     /// scrollbackCount + row = visible area.
-    var line: Int
+    public var line: Int
     /// Column (0-based).
-    var col: Int
+    public var col: Int
+
+    public init(line: Int, col: Int) {
+        self.line = line
+        self.col = col
+    }
 }
 
 /// Selection granularity.
-enum SelectionMode {
+public enum SelectionMode: Sendable {
     /// Character-by-character selection (drag).
     case character
     /// Select whole words (double-click).
@@ -19,13 +24,19 @@ enum SelectionMode {
 }
 
 /// Represents a text selection in the terminal buffer.
-struct Selection: Equatable {
-    var start: SelectionPoint
-    var end: SelectionPoint
-    var mode: SelectionMode = .character
+public struct Selection: Equatable, Sendable {
+    public var start: SelectionPoint
+    public var end: SelectionPoint
+    public var mode: SelectionMode = .character
+
+    public init(start: SelectionPoint, end: SelectionPoint, mode: SelectionMode = .character) {
+        self.start = start
+        self.end = end
+        self.mode = mode
+    }
 
     /// Normalized selection with start <= end.
-    var ordered: (start: SelectionPoint, end: SelectionPoint) {
+    public var ordered: (start: SelectionPoint, end: SelectionPoint) {
         if start.line < end.line || (start.line == end.line && start.col <= end.col) {
             return (start, end)
         }
@@ -33,12 +44,12 @@ struct Selection: Equatable {
     }
 
     /// Check if a given cell (absolute line, column) is within this selection.
-    func contains(line: Int, col: Int) -> Bool {
+    public func contains(line: Int, col: Int) -> Bool {
         Self.contains(ordered: ordered, line: line, col: col)
     }
 
     /// Hit-test using precomputed ordered bounds (avoids recomputing `ordered` per call).
-    static func contains(
+    public static func contains(
         ordered bounds: (start: SelectionPoint, end: SelectionPoint),
         line: Int, col: Int
     ) -> Bool {

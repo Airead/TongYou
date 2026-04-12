@@ -1,12 +1,14 @@
 /// Streaming UTF-8 decoder that correctly handles multi-byte sequences split across chunks.
-struct UTF8Decoder: Sendable {
+public struct UTF8Decoder: Sendable {
 
     private var pending: [UInt8] = []
     private var expectedLength: Int = 0
 
+    public init() {}
+
     /// Feed raw bytes and emit decoded Unicode scalars via the callback.
     /// Incomplete sequences at the end of a chunk are buffered for the next call.
-    mutating func decode(_ bytes: UnsafeBufferPointer<UInt8>, emit: (Unicode.Scalar) -> Void) {
+    public mutating func decode(_ bytes: UnsafeBufferPointer<UInt8>, emit: (Unicode.Scalar) -> Void) {
         var i = 0
         while i < bytes.count {
             let byte = bytes[i]
@@ -57,14 +59,14 @@ struct UTF8Decoder: Sendable {
     }
 
     /// Feed a single byte and emit a decoded scalar via the callback.
-    mutating func decode(_ byte: UInt8, emit: (Unicode.Scalar) -> Void) {
+    public mutating func decode(_ byte: UInt8, emit: (Unicode.Scalar) -> Void) {
         withUnsafePointer(to: byte) { ptr in
             decode(UnsafeBufferPointer(start: ptr, count: 1), emit: emit)
         }
     }
 
     /// Reset internal state, discarding any buffered bytes.
-    mutating func reset() {
+    public mutating func reset() {
         pending.removeAll(keepingCapacity: true)
         expectedLength = 0
     }

@@ -1,7 +1,7 @@
 import simd
 
 /// Display width of a terminal cell.
-enum CellWidth: UInt8, Equatable {
+public enum CellWidth: UInt8, Equatable, Sendable {
     /// Right half of a wide character (placeholder, not rendered).
     case continuation = 0
     /// Normal single-width character.
@@ -13,20 +13,26 @@ enum CellWidth: UInt8, Equatable {
     case spacer = 3
 
     /// Whether this cell carries its own character (not a continuation or spacer placeholder).
-    var isRenderable: Bool { self != .continuation && self != .spacer }
+    public var isRenderable: Bool { self != .continuation && self != .spacer }
 }
 
 /// A single character cell in the terminal grid.
 /// Uses `Unicode.Scalar` instead of `Character` to avoid heap allocation
 /// and make `[Cell]` array copies trivial (memcpy).
-struct Cell: Equatable {
-    var codepoint: Unicode.Scalar
-    var attributes: CellAttributes
-    var width: CellWidth
+public struct Cell: Equatable, Sendable {
+    public var codepoint: Unicode.Scalar
+    public var attributes: CellAttributes
+    public var width: CellWidth
 
-    static let empty = Cell(
+    public static let empty = Cell(
         codepoint: " ",
         attributes: .default,
         width: .normal
     )
+
+    public init(codepoint: Unicode.Scalar, attributes: CellAttributes, width: CellWidth) {
+        self.codepoint = codepoint
+        self.attributes = attributes
+        self.width = width
+    }
 }

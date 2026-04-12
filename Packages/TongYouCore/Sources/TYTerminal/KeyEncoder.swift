@@ -10,24 +10,47 @@ import Foundation
 /// - Application cursor mode (DECCKM)
 ///
 /// Reference: Ghostty `src/input/function_keys.zig`, `src/input/key_encode.zig`.
-struct KeyEncoder {
+public struct KeyEncoder: Sendable {
 
     /// Abstraction of a key event, decoupled from NSEvent for testability.
-    struct KeyInput {
-        let keyCode: UInt16
+    public struct KeyInput: Sendable {
+        public let keyCode: UInt16
         /// Characters produced by the key event (reflects shift, etc.).
-        let characters: String?
+        public let characters: String?
         /// Characters without modifier influence (for Alt-as-ESC).
-        let charactersIgnoringModifiers: String?
-        let shift: Bool
-        let control: Bool
-        let option: Bool
-        let command: Bool
+        public let charactersIgnoringModifiers: String?
+        public let shift: Bool
+        public let control: Bool
+        public let option: Bool
+        public let command: Bool
+
+        public init(
+            keyCode: UInt16,
+            characters: String?,
+            charactersIgnoringModifiers: String?,
+            shift: Bool,
+            control: Bool,
+            option: Bool,
+            command: Bool
+        ) {
+            self.keyCode = keyCode
+            self.characters = characters
+            self.charactersIgnoringModifiers = charactersIgnoringModifiers
+            self.shift = shift
+            self.control = control
+            self.option = option
+            self.command = command
+        }
     }
 
-    struct Options {
-        let appCursorMode: Bool
-        let optionAsAlt: Bool
+    public struct Options: Sendable {
+        public let appCursorMode: Bool
+        public let optionAsAlt: Bool
+
+        public init(appCursorMode: Bool, optionAsAlt: Bool) {
+            self.appCursorMode = appCursorMode
+            self.optionAsAlt = optionAsAlt
+        }
     }
 
     // MARK: - Public
@@ -40,7 +63,7 @@ struct KeyEncoder {
     /// handle them (producing special characters like ™, ©, ñ, etc.).
     /// Special keys (arrows, function keys, etc.) still work but without
     /// the Alt modifier in the xterm parameter.
-    static func encode(_ input: KeyInput, options: Options) -> Data? {
+    public static func encode(_ input: KeyInput, options: Options) -> Data? {
         // Cmd combos are handled by the view layer, not sent to PTY.
         if input.command { return nil }
 
@@ -79,7 +102,7 @@ struct KeyEncoder {
 
     /// xterm modifier parameter: 1 + shift(1) + alt(2) + ctrl(4).
     /// Returns 1 when no modifiers are held (base case).
-    static func modifierParam(_ input: KeyInput, optionAsAlt: Bool) -> Int {
+    public static func modifierParam(_ input: KeyInput, optionAsAlt: Bool) -> Int {
         var mod = 1
         if input.shift   { mod += 1 }
         if input.option && optionAsAlt { mod += 2 }

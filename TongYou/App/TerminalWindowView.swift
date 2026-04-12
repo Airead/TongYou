@@ -1,4 +1,5 @@
 import SwiftUI
+import TYTerminal
 
 /// Root view for a terminal window, managing sessions, tabs, and panes.
 ///

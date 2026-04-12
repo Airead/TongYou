@@ -6,61 +6,75 @@ import simd
 /// - Tag 0: default color (payload ignored)
 /// - Tag 1: indexed color (r_or_index = palette index 0-255)
 /// - Tag 2: direct RGB color
-struct PackedColor: Equatable {
-    var raw: UInt32 = 0
+public struct PackedColor: Equatable, Sendable {
+    public var raw: UInt32 = 0
 
-    static let `default` = PackedColor()
+    public init(raw: UInt32 = 0) {
+        self.raw = raw
+    }
 
-    static func indexed(_ index: UInt8) -> PackedColor {
+    public static let `default` = PackedColor()
+
+    public static func indexed(_ index: UInt8) -> PackedColor {
         PackedColor(raw: (1 << 24) | UInt32(index) << 16)
     }
 
-    static func rgb(_ r: UInt8, _ g: UInt8, _ b: UInt8) -> PackedColor {
+    public static func rgb(_ r: UInt8, _ g: UInt8, _ b: UInt8) -> PackedColor {
         PackedColor(raw: (2 << 24) | UInt32(r) << 16 | UInt32(g) << 8 | UInt32(b))
     }
 
-    var tag: UInt8 { UInt8(raw >> 24) }
-    var isIndexed: Bool { tag == 1 }
+    public var tag: UInt8 { UInt8(raw >> 24) }
+    public var isIndexed: Bool { tag == 1 }
 
     /// Palette index (valid when isIndexed).
-    var index: UInt8 { UInt8((raw >> 16) & 0xFF) }
+    public var index: UInt8 { UInt8((raw >> 16) & 0xFF) }
 
     /// RGB components (valid when isRGB).
-    var r: UInt8 { UInt8((raw >> 16) & 0xFF) }
-    var g: UInt8 { UInt8((raw >> 8) & 0xFF) }
-    var b: UInt8 { UInt8(raw & 0xFF) }
+    public var r: UInt8 { UInt8((raw >> 16) & 0xFF) }
+    public var g: UInt8 { UInt8((raw >> 8) & 0xFF) }
+    public var b: UInt8 { UInt8(raw & 0xFF) }
 }
 
 /// Text style flags packed into a UInt16 bitfield.
-struct StyleFlags: OptionSet, Equatable {
-    let rawValue: UInt16
+public struct StyleFlags: OptionSet, Equatable, Sendable {
+    public let rawValue: UInt16
 
-    static let bold          = StyleFlags(rawValue: 1 << 0)
-    static let dim           = StyleFlags(rawValue: 1 << 1)
-    static let italic        = StyleFlags(rawValue: 1 << 2)
-    static let underline     = StyleFlags(rawValue: 1 << 3)
-    static let blink         = StyleFlags(rawValue: 1 << 4)
-    static let inverse       = StyleFlags(rawValue: 1 << 5)
-    static let hidden        = StyleFlags(rawValue: 1 << 6)
-    static let strikethrough = StyleFlags(rawValue: 1 << 7)
+    public init(rawValue: UInt16) {
+        self.rawValue = rawValue
+    }
+
+    public static let bold          = StyleFlags(rawValue: 1 << 0)
+    public static let dim           = StyleFlags(rawValue: 1 << 1)
+    public static let italic        = StyleFlags(rawValue: 1 << 2)
+    public static let underline     = StyleFlags(rawValue: 1 << 3)
+    public static let blink         = StyleFlags(rawValue: 1 << 4)
+    public static let inverse       = StyleFlags(rawValue: 1 << 5)
+    public static let hidden        = StyleFlags(rawValue: 1 << 6)
+    public static let strikethrough = StyleFlags(rawValue: 1 << 7)
 }
 
 /// Per-cell text attributes: style flags + foreground/background colors.
-struct CellAttributes: Equatable {
-    var flags: StyleFlags = []
-    var fgColor: PackedColor = .default
-    var bgColor: PackedColor = .default
+public struct CellAttributes: Equatable, Sendable {
+    public var flags: StyleFlags = []
+    public var fgColor: PackedColor = .default
+    public var bgColor: PackedColor = .default
 
-    static let `default` = CellAttributes()
+    public static let `default` = CellAttributes()
 
-    mutating func reset() {
+    public init(flags: StyleFlags = [], fgColor: PackedColor = .default, bgColor: PackedColor = .default) {
+        self.flags = flags
+        self.fgColor = fgColor
+        self.bgColor = bgColor
+    }
+
+    public mutating func reset() {
         self = .default
     }
 }
 
 // MARK: - Cursor Shape
 
-enum CursorShape: UInt8 {
+public enum CursorShape: UInt8, Sendable {
     case block = 0
     case underline = 1
     case bar = 2
@@ -68,27 +82,40 @@ enum CursorShape: UInt8 {
 
 // MARK: - Color Palette
 
+/// RGB color for palette overrides.
+public struct RGBColor: Equatable, Sendable {
+    public let r: UInt8
+    public let g: UInt8
+    public let b: UInt8
+
+    public init(r: UInt8, g: UInt8, b: UInt8) {
+        self.r = r
+        self.g = g
+        self.b = b
+    }
+}
+
 /// Standard xterm-256color palette.
 /// Entries 0-7: standard colors, 8-15: bright colors,
 /// 16-231: 6×6×6 color cube, 232-255: grayscale ramp.
-struct ColorPalette {
+public struct ColorPalette: Sendable {
 
     /// RGBA values for all 256 palette entries.
-    private(set) var entries: [SIMD4<UInt8>]
+    public private(set) var entries: [SIMD4<UInt8>]
 
     /// Default fg/bg colors used when PackedColor is `.default`.
-    let defaultFg: SIMD4<UInt8>
-    let defaultBg: SIMD4<UInt8>
+    public let defaultFg: SIMD4<UInt8>
+    public let defaultBg: SIMD4<UInt8>
 
     /// Cursor colors. When nil, cursor uses inverted fg/bg.
-    let cursorColor: SIMD4<UInt8>?
-    let cursorText: SIMD4<UInt8>?
+    public let cursorColor: SIMD4<UInt8>?
+    public let cursorText: SIMD4<UInt8>?
 
     /// Selection colors. When nil, selection uses inverted fg/bg.
-    let selectionBg: SIMD4<UInt8>?
-    let selectionFg: SIMD4<UInt8>?
+    public let selectionBg: SIMD4<UInt8>?
+    public let selectionFg: SIMD4<UInt8>?
 
-    init(
+    public init(
         defaultFg: SIMD4<UInt8> = SIMD4<UInt8>(220, 220, 220, 255),
         defaultBg: SIMD4<UInt8> = SIMD4<UInt8>(30, 30, 38, 255),
         cursorColor: SIMD4<UInt8>? = nil,
@@ -106,7 +133,7 @@ struct ColorPalette {
     }
 
     /// Resolve a PackedColor to concrete RGBA.
-    func resolve(_ color: PackedColor, isFg: Bool) -> SIMD4<UInt8> {
+    public func resolve(_ color: PackedColor, isFg: Bool) -> SIMD4<UInt8> {
         switch color.tag {
         case 0: return isFg ? defaultFg : defaultBg
         case 1: return entries[Int(color.index)]
@@ -116,7 +143,7 @@ struct ColorPalette {
     }
 
     /// Resolve foreground color with bold→bright promotion for indexed colors 0-7.
-    func resolveFg(_ attrs: CellAttributes) -> SIMD4<UInt8> {
+    public func resolveFg(_ attrs: CellAttributes) -> SIMD4<UInt8> {
         var color = attrs.fgColor
         if attrs.flags.contains(.bold), color.isIndexed, color.index < 8 {
             color = .indexed(color.index + 8)
@@ -125,12 +152,12 @@ struct ColorPalette {
     }
 
     /// Resolve background color.
-    func resolveBg(_ attrs: CellAttributes) -> SIMD4<UInt8> {
+    public func resolveBg(_ attrs: CellAttributes) -> SIMD4<UInt8> {
         resolve(attrs.bgColor, isFg: false)
     }
 
     /// Resolve a cell's display colors, handling inverse and hidden flags.
-    func resolveDisplay(_ attrs: CellAttributes) -> (fg: SIMD4<UInt8>, bg: SIMD4<UInt8>) {
+    public func resolveDisplay(_ attrs: CellAttributes) -> (fg: SIMD4<UInt8>, bg: SIMD4<UInt8>) {
         var fg = resolveFg(attrs)
         var bg = resolveBg(attrs)
         if attrs.flags.contains(.inverse) {
@@ -144,7 +171,7 @@ struct ColorPalette {
 
     /// Apply palette overrides from configuration.
     /// - Parameter overrides: Map of palette index (0-255) to RGB color.
-    mutating func applyOverrides(_ overrides: [Int: RGBColor]) {
+    public mutating func applyOverrides(_ overrides: [Int: RGBColor]) {
         for (index, color) in overrides where (0...255).contains(index) {
             entries[index] = SIMD4<UInt8>(color.r, color.g, color.b, 255)
         }

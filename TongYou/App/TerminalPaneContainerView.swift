@@ -1,4 +1,5 @@
 import SwiftUI
+import TYTerminal
 
 /// NSViewRepresentable that manages a MetalView for a single terminal pane.
 /// Creates the MetalView on first appearance and reuses it for subsequent displays.

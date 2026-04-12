@@ -1,6 +1,7 @@
 import AppKit
 import Metal
 import QuartzCore
+import TYTerminal
 
 /// NSView subclass hosting a CAMetalLayer for GPU rendering.
 /// Bridged into SwiftUI via TerminalPaneContainerView (NSViewRepresentable).

@@ -7,13 +7,13 @@
 ///
 /// This works across SSH because the escape sequences travel through
 /// the byte stream from remote shell → SSH → local PTY → TongYou.
-enum ShellIntegration {
+public enum ShellIntegration {
 
     /// Zsh integration script.
     ///
     /// Written to disk by `ShellIntegrationInjector` and sourced
     /// via a ZDOTDIR `.zshenv` wrapper.
-    static let zsh = #"""
+    public static let zsh = #"""
     # TongYou shell integration for zsh
     # Sends OSC 7727 sequences to report command lifecycle.
 

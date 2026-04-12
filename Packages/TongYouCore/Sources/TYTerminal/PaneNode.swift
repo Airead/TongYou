@@ -1,7 +1,8 @@
+import CoreGraphics
 import Foundation
 
 /// Direction for splitting a pane.
-enum SplitDirection: Equatable {
+public enum SplitDirection: Equatable, Sendable {
     case horizontal  // top / bottom
     case vertical    // left / right
 }
@@ -10,14 +11,14 @@ enum SplitDirection: Equatable {
 ///
 /// - `.leaf`: A single terminal pane.
 /// - `.split`: Two children separated by a divider.
-indirect enum PaneNode: Equatable {
+public indirect enum PaneNode: Equatable, Sendable {
     case leaf(TerminalPane)
     case split(direction: SplitDirection, ratio: CGFloat, first: PaneNode, second: PaneNode)
 
     // MARK: - Queries
 
     /// All panes in the tree, in depth-first (left-to-right) order.
-    var allPanes: [TerminalPane] {
+    public var allPanes: [TerminalPane] {
         var result: [TerminalPane] = []
         collectPanes(into: &result)
         return result
@@ -34,7 +35,7 @@ indirect enum PaneNode: Equatable {
     }
 
     /// All pane IDs in the tree.
-    var allPaneIDs: [UUID] {
+    public var allPaneIDs: [UUID] {
         var result: [UUID] = []
         collectPaneIDs(into: &result)
         return result
@@ -51,7 +52,7 @@ indirect enum PaneNode: Equatable {
     }
 
     /// The pane count.
-    var paneCount: Int {
+    public var paneCount: Int {
         switch self {
         case .leaf:
             return 1
@@ -61,7 +62,7 @@ indirect enum PaneNode: Equatable {
     }
 
     /// Find a pane by ID.
-    func findPane(id: UUID) -> TerminalPane? {
+    public func findPane(id: UUID) -> TerminalPane? {
         switch self {
         case .leaf(let pane):
             return pane.id == id ? pane : nil
@@ -71,12 +72,12 @@ indirect enum PaneNode: Equatable {
     }
 
     /// Whether the tree contains a pane with the given ID.
-    func contains(paneID: UUID) -> Bool {
+    public func contains(paneID: UUID) -> Bool {
         findPane(id: paneID) != nil
     }
 
     /// The first leaf pane in depth-first order.
-    var firstPane: TerminalPane {
+    public var firstPane: TerminalPane {
         switch self {
         case .leaf(let pane):
             return pane
@@ -86,7 +87,7 @@ indirect enum PaneNode: Equatable {
     }
 
     /// The root pane when the tree is a single leaf. Useful for single-pane tabs.
-    var rootPane: TerminalPane? {
+    public var rootPane: TerminalPane? {
         if case .leaf(let pane) = self { return pane }
         return nil
     }
@@ -96,7 +97,7 @@ indirect enum PaneNode: Equatable {
     /// Replace the leaf with the given ID by splitting it in the given direction.
     /// The original pane becomes the first child; a new pane becomes the second child.
     /// Returns the new tree and the newly created pane, or nil if the ID was not found.
-    func split(paneID: UUID, direction: SplitDirection, newPane: TerminalPane) -> PaneNode? {
+    public func split(paneID: UUID, direction: SplitDirection, newPane: TerminalPane) -> PaneNode? {
         switch self {
         case .leaf(let pane):
             guard pane.id == paneID else { return nil }
@@ -119,7 +120,7 @@ indirect enum PaneNode: Equatable {
 
     /// Remove a pane by ID. The sibling of the removed pane is promoted.
     /// Returns nil if the removed pane is the only leaf (tree becomes empty).
-    func removePane(id: UUID) -> PaneNode? {
+    public func removePane(id: UUID) -> PaneNode? {
         switch self {
         case .leaf(let pane):
             // Removing the only leaf — tree becomes empty.
@@ -144,7 +145,7 @@ indirect enum PaneNode: Equatable {
     }
 
     /// Update the split ratio at the node that directly contains the given pane ID as a leaf child.
-    func updateRatio(for paneID: UUID, newRatio: CGFloat) -> PaneNode {
+    public func updateRatio(for paneID: UUID, newRatio: CGFloat) -> PaneNode {
         switch self {
         case .leaf:
             return self
@@ -166,7 +167,7 @@ indirect enum PaneNode: Equatable {
     }
 
     /// Replace a specific pane with a new subtree.
-    func replacingPane(id: UUID, with newNode: PaneNode) -> PaneNode {
+    public func replacingPane(id: UUID, with newNode: PaneNode) -> PaneNode {
         switch self {
         case .leaf(let pane):
             return pane.id == id ? newNode : self

@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import TYTerminal
 
 /// Manages terminal sessions, each containing its own set of tabs and panes.
 /// Absorbs all logic previously in TabManager, scoped to the active session.

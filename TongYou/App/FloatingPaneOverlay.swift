@@ -1,4 +1,5 @@
 import SwiftUI
+import TYTerminal
 
 /// Overlay that renders all visible floating panes sorted by z-order.
 ///

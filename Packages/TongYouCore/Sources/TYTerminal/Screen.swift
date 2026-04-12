@@ -1,17 +1,22 @@
 import simd
 
 /// Tracks which rows changed since the last snapshot, enabling partial buffer updates.
-struct DirtyRegion: Equatable {
+public struct DirtyRegion: Equatable, Sendable {
     /// Range of dirty rows (nil = all clean).
-    var lineRange: Range<Int>?
+    public var lineRange: Range<Int>?
     /// When true, the renderer must rebuild all instances (scroll, resize, etc.).
-    var fullRebuild: Bool
+    public var fullRebuild: Bool
 
-    static let clean = DirtyRegion(lineRange: nil, fullRebuild: false)
-    static let full = DirtyRegion(lineRange: nil, fullRebuild: true)
+    public init(lineRange: Range<Int>? = nil, fullRebuild: Bool = false) {
+        self.lineRange = lineRange
+        self.fullRebuild = fullRebuild
+    }
+
+    public static let clean = DirtyRegion(lineRange: nil, fullRebuild: false)
+    public static let full = DirtyRegion(lineRange: nil, fullRebuild: true)
 
     /// Mark a single row as dirty.
-    mutating func markLine(_ row: Int) {
+    public mutating func markLine(_ row: Int) {
         if fullRebuild { return }
         if let existing = lineRange {
             lineRange = min(existing.lowerBound, row)..<max(existing.upperBound, row + 1)
@@ -21,7 +26,7 @@ struct DirtyRegion: Equatable {
     }
 
     /// Mark a contiguous range of rows as dirty.
-    mutating func markRange(_ range: Range<Int>) {
+    public mutating func markRange(_ range: Range<Int>) {
         guard !range.isEmpty else { return }
         if fullRebuild { return }
         if let existing = lineRange {
@@ -32,13 +37,13 @@ struct DirtyRegion: Equatable {
     }
 
     /// Mark full rebuild required.
-    mutating func markFull() {
+    public mutating func markFull() {
         fullRebuild = true
         lineRange = nil
     }
 
     /// Merge another dirty region into this one.
-    mutating func merge(_ other: DirtyRegion) {
+    public mutating func merge(_ other: DirtyRegion) {
         if other.fullRebuild {
             markFull()
             return
@@ -49,49 +54,85 @@ struct DirtyRegion: Equatable {
     }
 
     /// Whether any rows are dirty or a full rebuild is needed.
-    var isDirty: Bool {
+    public var isDirty: Bool {
         fullRebuild || lineRange != nil
     }
 }
 
 /// Saved cursor state for DECSC/DECRC.
-struct SavedCursorState {
-    let col: Int
-    let row: Int
-    let attributes: CellAttributes
+public struct SavedCursorState: Sendable {
+    public let col: Int
+    public let row: Int
+    public let attributes: CellAttributes
+
+    public init(col: Int, row: Int, attributes: CellAttributes) {
+        self.col = col
+        self.row = row
+        self.attributes = attributes
+    }
 }
 
 /// Per-row metadata for soft-wrap tracking.
-struct LineFlags: Equatable {
+public struct LineFlags: Equatable, Sendable {
     /// True when this row's content continues on the next row (soft wrap).
-    var wrapped: Bool = false
+    public var wrapped: Bool = false
+
+    public init(wrapped: Bool = false) {
+        self.wrapped = wrapped
+    }
 }
 
 /// Immutable snapshot of screen state for cross-thread transfer to the renderer.
-struct ScreenSnapshot {
-    let cells: [Cell]
-    let columns: Int
-    let rows: Int
-    let cursorCol: Int
-    let cursorRow: Int
-    let cursorVisible: Bool
-    let cursorShape: CursorShape
+public struct ScreenSnapshot: Sendable {
+    public let cells: [Cell]
+    public let columns: Int
+    public let rows: Int
+    public let cursorCol: Int
+    public let cursorRow: Int
+    public let cursorVisible: Bool
+    public let cursorShape: CursorShape
     /// Active selection (absolute line coordinates).
-    let selection: Selection?
+    public let selection: Selection?
     /// Number of scrollback lines, used to convert selection absolute coords
     /// to viewport-relative row for rendering.
-    let scrollbackCount: Int
+    public let scrollbackCount: Int
     /// Current viewport offset (0 = bottom).
-    let viewportOffset: Int
+    public let viewportOffset: Int
     /// Dirty region since the previous snapshot.
-    let dirtyRegion: DirtyRegion
+    public let dirtyRegion: DirtyRegion
 
-    func cell(at col: Int, row: Int) -> Cell {
+    public init(
+        cells: [Cell],
+        columns: Int,
+        rows: Int,
+        cursorCol: Int,
+        cursorRow: Int,
+        cursorVisible: Bool,
+        cursorShape: CursorShape,
+        selection: Selection?,
+        scrollbackCount: Int,
+        viewportOffset: Int,
+        dirtyRegion: DirtyRegion
+    ) {
+        self.cells = cells
+        self.columns = columns
+        self.rows = rows
+        self.cursorCol = cursorCol
+        self.cursorRow = cursorRow
+        self.cursorVisible = cursorVisible
+        self.cursorShape = cursorShape
+        self.selection = selection
+        self.scrollbackCount = scrollbackCount
+        self.viewportOffset = viewportOffset
+        self.dirtyRegion = dirtyRegion
+    }
+
+    public func cell(at col: Int, row: Int) -> Cell {
         cells[row * columns + col]
     }
 
     /// Convert a viewport row to an absolute line number.
-    func absoluteLine(forViewportRow row: Int) -> Int {
+    public func absoluteLine(forViewportRow row: Int) -> Int {
         scrollbackCount - viewportOffset + row
     }
 }
@@ -102,22 +143,22 @@ struct ScreenSnapshot {
 /// Uses a row ring buffer: logical row 0 maps to physical row `rowBase`.
 /// Full-screen scrolling rotates `rowBase` in O(columns) instead of copying
 /// O(rows × columns) cells. Partial scroll regions fall back to physical copy.
-final class Screen {
+public final class Screen {
 
-    private(set) var columns: Int
-    private(set) var rows: Int
-    private(set) var cursorCol: Int = 0
-    private(set) var cursorRow: Int = 0
-    private(set) var cursorVisible: Bool = true
-    private(set) var cursorShape: CursorShape = .block
+    public private(set) var columns: Int
+    public private(set) var rows: Int
+    public private(set) var cursorCol: Int = 0
+    public private(set) var cursorRow: Int = 0
+    public private(set) var cursorVisible: Bool = true
+    public private(set) var cursorShape: CursorShape = .block
 
     /// Scroll region bounds (inclusive). Default: full screen.
-    private(set) var scrollTop: Int = 0
-    private(set) var scrollBottom: Int = 0
+    public private(set) var scrollTop: Int = 0
+    public private(set) var scrollBottom: Int = 0
 
     /// Tracks which rows changed since the last snapshot.
     /// Initialized to fullRebuild so the first frame renders everything.
-    private(set) var dirtyRegion = DirtyRegion.full
+    public private(set) var dirtyRegion = DirtyRegion.full
 
     private var cells: [Cell]
 
@@ -147,17 +188,17 @@ final class Screen {
     /// Per-row wrap flags for scrollback, ring-buffered in sync with scrollbackBuffer.
     private var scrollbackLineFlags: [LineFlags]?
     /// Number of valid lines in the scrollback buffer.
-    private(set) var scrollbackCount: Int = 0
+    public private(set) var scrollbackCount: Int = 0
 
     /// Maximum scrollback lines to keep.
-    private(set) var maxScrollback: Int
+    public private(set) var maxScrollback: Int
 
     /// Viewport offset: 0 = showing latest content (bottom), >0 = scrolled up.
-    private(set) var viewportOffset: Int = 0
+    public private(set) var viewportOffset: Int = 0
 
     private let tabWidth: Int
 
-    init(columns: Int, rows: Int, maxScrollback: Int = 10000, tabWidth: Int = 8) {
+    public init(columns: Int, rows: Int, maxScrollback: Int = 10000, tabWidth: Int = 8) {
         self.columns = max(1, columns)
         self.rows = max(1, rows)
         self.maxScrollback = max(0, maxScrollback)
@@ -221,7 +262,7 @@ final class Screen {
     }
 
     /// Query whether an absolute line (scrollback + screen) is soft-wrapped.
-    func isLineWrapped(absoluteLine line: Int) -> Bool {
+    public func isLineWrapped(absoluteLine line: Int) -> Bool {
         if line < scrollbackCount {
             guard let sbFlags = scrollbackLineFlags else { return false }
             return sbFlags[scrollbackPhysicalRow(line)].wrapped
@@ -234,18 +275,18 @@ final class Screen {
 
     // MARK: - Read Access
 
-    func cell(at col: Int, row: Int) -> Cell {
+    public func cell(at col: Int, row: Int) -> Cell {
         cells[rowStart(row) + col]
     }
 
     /// Return the current dirty region and reset it to clean.
-    func consumeDirtyRegion() -> DirtyRegion {
+    public func consumeDirtyRegion() -> DirtyRegion {
         let region = dirtyRegion
         dirtyRegion = .clean
         return region
     }
 
-    func snapshot(selection: Selection? = nil) -> ScreenSnapshot {
+    public func snapshot(selection: Selection? = nil) -> ScreenSnapshot {
         let viewCells: [Cell]
         if viewportOffset == 0 {
             viewCells = buildLinearCells()
@@ -298,7 +339,7 @@ final class Screen {
     // MARK: - Write Operations
 
     /// Write a printable character at the cursor with given attributes and advance.
-    func write(_ scalar: Unicode.Scalar, attributes: CellAttributes) {
+    public func write(_ scalar: Unicode.Scalar, attributes: CellAttributes) {
         let w = Int(scalar.terminalWidth)
 
         if cursorCol >= columns {
@@ -346,12 +387,12 @@ final class Screen {
     }
 
     /// Write a printable character at the cursor with default attributes and advance.
-    func write(_ scalar: Unicode.Scalar) {
+    public func write(_ scalar: Unicode.Scalar) {
         write(scalar, attributes: .default)
     }
 
     /// Batch-write single-width ASCII (0x20-0x7E). One dirtyRegion mark per line instead of per character.
-    func writeASCIIBatch(_ buffer: PrintBatchBuffer, count: Int, attributes: CellAttributes) {
+    public func writeASCIIBatch(_ buffer: PrintBatchBuffer, count: Int, attributes: CellAttributes) {
         var i = 0
         while i < count {
             // Handle wrap from previous write
@@ -426,25 +467,25 @@ final class Screen {
     }
 
     /// Line feed: move cursor down one row (scroll if at bottom of scroll region).
-    func lineFeed() {
+    public func lineFeed() {
         dirtyRegion.markLine(cursorRow)
         advanceRow()
         dirtyRegion.markLine(cursorRow)
     }
 
     /// Carriage return: move cursor to column 0.
-    func carriageReturn() {
+    public func carriageReturn() {
         cursorCol = 0
     }
 
     /// Newline: carriage return + line feed.
-    func newline() {
+    public func newline() {
         carriageReturn()
         lineFeed()
     }
 
     /// Backspace: move cursor left by one (stops at column 0).
-    func backspace() {
+    public func backspace() {
         let oldCol = cursorCol
         if cursorCol > 0 {
             cursorCol -= 1
@@ -453,7 +494,7 @@ final class Screen {
     }
 
     /// Tab: advance cursor to next tab stop (every 8 columns).
-    func tab() {
+    public func tab() {
         let nextStop = ((cursorCol / tabWidth) + 1) * tabWidth
         cursorCol = min(nextStop, columns - 1)
     }
@@ -461,31 +502,31 @@ final class Screen {
     // MARK: - Cursor Movement
 
     /// Move cursor up by `n` rows, clamping at scroll top.
-    func cursorUp(_ n: Int) {
+    public func cursorUp(_ n: Int) {
         moveCursorRow(to: max(scrollTop, cursorRow - max(1, n)))
     }
 
     /// Move cursor down by `n` rows, clamping at scroll bottom.
-    func cursorDown(_ n: Int) {
+    public func cursorDown(_ n: Int) {
         moveCursorRow(to: min(scrollBottom, cursorRow + max(1, n)))
     }
 
     /// Move cursor forward (right) by `n` columns, clamping at last column.
-    func cursorForward(_ n: Int) {
+    public func cursorForward(_ n: Int) {
         let oldCol = cursorCol
         cursorCol = min(columns - 1, cursorCol + max(1, n))
         if cursorCol != oldCol { dirtyRegion.markLine(cursorRow) }
     }
 
     /// Move cursor backward (left) by `n` columns, clamping at column 0.
-    func cursorBackward(_ n: Int) {
+    public func cursorBackward(_ n: Int) {
         let oldCol = cursorCol
         cursorCol = max(0, cursorCol - max(1, n))
         if cursorCol != oldCol { dirtyRegion.markLine(cursorRow) }
     }
 
     /// Set cursor to absolute position (0-based row, col).
-    func setCursorPos(row: Int, col: Int) {
+    public func setCursorPos(row: Int, col: Int) {
         moveCursorRow(to: clampRow(row))
         let oldCol = cursorCol
         cursorCol = clampCol(col)
@@ -493,23 +534,23 @@ final class Screen {
     }
 
     /// Set cursor row (0-based), clamping to screen bounds.
-    func setCursorRow(_ row: Int) {
+    public func setCursorRow(_ row: Int) {
         moveCursorRow(to: clampRow(row))
     }
 
     /// Set cursor column (0-based), clamping to screen bounds.
-    func setCursorCol(_ col: Int) {
+    public func setCursorCol(_ col: Int) {
         let oldCol = cursorCol
         cursorCol = clampCol(col)
         if cursorCol != oldCol { dirtyRegion.markLine(cursorRow) }
     }
 
-    func setCursorVisible(_ visible: Bool) {
+    public func setCursorVisible(_ visible: Bool) {
         cursorVisible = visible
         dirtyRegion.markLine(cursorRow)
     }
 
-    func setCursorShape(_ shape: CursorShape) {
+    public func setCursorShape(_ shape: CursorShape) {
         cursorShape = shape
         dirtyRegion.markLine(cursorRow)
     }
@@ -517,7 +558,7 @@ final class Screen {
     // MARK: - Erase Operations
 
     /// Erase in display (ED). Mode: 0=below, 1=above, 2=all, 3=all+scrollback.
-    func eraseDisplay(mode: Int, attributes: CellAttributes = .default) {
+    public func eraseDisplay(mode: Int, attributes: CellAttributes = .default) {
         let blank = Cell(codepoint: " ", attributes: attributes, width: .normal)
 
         switch mode {
@@ -577,7 +618,7 @@ final class Screen {
     }
 
     /// Erase in line (EL). Mode: 0=right, 1=left, 2=all.
-    func eraseLine(mode: Int, attributes: CellAttributes = .default) {
+    public func eraseLine(mode: Int, attributes: CellAttributes = .default) {
         let blank = Cell(codepoint: " ", attributes: attributes, width: .normal)
         let base = rowStart(cursorRow)
 
@@ -607,7 +648,7 @@ final class Screen {
     }
 
     /// Erase characters (ECH): erase `count` chars starting at cursor (fills with blank).
-    func eraseCharacters(count: Int, attributes: CellAttributes = .default) {
+    public func eraseCharacters(count: Int, attributes: CellAttributes = .default) {
         let blank = Cell(codepoint: " ", attributes: attributes, width: .normal)
         let n = max(1, count)
         let base = rowStart(cursorRow)
@@ -625,7 +666,7 @@ final class Screen {
     // MARK: - Scroll Operations
 
     /// Scroll up by `count` lines within the scroll region.
-    func scrollUp(count: Int = 1) {
+    public func scrollUp(count: Int = 1) {
         let n = min(max(1, count), scrollBottom - scrollTop + 1)
         let shiftRows = scrollBottom - scrollTop + 1 - n
         if shiftRows > 0 {
@@ -641,7 +682,7 @@ final class Screen {
     }
 
     /// Scroll down by `count` lines within the scroll region.
-    func scrollDown(count: Int = 1) {
+    public func scrollDown(count: Int = 1) {
         let n = min(max(1, count), scrollBottom - scrollTop + 1)
         let shiftRows = scrollBottom - scrollTop + 1 - n
         if shiftRows > 0 {
@@ -658,7 +699,7 @@ final class Screen {
 
     /// Set scroll region (DECSTBM). Values are 0-based inclusive.
     /// Pass top=0, bottom=rows-1 to reset to full screen.
-    func setScrollRegion(top: Int, bottom: Int) {
+    public func setScrollRegion(top: Int, bottom: Int) {
         let t = max(0, min(top, rows - 1))
         let b = max(t, min(bottom, rows - 1))
         scrollTop = t
@@ -670,7 +711,7 @@ final class Screen {
     }
 
     /// Reverse index (ESC M): move cursor up one row, scrolling down if at top of region.
-    func reverseIndex() {
+    public func reverseIndex() {
         if cursorRow == scrollTop {
             scrollRegionDown()
         } else if cursorRow > 0 {
@@ -681,7 +722,7 @@ final class Screen {
     // MARK: - Insert / Delete
 
     /// Insert `count` blank characters at cursor position, shifting content right.
-    func insertCharacters(count: Int) {
+    public func insertCharacters(count: Int) {
         let n = min(max(1, count), columns - cursorCol)
         let base = rowStart(cursorRow)
 
@@ -711,7 +752,7 @@ final class Screen {
     }
 
     /// Delete `count` characters at cursor position, shifting content left.
-    func deleteCharacters(count: Int) {
+    public func deleteCharacters(count: Int) {
         let n = min(max(1, count), columns - cursorCol)
         let base = rowStart(cursorRow)
 
@@ -740,7 +781,7 @@ final class Screen {
     }
 
     /// Insert `count` blank lines at cursor row, pushing content down within scroll region.
-    func insertLines(count: Int) {
+    public func insertLines(count: Int) {
         guard cursorRow >= scrollTop && cursorRow <= scrollBottom else { return }
         let n = min(max(1, count), scrollBottom - cursorRow + 1)
         for row in stride(from: scrollBottom, through: cursorRow + n, by: -1) {
@@ -756,7 +797,7 @@ final class Screen {
     }
 
     /// Delete `count` lines at cursor row, pulling content up within scroll region.
-    func deleteLines(count: Int) {
+    public func deleteLines(count: Int) {
         guard cursorRow >= scrollTop && cursorRow <= scrollBottom else { return }
         let n = min(max(1, count), scrollBottom - cursorRow + 1)
         // Shift lines up within region
@@ -777,14 +818,14 @@ final class Screen {
     // MARK: - Tab
 
     /// Forward tabulation: advance cursor to the Nth next tab stop.
-    func forwardTab(count: Int = 1) {
+    public func forwardTab(count: Int = 1) {
         for _ in 0..<max(1, count) {
             tab()
         }
     }
 
     /// Backward tabulation: move cursor to the Nth previous tab stop.
-    func backwardTab(count: Int = 1) {
+    public func backwardTab(count: Int = 1) {
         for _ in 0..<max(1, count) {
             if cursorCol == 0 { break }
             // Move to previous tab stop
@@ -796,7 +837,7 @@ final class Screen {
     // MARK: - Alternate Screen Buffer
 
     /// Switch to alternate screen buffer (DECSET 1049).
-    func switchToAltScreen() {
+    public func switchToAltScreen() {
         guard altCells == nil else { return }
         altCells = cells
         altRowBase = rowBase
@@ -812,7 +853,7 @@ final class Screen {
     }
 
     /// Switch back to main screen buffer (DECRST 1049).
-    func switchToMainScreen() {
+    public func switchToMainScreen() {
         guard let saved = altCells else { return }
         cells = saved
         altCells = nil
@@ -830,7 +871,7 @@ final class Screen {
     // MARK: - Full Reset
 
     /// Full terminal reset (RIS).
-    func fullReset() {
+    public func fullReset() {
         cells = [Cell](repeating: .empty, count: columns * rows)
         lineFlags = [LineFlags](repeating: LineFlags(), count: rows)
         rowBase = 0
@@ -853,7 +894,7 @@ final class Screen {
 
     /// Resize the screen with content reflow when columns change.
     /// Also resizes the saved alternate screen buffer (simple truncation, no reflow).
-    func resize(columns newCols: Int, rows newRows: Int) {
+    public func resize(columns newCols: Int, rows newRows: Int) {
         let newCols = max(1, newCols)
         let newRows = max(1, newRows)
 
@@ -1179,31 +1220,31 @@ final class Screen {
     // MARK: - Viewport Scrolling
 
     /// Scroll the viewport up by `lines` (view older content).
-    func scrollViewportUp(lines: Int = 1) {
+    public func scrollViewportUp(lines: Int = 1) {
         viewportOffset = min(viewportOffset + max(1, lines), scrollbackCount)
         dirtyRegion.markFull()
     }
 
     /// Scroll the viewport down by `lines` (view newer content).
-    func scrollViewportDown(lines: Int = 1) {
+    public func scrollViewportDown(lines: Int = 1) {
         viewportOffset = max(0, viewportOffset - max(1, lines))
         dirtyRegion.markFull()
     }
 
     /// Jump viewport to the bottom (most recent content).
-    func scrollViewportToBottom() {
+    public func scrollViewportToBottom() {
         viewportOffset = 0
         dirtyRegion.markFull()
     }
 
     /// Set viewport offset directly (clamped to valid range).
-    func setViewportOffset(_ offset: Int) {
+    public func setViewportOffset(_ offset: Int) {
         viewportOffset = max(0, min(offset, scrollbackCount))
         dirtyRegion.markFull()
     }
 
     /// Whether the viewport is scrolled up from the bottom.
-    var isScrolledUp: Bool { viewportOffset > 0 }
+    public var isScrolledUp: Bool { viewportOffset > 0 }
 
     // MARK: - Scrollback Ring Buffer
 
@@ -1254,13 +1295,13 @@ final class Screen {
 
     /// Single cell access into scrollback — zero allocation.
     @inline(__always)
-    func scrollbackCell(line: Int, col: Int) -> Cell {
+    public func scrollbackCell(line: Int, col: Int) -> Cell {
         let base = scrollbackPhysicalRow(line) * scrollbackColumns
         return scrollbackBuffer![base + col]
     }
 
     /// Get the codepoint at an absolute line + column, resolving scrollback vs active screen.
-    func codepoint(atAbsoluteLine line: Int, col: Int) -> Unicode.Scalar {
+    public func codepoint(atAbsoluteLine line: Int, col: Int) -> Unicode.Scalar {
         if line < scrollbackCount {
             guard col < scrollbackColumns else { return " " }
             return scrollbackCell(line: line, col: col).codepoint
@@ -1276,7 +1317,7 @@ final class Screen {
 
     /// Extract text from the given absolute line range and column range.
     /// Used for selection → copy.
-    func extractText(from sel: Selection) -> String {
+    public func extractText(from sel: Selection) -> String {
         let (s, e) = sel.ordered
         var result = ""
         let sbCount = scrollbackCount
@@ -1329,7 +1370,7 @@ final class Screen {
     /// Search all content (scrollback + active screen) for the given query.
     /// Returns matches ordered from top (oldest scrollback) to bottom (latest screen line).
     /// Case-insensitive substring search.
-    func search(query: String) -> [SearchMatch] {
+    public func search(query: String) -> [SearchMatch] {
         guard !query.isEmpty else { return [] }
         let lowerQuery = query.lowercased()
         let queryScalars = Array(lowerQuery.unicodeScalars)
@@ -1395,7 +1436,7 @@ final class Screen {
     }
 
     /// Clear the entire screen and reset cursor.
-    func clear() {
+    public func clear() {
         cells = [Cell](repeating: .empty, count: columns * rows)
         lineFlags = [LineFlags](repeating: LineFlags(), count: rows)
         rowBase = 0

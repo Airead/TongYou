@@ -1,4 +1,5 @@
 import SwiftUI
+import TYTerminal
 
 /// Sidebar view showing the list of terminal sessions.
 /// Supports selection, new session, rename via context menu, and close.

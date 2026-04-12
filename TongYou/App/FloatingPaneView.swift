@@ -1,4 +1,5 @@
 import SwiftUI
+import TYTerminal
 
 /// Renders a single floating pane with a title bar (drag to move),
 /// edge handles (drag to resize), and a close button.

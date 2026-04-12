@@ -9,7 +9,7 @@
 extension Unicode.Scalar {
 
     /// The number of terminal cells this character occupies (1 or 2).
-    var terminalWidth: UInt8 {
+    public var terminalWidth: UInt8 {
         let v = self.value
         // Fast path: ASCII and Latin-1 Supplement are always narrow
         if v < 0x1100 { return 1 }

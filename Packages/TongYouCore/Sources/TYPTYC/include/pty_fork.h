@@ -32,7 +32,7 @@ int pty_get_cwd(pid_t pid, char *buf, int bufsize);
 /// Query the name of the foreground process running in a PTY.
 ///
 /// Uses tcgetpgrp() to find the foreground process group leader,
-/// then proc_pidinfo(PROC_PIDTBSDINFO) to get its executable name.
+/// then queries the OS for its executable name.
 ///
 /// @param master_fd  Master side of the PTY pair.
 /// @param buf        Buffer to receive the process name.

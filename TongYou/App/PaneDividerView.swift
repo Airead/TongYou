@@ -1,4 +1,5 @@
 import SwiftUI
+import TYTerminal
 
 /// A draggable divider between two split panes.
 struct PaneDividerView: View {

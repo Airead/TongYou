@@ -6,10 +6,10 @@ import Foundation
 /// modifier bits, and motion deduplication.
 ///
 /// Reference: Ghostty `src/input/mouse_encode.zig`.
-struct MouseEncoder {
+public struct MouseEncoder: Sendable {
 
     /// Mouse button identifiers.
-    enum Button: UInt8 {
+    public enum Button: UInt8, Sendable {
         case left = 0
         case middle = 1
         case right = 2
@@ -18,31 +18,45 @@ struct MouseEncoder {
     }
 
     /// Mouse event action.
-    enum Action {
+    public enum Action: Sendable {
         case press
         case release
         case motion
     }
 
     /// Modifier keys held during a mouse event.
-    struct Modifiers {
-        var shift: Bool = false
-        var option: Bool = false   // Alt
-        var control: Bool = false
+    public struct Modifiers: Sendable {
+        public var shift: Bool = false
+        public var option: Bool = false   // Alt
+        public var control: Bool = false
+
+        public init(shift: Bool = false, option: Bool = false, control: Bool = false) {
+            self.shift = shift
+            self.option = option
+            self.control = control
+        }
     }
 
     /// A mouse event to encode.
-    struct Event {
-        var action: Action
-        var button: Button?
-        var col: Int         // 0-based grid column
-        var row: Int         // 0-based grid row
-        var modifiers: Modifiers = Modifiers()
+    public struct Event: Sendable {
+        public var action: Action
+        public var button: Button?
+        public var col: Int         // 0-based grid column
+        public var row: Int         // 0-based grid row
+        public var modifiers: Modifiers = Modifiers()
+
+        public init(action: Action, button: Button?, col: Int, row: Int, modifiers: Modifiers = Modifiers()) {
+            self.action = action
+            self.button = button
+            self.col = col
+            self.row = row
+            self.modifiers = modifiers
+        }
     }
 
     /// Encode a mouse event according to the given tracking mode and format.
     /// Returns nil if the event should not be reported.
-    static func encode(
+    public static func encode(
         event: Event,
         trackingMode: TerminalModes.MouseTrackingMode,
         format: TerminalModes.MouseFormat

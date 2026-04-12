@@ -1,6 +1,7 @@
 import AppKit
 import Testing
 import Foundation
+import TYTerminal
 @testable import TongYou
 
 @Suite("Config")

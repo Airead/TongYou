@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import TYTerminal
 
 /// Actions communicated from MetalView up to the window for dispatch.
 enum TabAction {
@@ -25,30 +26,6 @@ enum TabAction {
     case newFloatingPane
     case closeFloatingPane(UUID)
     case toggleOrCreateFloatingPane
-}
-
-/// A single terminal tab containing a tree of panes.
-struct TerminalTab: Identifiable {
-    static let defaultTitle = "shell"
-
-    let id: UUID
-    var title: String
-    var paneTree: PaneNode
-    var floatingPanes: [FloatingPane] = []
-
-    /// All pane IDs in this tab's pane tree (does not include floating panes).
-    var allPaneIDs: [UUID] { paneTree.allPaneIDs }
-
-    /// All pane IDs including both tree panes and floating panes.
-    var allPaneIDsIncludingFloating: [UUID] {
-        paneTree.allPaneIDs + floatingPanes.map(\.pane.id)
-    }
-
-    init(title: String = "shell", initialWorkingDirectory: String? = nil) {
-        self.id = UUID()
-        self.title = title
-        self.paneTree = .leaf(TerminalPane(initialWorkingDirectory: initialWorkingDirectory))
-    }
 }
 
 /// Manages the list of terminal tabs and the active tab index.

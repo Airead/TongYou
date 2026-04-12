@@ -1,38 +1,50 @@
 /// A single search match in the terminal buffer.
-struct SearchMatch: Equatable {
+public struct SearchMatch: Equatable, Sendable {
     /// Absolute line number (scrollback + screen combined).
-    let line: Int
+    public let line: Int
     /// Start column (inclusive).
-    let startCol: Int
+    public let startCol: Int
     /// End column (inclusive).
-    let endCol: Int
+    public let endCol: Int
+
+    public init(line: Int, startCol: Int, endCol: Int) {
+        self.line = line
+        self.startCol = startCol
+        self.endCol = endCol
+    }
 }
 
 /// Result of a search operation, including all matches and the focused index.
-struct SearchResult: Equatable {
+public struct SearchResult: Equatable, Sendable {
     /// All matches found, ordered from top to bottom.
-    let matches: [SearchMatch]
+    public let matches: [SearchMatch]
     /// The query that produced these matches.
-    let query: String
+    public let query: String
     /// Index of the currently focused match (nil if no matches).
-    var focusedIndex: Int?
+    public var focusedIndex: Int?
+
+    public init(matches: [SearchMatch], query: String, focusedIndex: Int?) {
+        self.matches = matches
+        self.query = query
+        self.focusedIndex = focusedIndex
+    }
 
     /// The currently focused match.
-    var focusedMatch: SearchMatch? {
+    public var focusedMatch: SearchMatch? {
         guard let idx = focusedIndex, idx < matches.count else { return nil }
         return matches[idx]
     }
 
     /// Total number of matches.
-    var count: Int { matches.count }
+    public var count: Int { matches.count }
 
     /// Whether there are any matches.
-    var isEmpty: Bool { matches.isEmpty }
+    public var isEmpty: Bool { matches.isEmpty }
 
-    static let empty = SearchResult(matches: [], query: "", focusedIndex: nil)
+    public static let empty = SearchResult(matches: [], query: "", focusedIndex: nil)
 
     /// Move focus to the next match (wraps around).
-    mutating func focusNext() {
+    public mutating func focusNext() {
         guard !matches.isEmpty else { return }
         if let idx = focusedIndex {
             focusedIndex = (idx + 1) % matches.count
@@ -42,7 +54,7 @@ struct SearchResult: Equatable {
     }
 
     /// Move focus to the previous match (wraps around).
-    mutating func focusPrevious() {
+    public mutating func focusPrevious() {
         guard !matches.isEmpty else { return }
         if let idx = focusedIndex {
             focusedIndex = (idx - 1 + matches.count) % matches.count
@@ -52,7 +64,7 @@ struct SearchResult: Equatable {
     }
 
     /// Find the match closest to the given absolute line and set it as focused.
-    mutating func focusNearest(toAbsoluteLine line: Int) {
+    public mutating func focusNearest(toAbsoluteLine line: Int) {
         guard !matches.isEmpty else { return }
         var bestIdx = 0
         var bestDist = Int.max

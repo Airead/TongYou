@@ -5,10 +5,10 @@
 /// with both semicolon-separated and colon-separated forms.
 ///
 /// Reference: Ghostty `src/terminal/sgr.zig`.
-enum SGRParser {
+public enum SGRParser {
 
     /// Parse all SGR parameters and apply them to the given attributes.
-    static func parse(_ params: CSIParams, into attrs: inout CellAttributes) {
+    public static func parse(_ params: CSIParams, into attrs: inout CellAttributes) {
         // SGR with no params is equivalent to SGR 0 (reset)
         if params.count == 0 {
             attrs.reset()
@@ -86,13 +86,6 @@ enum SGRParser {
 
     /// Parse extended color (256 or TrueColor) starting at param index `from`.
     /// Returns the index of the last consumed param (caller will +1).
-    ///
-    /// Formats:
-    /// - `38;5;N` — 256-color indexed (semicolon separated)
-    /// - `38:5:N` — 256-color indexed (colon separated)
-    /// - `38;2;R;G;B` — TrueColor RGB (semicolon separated)
-    /// - `38:2;R;G;B` or `38:2:R:G:B` — TrueColor RGB (colon separated)
-    /// - `38:2:CS:R:G:B` — TrueColor RGB with colorspace (colon, 6 values)
     private static func parseExtendedColor(
         _ params: CSIParams,
         from start: Int,

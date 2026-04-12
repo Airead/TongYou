@@ -1,17 +1,24 @@
 import Foundation
 
 /// Detected URL with its position in the terminal grid.
-struct DetectedURL: Equatable {
-    let url: String
+public struct DetectedURL: Equatable, Sendable {
+    public let url: String
     /// Row in the viewport (0-based).
-    let row: Int
+    public let row: Int
     /// Start column (inclusive).
-    let startCol: Int
+    public let startCol: Int
     /// End column (inclusive).
-    let endCol: Int
+    public let endCol: Int
+
+    public init(url: String, row: Int, startCol: Int, endCol: Int) {
+        self.url = url
+        self.row = row
+        self.startCol = startCol
+        self.endCol = endCol
+    }
 
     /// Check if a viewport position (row, col) falls within this URL.
-    func contains(row: Int, col: Int) -> Bool {
+    public func contains(row: Int, col: Int) -> Bool {
         self.row == row && col >= startCol && col <= endCol
     }
 }
@@ -20,17 +27,16 @@ struct DetectedURL: Equatable {
 ///
 /// The detector works on a ScreenSnapshot, matching URLs per-row.
 /// Results are cached and only recomputed when content changes.
-struct URLDetector {
+public struct URLDetector: Sendable {
 
-    private static let urlPattern: NSRegularExpression = {
-        let pattern = #"https?://[^\s<>"'`\{\}\|\\\^\[\]]+"#
-        return try! NSRegularExpression(pattern: pattern, options: [])
+    nonisolated(unsafe) private static let urlRegex: Regex<Substring> = {
+        try! Regex(#"https?://[^\s<>"'`\{\}\|\\\^\[\]]+"#)
     }()
 
     private static let trailingPunctuation = CharacterSet(charactersIn: ".,;:!?)>]}")
 
     /// Detect all URLs in the given snapshot's visible area.
-    static func detect(in snapshot: ScreenSnapshot) -> [DetectedURL] {
+    public static func detect(in snapshot: ScreenSnapshot) -> [DetectedURL] {
         var results: [DetectedURL] = []
         let cols = snapshot.columns
         let rows = snapshot.rows
@@ -49,20 +55,16 @@ struct URLDetector {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty else { continue }
 
-            let nsLine = line as NSString
-            let matches = urlPattern.matches(
-                in: line, options: [],
-                range: NSRange(location: 0, length: nsLine.length)
-            )
+            let matches = line.matches(of: urlRegex)
 
             for match in matches {
-                let range = match.range
-                let urlString = nsLine.substring(with: range)
+                let matchStr = String(match.output)
                 // Remove trailing punctuation that's likely not part of the URL
-                let cleaned = urlString.trimmingCharacters(in: trailingPunctuation)
+                let cleaned = matchStr.trimmingCharacters(in: trailingPunctuation)
                 guard !cleaned.isEmpty else { continue }
 
-                let startCol = range.location
+                // Calculate column positions from the match range
+                let startCol = line.distance(from: line.startIndex, to: match.range.lowerBound)
                 let endCol = startCol + cleaned.count - 1
                 results.append(DetectedURL(url: cleaned, row: row, startCol: startCol, endCol: endCol))
             }
@@ -72,7 +74,7 @@ struct URLDetector {
     }
 
     /// Find the URL at a specific viewport position, if any.
-    static func url(at row: Int, col: Int, in urls: [DetectedURL]) -> DetectedURL? {
+    public static func url(at row: Int, col: Int, in urls: [DetectedURL]) -> DetectedURL? {
         urls.first { $0.contains(row: row, col: col) }
     }
 }

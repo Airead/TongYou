@@ -10,9 +10,9 @@ import Foundation
 ///    b. Sources the real user `.zshenv`
 ///    c. Sources TongYou's integration script
 /// 3. Set `ZDOTDIR` to `<supportDir>/zsh/` so zsh picks up the wrapper
-enum ShellIntegrationInjector {
+public enum ShellIntegrationInjector {
 
-    static let defaultSupportDir: String = {
+    public static let defaultSupportDir: String = {
         let base = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask
         ).first!.path
@@ -21,7 +21,7 @@ enum ShellIntegrationInjector {
 
     /// Inject zsh shell integration into the environment.
     /// - Parameter baseDir: Override for tests. Defaults to Application Support.
-    static func injectZsh(into env: inout [String: String], baseDir: String? = nil) {
+    public static func injectZsh(into env: inout [String: String], baseDir: String? = nil) {
         let dir = baseDir ?? defaultSupportDir
         let integrationPath = dir + "/shell-integration.zsh"
         let zdotdirPath = dir + "/zsh"

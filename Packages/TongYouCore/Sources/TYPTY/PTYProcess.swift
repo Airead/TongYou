@@ -1,4 +1,12 @@
 import Foundation
+import TYShell
+import TYPTYC
+
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 /// Manages a pseudo-terminal and child shell process.
 ///
@@ -12,14 +20,14 @@ import Foundation
 /// - The read source fires on the provided `readQueue`.
 /// - Writes are dispatched to `writeQueue` to avoid blocking MainActor.
 /// - Properties accessed in `deinit` are marked `nonisolated(unsafe)`.
-final class PTYProcess {
+public final class PTYProcess {
 
     /// Callback invoked on `readQueue` when bytes arrive from the shell.
-    var onRead: ((_ bytes: UnsafeBufferPointer<UInt8>) -> Void)?
+    public var onRead: ((_ bytes: UnsafeBufferPointer<UInt8>) -> Void)?
 
     /// Callback invoked on the main thread when the child process exits.
     /// The parameter is the exit code (0 = normal, >0 = error, -N = killed by signal N).
-    var onExit: ((_ exitCode: Int32) -> Void)?
+    public var onExit: ((_ exitCode: Int32) -> Void)?
 
     nonisolated(unsafe) private var masterFD: Int32 = -1
     nonisolated(unsafe) private var childPID: pid_t = -1
@@ -36,7 +44,7 @@ final class PTYProcess {
     /// Maximum time (ms) to wait for the PTY to become writable per poll call.
     private static let writePollTimeoutMs: Int32 = 1000
 
-    init(readQueue: DispatchQueue) {
+    public init(readQueue: DispatchQueue) {
         self.readQueue = readQueue
         self.writeQueue = DispatchQueue(
             label: "io.github.airead.tongyou.pty.write",
@@ -51,13 +59,33 @@ final class PTYProcess {
     // MARK: - Start
 
     /// Open a PTY, fork a child shell process, and start reading.
-    func start(columns: UInt16, rows: UInt16, cellWidth: UInt16 = 0, cellHeight: UInt16 = 0, workingDirectory: String? = nil) throws {
+    public func start(columns: UInt16, rows: UInt16, cellWidth: UInt16 = 0, cellHeight: UInt16 = 0, workingDirectory: String? = nil) throws {
         var master: Int32 = -1
         var slave: Int32 = -1
 
+        #if os(macOS)
         guard openpty(&master, &slave, nil, nil, nil) == 0 else {
             throw PTYError.openptyFailed(errno)
         }
+        #elseif os(Linux)
+        master = posix_openpt(O_RDWR | O_NOCTTY)
+        guard master >= 0 else {
+            throw PTYError.openptyFailed(errno)
+        }
+        guard grantpt(master) == 0, unlockpt(master) == 0 else {
+            close(master)
+            throw PTYError.openptyFailed(errno)
+        }
+        guard let slaveName = ptsname(master) else {
+            close(master)
+            throw PTYError.openptyFailed(errno)
+        }
+        slave = open(slaveName, O_RDWR | O_NOCTTY)
+        guard slave >= 0 else {
+            close(master)
+            throw PTYError.openptyFailed(errno)
+        }
+        #endif
 
         let masterFlags = fcntl(master, F_GETFD)
         if masterFlags >= 0 {
@@ -116,7 +144,7 @@ final class PTYProcess {
     /// `poll()` to wait for the fd to become writable before retrying, ensuring
     /// large pastes (including the bracketed-paste end sequence) are delivered
     /// in full.
-    func write(_ data: Data) {
+    public func write(_ data: Data) {
         let fd = masterFD
         guard fd >= 0, !data.isEmpty else { return }
         writeQueue.async {
@@ -150,7 +178,7 @@ final class PTYProcess {
     // MARK: - Resize
 
     /// Update the PTY window size (sends SIGWINCH to the child).
-    func resize(columns: UInt16, rows: UInt16, pixelWidth: UInt16 = 0, pixelHeight: UInt16 = 0) {
+    public func resize(columns: UInt16, rows: UInt16, pixelWidth: UInt16 = 0, pixelHeight: UInt16 = 0) {
         guard masterFD >= 0 else { return }
         var winSize = winsize(
             ws_row: rows,
@@ -164,7 +192,7 @@ final class PTYProcess {
     // MARK: - Stop
 
     /// Terminate the child process and clean up.
-    func stop() {
+    public func stop() {
         cleanup()
     }
 
@@ -222,8 +250,8 @@ final class PTYProcess {
         }
     }
 
-    /// Query the current working directory of the child process via proc_pidinfo.
-    var currentWorkingDirectory: String? {
+    /// Query the current working directory of the child process.
+    public var currentWorkingDirectory: String? {
         guard childPID > 0 else { return nil }
         var buf = [CChar](repeating: 0, count: Int(MAXPATHLEN))
         guard pty_get_cwd(childPID, &buf, Int32(buf.count)) == 0 else { return nil }
@@ -231,7 +259,7 @@ final class PTYProcess {
     }
 
     /// Query the name of the foreground process running in this PTY.
-    var foregroundProcessName: String? {
+    public var foregroundProcessName: String? {
         guard masterFD >= 0 else { return nil }
         var buf = [CChar](repeating: 0, count: 17) // MAXCOMLEN + 1
         guard pty_get_foreground_process_name(masterFD, &buf, Int32(buf.count)) == 0 else {
@@ -334,7 +362,7 @@ final class PTYProcess {
 
 // MARK: - Errors
 
-enum PTYError: Error {
+public enum PTYError: Error {
     case openptyFailed(Int32)
     case forkFailed(Int32)
 }

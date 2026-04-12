@@ -4,15 +4,15 @@
 /// modes as separate enums (since tracking modes are mutually exclusive).
 /// Value type for snapshot passing.
 /// Reference: Ghostty `src/terminal/modes.zig`.
-struct TerminalModes: Equatable {
+public struct TerminalModes: Equatable, Sendable {
     private var flags: UInt32
 
     /// Mouse tracking mode (mutually exclusive).
-    private(set) var mouseTracking: MouseTrackingMode = .none
+    public private(set) var mouseTracking: MouseTrackingMode = .none
     /// Mouse encoding format.
-    private(set) var mouseFormat: MouseFormat = .x10
+    public private(set) var mouseFormat: MouseFormat = .x10
 
-    init() {
+    public init() {
         var f: UInt32 = 0
         // Defaults: cursor visible, autowrap on
         f |= Self.bit(.cursorVisible)
@@ -22,7 +22,7 @@ struct TerminalModes: Equatable {
 
     // MARK: - Mode Definitions
 
-    enum Mode: UInt16 {
+    public enum Mode: UInt16, Sendable {
         /// Application cursor keys (DECCKM). Off = normal, On = application.
         case cursorKeys = 1
         /// Auto-wrap mode (DECAWM). On = wrap at right margin.
@@ -36,7 +36,7 @@ struct TerminalModes: Equatable {
     }
 
     /// Mouse tracking modes — mutually exclusive (setting one clears others).
-    enum MouseTrackingMode: UInt8, Equatable {
+    public enum MouseTrackingMode: UInt8, Equatable, Sendable {
         /// No mouse tracking.
         case none = 0
         /// X10 compatibility mode (DECSET 9): report button press only.
@@ -50,7 +50,7 @@ struct TerminalModes: Equatable {
     }
 
     /// Mouse encoding format — independent of tracking mode.
-    enum MouseFormat: UInt8, Equatable {
+    public enum MouseFormat: UInt8, Equatable, Sendable {
         /// X10 format: ESC[M + 3 bytes. Coordinates limited to 223.
         case x10 = 0
         /// SGR format (DECSET 1006): ESC[<btn;x;y;M/m. No coordinate limit.
@@ -59,11 +59,11 @@ struct TerminalModes: Equatable {
 
     // MARK: - Access
 
-    func isSet(_ mode: Mode) -> Bool {
+    public func isSet(_ mode: Mode) -> Bool {
         flags & Self.bit(mode) != 0
     }
 
-    mutating func set(_ mode: Mode, _ value: Bool) {
+    public mutating func set(_ mode: Mode, _ value: Bool) {
         if value {
             flags |= Self.bit(mode)
         } else {
@@ -74,7 +74,7 @@ struct TerminalModes: Equatable {
     /// Set mouse tracking mode from a raw DECSET/DECRST parameter.
     /// Returns true if the parameter was a recognized mouse tracking mode.
     @discardableResult
-    mutating func setMouseTracking(rawParam: UInt16, enabled: Bool) -> Bool {
+    public mutating func setMouseTracking(rawParam: UInt16, enabled: Bool) -> Bool {
         let mode: MouseTrackingMode? = switch rawParam {
         case 9:    .x10
         case 1000: .normal
@@ -94,7 +94,7 @@ struct TerminalModes: Equatable {
     /// Set mouse format from a raw DECSET/DECRST parameter.
     /// Returns true if the parameter was a recognized mouse format mode.
     @discardableResult
-    mutating func setMouseFormat(rawParam: UInt16, enabled: Bool) -> Bool {
+    public mutating func setMouseFormat(rawParam: UInt16, enabled: Bool) -> Bool {
         switch rawParam {
         case 1006:
             mouseFormat = enabled ? .sgr : .x10
@@ -104,7 +104,7 @@ struct TerminalModes: Equatable {
         }
     }
 
-    mutating func reset() {
+    public mutating func reset() {
         self = TerminalModes()
     }
 
@@ -123,7 +123,7 @@ struct TerminalModes: Equatable {
     }
 
     /// Convert a raw DECSET/DECRST parameter number to a Mode, if supported.
-    static func from(rawValue: UInt16) -> Mode? {
+    public static func from(rawValue: UInt16) -> Mode? {
         Mode(rawValue: rawValue)
     }
 }

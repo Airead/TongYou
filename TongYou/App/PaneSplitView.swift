@@ -1,4 +1,5 @@
 import SwiftUI
+import TYTerminal
 
 /// Recursively renders a `PaneNode` tree with draggable dividers and focus highlighting.
 struct PaneSplitView: View {
