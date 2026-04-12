@@ -6,8 +6,19 @@ final class FocusManager {
 
     private(set) var focusedPaneID: UUID?
 
+    /// History of focused pane IDs (most recent last). Includes both tree and floating panes.
+    private(set) var focusHistory: [UUID] = []
+
+    private let maxHistorySize = 64
+
     func focusPane(id: UUID) {
         guard id != focusedPaneID else { return }
+        if let previous = focusedPaneID, previous != focusHistory.last {
+            focusHistory.append(previous)
+            if focusHistory.count > maxHistorySize {
+                focusHistory.removeFirst(focusHistory.count - maxHistorySize)
+            }
+        }
         focusedPaneID = id
     }
 
@@ -15,15 +26,27 @@ final class FocusManager {
         focusedPaneID = nil
     }
 
+    func removeFromHistory(id: UUID) {
+        focusHistory.removeAll { $0 == id }
+    }
+
+    func previousFocusedPane(existingIn paneIDs: Set<UUID>) -> UUID? {
+        for id in focusHistory.reversed() {
+            if paneIDs.contains(id) {
+                return id
+            }
+        }
+        return nil
+    }
+
     func moveFocus(direction: FocusDirection, in tree: PaneNode) {
         guard let currentID = focusedPaneID else {
-            // No focus — focus the first pane.
-            focusedPaneID = tree.firstPane.id
+            focusPane(id: tree.firstPane.id)
             return
         }
 
         if let nextID = tree.neighborOf(paneID: currentID, direction: direction) {
-            focusedPaneID = nextID
+            focusPane(id: nextID)
         }
     }
 }

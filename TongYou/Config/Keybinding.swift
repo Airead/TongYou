@@ -120,7 +120,7 @@ struct Keybinding: Equatable {
     static let defaults: [Keybinding] = [
         // Tab management
         Keybinding(modifiers: .command, key: "t", action: .newTab),
-        Keybinding(modifiers: .command, key: "w", action: .closeTab),
+        Keybinding(modifiers: .command, key: "w", action: .closePane),
         Keybinding(modifiers: [.command, .shift], key: "left", action: .previousTab),
         Keybinding(modifiers: [.command, .shift], key: "right", action: .nextTab),
         Keybinding(modifiers: [.command, .shift], key: "[", action: .previousTab),
@@ -147,7 +147,7 @@ struct Keybinding: Equatable {
         // Pane management
         Keybinding(modifiers: .command, key: "d", action: .splitVertical),
         Keybinding(modifiers: [.command, .shift], key: "d", action: .splitHorizontal),
-        Keybinding(modifiers: [.command, .shift], key: "w", action: .closePane),
+        Keybinding(modifiers: [.command, .shift], key: "w", action: .closeTab),
         Keybinding(modifiers: [.command, .option], key: "left", action: .focusPane(.left)),
         Keybinding(modifiers: [.command, .option], key: "right", action: .focusPane(.right)),
         Keybinding(modifiers: [.command, .option], key: "up", action: .focusPane(.up)),

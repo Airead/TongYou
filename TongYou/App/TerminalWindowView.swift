@@ -156,9 +156,10 @@ struct TerminalWindowView: View {
         }
 
         viewStore.tearDown(for: paneID)
+        focusManager.removeFromHistory(id: paneID)
 
         if let siblingID = tabManager.closePane(id: paneID) {
-            focusAndActivate(paneID: siblingID)
+            focusNextPane(fallback: siblingID)
         } else if tabManager.tabs.isEmpty {
             NSApp.keyWindow?.close()
         } else if let activeTab = tabManager.activeTab {
@@ -186,10 +187,11 @@ struct TerminalWindowView: View {
 
     private func closeFloatingPane(id paneID: UUID) {
         viewStore.tearDown(for: paneID)
+        focusManager.removeFromHistory(id: paneID)
         tabManager.closeFloatingPane(paneID: paneID)
 
         if let activeTab = tabManager.activeTab {
-            focusAndActivate(paneID: activeTab.paneTree.firstPane.id)
+            focusNextPane(fallback: activeTab.paneTree.firstPane.id)
         }
     }
 
@@ -235,6 +237,13 @@ struct TerminalWindowView: View {
     }
 
     // MARK: - Helpers
+
+    /// Pick the best pane to focus after closing one: prefer focus history, fall back to `fallback`.
+    private func focusNextPane(fallback: UUID) {
+        let remaining = Set(tabManager.activeTab?.allPaneIDsIncludingFloating ?? [])
+        let nextID = focusManager.previousFocusedPane(existingIn: remaining) ?? fallback
+        focusAndActivate(paneID: nextID)
+    }
 
     /// Focus a pane and make its MetalView the first responder for keyboard input.
     private func focusAndActivate(paneID: UUID) {
