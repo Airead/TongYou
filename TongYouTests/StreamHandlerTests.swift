@@ -264,6 +264,48 @@ import Testing
         #expect(screen.cell(at: 1, row: 0).codepoint == "B")
     }
 
+    // MARK: - OSC 7727 (Shell Integration)
+
+    private func feedOSC7727(_ input: String) -> (called: Bool, command: String?) {
+        var called = false
+        var command: String? = "SENTINEL"
+        _ = processWithHandler(input) { handler in
+            handler.onRunningCommandChanged = { cmd in
+                called = true
+                command = cmd
+            }
+        }
+        return called ? (true, command) : (false, nil)
+    }
+
+    @Test func osc7727RunningCommand() {
+        let result = feedOSC7727("\u{1B}]7727;running-command=zellij\u{07}")
+        #expect(result.called)
+        #expect(result.command == "zellij")
+    }
+
+    @Test func osc7727ShellPrompt() {
+        let result = feedOSC7727("\u{1B}]7727;shell-prompt\u{07}")
+        #expect(result.called)
+        #expect(result.command == nil)
+    }
+
+    @Test func osc7727RunningCommandWithST() {
+        let result = feedOSC7727("\u{1B}]7727;running-command=vim\u{1B}\\")
+        #expect(result.called)
+        #expect(result.command == "vim")
+    }
+
+    @Test func osc7727EmptyCommandIgnored() {
+        let result = feedOSC7727("\u{1B}]7727;running-command=\u{07}")
+        #expect(!result.called)
+    }
+
+    @Test func osc7727UnknownSubcommandIgnored() {
+        let result = feedOSC7727("\u{1B}]7727;unknown-thing\u{07}")
+        #expect(!result.called)
+    }
+
     // MARK: - OSC 52 (Clipboard)
 
     /// Feed an OSC 52 sequence and return the clipboard text received (if any).

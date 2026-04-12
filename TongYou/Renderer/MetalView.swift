@@ -197,15 +197,26 @@ final class MetalView: NSView {
     }
 
     /// Whether the foreground process is in the auto-passthrough list.
-    /// When true, non-Cmd keybindings are skipped so the key reaches the PTY.
+    /// Checks both the shell-integration running command (works over SSH)
+    /// and the local foreground process name (fallback).
     private func shouldPassthrough(modifiers: NSEvent.ModifierFlags) -> Bool {
         guard !modifiers.contains(.command) else { return false }
         let programs = configLoader.config.autoPassthroughPrograms
         guard !programs.isEmpty else { return false }
-        guard let name = terminalController?.foregroundProcessName?.lowercased() else {
-            return false
+
+        // Shell integration: running command reported via OSC 7727.
+        if let cmd = terminalController?.runningCommand?.lowercased(),
+           programs.contains(cmd) {
+            return true
         }
-        return programs.contains(name)
+
+        // Fallback: local foreground process detection via tcgetpgrp.
+        if let name = terminalController?.foregroundProcessName?.lowercased(),
+           programs.contains(name) {
+            return true
+        }
+
+        return false
     }
 
     private func handlePaste() {

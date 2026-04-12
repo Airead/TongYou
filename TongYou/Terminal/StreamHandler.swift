@@ -22,6 +22,8 @@ struct StreamHandler {
     var onBell: (() -> Void)?
     /// Callback: OSC 52 clipboard set request (decoded text).
     var onClipboardSet: ((String) -> Void)?
+    /// Callback: shell integration reported the running command (nil = shell prompt).
+    var onRunningCommandChanged: ((String?) -> Void)?
 
     init(screen: Screen) {
         self.screen = screen
@@ -269,6 +271,8 @@ struct StreamHandler {
             }
         case 52:
             handleOSC52(stringData)
+        case 7727:
+            handleOSC7727(stringData)
         default:
             break
         }
@@ -294,6 +298,24 @@ struct StreamHandler {
         else { return }
 
         onClipboardSet?(text)
+    }
+
+    // MARK: - OSC 7727 (Shell Integration)
+
+    /// Handle TongYou shell integration sequences.
+    /// Format: `7727;key=value`
+    ///   - `running-command=<cmd>` — a command is about to execute
+    ///   - `shell-prompt` — shell is back at a prompt (no value)
+    private func handleOSC7727(_ data: ArraySlice<UInt8>) {
+        guard let str = String(bytes: data, encoding: .utf8) else { return }
+        if str.hasPrefix("running-command=") {
+            let cmd = String(str.dropFirst("running-command=".count))
+            if !cmd.isEmpty {
+                onRunningCommandChanged?(cmd)
+            }
+        } else if str == "shell-prompt" {
+            onRunningCommandChanged?(nil)
+        }
     }
 
     // MARK: - DEC Mode Set/Reset

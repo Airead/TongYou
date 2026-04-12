@@ -25,6 +25,10 @@ final class TerminalController {
     /// Window title as reported by the running program via OSC 0/2.
     nonisolated(unsafe) private(set) var windowTitle: String = ""
 
+    /// Command currently running in the shell, reported via OSC 7727.
+    /// nil means the shell is at a prompt.
+    nonisolated(unsafe) private(set) var runningCommand: String?
+
     /// Active text selection (MainActor-only).
     private(set) var selection: Selection?
 
@@ -123,6 +127,9 @@ final class TerminalController {
                 pb.clearContents()
                 pb.setString(text, forType: .string)
             }
+        }
+        streamHandler.onRunningCommandChanged = { [weak self] cmd in
+            self?.runningCommand = cmd
         }
 
         do {

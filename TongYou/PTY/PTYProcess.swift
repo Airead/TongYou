@@ -70,7 +70,7 @@ final class PTYProcess {
         _ = ioctl(slave, TIOCSWINSZ, &winSize)
 
         let shellPath = Self.resolveShell()
-        let env = Self.buildEnvironment()
+        let env = Self.buildEnvironment(shellPath: shellPath)
 
         let pid = Self.forkAndExec(
             slaveFD: slave, masterFD: master,
@@ -286,11 +286,14 @@ final class PTYProcess {
         return "/bin/zsh"
     }
 
-    private static func buildEnvironment() -> [String] {
+    private static func buildEnvironment(shellPath: String) -> [String] {
         var env = ProcessInfo.processInfo.environment
         env["TERM"] = "xterm-256color"
         if env["LANG"] == nil {
             env["LANG"] = "en_US.UTF-8"
+        }
+        if shellPath.hasSuffix("/zsh") || shellPath.hasSuffix("/zsh5") {
+            ShellIntegrationInjector.injectZsh(into: &env)
         }
         return env.map { "\($0.key)=\($0.value)" }
     }
