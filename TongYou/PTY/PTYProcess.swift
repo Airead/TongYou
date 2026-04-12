@@ -4,11 +4,13 @@ import Foundation
 ///
 /// Creates a PTY pair via `openpty()`, spawns a shell via the C helper
 /// `pty_fork_exec()` (fork + setsid + TIOCSCTTY + dup2 + execve),
-/// and provides async read (via DispatchSourceRead) and synchronous write.
+/// and provides async read (via DispatchSourceRead) and async write
+/// (via a dedicated serial `writeQueue` that handles `EAGAIN` with `poll()`).
 ///
 /// Thread safety:
 /// - `start()`, `write()`, `resize()`, `stop()` are called from MainActor.
 /// - The read source fires on the provided `readQueue`.
+/// - Writes are dispatched to `writeQueue` to avoid blocking MainActor.
 /// - Properties accessed in `deinit` are marked `nonisolated(unsafe)`.
 final class PTYProcess {
 
@@ -24,14 +26,22 @@ final class PTYProcess {
     nonisolated(unsafe) private var readSource: DispatchSourceRead?
     nonisolated(unsafe) private var processSource: DispatchSourceProcess?
     private let readQueue: DispatchQueue
+    private let writeQueue: DispatchQueue
 
     private static let readBufSize = 16384
     /// Time budget per event handler invocation (milliseconds).
     /// Balances throughput vs. main-thread responsiveness.
     private static let readBudgetMs = 8
 
+    /// Maximum time (ms) to wait for the PTY to become writable per poll call.
+    private static let writePollTimeoutMs: Int32 = 1000
+
     init(readQueue: DispatchQueue) {
         self.readQueue = readQueue
+        self.writeQueue = DispatchQueue(
+            label: "io.github.airead.tongyou.pty.write",
+            qos: .userInitiated
+        )
     }
 
     deinit {
@@ -100,20 +110,39 @@ final class PTYProcess {
     // MARK: - Write
 
     /// Write data to the PTY master fd (sends to the shell's stdin).
+    ///
+    /// The write is dispatched to a dedicated serial queue so it never blocks
+    /// the caller. When the kernel buffer is full (`EAGAIN`), the queue uses
+    /// `poll()` to wait for the fd to become writable before retrying, ensuring
+    /// large pastes (including the bracketed-paste end sequence) are delivered
+    /// in full.
     func write(_ data: Data) {
-        guard masterFD >= 0, !data.isEmpty else { return }
-        data.withUnsafeBytes { rawBuf in
-            guard let ptr = rawBuf.baseAddress else { return }
-            var remaining = data.count
-            var offset = 0
-            while remaining > 0 {
-                let n = Darwin.write(masterFD, ptr + offset, remaining)
-                if n < 0 {
+        let fd = masterFD
+        guard fd >= 0, !data.isEmpty else { return }
+        writeQueue.async {
+            data.withUnsafeBytes { rawBuf in
+                guard let ptr = rawBuf.baseAddress else { return }
+                var remaining = data.count
+                var offset = 0
+                while remaining > 0 {
+                    let n = Darwin.write(fd, ptr + offset, remaining)
+                    if n >= 0 {
+                        offset += n
+                        remaining -= n
+                        continue
+                    }
+                    // n < 0
                     if errno == EINTR { continue }
-                    break // EAGAIN or real error — stop, don't spin
+                    if errno == EAGAIN || errno == EWOULDBLOCK {
+                        var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+                        let ret = poll(&pfd, 1, Self.writePollTimeoutMs)
+                        if ret > 0 && (pfd.revents & Int16(POLLOUT)) != 0 {
+                            continue // fd writable — retry
+                        }
+                        break // timeout or poll error — give up
+                    }
+                    break // fatal write error
                 }
-                offset += n
-                remaining -= n
             }
         }
     }
@@ -145,6 +174,10 @@ final class PTYProcess {
         readSource = nil
         processSource?.cancel()
         processSource = nil
+
+        // Drain pending writes before closing the fd so in-flight data
+        // (e.g. the bracketed-paste end sequence) is not lost.
+        writeQueue.sync {}
 
         if childPID > 0 {
             kill(childPID, SIGHUP)
