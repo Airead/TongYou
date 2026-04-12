@@ -121,6 +121,78 @@ struct TYClientTests {
         #expect(replica.consumeSnapshot() != nil)
     }
 
+    // MARK: - ScreenReplica Scrollback Tests
+
+    @Test("ScreenReplica tracks scrollbackCount and viewportOffset from full snapshot")
+    func screenReplicaScrollbackFromFullSnapshot() {
+        let replica = ScreenReplica(columns: 4, rows: 2)
+
+        let cells = [Cell](repeating: .empty, count: 8)
+        let snapshot = ScreenSnapshot(
+            cells: cells, columns: 4, rows: 2,
+            cursorCol: 0, cursorRow: 0, cursorVisible: true, cursorShape: .block,
+            selection: nil, scrollbackCount: 500, viewportOffset: 10,
+            dirtyRegion: .full
+        )
+
+        replica.applyFullSnapshot(snapshot)
+
+        #expect(replica.scrollbackCount == 500)
+        #expect(replica.viewportOffset == 10)
+
+        let result = replica.consumeSnapshot()
+        #expect(result?.scrollbackCount == 500)
+        #expect(result?.viewportOffset == 10)
+    }
+
+    @Test("ScreenReplica tracks scrollbackCount and viewportOffset from diff")
+    func screenReplicaScrollbackFromDiff() {
+        let replica = ScreenReplica(columns: 4, rows: 2)
+
+        // Apply initial snapshot.
+        let cells = [Cell](repeating: .empty, count: 8)
+        let snapshot = ScreenSnapshot(
+            cells: cells, columns: 4, rows: 2,
+            cursorCol: 0, cursorRow: 0, cursorVisible: true, cursorShape: .block,
+            selection: nil, scrollbackCount: 0, viewportOffset: 0,
+            dirtyRegion: .full
+        )
+        replica.applyFullSnapshot(snapshot)
+        _ = replica.consumeSnapshot()
+
+        // Apply diff with scrollback info.
+        let newCells = (0..<4).map { i in
+            Cell(codepoint: Unicode.Scalar(UInt32(0x41 + i))!, attributes: .default, width: .normal)
+        }
+        let diff = ScreenDiff(
+            dirtyRows: [0],
+            cellData: newCells,
+            columns: 4,
+            cursorCol: 0,
+            cursorRow: 0,
+            cursorVisible: true,
+            cursorShape: .block,
+            scrollbackCount: 200,
+            viewportOffset: 5
+        )
+
+        replica.applyDiff(diff)
+
+        #expect(replica.scrollbackCount == 200)
+        #expect(replica.viewportOffset == 5)
+
+        let result = replica.consumeSnapshot()
+        #expect(result?.scrollbackCount == 200)
+        #expect(result?.viewportOffset == 5)
+    }
+
+    @Test("ScreenReplica scrollback defaults to zero")
+    func screenReplicaScrollbackDefaults() {
+        let replica = ScreenReplica(columns: 4, rows: 2)
+        #expect(replica.scrollbackCount == 0)
+        #expect(replica.viewportOffset == 0)
+    }
+
     // MARK: - TYDConnection Tests
 
     @Test("TYDConnection send/receive round-trip through server")

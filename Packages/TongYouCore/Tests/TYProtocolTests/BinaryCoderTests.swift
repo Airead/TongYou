@@ -268,7 +268,9 @@ struct BinaryCoderTests {
             cursorCol: 2,
             cursorRow: 3,
             cursorVisible: true,
-            cursorShape: .block
+            cursorShape: .block,
+            scrollbackCount: 500,
+            viewportOffset: 10
         )
 
         var encoder = BinaryEncoder()
@@ -283,6 +285,8 @@ struct BinaryCoderTests {
         #expect(decoded.cursorRow == 3)
         #expect(decoded.cursorVisible == true)
         #expect(decoded.cursorShape == .block)
+        #expect(decoded.scrollbackCount == 500)
+        #expect(decoded.viewportOffset == 10)
     }
 
     // MARK: - ScreenSnapshot
@@ -354,6 +358,54 @@ struct BinaryCoderTests {
         #expect(decoded.tabs[0].title == "shell")
         #expect(decoded.tabs[0].layout == .leaf(paneID))
         #expect(decoded.activeTabIndex == 0)
+    }
+
+    // MARK: - Client Message: scrollViewport
+
+    @Test func roundTripScrollViewportMessage() throws {
+        let sessionID = SessionID()
+        let paneID = PaneID()
+
+        // Test scroll up (positive delta).
+        let msgUp = ClientMessage.scrollViewport(sessionID, paneID, delta: 5)
+        var encoderUp = BinaryEncoder()
+        encoderUp.writeClientMessage(msgUp)
+
+        var decoderUp = BinaryDecoder(encoderUp.data)
+        let decodedUp = try decoderUp.readClientMessage(type: .scrollViewport)
+        if case .scrollViewport(let sid, let pid, let delta) = decodedUp {
+            #expect(sid == sessionID)
+            #expect(pid == paneID)
+            #expect(delta == 5)
+        } else {
+            Issue.record("Expected scrollViewport, got \(decodedUp)")
+        }
+
+        // Test scroll down (negative delta).
+        let msgDown = ClientMessage.scrollViewport(sessionID, paneID, delta: -3)
+        var encoderDown = BinaryEncoder()
+        encoderDown.writeClientMessage(msgDown)
+
+        var decoderDown = BinaryDecoder(encoderDown.data)
+        let decodedDown = try decoderDown.readClientMessage(type: .scrollViewport)
+        if case .scrollViewport(_, _, let delta) = decodedDown {
+            #expect(delta == -3)
+        } else {
+            Issue.record("Expected scrollViewport")
+        }
+
+        // Test jump to bottom (Int32.max).
+        let msgBottom = ClientMessage.scrollViewport(sessionID, paneID, delta: Int32.max)
+        var encoderBottom = BinaryEncoder()
+        encoderBottom.writeClientMessage(msgBottom)
+
+        var decoderBottom = BinaryDecoder(encoderBottom.data)
+        let decodedBottom = try decoderBottom.readClientMessage(type: .scrollViewport)
+        if case .scrollViewport(_, _, let delta) = decodedBottom {
+            #expect(delta == Int32.max)
+        } else {
+            Issue.record("Expected scrollViewport")
+        }
     }
 
     // MARK: - Error Cases

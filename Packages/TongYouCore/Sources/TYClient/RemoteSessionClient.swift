@@ -137,6 +137,12 @@ public final class RemoteSessionClient: @unchecked Sendable {
         connection?.send(.resize(sessionID, paneID, cols: cols, rows: rows))
     }
 
+    /// Scroll the viewport for a pane on the server.
+    /// Positive delta = up (older), negative = down (newer), Int32.max = jump to bottom.
+    public func scrollViewport(sessionID: SessionID, paneID: PaneID, delta: Int32) {
+        connection?.send(.scrollViewport(sessionID, paneID, delta: delta))
+    }
+
     // MARK: - Tab/Pane Operations
 
     public func createTab(sessionID: SessionID) {

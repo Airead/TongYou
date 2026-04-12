@@ -357,6 +357,20 @@ struct WireFormatTests {
         #expect(dPid == pid)
     }
 
+    @Test func roundTripScrollViewport() throws {
+        let sid = SessionID()
+        let pid = PaneID()
+        let msg = ClientMessage.scrollViewport(sid, pid, delta: -10)
+        let decoded = try encodeAndDecode(clientMessage: msg)
+        guard case .scrollViewport(let dSid, let dPid, let delta) = decoded else {
+            Issue.record("Expected .scrollViewport")
+            return
+        }
+        #expect(dSid == sid)
+        #expect(dPid == pid)
+        #expect(delta == -10)
+    }
+
     @Test func roundTripDetachSession() throws {
         let sid = SessionID()
         let msg = ClientMessage.detachSession(sid)

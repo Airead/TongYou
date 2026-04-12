@@ -269,6 +269,9 @@ public final class SocketServer: @unchecked Sendable {
         case .resize(_, let paneID, let cols, let rows):
             sessionManager.resizePane(paneID: paneID, cols: cols, rows: rows)
 
+        case .scrollViewport(_, let paneID, let delta):
+            sessionManager.scrollViewport(paneID: paneID, delta: delta)
+
         case .createTab(let sessionID):
             if sessionManager.createTab(sessionID: sessionID) != nil {
                 broadcastLayoutOrClosed(sessionID: sessionID)

@@ -16,6 +16,8 @@ public final class ScreenReplica: @unchecked Sendable {
     private var cursorRow: Int = 0
     private var cursorVisible: Bool = true
     private var cursorShape: CursorShape = .block
+    private var _scrollbackCount: Int = 0
+    private var _viewportOffset: Int = 0
     private var dirty = false
 
     private let lock = NSLock()
@@ -24,6 +26,40 @@ public final class ScreenReplica: @unchecked Sendable {
         self.columns = columns
         self.rows = rows
         self.cells = [Cell](repeating: Cell.empty, count: columns * rows)
+    }
+
+    /// Viewport state snapshot taken under a single lock acquisition.
+    public struct ViewportInfo {
+        public let scrollbackCount: Int
+        public let viewportOffset: Int
+        public let rows: Int
+        public let columns: Int
+    }
+
+    /// Number of scrollback lines on the server.
+    public var scrollbackCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return _scrollbackCount
+    }
+
+    /// Current viewport offset (0 = bottom).
+    public var viewportOffset: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return _viewportOffset
+    }
+
+    /// Atomically read all viewport-related state in a single lock acquisition.
+    public func viewportInfo() -> ViewportInfo {
+        lock.lock()
+        defer { lock.unlock() }
+        return ViewportInfo(
+            scrollbackCount: _scrollbackCount,
+            viewportOffset: _viewportOffset,
+            rows: rows,
+            columns: columns
+        )
     }
 
     // MARK: - Apply Server Updates
@@ -39,6 +75,8 @@ public final class ScreenReplica: @unchecked Sendable {
         cursorRow = snapshot.cursorRow
         cursorVisible = snapshot.cursorVisible
         cursorShape = snapshot.cursorShape
+        _scrollbackCount = snapshot.scrollbackCount
+        _viewportOffset = snapshot.viewportOffset
         dirty = true
     }
 
@@ -74,6 +112,8 @@ public final class ScreenReplica: @unchecked Sendable {
         cursorRow = Int(diff.cursorRow)
         cursorVisible = diff.cursorVisible
         cursorShape = diff.cursorShape
+        _scrollbackCount = diff.scrollbackCount
+        _viewportOffset = diff.viewportOffset
         dirty = true
     }
 
@@ -106,8 +146,8 @@ public final class ScreenReplica: @unchecked Sendable {
             cursorVisible: cursorVisible,
             cursorShape: cursorShape,
             selection: selection,
-            scrollbackCount: 0,
-            viewportOffset: 0,
+            scrollbackCount: _scrollbackCount,
+            viewportOffset: _viewportOffset,
             dirtyRegion: .full
         )
     }

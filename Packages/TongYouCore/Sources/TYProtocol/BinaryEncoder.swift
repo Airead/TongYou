@@ -128,9 +128,9 @@ public struct BinaryEncoder: Sendable {
 
     /// Encode a `ScreenDiff` into the buffer.
     public mutating func writeScreenDiff(_ diff: ScreenDiff) {
-        // Pre-allocate: header (4B) + dirty row indices (2B each) + cells (15B each) + cursor (6B).
+        // Pre-allocate: header (4B) + dirty row indices (2B each) + cells (15B each) + cursor (6B) + scrollback (8B).
         let cellBytes = diff.cellData.count * 15
-        let headerBytes = 4 + diff.dirtyRows.count * 2 + 6
+        let headerBytes = 4 + diff.dirtyRows.count * 2 + 6 + 8
         data.reserveCapacity(data.count + headerBytes + cellBytes)
         writeUInt16(diff.columns)
         writeUInt16(UInt16(diff.dirtyRows.count))
@@ -145,6 +145,8 @@ public struct BinaryEncoder: Sendable {
             col: diff.cursorCol, row: diff.cursorRow,
             visible: diff.cursorVisible, shape: diff.cursorShape
         )
+        writeUInt32(UInt32(diff.scrollbackCount))
+        writeUInt32(UInt32(diff.viewportOffset))
     }
 
     /// Encode a `ScreenSnapshot` into the buffer.
@@ -258,6 +260,11 @@ public struct BinaryEncoder: Sendable {
             writePaneID(paneID)
             writeUInt16(cols)
             writeUInt16(rows)
+
+        case .scrollViewport(let sessionID, let paneID, let delta):
+            writeSessionID(sessionID)
+            writePaneID(paneID)
+            writeInt32(delta)
 
         case .createTab(let sessionID):
             writeSessionID(sessionID)

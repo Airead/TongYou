@@ -240,6 +240,10 @@ public final class ServerSessionManager {
         coreLookup[paneID]?.resize(columns: cols, rows: rows)
     }
 
+    public func scrollViewport(paneID: PaneID, delta: Int32) {
+        coreLookup[paneID]?.scrollViewport(delta: delta)
+    }
+
     /// Force a full snapshot (e.g., on client attach).
     public func snapshot(paneID: PaneID) -> ScreenSnapshot? {
         coreLookup[paneID]?.forceSnapshot()

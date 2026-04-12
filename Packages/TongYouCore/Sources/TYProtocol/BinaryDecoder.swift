@@ -221,6 +221,8 @@ public struct BinaryDecoder: Sendable {
             cellData.append(try readCell())
         }
         let cursor = try readCursorState()
+        let scrollbackCount = Int(try readUInt32())
+        let viewportOffset = Int(try readUInt32())
         return ScreenDiff(
             dirtyRows: dirtyRows,
             cellData: cellData,
@@ -228,7 +230,9 @@ public struct BinaryDecoder: Sendable {
             cursorCol: cursor.col,
             cursorRow: cursor.row,
             cursorVisible: cursor.visible,
-            cursorShape: cursor.shape
+            cursorShape: cursor.shape,
+            scrollbackCount: scrollbackCount,
+            viewportOffset: viewportOffset
         )
     }
 
@@ -371,6 +375,12 @@ public struct BinaryDecoder: Sendable {
             let cols = try readUInt16()
             let rows = try readUInt16()
             return .resize(sessionID, paneID, cols: cols, rows: rows)
+
+        case .scrollViewport:
+            let sessionID = try readSessionID()
+            let paneID = try readPaneID()
+            let delta = try readInt32()
+            return .scrollViewport(sessionID, paneID, delta: delta)
 
         case .createTab:
             return .createTab(try readSessionID())

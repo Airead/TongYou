@@ -67,6 +67,7 @@ final class ClientTerminalController: TerminalControlling {
         )
         guard let data = KeyEncoder.encode(input, options: options) else { return }
         selection = nil
+        scrollToBottomIfNeeded()
         remoteClient.sendInput(
             sessionID: sessionID,
             paneID: paneID,
@@ -77,6 +78,7 @@ final class ClientTerminalController: TerminalControlling {
     func sendText(_ text: String) {
         guard !text.isEmpty, let data = text.data(using: .utf8) else { return }
         selection = nil
+        scrollToBottomIfNeeded()
         remoteClient.sendInput(
             sessionID: sessionID,
             paneID: paneID,
@@ -84,25 +86,41 @@ final class ClientTerminalController: TerminalControlling {
         )
     }
 
+    private func sendScroll(delta: Int32) {
+        remoteClient.scrollViewport(
+            sessionID: sessionID,
+            paneID: paneID,
+            delta: delta
+        )
+    }
+
+    private func scrollToBottomIfNeeded() {
+        if screenReplica.viewportOffset > 0 {
+            sendScroll(delta: Int32.max)
+        }
+    }
+
     // MARK: - Scrollback
 
     func scrollUp(lines: Int = 3) {
-        // No-op: remote screen replica has no scrollback buffer.
+        sendScroll(delta: Int32(clamping: lines))
     }
 
     func scrollDown(lines: Int = 3) {
-        // No-op: remote screen replica has no scrollback buffer.
+        sendScroll(delta: -Int32(clamping: lines))
     }
 
-    // MARK: - Selection (operates on local replica)
+    // MARK: - Selection (operates on local replica with absolute line coords)
 
     func startSelection(col: Int, row: Int, mode: SelectionMode = .character) {
-        let point = SelectionPoint(line: row, col: col)
+        let info = screenReplica.viewportInfo()
+        let line = info.scrollbackCount - info.viewportOffset + row
+        let point = SelectionPoint(line: line, col: col)
         var sel = Selection(start: point, end: point, mode: mode)
 
         if mode == .line {
             sel.start.col = 0
-            sel.end.col = screenReplica.columns - 1
+            sel.end.col = info.columns - 1
         }
 
         selection = sel
@@ -112,10 +130,12 @@ final class ClientTerminalController: TerminalControlling {
 
     func updateSelection(col: Int, row: Int) {
         guard var sel = selection else { return }
-        sel.end = SelectionPoint(line: row, col: col)
+        let info = screenReplica.viewportInfo()
+        let line = info.scrollbackCount - info.viewportOffset + row
+        sel.end = SelectionPoint(line: line, col: col)
 
         if sel.mode == .line {
-            sel.end.col = screenReplica.columns - 1
+            sel.end.col = info.columns - 1
         }
 
         selection = sel
@@ -124,7 +144,15 @@ final class ClientTerminalController: TerminalControlling {
     }
 
     func updateSelectionWithAutoScroll(col: Int, viewportRow: Int) {
-        let clampedRow = max(0, min(viewportRow, screenReplica.rows - 1))
+        let visibleRows = screenReplica.rows
+
+        if viewportRow < 0 {
+            scrollUp(lines: min(-viewportRow, 3))
+        } else if viewportRow >= visibleRows {
+            scrollDown(lines: min(viewportRow - visibleRows + 1, 3))
+        }
+
+        let clampedRow = max(0, min(viewportRow, visibleRows - 1))
         updateSelection(col: col, row: clampedRow)
     }
 
@@ -195,7 +223,13 @@ final class ClientTerminalController: TerminalControlling {
     }
 
     func scrollToLine(_ absoluteLine: Int) {
-        // Not applicable for remote sessions without server-side scrollback support.
+        let info = screenReplica.viewportInfo()
+        let targetOffset = info.scrollbackCount - absoluteLine + info.rows / 2
+        let clamped = max(0, min(targetOffset, info.scrollbackCount))
+        let delta = clamped - info.viewportOffset
+        if delta != 0 {
+            sendScroll(delta: Int32(clamping: delta))
+        }
     }
 
     // MARK: - Paste
@@ -208,6 +242,7 @@ final class ClientTerminalController: TerminalControlling {
             bytes[i] = 0x20
         }
 
+        scrollToBottomIfNeeded()
         remoteClient.sendInput(
             sessionID: sessionID,
             paneID: paneID,

@@ -41,6 +41,7 @@ public enum ClientMessageType: UInt16, Sendable {
     // Terminal I/O (hot path)
     case input           = 0x0210
     case resize          = 0x0211
+    case scrollViewport  = 0x0212
 
     // Tab/Pane operations
     case createTab       = 0x0220
@@ -137,6 +138,8 @@ public enum ClientMessage: Sendable {
     // Terminal I/O (hot path)
     case input(SessionID, PaneID, [UInt8])
     case resize(SessionID, PaneID, cols: UInt16, rows: UInt16)
+    /// Scroll viewport: positive = up (older), negative = down (newer), Int32.max = jump to bottom.
+    case scrollViewport(SessionID, PaneID, delta: Int32)
 
     // Tab/Pane operations
     case createTab(SessionID)
@@ -164,6 +167,8 @@ public enum ClientMessage: Sendable {
             return "input(session=\(sid), pane=\(pid), data=[\(preview)\(suffix)])"
         case .resize(let sid, let pid, let cols, let rows):
             return "resize(session=\(sid), pane=\(pid), \(cols)x\(rows))"
+        case .scrollViewport(let sid, let pid, let delta):
+            return "scrollViewport(session=\(sid), pane=\(pid), delta=\(delta))"
         case .createTab(let sid):
             return "createTab(session=\(sid))"
         case .closeTab(let sid, let tid):
@@ -187,6 +192,7 @@ public enum ClientMessage: Sendable {
         case .closeSession:   return .closeSession
         case .input:          return .input
         case .resize:         return .resize
+        case .scrollViewport: return .scrollViewport
         case .createTab:      return .createTab
         case .closeTab:       return .closeTab
         case .splitPane:      return .splitPane

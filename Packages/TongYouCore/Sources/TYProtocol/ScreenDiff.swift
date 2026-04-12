@@ -24,6 +24,11 @@ public struct ScreenDiff: Equatable, Sendable {
     /// Cursor shape (block, underline, bar).
     public let cursorShape: CursorShape
 
+    /// Number of scrollback lines available on the server.
+    public let scrollbackCount: Int
+    /// Current viewport offset (0 = bottom, >0 = scrolled up).
+    public let viewportOffset: Int
+
     public init(
         dirtyRows: [UInt16],
         cellData: [Cell],
@@ -31,7 +36,9 @@ public struct ScreenDiff: Equatable, Sendable {
         cursorCol: UInt16,
         cursorRow: UInt16,
         cursorVisible: Bool,
-        cursorShape: CursorShape
+        cursorShape: CursorShape,
+        scrollbackCount: Int = 0,
+        viewportOffset: Int = 0
     ) {
         self.dirtyRows = dirtyRows
         self.cellData = cellData
@@ -40,5 +47,7 @@ public struct ScreenDiff: Equatable, Sendable {
         self.cursorRow = cursorRow
         self.cursorVisible = cursorVisible
         self.cursorShape = cursorShape
+        self.scrollbackCount = scrollbackCount
+        self.viewportOffset = viewportOffset
     }
 }

@@ -188,7 +188,9 @@ extension ScreenDiff {
             cursorCol: UInt16(snapshot.cursorCol),
             cursorRow: UInt16(snapshot.cursorRow),
             cursorVisible: snapshot.cursorVisible,
-            cursorShape: snapshot.cursorShape
+            cursorShape: snapshot.cursorShape,
+            scrollbackCount: snapshot.scrollbackCount,
+            viewportOffset: snapshot.viewportOffset
         )
     }
 }

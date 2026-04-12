@@ -207,6 +207,26 @@ public final class TerminalCore: @unchecked Sendable {
         }
     }
 
+    // MARK: - Viewport Scrolling
+
+    /// Scroll the viewport by the given delta.
+    /// Positive = up (older content), negative = down (newer content),
+    /// `Int32.max` = jump to bottom.
+    public func scrollViewport(delta: Int32) {
+        guard delta != 0 else { return }
+        ptyQueue.async { [weak self] in
+            guard let self else { return }
+            if delta == Int32.max {
+                self.screen.scrollViewportToBottom()
+            } else if delta > 0 {
+                self.screen.scrollViewportUp(lines: Int(delta))
+            } else {
+                self.screen.scrollViewportDown(lines: Int(-delta))
+            }
+            self.markScreenDirty()
+        }
+    }
+
     // MARK: - Query
 
     /// Current terminal dimensions.
