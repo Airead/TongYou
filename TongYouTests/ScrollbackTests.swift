@@ -242,6 +242,90 @@ struct ScrollbackTests {
         #expect(screen.scrollbackCount == sbBefore)
     }
 
+    // MARK: - Viewport Stability on New Output
+
+    @Test func viewportStaysWhenScrolledUp() {
+        let screen = makeScreen(cols: 5, rows: 3)
+        // Generate scrollback: write 6 lines into a 3-row screen.
+        for i in 0..<6 {
+            let ch = Unicode.Scalar(UInt32(0x41 + i))! // A, B, C, D, E, F
+            for _ in 0..<5 { screen.write(ch, attributes: .default) }
+            screen.newline()
+        }
+        // scrollback should have 4 lines (A, B, C, D), screen has E, F, blank
+        #expect(screen.scrollbackCount == 4)
+
+        // Scroll up to view older content
+        screen.scrollViewportUp(lines: 2)
+        #expect(screen.viewportOffset == 2)
+
+        // Remember what we're looking at: absolute line at top of viewport
+        let viewedLine0Before = screen.codepoint(
+            atAbsoluteLine: screen.scrollbackCount - screen.viewportOffset, col: 0
+        )
+
+        // New output arrives — pushes another line to scrollback
+        writeLine(screen, text: "GGGGG")
+        screen.newline()
+        #expect(screen.scrollbackCount == 5)
+
+        // Viewport offset should have increased to keep the same content in view
+        #expect(screen.viewportOffset == 3)
+
+        // The content at the top of the viewport should be the same character
+        let viewedLine0After = screen.codepoint(
+            atAbsoluteLine: screen.scrollbackCount - screen.viewportOffset, col: 0
+        )
+        #expect(viewedLine0Before == viewedLine0After)
+    }
+
+    @Test func viewportDoesNotChangeWhenAtBottom() {
+        let screen = makeScreen(cols: 5, rows: 3)
+        for i in 0..<6 {
+            let ch = Unicode.Scalar(UInt32(0x41 + i))!
+            for _ in 0..<5 { screen.write(ch, attributes: .default) }
+            screen.newline()
+        }
+        #expect(screen.viewportOffset == 0)
+
+        // New output while at bottom — viewport should stay at 0
+        writeLine(screen, text: "ZZZZZ")
+        screen.newline()
+        #expect(screen.viewportOffset == 0)
+    }
+
+    @Test func viewportStaysOnRingWrap() {
+        let screen = makeScreen(cols: 3, rows: 2)
+        // Fill scrollback to max
+        for i in 0..<(screen.maxScrollback + 2) {
+            let ch = Unicode.Scalar(UInt32(0x41 + (i % 26)))!
+            for _ in 0..<3 { screen.write(ch, attributes: .default) }
+            screen.newline()
+        }
+        #expect(screen.scrollbackCount == screen.maxScrollback)
+
+        // Scroll up partway
+        screen.scrollViewportUp(lines: 5)
+        let offsetBefore = screen.viewportOffset
+
+        // Record content at viewport top
+        let viewedBefore = screen.codepoint(
+            atAbsoluteLine: screen.scrollbackCount - screen.viewportOffset, col: 0
+        )
+
+        // More output causes ring wrap (oldest line discarded)
+        writeLine(screen, text: "ZZZ")
+        screen.newline()
+        #expect(screen.scrollbackCount == screen.maxScrollback)
+        #expect(screen.viewportOffset == offsetBefore + 1)
+
+        // Content at viewport top should be the same
+        let viewedAfter = screen.codepoint(
+            atAbsoluteLine: screen.scrollbackCount - screen.viewportOffset, col: 0
+        )
+        #expect(viewedBefore == viewedAfter)
+    }
+
     @Test func flatBufferRingWrapAround() {
         let screen = makeScreen(cols: 3, rows: 2)
         // Write more than maxScrollback lines.

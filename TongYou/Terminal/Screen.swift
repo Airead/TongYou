@@ -1245,6 +1245,11 @@ final class Screen {
         let dst = slotIndex * scrollbackColumns
         scrollbackBuffer![dst..<(dst + scrollbackColumns)] = cells[topBase..<(topBase + columns)]
         scrollbackLineFlags![slotIndex] = lineFlagForRow(0)
+
+        // Keep the viewport pinned to the same content when scrolled up.
+        if viewportOffset > 0 {
+            viewportOffset = min(viewportOffset + 1, scrollbackCount)
+        }
     }
 
     /// Single cell access into scrollback — zero allocation.
