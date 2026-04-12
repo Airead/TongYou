@@ -7,6 +7,7 @@ let package = Package(
     platforms: [.macOS(.v15)],
     products: [
         .library(name: "TYTerminal", targets: ["TYTerminal"]),
+        .library(name: "TYProtocol", targets: ["TYProtocol"]),
         .library(name: "TYPTY", targets: ["TYPTY"]),
         .library(name: "TYShell", targets: ["TYShell"]),
     ],
@@ -39,9 +40,22 @@ let package = Package(
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 
+        // Binary wire protocol for client/server communication.
+        .target(
+            name: "TYProtocol",
+            dependencies: ["TYTerminal"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+
         .testTarget(
             name: "TYTerminalTests",
             dependencies: ["TYTerminal"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+
+        .testTarget(
+            name: "TYProtocolTests",
+            dependencies: ["TYProtocol", "TYTerminal"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
     ]
