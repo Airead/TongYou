@@ -1258,14 +1258,16 @@ public final class Screen {
 
     /// Scroll the viewport up by `lines` (view older content).
     public func scrollViewportUp(lines: Int = 1) {
+        let old = viewportOffset
         viewportOffset = min(viewportOffset + max(1, lines), scrollbackCount)
-        dirtyRegion.markFull()
+        if viewportOffset != old { dirtyRegion.markFull() }
     }
 
     /// Scroll the viewport down by `lines` (view newer content).
     public func scrollViewportDown(lines: Int = 1) {
+        let old = viewportOffset
         viewportOffset = max(0, viewportOffset - max(1, lines))
-        dirtyRegion.markFull()
+        if viewportOffset != old { dirtyRegion.markFull() }
     }
 
     /// Jump viewport to the bottom (most recent content).

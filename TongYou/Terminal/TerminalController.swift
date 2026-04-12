@@ -261,14 +261,37 @@ final class TerminalController: TerminalControlling {
 
     /// Update the selection end point (for drag).
     func updateSelection(col: Int, row: Int) {
-        guard var sel = selection else { return }
-        let line = viewportRowToAbsoluteLine(row)
-        sel.end = SelectionPoint(line: line, col: col)
+        applySelectionEnd(col: col, absoluteLine: viewportRowToAbsoluteLine(row))
+    }
 
+    /// Update selection and auto-scroll when dragging outside viewport.
+    func updateSelectionWithAutoScroll(col: Int, viewportRow: Int) {
+        ptyQueue.async { [weak self] in
+            guard let self else { return }
+            let visibleRows = self.screen.rows
+
+            let clampedRow: Int
+            if viewportRow < 0 {
+                self.screen.scrollViewportUp(lines: min(-viewportRow, 3))
+                clampedRow = 0
+            } else if viewportRow >= visibleRows {
+                self.screen.scrollViewportDown(lines: min(viewportRow - visibleRows + 1, 3))
+                clampedRow = visibleRows - 1
+            } else {
+                clampedRow = viewportRow
+            }
+
+            self.applySelectionEnd(col: col, absoluteLine: self.viewportRowToAbsoluteLine(clampedRow))
+        }
+    }
+
+    /// Shared helper: set selection end-point and mark dirty.
+    private func applySelectionEnd(col: Int, absoluteLine: Int) {
+        guard var sel = selection else { return }
+        sel.end = SelectionPoint(line: absoluteLine, col: col)
         if sel.mode == .line {
             sel.end.col = screen.columns - 1
         }
-
         selection = sel
         markScreenDirty()
     }

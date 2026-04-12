@@ -31,6 +31,13 @@ final class MetalView: NSView {
     /// Lines per discrete mouse-wheel tick.
     private static let discreteScrollMultiplier = 3
 
+    // nonisolated(unsafe) because deinit must invalidate without actor hop
+    nonisolated(unsafe) private var dragAutoScrollTimer: Timer?
+    /// Last known drag column (for auto-scroll timer updates).
+    private var dragLastCol: Int = 0
+    /// Last known unclamped drag row (for auto-scroll timer updates).
+    private var dragLastUnclampedRow: Int = 0
+
     /// The pane ID this MetalView belongs to (set by TerminalPaneContainerView).
     var paneID: UUID?
 
@@ -398,6 +405,7 @@ final class MetalView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        stopDragAutoScrollTimer()
         if isMouseTrackingActive {
             sendMouseEvent(event, action: .release, button: .left)
         }
@@ -440,9 +448,20 @@ final class MetalView: NSView {
         if isMouseTrackingActive {
             sendMouseEvent(event, action: .motion, button: .left)
         } else {
-            // Update selection during drag
-            let (col, row) = gridPosition(for: event)
-            terminalController?.updateSelection(col: col, row: row)
+            let (col, unclampedRow) = gridPosition(for: event, clampRow: false)
+            let visibleRows = Int(renderer?.gridSize.rows ?? 1)
+
+            dragLastCol = col
+            dragLastUnclampedRow = unclampedRow
+
+            if unclampedRow < 0 || unclampedRow >= visibleRows {
+                terminalController?.updateSelectionWithAutoScroll(
+                    col: col, viewportRow: unclampedRow)
+                startDragAutoScrollTimer()
+            } else {
+                stopDragAutoScrollTimer()
+                terminalController?.updateSelection(col: col, row: unclampedRow)
+            }
         }
     }
 
@@ -538,7 +557,8 @@ final class MetalView: NSView {
     // MARK: - Mouse Helpers
 
     /// Convert an NSEvent's window location to grid (col, row).
-    private func gridPosition(for event: NSEvent) -> (col: Int, row: Int) {
+    /// When `clampRow` is false, row may be negative (above) or >= rows (below).
+    private func gridPosition(for event: NSEvent, clampRow: Bool = true) -> (col: Int, row: Int) {
         guard let fontSystem, let renderer else { return (0, 0) }
         let viewPos = convert(event.locationInWindow, from: nil)
         let scale = displayScale
@@ -546,9 +566,27 @@ final class MetalView: NSView {
         let pixelY = (bounds.height - viewPos.y) * scale
         let col = max(0, min(Int(pixelX / CGFloat(fontSystem.cellSize.width)),
                              Int(renderer.gridSize.columns) - 1))
-        let row = max(0, min(Int(pixelY / CGFloat(fontSystem.cellSize.height)),
-                             Int(renderer.gridSize.rows) - 1))
+        let rawRow = Int(floor(pixelY / CGFloat(fontSystem.cellSize.height)))
+        let row = clampRow ? max(0, min(rawRow, Int(renderer.gridSize.rows) - 1)) : rawRow
         return (col, row)
+    }
+
+    // MARK: - Drag Auto-Scroll
+
+    private func startDragAutoScrollTimer() {
+        guard dragAutoScrollTimer == nil else { return }
+        dragAutoScrollTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) {
+            [weak self] _ in
+            guard let self else { return }
+            self.terminalController?.updateSelectionWithAutoScroll(
+                col: self.dragLastCol,
+                viewportRow: self.dragLastUnclampedRow)
+        }
+    }
+
+    private func stopDragAutoScrollTimer() {
+        dragAutoScrollTimer?.invalidate()
+        dragAutoScrollTimer = nil
     }
 
     private func sendMouseEvent(
@@ -586,6 +624,7 @@ final class MetalView: NSView {
                     self.wakeDisplayLink()
                 }
             } else {
+                self.stopDragAutoScrollTimer()
                 self.stopDisplayLink()
                 self.removeWindowActivationObservers()
             }
@@ -865,6 +904,7 @@ final class MetalView: NSView {
 
     deinit {
         cursorBlinkTimer?.invalidate()
+        dragAutoScrollTimer?.invalidate()
         displayLink?.invalidate()
         displayLink = nil
     }

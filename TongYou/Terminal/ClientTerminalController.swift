@@ -123,6 +123,11 @@ final class ClientTerminalController: TerminalControlling {
         onNeedsDisplay?()
     }
 
+    func updateSelectionWithAutoScroll(col: Int, viewportRow: Int) {
+        let clampedRow = max(0, min(viewportRow, screenReplica.rows - 1))
+        updateSelection(col: col, row: clampedRow)
+    }
+
     @discardableResult
     func copySelection() -> Bool {
         guard let sel = selection else { return false }

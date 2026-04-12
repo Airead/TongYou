@@ -27,6 +27,9 @@ protocol TerminalControlling: AnyObject {
     var selection: Selection? { get }
     func startSelection(col: Int, row: Int, mode: SelectionMode)
     func updateSelection(col: Int, row: Int)
+    /// Update selection and auto-scroll when dragging outside viewport.
+    /// `viewportRow` may be negative (above) or >= rows (below).
+    func updateSelectionWithAutoScroll(col: Int, viewportRow: Int)
     @discardableResult func copySelection() -> Bool
 
     // MARK: - URL Detection
