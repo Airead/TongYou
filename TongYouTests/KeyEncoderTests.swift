@@ -297,6 +297,51 @@ struct KeyEncoderTests {
         #expect(result == Data([0x09]))
     }
 
+    @Test func shiftTab() {
+        // Shift+Tab → ESC[Z (backtab)
+        let result = KeyEncoder.encode(
+            input(keyCode: 48, shift: true),
+            options: normalOpts
+        )
+        #expect(result == Data([0x1B, 0x5B, 0x5A]))
+    }
+
+    @Test func ctrlTab() {
+        // Ctrl+Tab → ESC[9;5u (CSI u encoding, mod = 1 + 4 = 5)
+        let result = KeyEncoder.encode(
+            input(keyCode: 48, control: true),
+            options: normalOpts
+        )
+        #expect(result == Data([0x1B, 0x5B, 0x39, 0x3B, 0x35, 0x75]))
+    }
+
+    @Test func shiftReturn() {
+        // Shift+Enter → ESC[13;2u (CSI u encoding, mod = 1 + 1 = 2)
+        let result = KeyEncoder.encode(
+            input(keyCode: 36, shift: true),
+            options: normalOpts
+        )
+        #expect(result == Data([0x1B, 0x5B, 0x31, 0x33, 0x3B, 0x32, 0x75]))
+    }
+
+    @Test func ctrlReturn() {
+        // Ctrl+Enter → ESC[13;5u (CSI u encoding, mod = 1 + 4 = 5)
+        let result = KeyEncoder.encode(
+            input(keyCode: 36, control: true),
+            options: normalOpts
+        )
+        #expect(result == Data([0x1B, 0x5B, 0x31, 0x33, 0x3B, 0x35, 0x75]))
+    }
+
+    @Test func altReturn() {
+        // Alt+Enter → ESC[13;3u (CSI u encoding, mod = 1 + 2 = 3)
+        let result = KeyEncoder.encode(
+            input(keyCode: 36, option: true),
+            options: normalOpts
+        )
+        #expect(result == Data([0x1B, 0x5B, 0x31, 0x33, 0x3B, 0x33, 0x75]))
+    }
+
     @Test func escapeKey() {
         let result = KeyEncoder.encode(input(keyCode: 53), options: normalOpts)
         #expect(result == Data([0x1B]))

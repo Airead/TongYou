@@ -208,15 +208,28 @@ struct KeyEncoder {
             return fk.baseSequence
         }
 
-        // Return, Backspace, Tab, Escape — these don't take PC-style modifiers
-        // in legacy mode, but we handle Alt+key as ESC prefix below.
+        // Return, Backspace, Tab, Escape — handle modifier combinations.
         switch input.keyCode {
-        case 36: return dataReturn
+        case 36: // Return
+            if hasModifier {
+                // CSI u encoding: ESC[13;{mod}u
+                return formatCSI(param1: 13, modParam: modParam, final: 0x75)
+            }
+            return dataReturn
         case 51:
             if input.option && options.optionAsAlt { return Data([0x1B, 0x7F]) } // Alt+Backspace
             if input.control { return Data([0x08]) }       // Ctrl+Backspace → BS
             return dataBackspace
-        case 48: return dataTab
+        case 48: // Tab
+            if input.shift && !input.control && !input.option {
+                // Shift+Tab → ESC[Z (backtab, universally supported)
+                return dataBacktab
+            }
+            if hasModifier {
+                // Other modifier combos: CSI u encoding ESC[9;{mod}u
+                return formatCSI(param1: 9, modParam: modParam, final: 0x75)
+            }
+            return dataTab
         case 53: return dataEscape
         default: return nil
         }
@@ -287,5 +300,6 @@ struct KeyEncoder {
     private static let dataReturn    = Data([0x0D])
     private static let dataBackspace = Data([0x7F])
     private static let dataTab       = Data([0x09])
+    private static let dataBacktab   = Data([0x1B, 0x5B, 0x5A])  // ESC[Z
     private static let dataEscape    = Data([0x1B])
 }
