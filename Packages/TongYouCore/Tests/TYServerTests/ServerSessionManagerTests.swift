@@ -22,6 +22,8 @@ struct ServerSessionManagerTests {
         } else {
             Issue.record("Expected leaf layout for single-pane tab")
         }
+
+        manager.closeSession(id: info.id)
     }
 
     @Test("Create session with default name")
@@ -29,17 +31,21 @@ struct ServerSessionManagerTests {
         let manager = ServerSessionManager()
         let info = manager.createSession()
         #expect(info.name == "Session 1")
+        manager.closeSession(id: info.id)
     }
 
     @Test("List sessions returns all sessions")
     func listSessions() {
         let manager = ServerSessionManager()
-        _ = manager.createSession(name: "A")
-        _ = manager.createSession(name: "B")
+        let a = manager.createSession(name: "A")
+        let b = manager.createSession(name: "B")
 
         let sessions = manager.listSessions()
         #expect(sessions.count == 2)
         #expect(Set(sessions.map(\.name)) == Set(["A", "B"]))
+
+        manager.closeSession(id: a.id)
+        manager.closeSession(id: b.id)
     }
 
     @Test("Close session removes it")
@@ -65,6 +71,8 @@ struct ServerSessionManagerTests {
         #expect(queried != nil)
         #expect(queried?.name == "Query Test")
         #expect(queried?.id == info.id)
+
+        manager.closeSession(id: info.id)
     }
 
     @Test("sessionInfo returns nil for unknown ID")
@@ -85,6 +93,8 @@ struct ServerSessionManagerTests {
         let info = manager.sessionInfo(for: session.id)
         #expect(info?.tabs.count == 2)
         #expect(info?.activeTabIndex == 1)
+
+        manager.closeSession(id: session.id)
     }
 
     @Test("Create tab returns nil for unknown session")
@@ -104,6 +114,8 @@ struct ServerSessionManagerTests {
 
         let info = manager.sessionInfo(for: session.id)
         #expect(info?.tabs.count == 1)
+
+        manager.closeSession(id: session.id)
     }
 
     @Test("Close last tab removes session")
@@ -141,6 +153,8 @@ struct ServerSessionManagerTests {
         } else {
             Issue.record("Expected split layout after splitting pane")
         }
+
+        manager.closeSession(id: session.id)
     }
 
     @Test("Close pane removes from tree")
@@ -166,6 +180,8 @@ struct ServerSessionManagerTests {
         } else {
             Issue.record("Expected leaf layout after closing split pane")
         }
+
+        manager.closeSession(id: session.id)
     }
 
     @Test("allPaneIDs returns all panes in session")
@@ -185,6 +201,8 @@ struct ServerSessionManagerTests {
 
         let paneIDs = manager.allPaneIDs(sessionID: session.id)
         #expect(paneIDs.count == 2)
+
+        manager.closeSession(id: session.id)
     }
 
     @Test("sendInput does not crash with valid pane")

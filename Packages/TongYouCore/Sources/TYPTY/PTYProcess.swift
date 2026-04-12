@@ -208,10 +208,28 @@ public final class PTYProcess {
         writeQueue.sync {}
 
         if childPID > 0 {
-            kill(childPID, SIGHUP)
-            var status: Int32 = 0
-            waitpid(childPID, &status, WNOHANG)
+            let pid = childPID
             childPID = -1
+
+            kill(pid, SIGHUP)
+
+            // Give the child a brief window to exit gracefully, then force-kill.
+            // Use WNOHANG throughout — the processSource may have already reaped
+            // this child, so a blocking waitpid would hang forever.
+            var status: Int32 = 0
+            var reaped = false
+            for _ in 0..<20 {
+                if waitpid(pid, &status, WNOHANG) != 0 { reaped = true; break }
+                usleep(5_000) // 5ms, total up to 100ms
+            }
+            if !reaped {
+                kill(pid, SIGKILL)
+                // Brief non-blocking poll after SIGKILL.
+                for _ in 0..<10 {
+                    if waitpid(pid, &status, WNOHANG) != 0 { break }
+                    usleep(5_000)
+                }
+            }
         }
 
         if masterFD >= 0 {
