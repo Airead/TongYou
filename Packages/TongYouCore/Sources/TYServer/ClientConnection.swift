@@ -7,10 +7,15 @@ import TYTerminal
 /// Runs a read loop on a dedicated queue. Sending is serialized via writeQueue.
 /// Screen update distribution is handled by SocketServer's single update timer,
 /// not per-client timers (avoids snapshot consumption races).
+///
+/// Backpressure: screen update messages (.screenFull, .screenDiff) are dropped
+/// when the writeQueue has more than `maxPendingScreenUpdates` such messages
+/// pending. Non-screen messages are always delivered.
 public final class ClientConnection: @unchecked Sendable {
 
     let id: UUID
     private let socket: TYSocket
+    private let maxPendingScreenUpdates: Int
 
     private var attachedSessions: Set<SessionID> = []
     private let sessionsLock = NSLock()
@@ -19,12 +24,17 @@ public final class ClientConnection: @unchecked Sendable {
     private let readQueue: DispatchQueue
     private let writeQueue: DispatchQueue
 
+    /// Number of screen update messages currently queued in writeQueue.
+    private var pendingScreenCount: Int = 0
+    private let pendingLock = NSLock()
+
     var onMessage: ((ClientMessage) -> Void)?
     var onDisconnect: (() -> Void)?
 
-    init(socket: TYSocket) {
+    init(socket: TYSocket, maxPendingScreenUpdates: Int = 3) {
         self.id = UUID()
         self.socket = socket
+        self.maxPendingScreenUpdates = maxPendingScreenUpdates
         self.readQueue = DispatchQueue(
             label: "io.github.airead.tongyou.client.\(id.uuidString.prefix(8)).read",
             qos: .userInteractive
@@ -33,6 +43,7 @@ public final class ClientConnection: @unchecked Sendable {
             label: "io.github.airead.tongyou.client.\(id.uuidString.prefix(8)).write",
             qos: .userInteractive
         )
+        Log.info("Client connected: \(id.uuidString.prefix(8))", category: .client)
     }
 
     // MARK: - Lifecycle
@@ -45,6 +56,7 @@ public final class ClientConnection: @unchecked Sendable {
 
     func stop() {
         socket.closeSocket()
+        Log.info("Client stopped: \(id.uuidString.prefix(8))", category: .client)
     }
 
     // MARK: - Session Attachment
@@ -70,15 +82,52 @@ public final class ClientConnection: @unchecked Sendable {
     // MARK: - Send
 
     /// Send a server message to this client. Thread-safe (serialized via writeQueue).
+    ///
+    /// Screen update messages are subject to backpressure: if more than
+    /// `maxPendingScreenUpdates` are already queued, the message is dropped.
+    /// Non-screen messages (session lifecycle, layout, etc.) are always sent.
     func send(_ message: ServerMessage) {
+        let isScreen = message.isScreenUpdate
+        if isScreen {
+            pendingLock.lock()
+            if pendingScreenCount >= maxPendingScreenUpdates {
+                pendingLock.unlock()
+                Log.debug(
+                    "Dropping screen update for client \(id.uuidString.prefix(8)): \(pendingScreenCount) pending",
+                    category: .client
+                )
+                return
+            }
+            pendingScreenCount += 1
+            pendingLock.unlock()
+        }
+
         writeQueue.async { [weak self] in
             guard let self else { return }
+            if isScreen {
+                self.pendingLock.lock()
+                self.pendingScreenCount -= 1
+                self.pendingLock.unlock()
+            }
             do {
                 try self.socket.send(message)
             } catch {
+                Log.error(
+                    "Send failed for client \(self.id.uuidString.prefix(8)): \(error)",
+                    category: .client
+                )
                 self.handleDisconnect()
             }
         }
+    }
+
+    // MARK: - Stats
+
+    /// Current number of screen update messages pending in the write queue.
+    var pendingScreenUpdateCount: Int {
+        pendingLock.lock()
+        defer { pendingLock.unlock() }
+        return pendingScreenCount
     }
 
     // MARK: - Private
@@ -101,6 +150,7 @@ public final class ClientConnection: @unchecked Sendable {
         disconnected = true
         sessionsLock.unlock()
         guard !alreadyDisconnected else { return }
+        Log.info("Client disconnected: \(id.uuidString.prefix(8))", category: .client)
         onDisconnect?()
     }
 }

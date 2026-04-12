@@ -4,7 +4,7 @@ import Foundation
 import TYProtocol
 import TYTerminal
 
-@Suite("ServerSessionManager Tests")
+@Suite("ServerSessionManager Tests", .serialized)
 struct ServerSessionManagerTests {
 
     @Test("Create session returns valid SessionInfo")

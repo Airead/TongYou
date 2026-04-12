@@ -3,7 +3,7 @@ import Foundation
 @testable import TYServer
 import TYTerminal
 
-@Suite("TerminalCore Tests")
+@Suite("TerminalCore Tests", .serialized)
 struct TerminalCoreTests {
 
     @Test("Init creates core with correct dimensions")

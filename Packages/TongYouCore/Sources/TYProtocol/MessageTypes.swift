@@ -63,6 +63,16 @@ public enum ServerMessage: Sendable {
     case layoutUpdate(SessionID, LayoutTree)
     case clipboardSet(String)
 
+    /// Whether this message is a screen update (screenFull or screenDiff).
+    /// Screen updates are high-frequency and can be safely dropped under backpressure
+    /// since the next timer tick will send fresh data.
+    public var isScreenUpdate: Bool {
+        switch self {
+        case .screenFull, .screenDiff: return true
+        default: return false
+        }
+    }
+
     /// The wire type code for this message.
     public var typeCode: ServerMessageType {
         switch self {

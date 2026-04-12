@@ -5,7 +5,7 @@ import TYProtocol
 import TYServer
 import TYTerminal
 
-@Suite("TYClient Tests")
+@Suite("TYClient Tests", .serialized)
 struct TYClientTests {
 
     // MARK: - ScreenReplica Tests

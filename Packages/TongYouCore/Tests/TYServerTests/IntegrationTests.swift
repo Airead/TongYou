@@ -4,7 +4,7 @@ import Foundation
 import TYProtocol
 import TYTerminal
 
-@Suite("Server Integration Tests")
+@Suite("Server Integration Tests", .serialized)
 struct IntegrationTests {
 
     @Test("Full flow: start server, connect client, create session, send input, receive screen update")
@@ -210,6 +210,70 @@ struct IntegrationTests {
         #expect(!pidPath.isEmpty)
         #expect(pidPath.contains("tongyou"))
         #expect(pidPath.hasSuffix("tyd.pid"))
+    }
+
+    @Test("Backpressure drops screen updates when over threshold")
+    func backpressureDropsScreenUpdates() throws {
+        let socketPath = NSTemporaryDirectory() + "tyd-test-bp-\(UUID().uuidString).sock"
+        defer { try? FileManager.default.removeItem(atPath: socketPath) }
+
+        let listenSocket = try TYSocket.listen(path: socketPath)
+        let clientEnd = try TYSocket.connect(path: socketPath)
+        let serverEnd = try listenSocket.accept()
+        listenSocket.closeSocket()
+
+        let maxPending = 3
+        let conn = ClientConnection(socket: serverEnd, maxPendingScreenUpdates: maxPending)
+
+        let dummySessionID = SessionID()
+        let dummyPaneID = PaneID()
+        let snapshot = ScreenSnapshot(
+            cells: [Cell](repeating: .empty, count: 4),
+            columns: 2, rows: 2,
+            cursorCol: 0, cursorRow: 0,
+            cursorVisible: true, cursorShape: .block,
+            selection: nil, scrollbackCount: 0, viewportOffset: 0,
+            dirtyRegion: .full
+        )
+
+        // Send many screen updates rapidly.
+        let totalSent = 20
+        for _ in 0..<totalSent {
+            conn.send(.screenFull(dummySessionID, dummyPaneID, snapshot))
+        }
+
+        // Also send non-screen messages — these must never be dropped.
+        conn.send(.sessionClosed(dummySessionID))
+        conn.send(.sessionClosed(dummySessionID))
+        conn.send(.sessionClosed(dummySessionID))
+
+        // Wait for the writeQueue to drain, then close the server end
+        // so the client's receiveServerMessage hits EOF and stops blocking.
+        Thread.sleep(forTimeInterval: 0.5)
+        conn.stop()
+
+        // Read all messages that were actually sent.
+        var screenCount = 0
+        var nonScreenCount = 0
+        while true {
+            do {
+                let msg = try clientEnd.receiveServerMessage()
+                if msg.isScreenUpdate {
+                    screenCount += 1
+                } else {
+                    nonScreenCount += 1
+                }
+            } catch {
+                break  // EOF or error — done reading
+            }
+        }
+
+        // Backpressure is approximate (race between check-and-increment
+        // and writeQueue drain), but we must see significantly fewer than totalSent.
+        #expect(screenCount < totalSent / 2)
+
+        // All non-screen messages should be delivered.
+        #expect(nonScreenCount == 3)
     }
 
     @Test("ScreenDiff(from:) converts snapshot correctly")

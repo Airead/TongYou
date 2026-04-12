@@ -23,6 +23,9 @@ public final class SocketServer: @unchecked Sendable {
     /// Single server-wide timer for coalescing screen updates.
     private var updateTimer: DispatchSourceTimer?
 
+    /// Periodic stats logging timer.
+    private var statsTimer: DispatchSourceTimer?
+
     private let acceptQueue = DispatchQueue(
         label: "io.github.airead.tongyou.server.accept",
         qos: .userInitiated
@@ -52,6 +55,8 @@ public final class SocketServer: @unchecked Sendable {
         listenSocket = socket
 
         startUpdateTimer()
+        startStatsTimer()
+        Log.info("Server started, listening on \(config.socketPath)")
         onReady?()
 
         acceptQueue.async { [weak self] in
@@ -62,6 +67,9 @@ public final class SocketServer: @unchecked Sendable {
     public func stop() {
         updateTimer?.cancel()
         updateTimer = nil
+
+        statsTimer?.cancel()
+        statsTimer = nil
 
         listenSocket?.closeSocket()
         listenSocket = nil
@@ -74,6 +82,7 @@ public final class SocketServer: @unchecked Sendable {
         for client in allClients {
             client.stop()
         }
+        Log.info("Server stopped")
     }
 
     public var clientCount: Int {
@@ -125,7 +134,10 @@ public final class SocketServer: @unchecked Sendable {
         while let listenSocket {
             do {
                 let clientSocket = try listenSocket.accept()
-                let connection = ClientConnection(socket: clientSocket)
+                let connection = ClientConnection(
+                    socket: clientSocket,
+                    maxPendingScreenUpdates: config.maxPendingScreenUpdates
+                )
 
                 connection.onMessage = { [weak self, weak connection] message in
                     guard let self, let connection else { return }
@@ -143,9 +155,12 @@ public final class SocketServer: @unchecked Sendable {
                 clients[connection.id] = connection
                 clientsLock.unlock()
 
+                Log.info("Client accepted: \(connection.id.uuidString.prefix(8)), total: \(clientCount)")
+
                 connection.startReadLoop()
             } catch {
                 if self.listenSocket == nil { return }
+                Log.error("Accept loop error: \(error)")
                 continue
             }
         }
@@ -156,21 +171,30 @@ public final class SocketServer: @unchecked Sendable {
         clients.removeValue(forKey: client.id)
         clientsLock.unlock()
         client.stop()
+        Log.info("Client removed: \(client.id.uuidString.prefix(8)), remaining: \(clientCount)")
     }
 
-    // MARK: - Private: Screen Update Timer
+    // MARK: - Private: Timers
+
+    private func makeTimer(interval: TimeInterval, handler: @escaping () -> Void) -> DispatchSourceTimer {
+        let timer = DispatchSource.makeTimerSource(queue: messageQueue)
+        timer.schedule(deadline: .now() + interval, repeating: interval)
+        timer.setEventHandler(handler: handler)
+        timer.resume()
+        return timer
+    }
 
     private func startUpdateTimer() {
-        let timer = DispatchSource.makeTimerSource(queue: messageQueue)
-        timer.schedule(
-            deadline: .now() + config.screenUpdateInterval,
-            repeating: config.screenUpdateInterval
-        )
-        timer.setEventHandler { [weak self] in
+        updateTimer = makeTimer(interval: config.screenUpdateInterval) { [weak self] in
             self?.flushDirtyPanes()
         }
-        timer.resume()
-        updateTimer = timer
+    }
+
+    private func startStatsTimer() {
+        guard config.statsInterval > 0 else { return }
+        statsTimer = makeTimer(interval: config.statsInterval) { [weak self] in
+            self?.logStats()
+        }
     }
 
     /// Consume each dirty pane's snapshot once and send to all attached clients.
@@ -196,6 +220,22 @@ public final class SocketServer: @unchecked Sendable {
 
             forEachAttachedClient(session: key.sessionID) { $0.send(message) }
         }
+    }
+
+    private func logStats() {
+        clientsLock.lock()
+        let allClients = Array(clients.values)
+        let count = allClients.count
+        clientsLock.unlock()
+
+        let sessions = sessionManager.sessionCount
+        let pendingInfo = allClients.map { client in
+            "\(client.id.uuidString.prefix(8)):\(client.pendingScreenUpdateCount)"
+        }.joined(separator: ", ")
+
+        Log.info(
+            "Stats: clients=\(count), sessions=\(sessions), pending=[\(pendingInfo)]"
+        )
     }
 
     // MARK: - Private: Message Dispatch

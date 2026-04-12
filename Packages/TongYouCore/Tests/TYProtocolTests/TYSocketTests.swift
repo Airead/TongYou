@@ -3,7 +3,7 @@ import Foundation
 @testable import TYProtocol
 @testable import TYTerminal
 
-@Suite("TYSocket integration tests")
+@Suite("TYSocket integration tests", .serialized)
 struct TYSocketTests {
 
     @Test func clientServerRoundTrip() throws {

@@ -52,6 +52,9 @@ func printUsage() {
 // MARK: - Commands
 
 func runServer(daemon: Bool) {
+    // Configure logging before anything else.
+    Log.configure(useSyslog: daemon)
+
     if let existingPID = DaemonLifecycle.checkExistingProcess() {
         fputs("tyd: already running (pid \(existingPID))\n", stderr)
         exit(1)
@@ -69,38 +72,28 @@ func runServer(daemon: Bool) {
     do {
         try lifecycle.writePIDFile()
     } catch {
-        fputs("tyd: failed to write PID file: \(error)\n", stderr)
+        Log.error("Failed to write PID file: \(error)")
         exit(1)
     }
 
     lifecycle.onShutdown = {
         server.stop()
-        if !daemon {
-            print("tyd: shutting down")
-        }
+        Log.info("Shutting down")
         exit(0)
     }
 
     lifecycle.installSignalHandlers()
 
     server.onAllSessionsClosed = {
+        Log.info("All sessions closed, exiting")
         lifecycle.cleanup()
-        if !daemon {
-            print("tyd: all sessions closed, exiting")
-        }
         exit(0)
-    }
-
-    server.onReady = {
-        if !daemon {
-            print("tyd: listening on \(config.socketPath)")
-        }
     }
 
     do {
         try server.start()
     } catch {
-        fputs("tyd: failed to start server: \(error)\n", stderr)
+        Log.error("Failed to start server: \(error)")
         lifecycle.cleanup()
         exit(1)
     }

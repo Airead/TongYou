@@ -120,6 +120,7 @@ public final class ServerSessionManager {
         )
 
         sessions[sessionID] = session
+        Log.info("Session created: \(sessionName) (\(sessionID))", category: .session)
         return session.toSessionInfo()
     }
 
@@ -131,6 +132,7 @@ public final class ServerSessionManager {
                 coreLookup.removeValue(forKey: paneID)
             }
         }
+        Log.info("Session closed: \(session.name) (\(id))", category: .session)
     }
 
     public func sessionInfo(for id: SessionID) -> SessionInfo? {
@@ -159,6 +161,7 @@ public final class ServerSessionManager {
 
         sessions[sessionID]!.tabs.append(tab)
         sessions[sessionID]!.activeTabIndex = sessions[sessionID]!.tabs.count - 1
+        Log.info("Tab created: \(tabID) in session \(sessionID)", category: .session)
         return tabID
     }
 
@@ -173,9 +176,11 @@ public final class ServerSessionManager {
         }
 
         session.tabs.remove(at: tabIndex)
+        Log.info("Tab closed: \(tabID) in session \(sessionID)", category: .session)
 
         if session.tabs.isEmpty {
             sessions.removeValue(forKey: sessionID)
+            Log.info("Session removed (last tab closed): \(sessionID)", category: .session)
             return
         }
 
@@ -290,7 +295,7 @@ public final class ServerSessionManager {
                     ?? "/"
             )
         } catch {
-            print("[tyd] Failed to start PTY for pane \(paneID): \(error)")
+            Log.error("Failed to start PTY for pane \(paneID): \(error)", category: .session)
         }
 
         return (paneID, pane, core)

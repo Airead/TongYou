@@ -15,6 +15,14 @@ public struct ServerConfig: Sendable {
     /// Default working directory for new shells. nil means use $HOME.
     public var defaultWorkingDirectory: String?
 
+    /// Maximum pending screen update messages per client before dropping.
+    /// Screen updates beyond this threshold are discarded since the next
+    /// timer tick will send fresh data anyway.
+    public var maxPendingScreenUpdates: Int
+
+    /// Interval in seconds between periodic stats logging (0 = disabled).
+    public var statsInterval: TimeInterval
+
     public init(
         socketPath: String? = nil,
         autoExitOnNoSessions: Bool = false,
@@ -22,7 +30,9 @@ public struct ServerConfig: Sendable {
         defaultRows: UInt16 = 24,
         maxScrollback: Int = 10000,
         screenUpdateInterval: TimeInterval = 1.0 / 60.0,
-        defaultWorkingDirectory: String? = nil
+        defaultWorkingDirectory: String? = nil,
+        maxPendingScreenUpdates: Int = 3,
+        statsInterval: TimeInterval = 30.0
     ) {
         self.socketPath = socketPath ?? Self.defaultSocketPath()
         self.autoExitOnNoSessions = autoExitOnNoSessions
@@ -31,6 +41,8 @@ public struct ServerConfig: Sendable {
         self.maxScrollback = maxScrollback
         self.screenUpdateInterval = screenUpdateInterval
         self.defaultWorkingDirectory = defaultWorkingDirectory
+        self.maxPendingScreenUpdates = maxPendingScreenUpdates
+        self.statsInterval = statsInterval
     }
 
     public static func defaultSocketPath() -> String {
