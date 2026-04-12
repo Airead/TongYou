@@ -6,7 +6,7 @@ import SwiftUI
 /// ```
 /// TerminalWindowView
 ///   +-- TabBarView (visible when tab count > 1, or configured)
-///   +-- TerminalTabContainerView (active tab's MetalView)
+///   +-- PaneSplitView (active tab's pane tree)
 /// ```
 struct TerminalWindowView: View {
 
@@ -40,10 +40,9 @@ struct TerminalWindowView: View {
             }
 
             if let activeTab = tabManager.activeTab {
-                TerminalTabContainerView(
-                    tabID: activeTab.id,
+                PaneSplitView(
+                    node: activeTab.paneTree,
                     viewStore: viewStore,
-                    initialWorkingDirectory: activeTab.initialWorkingDirectory,
                     onTabAction: handleTabAction,
                     onTitleChanged: { title in
                         tabManager.updateTitle(title, for: activeTab.id)
@@ -70,16 +69,20 @@ struct TerminalWindowView: View {
     // MARK: - Tab Operations
 
     private func createNewTab() {
-        let cwd = tabManager.activeTab.flatMap { viewStore.view(for: $0.id)?.currentWorkingDirectory }
+        let cwd: String? = tabManager.activeTab.flatMap { tab in
+            viewStore.view(for: tab.paneTree.firstPane.id)?.currentWorkingDirectory
+        }
         tabManager.createTab(initialWorkingDirectory: cwd)
     }
 
     private func closeTab(at index: Int) {
         guard tabManager.tabs.indices.contains(index) else { return }
-        let tabID = tabManager.tabs[index].id
+        let tab = tabManager.tabs[index]
 
-        // Tear down the MetalView
-        viewStore.tearDown(for: tabID)
+        // Tear down all MetalViews in this tab's pane tree.
+        for paneID in tab.allPaneIDs {
+            viewStore.tearDown(for: paneID)
+        }
 
         tabManager.closeTab(at: index)
 
@@ -110,60 +113,23 @@ struct TerminalWindowView: View {
 
 // MARK: - MetalView Store
 
-/// Plain reference type that holds MetalView instances keyed by tab ID.
+/// Plain reference type that holds MetalView instances keyed by pane ID.
 /// Not `@Observable` — invisible to SwiftUI, so mutations in `makeNSView`
 /// do not trigger "Modifying state during view update" warnings.
 final class MetalViewStore {
     private var views: [UUID: MetalView] = [:]
 
-    func view(for tabID: UUID) -> MetalView? {
-        views[tabID]
+    func view(for paneID: UUID) -> MetalView? {
+        views[paneID]
     }
 
-    func store(_ view: MetalView, for tabID: UUID) {
-        views[tabID] = view
+    func store(_ view: MetalView, for paneID: UUID) {
+        views[paneID] = view
     }
 
-    func tearDown(for tabID: UUID) {
-        if let view = views.removeValue(forKey: tabID) {
+    func tearDown(for paneID: UUID) {
+        if let view = views.removeValue(forKey: paneID) {
             view.tearDown()
         }
-    }
-}
-
-// MARK: - Terminal Tab Container
-
-/// NSViewRepresentable that manages a MetalView for a specific tab.
-/// Creates the MetalView on first appearance and reuses it for subsequent displays.
-struct TerminalTabContainerView: NSViewRepresentable {
-
-    let tabID: UUID
-    let viewStore: MetalViewStore
-    let initialWorkingDirectory: String?
-    let onTabAction: (TabAction) -> Void
-    let onTitleChanged: (String) -> Void
-
-    func makeNSView(context: Context) -> MetalView {
-        if let existing = viewStore.view(for: tabID) {
-            existing.onTabAction = onTabAction
-            existing.onTitleChanged = onTitleChanged
-            return existing
-        }
-        let view = MetalView()
-        view.initialWorkingDirectory = initialWorkingDirectory
-        view.onTabAction = onTabAction
-        view.onTitleChanged = onTitleChanged
-        viewStore.store(view, for: tabID)
-        return view
-    }
-
-    func updateNSView(_ nsView: MetalView, context: Context) {
-        nsView.onTabAction = onTabAction
-        nsView.onTitleChanged = onTitleChanged
-    }
-
-    static func dismantleNSView(_ nsView: MetalView, coordinator: ()) {
-        // Do NOT tear down here — the MetalView may be reused when switching tabs.
-        // Tear down happens in TerminalWindowView.closeTab(at:).
     }
 }

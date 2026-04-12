@@ -3,7 +3,7 @@ import Metal
 import QuartzCore
 
 /// NSView subclass hosting a CAMetalLayer for GPU rendering.
-/// Bridged into SwiftUI via TerminalTabContainerView (NSViewRepresentable).
+/// Bridged into SwiftUI via TerminalPaneContainerView (NSViewRepresentable).
 final class MetalView: NSView {
 
     private var metalLayer: CAMetalLayer!

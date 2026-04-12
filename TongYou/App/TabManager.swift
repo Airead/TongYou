@@ -9,16 +9,19 @@ enum TabAction {
     case gotoTab(Int)  // 1-based index
 }
 
-/// A single terminal tab.
+/// A single terminal tab containing a tree of panes.
 struct TerminalTab: Identifiable {
     let id: UUID
     var title: String
-    let initialWorkingDirectory: String?
+    var paneTree: PaneNode
+
+    /// All pane IDs in this tab's pane tree.
+    var allPaneIDs: [UUID] { paneTree.allPaneIDs }
 
     init(title: String = "shell", initialWorkingDirectory: String? = nil) {
         self.id = UUID()
         self.title = title
-        self.initialWorkingDirectory = initialWorkingDirectory
+        self.paneTree = .leaf(TerminalPane(initialWorkingDirectory: initialWorkingDirectory))
     }
 }
 
