@@ -178,6 +178,10 @@ public struct ScreenSnapshot: Sendable {
 /// O(rows × columns) cells. Partial scroll regions fall back to physical copy.
 public final class Screen {
 
+    /// Minimum terminal dimensions to prevent reflow issues.
+    public static let minColumns = 12
+    public static let minRows = 2
+
     public private(set) var columns: Int
     public private(set) var rows: Int
     public private(set) var cursorCol: Int = 0

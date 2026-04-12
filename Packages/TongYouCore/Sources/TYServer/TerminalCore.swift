@@ -158,8 +158,8 @@ public final class TerminalCore: @unchecked Sendable {
     // MARK: - Resize
 
     public func resize(columns: UInt16, rows: UInt16) {
-        let cols = Int(columns)
-        let rows = Int(rows)
+        let cols = max(Screen.minColumns, Int(columns))
+        let rows = max(Screen.minRows, Int(rows))
         nonisolated(unsafe) let process = ptyProcess
 
         ptyQueue.async { [weak self] in

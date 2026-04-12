@@ -386,8 +386,8 @@ final class TerminalController: TerminalControlling {
 
     func resize(columns newCols: Int, rows newRows: Int,
                 cellWidth: UInt32 = 0, cellHeight: UInt32 = 0) {
-        let cols = max(1, newCols)
-        let rows = max(1, newRows)
+        let cols = max(Screen.minColumns, newCols)
+        let rows = max(Screen.minRows, newRows)
         let process = ptyProcess  // Capture on MainActor before dispatching
 
         ptyQueue.async { [weak self] in

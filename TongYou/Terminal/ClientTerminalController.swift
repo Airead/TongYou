@@ -173,8 +173,8 @@ final class ClientTerminalController: TerminalControlling {
     // MARK: - Resize
 
     func resize(columns: Int, rows: Int, cellWidth: UInt32 = 0, cellHeight: UInt32 = 0) {
-        let cols = max(1, columns)
-        let rows = max(1, rows)
+        let cols = max(Screen.minColumns, columns)
+        let rows = max(Screen.minRows, rows)
         remoteClient.resizePane(
             sessionID: sessionID,
             paneID: paneID,
