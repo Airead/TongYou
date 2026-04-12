@@ -1,0 +1,401 @@
+import Foundation
+import Testing
+@testable import TongYou
+
+@Suite("SessionManager")
+struct SessionManagerTests {
+
+    // MARK: - Session Creation
+
+    @Test func createFirstSession() {
+        let mgr = SessionManager()
+        let id = mgr.createSession(name: "dev")
+        #expect(mgr.sessionCount == 1)
+        #expect(mgr.activeSessionIndex == 0)
+        #expect(mgr.activeSession?.id == id)
+        #expect(mgr.activeSession?.name == "dev")
+        // Session starts with one tab.
+        #expect(mgr.tabCount == 1)
+    }
+
+    @Test func createMultipleSessions() {
+        let mgr = SessionManager()
+        _ = mgr.createSession(name: "s1")
+        _ = mgr.createSession(name: "s2")
+        let id3 = mgr.createSession(name: "s3")
+
+        #expect(mgr.sessionCount == 3)
+        #expect(mgr.activeSessionIndex == 2)
+        #expect(mgr.activeSession?.id == id3)
+    }
+
+    @Test func createSessionAutoName() {
+        let mgr = SessionManager()
+        _ = mgr.createSession()
+        _ = mgr.createSession()
+
+        #expect(mgr.sessions[0].name == "Session 1")
+        #expect(mgr.sessions[1].name == "Session 2")
+    }
+
+    // MARK: - Session Close
+
+    @Test func closeActiveSession() {
+        let mgr = SessionManager()
+        _ = mgr.createSession(name: "s1")
+        let id2 = mgr.createSession(name: "s2")
+        _ = mgr.createSession(name: "s3")
+
+        mgr.selectSession(at: 1)
+        #expect(mgr.activeSession?.id == id2)
+
+        let paneIDs = mgr.closeActiveSession()
+        #expect(!paneIDs.isEmpty)
+        #expect(mgr.sessionCount == 2)
+        // After closing index 1, tab at index 2 slides to 1.
+        #expect(mgr.activeSessionIndex == 1)
+        #expect(mgr.activeSession?.name == "s3")
+    }
+
+    @Test func closeFirstSession() {
+        let mgr = SessionManager()
+        _ = mgr.createSession(name: "s1")
+        let id2 = mgr.createSession(name: "s2")
+
+        mgr.selectSession(at: 0)
+        mgr.closeSession(at: 0)
+
+        #expect(mgr.sessionCount == 1)
+        #expect(mgr.activeSessionIndex == 0)
+        #expect(mgr.activeSession?.id == id2)
+    }
+
+    @Test func closeLastRemainingSession() {
+        let mgr = SessionManager()
+        _ = mgr.createSession()
+
+        let paneIDs = mgr.closeActiveSession()
+        #expect(!paneIDs.isEmpty)
+        #expect(mgr.sessionCount == 0)
+        #expect(mgr.activeSession == nil)
+    }
+
+    @Test func closeSessionReturnsAllPaneIDs() {
+        let mgr = SessionManager()
+        _ = mgr.createSession()
+        // Add a second tab to the session.
+        _ = mgr.createTab()
+        #expect(mgr.tabCount == 2)
+
+        let paneIDs = mgr.closeActiveSession()
+        // Each tab has one pane by default.
+        #expect(paneIDs.count == 2)
+    }
+
+    @Test func closeSessionBeforeActive() {
+        let mgr = SessionManager()
+        _ = mgr.createSession(name: "s1")
+        _ = mgr.createSession(name: "s2")
+        let id3 = mgr.createSession(name: "s3")
+
+        // Active is s3 (index 2)
+        mgr.closeSession(at: 0)
+
+        #expect(mgr.sessionCount == 2)
+        #expect(mgr.activeSessionIndex == 1)
+        #expect(mgr.activeSession?.id == id3)
+    }
+
+    // MARK: - Session Switching
+
+    @Test func selectSession() {
+        let mgr = SessionManager()
+        let id1 = mgr.createSession(name: "s1")
+        _ = mgr.createSession(name: "s2")
+
+        mgr.selectSession(at: 0)
+        #expect(mgr.activeSessionIndex == 0)
+        #expect(mgr.activeSession?.id == id1)
+    }
+
+    @Test func selectSessionClamped() {
+        let mgr = SessionManager()
+        _ = mgr.createSession()
+        _ = mgr.createSession()
+
+        mgr.selectSession(at: 100)
+        #expect(mgr.activeSessionIndex == 1)
+
+        mgr.selectSession(at: -5)
+        #expect(mgr.activeSessionIndex == 0)
+    }
+
+    @Test func previousSessionWraps() {
+        let mgr = SessionManager()
+        _ = mgr.createSession(name: "s1")
+        _ = mgr.createSession(name: "s2")
+        _ = mgr.createSession(name: "s3")
+
+        mgr.selectSession(at: 0)
+        mgr.selectPreviousSession()
+        #expect(mgr.activeSessionIndex == 2)
+    }
+
+    @Test func nextSessionWraps() {
+        let mgr = SessionManager()
+        _ = mgr.createSession(name: "s1")
+        _ = mgr.createSession(name: "s2")
+
+        // Active is s2 (index 1)
+        mgr.selectNextSession()
+        #expect(mgr.activeSessionIndex == 0)
+    }
+
+    @Test func previousAndNextNoOpWithSingleSession() {
+        let mgr = SessionManager()
+        _ = mgr.createSession()
+
+        mgr.selectPreviousSession()
+        #expect(mgr.activeSessionIndex == 0)
+
+        mgr.selectNextSession()
+        #expect(mgr.activeSessionIndex == 0)
+    }
+
+    // MARK: - Session Rename
+
+    @Test func renameSession() {
+        let mgr = SessionManager()
+        _ = mgr.createSession(name: "old")
+
+        mgr.renameSession(at: 0, to: "new")
+        #expect(mgr.sessions[0].name == "new")
+    }
+
+    @Test func renameActiveSession() {
+        let mgr = SessionManager()
+        _ = mgr.createSession(name: "old")
+
+        mgr.renameActiveSession(to: "renamed")
+        #expect(mgr.activeSession?.name == "renamed")
+    }
+
+    // MARK: - Tab Operations Within Session
+
+    @Test func createTabInActiveSession() {
+        let mgr = SessionManager()
+        _ = mgr.createSession()
+        #expect(mgr.tabCount == 1)
+
+        let tabID = mgr.createTab(title: "second")
+        #expect(mgr.tabCount == 2)
+        #expect(mgr.activeTab?.id == tabID)
+    }
+
+    @Test func tabsAreScopedToSession() {
+        let mgr = SessionManager()
+        _ = mgr.createSession(name: "s1")
+        _ = mgr.createTab(title: "s1-tab2")
+        #expect(mgr.tabCount == 2)
+
+        _ = mgr.createSession(name: "s2")
+        #expect(mgr.tabCount == 1)  // New session starts with 1 tab.
+
+        mgr.selectSession(at: 0)
+        #expect(mgr.tabCount == 2)  // Back to s1's tabs.
+    }
+
+    @Test func closeTabInSession() {
+        let mgr = SessionManager()
+        _ = mgr.createSession()
+        _ = mgr.createTab(title: "tab2")
+        #expect(mgr.tabCount == 2)
+
+        mgr.closeTab(at: 0)
+        #expect(mgr.tabCount == 1)
+    }
+
+    @Test func closeLastTabLeavesEmptySession() {
+        let mgr = SessionManager()
+        _ = mgr.createSession()
+        #expect(mgr.tabCount == 1)
+
+        mgr.closeActiveTab()
+        #expect(mgr.tabCount == 0)
+        // Session still exists — caller decides whether to close it.
+        #expect(mgr.sessionCount == 1)
+    }
+
+    @Test func selectTabInSession() {
+        let mgr = SessionManager()
+        _ = mgr.createSession()
+        let id1 = mgr.tabs.first!.id
+        _ = mgr.createTab(title: "tab2")
+
+        mgr.selectTab(at: 0)
+        #expect(mgr.activeTab?.id == id1)
+    }
+
+    @Test func previousAndNextTab() {
+        let mgr = SessionManager()
+        _ = mgr.createSession()
+        _ = mgr.createTab(title: "tab2")
+        _ = mgr.createTab(title: "tab3")
+
+        // Active is tab3 (index 2)
+        mgr.selectTab(at: 0)
+        mgr.selectPreviousTab()
+        #expect(mgr.activeTabIndex == 2)
+
+        mgr.selectNextTab()
+        #expect(mgr.activeTabIndex == 0)
+    }
+
+    @Test func moveTabInSession() {
+        let mgr = SessionManager()
+        _ = mgr.createSession()
+        let id1 = mgr.tabs.first!.id
+        let id2 = mgr.createTab(title: "tab2")
+
+        mgr.selectTab(at: 0)
+        mgr.moveTab(from: 0, to: 1)
+        #expect(mgr.tabs[0].id == id2)
+        #expect(mgr.tabs[1].id == id1)
+        #expect(mgr.activeTabIndex == 1)
+    }
+
+    // MARK: - Pane Operations Within Session
+
+    @Test func splitPaneInSession() {
+        let mgr = SessionManager()
+        _ = mgr.createSession()
+        guard let rootPaneID = mgr.activeTab?.paneTree.firstPane.id else {
+            Issue.record("No active tab")
+            return
+        }
+
+        let newPane = TerminalPane()
+        let result = mgr.splitPane(id: rootPaneID, direction: .vertical, newPane: newPane)
+        #expect(result)
+        #expect(mgr.activeTab?.allPaneIDs.count == 2)
+    }
+
+    @Test func closePaneInSession() {
+        let mgr = SessionManager()
+        _ = mgr.createSession()
+        guard let rootPaneID = mgr.activeTab?.paneTree.firstPane.id else {
+            Issue.record("No active tab")
+            return
+        }
+
+        let newPane = TerminalPane()
+        mgr.splitPane(id: rootPaneID, direction: .vertical, newPane: newPane)
+
+        let siblingID = mgr.closePane(id: newPane.id)
+        #expect(siblingID == rootPaneID)
+        #expect(mgr.activeTab?.allPaneIDs.count == 1)
+    }
+
+    @Test func closeLastPaneClosesTab() {
+        let mgr = SessionManager()
+        _ = mgr.createSession()
+        _ = mgr.createTab(title: "tab2")
+        #expect(mgr.tabCount == 2)
+
+        guard let rootPaneID = mgr.activeTab?.paneTree.firstPane.id else {
+            Issue.record("No active tab")
+            return
+        }
+
+        let siblingID = mgr.closePane(id: rootPaneID)
+        #expect(siblingID == nil)
+        #expect(mgr.tabCount == 1)
+    }
+
+    // MARK: - Floating Pane Operations
+
+    @Test func createFloatingPaneInSession() {
+        let mgr = SessionManager()
+        _ = mgr.createSession()
+
+        let paneID = mgr.createFloatingPane()
+        #expect(paneID != nil)
+        #expect(mgr.activeTab?.floatingPanes.count == 1)
+    }
+
+    @Test func closeFloatingPaneInSession() {
+        let mgr = SessionManager()
+        _ = mgr.createSession()
+
+        guard let paneID = mgr.createFloatingPane() else {
+            Issue.record("Failed to create floating pane")
+            return
+        }
+
+        let removed = mgr.closeFloatingPane(paneID: paneID)
+        #expect(removed)
+        #expect(mgr.activeTab?.floatingPanes.isEmpty == true)
+    }
+
+    @Test func floatingPanesScopedToSession() {
+        let mgr = SessionManager()
+        _ = mgr.createSession(name: "s1")
+        _ = mgr.createFloatingPane()
+        #expect(mgr.activeTab?.floatingPanes.count == 1)
+
+        _ = mgr.createSession(name: "s2")
+        #expect(mgr.activeTab?.floatingPanes.isEmpty == true)
+
+        mgr.selectSession(at: 0)
+        #expect(mgr.activeTab?.floatingPanes.count == 1)
+    }
+
+    // MARK: - Title Updates
+
+    @Test func updateTabTitle() {
+        let mgr = SessionManager()
+        _ = mgr.createSession()
+        guard let tabID = mgr.activeTab?.id else {
+            Issue.record("No active tab")
+            return
+        }
+
+        mgr.updateTitle("vim", for: tabID)
+        #expect(mgr.tabs[0].title == "vim")
+    }
+
+    // MARK: - handleAction
+
+    @Test func handleActionNewTab() {
+        let mgr = SessionManager()
+        _ = mgr.createSession()
+        #expect(mgr.handleAction(.newTab))
+        #expect(mgr.tabCount == 2)
+    }
+
+    @Test func handleActionNewSession() {
+        let mgr = SessionManager()
+        _ = mgr.createSession()
+        #expect(mgr.handleAction(.newSession))
+        #expect(mgr.sessionCount == 2)
+    }
+
+    @Test func handleActionSessionActionsReturnFalse() {
+        let mgr = SessionManager()
+        _ = mgr.createSession()
+
+        // These actions are handled by TerminalWindowView.
+        #expect(!mgr.handleAction(.closeSession))
+        #expect(!mgr.handleAction(.previousSession))
+        #expect(!mgr.handleAction(.nextSession))
+        #expect(!mgr.handleAction(.toggleSidebar))
+    }
+
+    @Test func handleActionPaneActionsReturnFalse() {
+        let mgr = SessionManager()
+        _ = mgr.createSession()
+
+        #expect(!mgr.handleAction(.splitVertical))
+        #expect(!mgr.handleAction(.closePane))
+    }
+}

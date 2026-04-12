@@ -29,7 +29,7 @@ final class MetalView: NSView {
     /// The pane ID this MetalView belongs to (set by TerminalPaneContainerView).
     var paneID: UUID?
 
-    /// Callback for tab-related keybinding actions (forwarded to TabManager).
+    /// Callback for keybinding actions (forwarded to SessionManager via TerminalWindowView).
     var onTabAction: ((TabAction) -> Void)?
 
     /// Callback when the window title changes (from OSC 0/2).

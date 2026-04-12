@@ -286,6 +286,16 @@ enum BellMode: String, Equatable {
     case none
 }
 
+/// Sidebar visibility mode.
+enum SidebarVisibility: String, Equatable {
+    /// Show sidebar only when more than one session exists.
+    case auto
+    /// Always show the sidebar.
+    case always
+    /// Never show the sidebar.
+    case never
+}
+
 /// Tab bar visibility mode.
 enum TabBarVisibility: String, Equatable {
     /// Show tab bar only when more than one tab is open.

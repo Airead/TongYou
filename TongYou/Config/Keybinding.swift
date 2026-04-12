@@ -14,6 +14,13 @@ struct Keybinding: Equatable {
 
     /// Actions that can be triggered by keybindings.
     enum Action: Equatable {
+        // Session management
+        case newSession
+        case closeSession
+        case previousSession
+        case nextSession
+        case toggleSidebar
+        // Tab management
         case newTab
         case closeTab
         case previousTab
@@ -39,6 +46,11 @@ struct Keybinding: Equatable {
         /// Raw string used in config files.
         var rawValue: String {
             switch self {
+            case .newSession: "new_session"
+            case .closeSession: "close_session"
+            case .previousSession: "previous_session"
+            case .nextSession: "next_session"
+            case .toggleSidebar: "toggle_sidebar"
             case .newTab: "new_tab"
             case .closeTab: "close_tab"
             case .previousTab: "previous_tab"
@@ -69,6 +81,11 @@ struct Keybinding: Equatable {
         /// Map to TabAction for actions that pass straight through to the window.
         var tabAction: TabAction? {
             switch self {
+            case .newSession: .newSession
+            case .closeSession: .closeSession
+            case .previousSession: .previousSession
+            case .nextSession: .nextSession
+            case .toggleSidebar: .toggleSidebar
             case .newTab: .newTab
             case .closeTab: .closeTab
             case .previousTab: .previousTab
@@ -89,6 +106,11 @@ struct Keybinding: Equatable {
         /// Parse from config string.
         init?(rawValue: String) {
             switch rawValue {
+            case "new_session": self = .newSession
+            case "close_session": self = .closeSession
+            case "previous_session": self = .previousSession
+            case "next_session": self = .nextSession
+            case "toggle_sidebar": self = .toggleSidebar
             case "new_tab": self = .newTab
             case "close_tab": self = .closeTab
             case "previous_tab": self = .previousTab
@@ -123,6 +145,13 @@ struct Keybinding: Equatable {
 
     /// Default keybindings.
     static let defaults: [Keybinding] = [
+        // Session management
+        Keybinding(modifiers: [.command, .shift], key: "n", action: .newSession),
+        Keybinding(modifiers: .command, key: "up", action: .previousSession),
+        Keybinding(modifiers: .command, key: "k", action: .previousSession),
+        Keybinding(modifiers: .command, key: "down", action: .nextSession),
+        Keybinding(modifiers: .command, key: "j", action: .nextSession),
+        Keybinding(modifiers: .command, key: "b", action: .toggleSidebar),
         // Tab management
         Keybinding(modifiers: .command, key: "t", action: .newTab),
         Keybinding(modifiers: .command, key: "w", action: .closePane),

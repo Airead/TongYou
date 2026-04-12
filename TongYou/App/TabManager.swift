@@ -3,6 +3,12 @@ import Foundation
 
 /// Actions communicated from MetalView up to the window for dispatch.
 enum TabAction {
+    // Session management
+    case newSession
+    case closeSession
+    case previousSession
+    case nextSession
+    case toggleSidebar
     // Tab management
     case newTab
     case closeTab
@@ -335,6 +341,9 @@ final class TabManager {
         case .gotoTab(let number):
             selectTabByNumber(number)
             return true
+        case .newSession, .closeSession, .previousSession, .nextSession, .toggleSidebar:
+            // Session actions are handled by SessionManager / TerminalWindowView.
+            return false
         case .splitVertical, .splitHorizontal, .closePane,
              .focusPane, .paneExited,
              .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane:
