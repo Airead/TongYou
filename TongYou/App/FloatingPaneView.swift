@@ -13,6 +13,7 @@ struct FloatingPaneView: View {
     let onFrameChanged: (UUID, CGRect) -> Void
     let onBringToFront: (UUID) -> Void
     let onClose: (UUID) -> Void
+    let onTogglePin: (UUID) -> Void
 
     private static let titleBarHeight: CGFloat = 24
     private static let resizeHandleSize: CGFloat = 6
@@ -62,13 +63,20 @@ struct FloatingPaneView: View {
 
             Spacer()
 
-            Text("Float")
+            Text(floatingPane.title)
                 .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.white.opacity(0.7))
+                .lineLimit(1)
 
             Spacer()
 
-            Color.clear.frame(width: 10, height: 10)
+            Button(action: { onTogglePin(floatingPane.pane.id) }) {
+                Image(systemName: floatingPane.isPinned ? "pin.fill" : "pin")
+                    .font(.system(size: 9))
+                    .foregroundStyle(floatingPane.isPinned ? Color.accentColor : .white.opacity(0.5))
+            }
+            .buttonStyle(.plain)
+            .help(floatingPane.isPinned ? "Unpin" : "Pin")
         }
         .padding(.horizontal, 8)
         .frame(height: Self.titleBarHeight)

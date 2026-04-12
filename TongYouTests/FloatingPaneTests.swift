@@ -248,4 +248,119 @@ struct FloatingPaneTests {
         #expect(newMapped != nil)
         #expect(toggleMapped != nil)
     }
+
+    // MARK: - Pin
+
+    @Test func defaultIsNotPinned() {
+        let fp = FloatingPane(pane: TerminalPane())
+        #expect(!fp.isPinned)
+    }
+
+    @Test func togglePin() {
+        let mgr = TabManager()
+        mgr.createTab(title: "test")
+        let paneID = mgr.createFloatingPane()!
+
+        #expect(!mgr.activeTab!.floatingPanes[0].isPinned)
+        mgr.toggleFloatingPanePin(paneID: paneID)
+        #expect(mgr.activeTab!.floatingPanes[0].isPinned)
+        mgr.toggleFloatingPanePin(paneID: paneID)
+        #expect(!mgr.activeTab!.floatingPanes[0].isPinned)
+    }
+
+    // MARK: - Title
+
+    @Test func defaultTitle() {
+        let fp = FloatingPane(pane: TerminalPane())
+        #expect(fp.title == "Float")
+    }
+
+    @Test func updateFloatingPaneTitle() {
+        let mgr = TabManager()
+        mgr.createTab(title: "test")
+        let paneID = mgr.createFloatingPane()!
+
+        mgr.updateFloatingPaneTitle(paneID: paneID, title: "zsh")
+        #expect(mgr.activeTab!.floatingPanes[0].title == "zsh")
+    }
+
+    // MARK: - Focus-Based Visibility
+
+    @Test func focusFloatingPaneShowsAll() {
+        let mgr = TabManager()
+        mgr.createTab(title: "test")
+        let id1 = mgr.createFloatingPane()!
+        let id2 = mgr.createFloatingPane()!
+
+        // First hide all by focusing a tree pane
+        let treePaneID = mgr.activeTab!.paneTree.firstPane.id
+        mgr.updateFloatingPanesVisibilityForFocus(focusedPaneID: treePaneID)
+        let allHidden = mgr.activeTab!.floatingPanes.allSatisfy { !$0.isVisible }
+        #expect(allHidden)
+
+        // Focus a floating pane → all become visible
+        mgr.updateFloatingPanesVisibilityForFocus(focusedPaneID: id1)
+        let allVisible1 = mgr.activeTab!.floatingPanes.allSatisfy(\.isVisible)
+        #expect(allVisible1)
+
+        // Also works when focusing the other floating pane
+        mgr.updateFloatingPanesVisibilityForFocus(focusedPaneID: id2)
+        let allVisible2 = mgr.activeTab!.floatingPanes.allSatisfy(\.isVisible)
+        #expect(allVisible2)
+    }
+
+    @Test func focusTreePaneHidesUnpinnedFloats() {
+        let mgr = TabManager()
+        mgr.createTab(title: "test")
+        _ = mgr.createFloatingPane()!
+        _ = mgr.createFloatingPane()!
+
+        let treePaneID = mgr.activeTab!.paneTree.firstPane.id
+        mgr.updateFloatingPanesVisibilityForFocus(focusedPaneID: treePaneID)
+
+        let allHidden = mgr.activeTab!.floatingPanes.allSatisfy { !$0.isVisible }
+        #expect(allHidden)
+    }
+
+    @Test func pinnedPaneStaysVisibleWhenTreeFocused() {
+        let mgr = TabManager()
+        mgr.createTab(title: "test")
+        let pinnedID = mgr.createFloatingPane()!
+        let unpinnedID = mgr.createFloatingPane()!
+
+        mgr.toggleFloatingPanePin(paneID: pinnedID)
+
+        let treePaneID = mgr.activeTab!.paneTree.firstPane.id
+        mgr.updateFloatingPanesVisibilityForFocus(focusedPaneID: treePaneID)
+
+        let pinned = mgr.activeTab!.floatingPanes.first { $0.pane.id == pinnedID }!
+        let unpinned = mgr.activeTab!.floatingPanes.first { $0.pane.id == unpinnedID }!
+        #expect(pinned.isVisible)  // pinned pane stays visible
+        #expect(pinned.isPinned)
+        #expect(!unpinned.isVisible)
+        #expect(!unpinned.isPinned)
+    }
+
+    @Test func pinnedPaneRenderedViaOverlayFilter() {
+        // Verify that the overlay filter logic (isVisible || isPinned) works
+        let pinned = FloatingPane(pane: TerminalPane(), isVisible: false, isPinned: true)
+        let unpinned = FloatingPane(pane: TerminalPane(), isVisible: false, isPinned: false)
+        let visible = FloatingPane(pane: TerminalPane(), isVisible: true, isPinned: false)
+
+        let panes = [pinned, unpinned, visible]
+        let rendered = panes.filter { $0.isVisible || $0.isPinned }
+        #expect(rendered.count == 2)
+        #expect(rendered.contains { $0.id == pinned.id })
+        #expect(!rendered.contains { $0.id == unpinned.id })
+        #expect(rendered.contains { $0.id == visible.id })
+    }
+
+    @Test func focusNilDoesNotCrash() {
+        let mgr = TabManager()
+        mgr.createTab(title: "test")
+        _ = mgr.createFloatingPane()!
+        // Should be a no-op
+        mgr.updateFloatingPanesVisibilityForFocus(focusedPaneID: nil)
+        #expect(mgr.activeTab!.floatingPanes[0].isVisible)
+    }
 }

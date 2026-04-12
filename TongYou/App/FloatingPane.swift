@@ -12,6 +12,10 @@ struct FloatingPane: Identifiable, Equatable {
     var frame: CGRect
     var isVisible: Bool
     var zIndex: Int
+    /// Whether this pane stays visible even when focus moves to a tree pane.
+    var isPinned: Bool
+    /// Title reported by the terminal program (via OSC 0/2).
+    var title: String
 
     /// Default size for a new floating pane (40% width, 40% height, centered).
     static let defaultFrame = CGRect(x: 0.3, y: 0.3, width: 0.4, height: 0.4)
@@ -23,13 +27,17 @@ struct FloatingPane: Identifiable, Equatable {
         pane: TerminalPane,
         frame: CGRect = FloatingPane.defaultFrame,
         isVisible: Bool = true,
-        zIndex: Int = 0
+        zIndex: Int = 0,
+        isPinned: Bool = false,
+        title: String = "Float"
     ) {
         self.id = UUID()
         self.pane = pane
         self.frame = frame
         self.isVisible = isVisible
         self.zIndex = zIndex
+        self.isPinned = isPinned
+        self.title = title
     }
 
     /// Clamp the frame so it stays within the container bounds (0–1)

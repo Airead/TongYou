@@ -9,14 +9,15 @@ struct FloatingPaneOverlay: View {
     let viewStore: MetalViewStore
     let focusManager: FocusManager
     let onTabAction: (TabAction) -> Void
-    let onTitleChanged: (String) -> Void
+    let onTitleChanged: (UUID, String) -> Void
     let onFrameChanged: (UUID, CGRect) -> Void
     let onBringToFront: (UUID) -> Void
     let onClose: (UUID) -> Void
+    let onTogglePin: (UUID) -> Void
 
     private var visiblePanes: [FloatingPane] {
         floatingPanes
-            .filter(\.isVisible)
+            .filter { $0.isVisible || $0.isPinned }
             .sorted { $0.zIndex < $1.zIndex }
     }
 
@@ -37,10 +38,11 @@ struct FloatingPaneOverlay: View {
                         viewStore: viewStore,
                         focusManager: focusManager,
                         onTabAction: onTabAction,
-                        onTitleChanged: onTitleChanged,
+                        onTitleChanged: { title in onTitleChanged(fp.pane.id, title) },
                         onFrameChanged: onFrameChanged,
                         onBringToFront: onBringToFront,
-                        onClose: onClose
+                        onClose: onClose,
+                        onTogglePin: onTogglePin
                     )
                 }
             }

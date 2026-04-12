@@ -15,11 +15,16 @@ struct TerminalWindowView: View {
     @State private var tabManager = TabManager()
     @State private var tabBarVisibility: TabBarVisibility = .auto
     @State private var focusManager = FocusManager()
+    @State private var windowBackgroundColor: NSColor = .black
 
     /// Stores MetalView instances outside of SwiftUI state so that
     /// NSViewRepresentable.makeNSView can read/write without triggering
     /// "Modifying state during view update" warnings.
     @State private var viewStore = MetalViewStore()
+
+    /// Loads config to derive the window background color.
+    /// Each MetalView also has its own ConfigLoader for rendering.
+    @State private var configLoader = ConfigLoader()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -64,7 +69,9 @@ struct TerminalWindowView: View {
                         viewStore: viewStore,
                         focusManager: focusManager,
                         onTabAction: handleTabAction,
-                        onTitleChanged: updateTabTitle,
+                        onTitleChanged: { paneID, title in
+                            tabManager.updateFloatingPaneTitle(paneID: paneID, title: title)
+                        },
                         onFrameChanged: { paneID, frame in
                             tabManager.updateFloatingPaneFrame(paneID: paneID, frame: frame)
                         },
@@ -73,16 +80,24 @@ struct TerminalWindowView: View {
                         },
                         onClose: { paneID in
                             closeFloatingPane(id: paneID)
+                        },
+                        onTogglePin: { paneID in
+                            tabManager.toggleFloatingPanePin(paneID: paneID)
                         }
                     )
                 }
                 .id(activeTab.id)
             }
         }
+        .background(WindowConfigurator(backgroundColor: windowBackgroundColor))
         .onAppear {
             if tabManager.tabs.isEmpty {
                 createNewTab()
             }
+            loadWindowBackground()
+        }
+        .onChange(of: focusManager.focusedPaneID) { _, newID in
+            tabManager.updateFloatingPanesVisibilityForFocus(focusedPaneID: newID)
         }
     }
 
@@ -257,6 +272,15 @@ struct TerminalWindowView: View {
         }
     }
 
+    /// Load config and derive window background color, with hot-reload support.
+    private func loadWindowBackground() {
+        configLoader.load()
+        windowBackgroundColor = configLoader.config.background.nsColor
+        configLoader.onConfigChanged = { newConfig in
+            windowBackgroundColor = newConfig.background.nsColor
+        }
+    }
+
     /// Get the CWD from the currently focused pane.
     private var focusedPaneCWD: String? {
         guard let focusedID = focusManager.focusedPaneID else {
@@ -265,6 +289,40 @@ struct TerminalWindowView: View {
             }
         }
         return viewStore.view(for: focusedID)?.currentWorkingDirectory
+    }
+}
+
+// MARK: - RGBColor + AppKit
+
+extension RGBColor {
+    var nsColor: NSColor {
+        NSColor(
+            red: CGFloat(r) / 255,
+            green: CGFloat(g) / 255,
+            blue: CGFloat(b) / 255,
+            alpha: 1
+        )
+    }
+}
+
+// MARK: - Window Configurator
+
+/// Sets the hosting NSWindow's titlebar to transparent and background color
+/// to match the terminal theme, so the title bar blends with the content.
+struct WindowConfigurator: NSViewRepresentable {
+    let backgroundColor: NSColor
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async {
+            guard let window = nsView.window else { return }
+            window.titlebarAppearsTransparent = true
+            window.backgroundColor = backgroundColor
+        }
     }
 }
 

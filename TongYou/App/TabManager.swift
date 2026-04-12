@@ -248,10 +248,15 @@ final class TabManager {
         return false
     }
 
+    /// Find the index of a floating pane by its pane ID in the active tab.
+    private func activeFloatingPaneIndex(for paneID: UUID) -> Int? {
+        guard tabs.indices.contains(activeTabIndex) else { return nil }
+        return activeFloatingPanes.firstIndex(where: { $0.pane.id == paneID })
+    }
+
     /// Bring a floating pane to the front by updating its zIndex.
     func bringFloatingPaneToFront(paneID: UUID) {
-        guard tabs.indices.contains(activeTabIndex) else { return }
-        guard let idx = activeFloatingPanes.firstIndex(where: { $0.pane.id == paneID }) else { return }
+        guard let idx = activeFloatingPaneIndex(for: paneID) else { return }
         let maxZ = activeFloatingPanes.max(by: { $0.zIndex < $1.zIndex })?.zIndex ?? 0
         guard activeFloatingPanes[idx].zIndex < maxZ else { return }
         activeFloatingPanes[idx].zIndex = maxZ + 1
@@ -259,8 +264,7 @@ final class TabManager {
 
     /// Update the normalized frame of a floating pane.
     func updateFloatingPaneFrame(paneID: UUID, frame: CGRect) {
-        guard tabs.indices.contains(activeTabIndex) else { return }
-        guard let idx = activeFloatingPanes.firstIndex(where: { $0.pane.id == paneID }) else { return }
+        guard let idx = activeFloatingPaneIndex(for: paneID) else { return }
         activeFloatingPanes[idx].frame = frame
         activeFloatingPanes[idx].clampFrame()
     }
@@ -272,6 +276,36 @@ final class TabManager {
         let newVisibility = !allVisible
         for i in activeFloatingPanes.indices {
             activeFloatingPanes[i].isVisible = newVisibility
+        }
+    }
+
+    /// Toggle the pinned state of a floating pane.
+    func toggleFloatingPanePin(paneID: UUID) {
+        guard let idx = activeFloatingPaneIndex(for: paneID) else { return }
+        activeFloatingPanes[idx].isPinned.toggle()
+    }
+
+    /// Update the title of a floating pane.
+    func updateFloatingPaneTitle(paneID: UUID, title: String) {
+        guard let idx = activeFloatingPaneIndex(for: paneID) else { return }
+        guard activeFloatingPanes[idx].title != title else { return }
+        activeFloatingPanes[idx].title = title
+    }
+
+    /// Show or hide floating panes based on whether the focused pane is floating.
+    /// - Focused pane is a floating pane → show all floating panes
+    /// - Focused pane is a tree pane → hide all except pinned
+    func updateFloatingPanesVisibilityForFocus(focusedPaneID: UUID?) {
+        guard tabs.indices.contains(activeTabIndex) else { return }
+        guard let focusedID = focusedPaneID else { return }
+
+        let isFloatingFocused = activeFloatingPanes.contains { $0.pane.id == focusedID }
+
+        for i in activeFloatingPanes.indices {
+            let newVisible = isFloatingFocused || activeFloatingPanes[i].isPinned
+            if activeFloatingPanes[i].isVisible != newVisible {
+                activeFloatingPanes[i].isVisible = newVisible
+            }
         }
     }
 
