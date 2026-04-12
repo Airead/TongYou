@@ -16,7 +16,7 @@ Similar to: zellij, tmux, screen.
 | Auto-start | GUI auto-starts tyd (configurable) | Zero-config UX for most users |
 | Screen transfer | Incremental diffs + full snapshot on attach | Leverage existing DirtyRegion |
 
-## Current State (Phase 1 Complete)
+## Current State (Phase 3 Complete)
 
 ```
 TongYou/

@@ -10,6 +10,8 @@ let package = Package(
         .library(name: "TYProtocol", targets: ["TYProtocol"]),
         .library(name: "TYPTY", targets: ["TYPTY"]),
         .library(name: "TYShell", targets: ["TYShell"]),
+        .library(name: "TYServer", targets: ["TYServer"]),
+        .executable(name: "tyd", targets: ["tyd"]),
     ],
     targets: [
         // Pure terminal state machine: Screen, VTParser, StreamHandler, etc.
@@ -47,6 +49,20 @@ let package = Package(
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 
+        // Server daemon: manages PTY sessions, serves clients over Unix socket.
+        .target(
+            name: "TYServer",
+            dependencies: ["TYTerminal", "TYPTY", "TYProtocol", "TYShell"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+
+        // tyd executable: the server daemon entry point.
+        .executableTarget(
+            name: "tyd",
+            dependencies: ["TYServer"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+
         .testTarget(
             name: "TYTerminalTests",
             dependencies: ["TYTerminal"],
@@ -56,6 +72,12 @@ let package = Package(
         .testTarget(
             name: "TYProtocolTests",
             dependencies: ["TYProtocol", "TYTerminal"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+
+        .testTarget(
+            name: "TYServerTests",
+            dependencies: ["TYServer", "TYProtocol", "TYTerminal"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
     ]
