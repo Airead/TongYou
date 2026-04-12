@@ -7,6 +7,8 @@ struct PaneSplitView: View {
     let node: PaneNode
     let viewStore: MetalViewStore
     let focusManager: FocusManager
+    /// Returns a pre-built controller for remote panes, or nil for local panes.
+    let controllerForPane: (UUID) -> (any TerminalControlling)?
     let onTabAction: (TabAction) -> Void
     let onTitleChanged: (String) -> Void
     let onNodeChanged: (PaneNode) -> Void
@@ -24,6 +26,7 @@ struct PaneSplitView: View {
                 second: second,
                 viewStore: viewStore,
                 focusManager: focusManager,
+                controllerForPane: controllerForPane,
                 onTabAction: onTabAction,
                 onTitleChanged: onTitleChanged,
                 onNodeChanged: onNodeChanged
@@ -38,6 +41,7 @@ struct PaneSplitView: View {
             paneID: pane.id,
             viewStore: viewStore,
             initialWorkingDirectory: pane.initialWorkingDirectory,
+            externalController: controllerForPane(pane.id),
             onTabAction: onTabAction,
             onTitleChanged: onTitleChanged,
             onFocused: {
@@ -68,6 +72,7 @@ private struct SplitContainerView: View {
     let second: PaneNode
     let viewStore: MetalViewStore
     let focusManager: FocusManager
+    let controllerForPane: (UUID) -> (any TerminalControlling)?
     let onTabAction: (TabAction) -> Void
     let onTitleChanged: (String) -> Void
     let onNodeChanged: (PaneNode) -> Void
@@ -135,6 +140,7 @@ private struct SplitContainerView: View {
             node: first,
             viewStore: viewStore,
             focusManager: focusManager,
+            controllerForPane: controllerForPane,
             onTabAction: onTabAction,
             onTitleChanged: onTitleChanged,
             onNodeChanged: { newFirst in
@@ -148,6 +154,7 @@ private struct SplitContainerView: View {
             node: second,
             viewStore: viewStore,
             focusManager: focusManager,
+            controllerForPane: controllerForPane,
             onTabAction: onTabAction,
             onTitleChanged: onTitleChanged,
             onNodeChanged: { newSecond in

@@ -9,7 +9,7 @@ import TYPTY
 /// - PTY reads, VT parsing, and screen mutations happen on `ptyQueue` (background).
 /// - A dirty flag is set on ptyQueue; the snapshot is taken only when consumed.
 /// - `consumeSnapshot()` is called on MainActor by the display link.
-final class TerminalController {
+final class TerminalController: TerminalControlling {
 
     private var ptyProcess: PTYProcess?
 
@@ -186,15 +186,7 @@ final class TerminalController {
     // MARK: - Keyboard Input
 
     func handleKeyDown(_ event: NSEvent) {
-        let input = KeyEncoder.KeyInput(
-            keyCode: event.keyCode,
-            characters: event.characters,
-            charactersIgnoringModifiers: event.charactersIgnoringModifiers,
-            shift: event.modifierFlags.contains(.shift),
-            control: event.modifierFlags.contains(.control),
-            option: event.modifierFlags.contains(.option),
-            command: event.modifierFlags.contains(.command)
-        )
+        let input = KeyEncoder.KeyInput(event: event)
         let options = KeyEncoder.Options(
             appCursorMode: streamHandler.modes.isSet(.cursorKeys),
             optionAsAlt: optionAsAlt
@@ -468,18 +460,11 @@ final class TerminalController {
 
     // MARK: - Paste
 
-    /// Paste text into the terminal. Applies safety filtering and bracketed paste encoding.
-    private static let unsafePasteBytes: Set<UInt8> = [
-        0x00, 0x08, 0x05, 0x04, 0x1B, 0x7F, // NUL, BS, ENQ, EOT, ESC, DEL
-        0x03, 0x1C, 0x15, 0x1A, 0x11, 0x13,  // VINTR, VQUIT, VKILL, VSUSP, VSTART, VSTOP
-        0x17, 0x16, 0x12, 0x0F,               // VWERASE, VLNEXT, VREPRINT, VDISCARD
-    ]
-
     func handlePaste(_ text: String) {
         guard !text.isEmpty else { return }
         var bytes = Array(text.utf8)
 
-        for i in bytes.indices where Self.unsafePasteBytes.contains(bytes[i]) {
+        for i in bytes.indices where unsafePasteBytes.contains(bytes[i]) {
             bytes[i] = 0x20
         }
 

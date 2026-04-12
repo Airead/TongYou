@@ -59,6 +59,14 @@ struct SessionSidebarView: View {
         let isEditing = editingSessionID == session.id
 
         HStack(spacing: 4) {
+            // Icon: remote sessions show a server icon, local sessions show terminal icon.
+            Image(systemName: session.source.isRemote
+                  ? "rectangle.connected.to.line.below"
+                  : "terminal")
+                .font(.system(size: 10))
+                .foregroundStyle(session.source.isRemote ? .blue : .secondary)
+                .frame(width: 14)
+
             if isEditing {
                 TextField("", text: $editingName, onCommit: {
                     let trimmed = editingName.trimmingCharacters(in: .whitespaces)

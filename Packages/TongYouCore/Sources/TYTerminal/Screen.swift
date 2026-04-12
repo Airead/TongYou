@@ -135,6 +135,39 @@ public struct ScreenSnapshot: Sendable {
     public func absoluteLine(forViewportRow row: Int) -> Int {
         scrollbackCount - viewportOffset + row
     }
+
+    /// Extract text from a selection over viewport-relative coordinates.
+    /// Handles wide-char continuation cells and trailing-space trimming.
+    public func extractText(from sel: Selection) -> String {
+        let (s, e) = sel.ordered
+        var result = ""
+
+        for row in s.line...e.line {
+            guard row >= 0 && row < rows else { continue }
+            let startCol = (row == s.line) ? max(0, s.col) : 0
+            let endCol: Int
+            if sel.mode == .line {
+                endCol = columns - 1
+            } else {
+                endCol = (row == e.line) ? min(e.col, columns - 1) : columns - 1
+            }
+
+            for col in startCol...endCol {
+                let c = cell(at: col, row: row)
+                guard c.width.isRenderable else { continue }
+                result.unicodeScalars.append(c.codepoint)
+            }
+
+            if row < e.line || sel.mode == .line {
+                // Trim trailing spaces on hard line breaks.
+                while result.last == " " { result.removeLast() }
+                result.append("\n")
+            }
+        }
+
+        while result.last == "\n" { result.removeLast() }
+        return result
+    }
 }
 
 /// 2D grid of terminal cells with cursor tracking.

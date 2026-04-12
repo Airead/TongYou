@@ -9,6 +9,7 @@ struct FloatingPaneOverlay: View {
     let floatingPanes: [FloatingPane]
     let viewStore: MetalViewStore
     let focusManager: FocusManager
+    let controllerForPane: (UUID) -> (any TerminalControlling)?
     let onTabAction: (TabAction) -> Void
     let onTitleChanged: (UUID, String) -> Void
     let onFrameChanged: (UUID, CGRect) -> Void
@@ -38,6 +39,7 @@ struct FloatingPaneOverlay: View {
                         containerSize: geometry.size,
                         viewStore: viewStore,
                         focusManager: focusManager,
+                        controllerForPane: controllerForPane,
                         onTabAction: onTabAction,
                         onTitleChanged: { title in onTitleChanged(fp.pane.id, title) },
                         onFrameChanged: onFrameChanged,

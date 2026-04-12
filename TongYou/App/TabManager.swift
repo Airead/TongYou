@@ -26,6 +26,8 @@ enum TabAction {
     case newFloatingPane
     case closeFloatingPane(UUID)
     case toggleOrCreateFloatingPane
+    // Remote session management
+    case connectTYD
 }
 
 /// Manages the list of terminal tabs and the active tab index.
@@ -325,8 +327,9 @@ final class TabManager {
             return false
         case .splitVertical, .splitHorizontal, .closePane,
              .focusPane, .paneExited,
-             .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane:
-            // Pane actions are handled by TerminalWindowView, not TabManager.
+             .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane,
+             .connectTYD:
+            // Pane/remote actions are handled by TerminalWindowView, not TabManager.
             return false
         }
     }

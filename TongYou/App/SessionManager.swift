@@ -1,14 +1,27 @@
 import CoreGraphics
 import Foundation
+import TYClient
+import TYProtocol
 import TYTerminal
 
 /// Manages terminal sessions, each containing its own set of tabs and panes.
 /// Absorbs all logic previously in TabManager, scoped to the active session.
+///
+/// Supports mixed-mode operation: local sessions (direct PTY) and remote sessions
+/// (backed by a tyd server) can coexist in the same sidebar.
 @Observable
 final class SessionManager {
 
     private(set) var sessions: [TerminalSession] = []
     private(set) var activeSessionIndex: Int = 0
+
+    /// Remote session client for tyd communication. Nil when not connected.
+    private(set) var remoteClient: RemoteSessionClient?
+
+    /// Controllers for remote panes, keyed by local pane UUID.
+    private var remoteControllers: [UUID: ClientTerminalController] = [:]
+    /// Maps server pane UUID → local pane UUID for routing screen updates.
+    private var serverToLocalPaneID: [UUID: UUID] = [:]
 
     /// The currently active session, if any.
     var activeSession: TerminalSession? {
@@ -38,7 +51,23 @@ final class SessionManager {
     @discardableResult
     func closeSession(at index: Int) -> [UUID] {
         guard sessions.indices.contains(index) else { return [] }
-        let paneIDs = sessions[index].allPaneIDs
+        let session = sessions[index]
+        let paneIDs = session.allPaneIDs
+
+        // Clean up remote controllers if this is a remote session.
+        if session.source.isRemote {
+            let paneIDSet = Set(paneIDs)
+            for paneID in paneIDSet {
+                remoteControllers.removeValue(forKey: paneID)?.stop()
+            }
+            serverToLocalPaneID = serverToLocalPaneID.filter { _, localID in
+                !paneIDSet.contains(localID)
+            }
+            if case .remote(let serverSessionID) = session.source {
+                remoteClient?.closeSession(SessionID(serverSessionID))
+            }
+        }
+
         sessions.remove(at: index)
 
         if !sessions.isEmpty {
@@ -395,9 +424,179 @@ final class SessionManager {
             return false
         case .splitVertical, .splitHorizontal, .closePane,
              .focusPane, .paneExited,
-             .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane:
-            // Pane actions are handled by TerminalWindowView.
+             .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane,
+             .connectTYD:
+            // Pane/remote actions are handled by TerminalWindowView.
             return false
+        }
+    }
+
+    // MARK: - Remote Session Support (tyd)
+
+    /// Attach to a tyd server using a pre-established connection.
+    /// Must be called on the main thread.
+    func attachToTYD(connectionManager: TYDConnectionManager, connection: TYDConnection) {
+        let client = RemoteSessionClient(connectionManager: connectionManager)
+
+        client.onSessionList = { [weak self] infos in
+            self?.handleRemoteSessionList(infos)
+        }
+        client.onSessionCreated = { [weak self] info in
+            self?.handleRemoteSessionCreated(info)
+        }
+        client.onSessionClosed = { [weak self] sessionID in
+            self?.handleRemoteSessionClosed(sessionID)
+        }
+        client.onScreenUpdated = { [weak self] _, paneID in
+            self?.handleRemoteScreenUpdated(paneID)
+        }
+        client.onTitleChanged = { [weak self] _, paneID, title in
+            self?.handleRemoteTitleChanged(paneID, title: title)
+        }
+        client.onPaneExited = { [weak self] _, paneID, _ in
+            self?.handleRemotePaneExited(paneID)
+        }
+
+        client.attachConnection(connection)
+        remoteClient = client
+    }
+
+    /// Disconnect from the tyd server.
+    func disconnectFromTYD() {
+        remoteClient?.disconnect()
+        remoteClient = nil
+
+        // Stop all remote controllers before dropping references.
+        for controller in remoteControllers.values {
+            controller.stop()
+        }
+        sessions.removeAll { $0.source.isRemote }
+        remoteControllers.removeAll()
+        serverToLocalPaneID.removeAll()
+
+        if !sessions.isEmpty {
+            activeSessionIndex = min(activeSessionIndex, sessions.count - 1)
+        } else {
+            activeSessionIndex = 0
+        }
+    }
+
+    /// Whether we are connected to a tyd server.
+    var isConnectedToTYD: Bool {
+        remoteClient != nil
+    }
+
+    /// Get the remote controller for a pane, if it exists.
+    func remoteController(for paneID: UUID) -> ClientTerminalController? {
+        remoteControllers[paneID]
+    }
+
+    // MARK: - Private: Remote Event Handlers
+
+    private func handleRemoteSessionList(_ infos: [SessionInfo]) {
+        for info in infos {
+            addOrUpdateRemoteSession(info)
+        }
+    }
+
+    private func handleRemoteSessionCreated(_ info: SessionInfo) {
+        addOrUpdateRemoteSession(info)
+    }
+
+    private func handleRemoteSessionClosed(_ sessionID: SessionID) {
+        guard let index = sessions.firstIndex(where: {
+            $0.source == .remote(serverSessionID: sessionID.uuid)
+        }) else { return }
+
+        let paneIDSet = Set(sessions[index].allPaneIDs)
+        for paneID in paneIDSet {
+            remoteControllers.removeValue(forKey: paneID)?.stop()
+        }
+        serverToLocalPaneID = serverToLocalPaneID.filter { _, localID in
+            !paneIDSet.contains(localID)
+        }
+
+        sessions.remove(at: index)
+
+        if !sessions.isEmpty {
+            if activeSessionIndex >= sessions.count {
+                activeSessionIndex = sessions.count - 1
+            } else if activeSessionIndex > index {
+                activeSessionIndex -= 1
+            }
+        } else {
+            activeSessionIndex = 0
+        }
+    }
+
+    private func controllerForServerPane(_ paneID: PaneID) -> ClientTerminalController? {
+        guard let localID = serverToLocalPaneID[paneID.uuid] else { return nil }
+        return remoteControllers[localID]
+    }
+
+    private func handleRemoteScreenUpdated(_ paneID: PaneID) {
+        controllerForServerPane(paneID)?.handleScreenUpdated()
+    }
+
+    private func handleRemoteTitleChanged(_ paneID: PaneID, title: String) {
+        controllerForServerPane(paneID)?.handleTitleChanged(title)
+    }
+
+    private func handleRemotePaneExited(_ paneID: PaneID) {
+        controllerForServerPane(paneID)?.handleProcessExited()
+    }
+
+    private func addOrUpdateRemoteSession(_ info: SessionInfo) {
+        let sessionUUID = info.id.uuid
+
+        // Check if this session already exists.
+        if sessions.contains(where: { $0.source == .remote(serverSessionID: sessionUUID) }) {
+            return
+        }
+
+        // Build tabs from server info.
+        let tabs = info.tabs.map { tabInfo -> TerminalTab in
+            var tab = TerminalTab(title: tabInfo.title)
+            // Re-create the pane tree from the layout, creating controllers for each leaf pane.
+            tab.paneTree = buildPaneNode(from: tabInfo.layout, sessionID: info.id)
+            return tab
+        }
+
+        let session = TerminalSession(
+            remoteSessionID: sessionUUID,
+            name: info.name,
+            tabs: tabs
+        )
+        sessions.append(session)
+
+        // Auto-attach so we receive screen updates.
+        remoteClient?.attachSession(info.id)
+    }
+
+    /// Recursively build a PaneNode from a server LayoutTree,
+    /// creating a ClientTerminalController for each leaf pane.
+    private func buildPaneNode(from layout: LayoutTree, sessionID: SessionID) -> PaneNode {
+        switch layout {
+        case .leaf(let paneID):
+            let pane = TerminalPane()
+            if let client = remoteClient {
+                let controller = ClientTerminalController(
+                    remoteClient: client,
+                    sessionID: sessionID,
+                    paneID: paneID
+                )
+                remoteControllers[pane.id] = controller
+                serverToLocalPaneID[paneID.uuid] = pane.id
+            }
+            return .leaf(pane)
+
+        case .split(let direction, let ratio, let first, let second):
+            return .split(
+                direction: direction,
+                ratio: CGFloat(ratio),
+                first: buildPaneNode(from: first, sessionID: sessionID),
+                second: buildPaneNode(from: second, sessionID: sessionID)
+            )
         }
     }
 }

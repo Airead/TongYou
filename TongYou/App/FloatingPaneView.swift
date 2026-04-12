@@ -9,6 +9,7 @@ struct FloatingPaneView: View {
     let containerSize: CGSize
     let viewStore: MetalViewStore
     let focusManager: FocusManager
+    let controllerForPane: (UUID) -> (any TerminalControlling)?
     let onTabAction: (TabAction) -> Void
     let onTitleChanged: (String) -> Void
     let onFrameChanged: (UUID, CGRect) -> Void
@@ -92,6 +93,7 @@ struct FloatingPaneView: View {
             paneID: floatingPane.pane.id,
             viewStore: viewStore,
             initialWorkingDirectory: floatingPane.pane.initialWorkingDirectory,
+            externalController: controllerForPane(floatingPane.pane.id),
             onTabAction: onTabAction,
             onTitleChanged: onTitleChanged,
             onFocused: { bringToFrontAndFocus() }

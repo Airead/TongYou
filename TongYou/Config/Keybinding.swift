@@ -42,6 +42,8 @@ struct Keybinding: Equatable {
         // Floating pane management
         case newFloatingPane
         case toggleOrCreateFloatingPane
+        // Remote session management
+        case connectTYD
         // Pass through to PTY (disables the keybinding)
         case unbind
 
@@ -78,6 +80,7 @@ struct Keybinding: Equatable {
                 }
             case .newFloatingPane: "new_floating_pane"
             case .toggleOrCreateFloatingPane: "toggle_or_create_floating_pane"
+            case .connectTYD: "connect_tyd"
             case .unbind: "unbind"
             }
         }
@@ -101,6 +104,7 @@ struct Keybinding: Equatable {
             case .focusPane(let dir): .focusPane(dir)
             case .newFloatingPane: .newFloatingPane
             case .toggleOrCreateFloatingPane: .toggleOrCreateFloatingPane
+            case .connectTYD: .connectTYD
             case .copy, .paste, .search, .searchNext, .searchPrevious,
                  .resetFontSize, .increaseFontSize, .decreaseFontSize,
                  .unbind:
@@ -137,6 +141,7 @@ struct Keybinding: Equatable {
             case "focus_pane_down": self = .focusPane(.down)
             case "new_floating_pane": self = .newFloatingPane
             case "toggle_or_create_floating_pane": self = .toggleOrCreateFloatingPane
+            case "connect_tyd": self = .connectTYD
             case "unbind": self = .unbind
             default:
                 if rawValue.hasPrefix("goto_tab:"),
@@ -198,6 +203,8 @@ struct Keybinding: Equatable {
         // Floating pane management
         Keybinding(modifiers: .option, key: "f", action: .toggleOrCreateFloatingPane),
         Keybinding(modifiers: .option, key: "n", action: .newFloatingPane),
+        // Remote session management
+        Keybinding(modifiers: .command, key: "r", action: .connectTYD),
     ]
 
     /// Parse a keybinding string like "cmd+shift+t=new_tab".

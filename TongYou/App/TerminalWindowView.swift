@@ -1,4 +1,6 @@
 import SwiftUI
+import TYClient
+import TYProtocol
 import TYTerminal
 
 /// Root view for a terminal window, managing sessions, tabs, and panes.
@@ -84,6 +86,9 @@ struct TerminalWindowView: View {
                             node: activeTab.paneTree,
                             viewStore: viewStore,
                             focusManager: focusManager,
+                            controllerForPane: { paneID in
+                                sessionManager.remoteController(for: paneID)
+                            },
                             onTabAction: handleTabAction,
                             onTitleChanged: updateTabTitle,
                             onNodeChanged: { newTree in
@@ -95,6 +100,9 @@ struct TerminalWindowView: View {
                             floatingPanes: activeTab.floatingPanes,
                             viewStore: viewStore,
                             focusManager: focusManager,
+                            controllerForPane: { paneID in
+                                sessionManager.remoteController(for: paneID)
+                            },
                             onTabAction: handleTabAction,
                             onTitleChanged: { paneID, title in
                                 sessionManager.updateFloatingPaneTitle(paneID: paneID, title: title)
@@ -360,6 +368,8 @@ struct TerminalWindowView: View {
             closeFloatingPane(id: paneID)
         case .toggleOrCreateFloatingPane:
             toggleOrCreateFloatingPane()
+        case .connectTYD:
+            connectToTYD()
         }
     }
 
@@ -396,6 +406,33 @@ struct TerminalWindowView: View {
     private func activateFirstResponder(for paneID: UUID) {
         if let metalView = viewStore.view(for: paneID) {
             metalView.window?.makeFirstResponder(metalView)
+        }
+    }
+
+    // MARK: - Remote Session (tyd)
+
+    private func connectToTYD() {
+        guard !sessionManager.isConnectedToTYD else {
+            print("[TongYou] Already connected to tyd")
+            return
+        }
+        // Prepare manager on main thread; do blocking connect off main.
+        let manager = TYDConnectionManager(autoStart: true)
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let conn = try manager.connect()
+                DispatchQueue.main.async {
+                    sessionManager.attachToTYD(connectionManager: manager, connection: conn)
+                    print("[TongYou] Connected to tyd")
+                    if sidebarVisibility == .never {
+                        sidebarVisibility = .auto
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    print("[TongYou] Failed to connect to tyd: \(error)")
+                }
+            }
         }
     }
 

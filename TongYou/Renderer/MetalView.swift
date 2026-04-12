@@ -11,13 +11,17 @@ final class MetalView: NSView {
     private var device: MTLDevice!
     private var renderer: MetalRenderer?
     private var fontSystem: FontSystem?
-    private var terminalController: TerminalController?
+    private var terminalController: (any TerminalControlling)?
     // nonisolated(unsafe) because deinit must invalidate without actor hop
     nonisolated(unsafe) private var displayLink: CADisplayLink?
     private var cursorBlinkTimer: Timer?
 
     /// Working directory for the shell spawned in this tab.
     var initialWorkingDirectory: String?
+
+    /// External controller injected for remote (tyd) sessions.
+    /// When set, MetalView skips creating a local TerminalController.
+    var externalController: (any TerminalControlling)?
 
     /// Configuration loader with hot reload support.
     private let configLoader = ConfigLoader()
@@ -638,26 +642,44 @@ final class MetalView: NSView {
         }
 
         if terminalController == nil, let grid = renderer?.gridSize {
-            let config = configLoader.config
-            let tc = TerminalController(
-                columns: Int(grid.columns),
-                rows: Int(grid.rows),
-                config: config
-            )
-            tc.onNeedsDisplay = { [weak self] in
-                DispatchQueue.main.async {
-                    self?.wakeDisplayLink()
-                }
+            let controller: any TerminalControlling
+            if let external = externalController {
+                external.resize(
+                    columns: Int(grid.columns),
+                    rows: Int(grid.rows),
+                    cellWidth: 0, cellHeight: 0
+                )
+                external.applyConfig(configLoader.config)
+                controller = external
+            } else {
+                let config = configLoader.config
+                let tc = TerminalController(
+                    columns: Int(grid.columns),
+                    rows: Int(grid.rows),
+                    config: config
+                )
+                tc.start(workingDirectory: initialWorkingDirectory)
+                controller = tc
             }
-            tc.onProcessExited = { [weak self] in
-                guard let self, let paneID = self.paneID else { return }
-                self.onTabAction?(.paneExited(paneID))
+            wireControllerCallbacks(controller)
+            terminalController = controller
+        }
+    }
+
+    private func wireControllerCallbacks(_ controller: any TerminalControlling) {
+        controller.onNeedsDisplay = { [weak self] in
+            if Thread.isMainThread {
+                self?.wakeDisplayLink()
+            } else {
+                DispatchQueue.main.async { self?.wakeDisplayLink() }
             }
-            tc.onTitleChanged = { [weak self] title in
-                self?.onTitleChanged?(title)
-            }
-            tc.start(workingDirectory: initialWorkingDirectory)
-            terminalController = tc
+        }
+        controller.onProcessExited = { [weak self] in
+            guard let self, let paneID = self.paneID else { return }
+            self.onTabAction?(.paneExited(paneID))
+        }
+        controller.onTitleChanged = { [weak self] title in
+            self?.onTitleChanged?(title)
         }
     }
 

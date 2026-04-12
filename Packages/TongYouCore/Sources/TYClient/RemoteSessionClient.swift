@@ -1,0 +1,242 @@
+import Foundation
+import TYProtocol
+import TYTerminal
+
+/// Manages the client-side view of all remote sessions from a tyd server.
+///
+/// Subscribes to session lifecycle events and screen updates, maintaining
+/// a `ScreenReplica` for each attached pane. The GUI layer observes changes
+/// via callbacks to update its SessionManager and MetalViews.
+public final class RemoteSessionClient: @unchecked Sendable {
+
+    private let connectionManager: TYDConnectionManager
+    private var connection: TYDConnection?
+
+    /// Screen replicas indexed by PaneID.
+    private var replicas: [PaneID: ScreenReplica] = [:]
+    private let replicaLock = NSLock()
+
+    // MARK: - Callbacks (dispatched to main queue)
+
+    /// Called when the session list is received from the server.
+    public var onSessionList: (([SessionInfo]) -> Void)?
+
+    /// Called when a new session is created on the server.
+    public var onSessionCreated: ((SessionInfo) -> Void)?
+
+    /// Called when a session is closed on the server.
+    public var onSessionClosed: ((SessionID) -> Void)?
+
+    /// Called when a pane's screen content is updated (full or diff).
+    /// The ScreenReplica has already been updated; the callback provides
+    /// the pane ID so the GUI can wake the display link.
+    public var onScreenUpdated: ((SessionID, PaneID) -> Void)?
+
+    /// Called when a pane's title changes.
+    public var onTitleChanged: ((SessionID, PaneID, String) -> Void)?
+
+    /// Called when a bell is received.
+    public var onBell: ((SessionID, PaneID) -> Void)?
+
+    /// Called when a pane's process exits.
+    public var onPaneExited: ((SessionID, PaneID, Int32) -> Void)?
+
+    /// Called when a session's layout changes.
+    public var onLayoutUpdate: ((SessionID, LayoutTree) -> Void)?
+
+    /// Called when the server sets the clipboard.
+    public var onClipboardSet: ((String) -> Void)?
+
+    /// Called when the connection to tyd is established.
+    public var onConnected: (() -> Void)?
+
+    /// Called when the connection to tyd is lost.
+    public var onDisconnected: (() -> Void)?
+
+    public init(connectionManager: TYDConnectionManager) {
+        self.connectionManager = connectionManager
+    }
+
+    // MARK: - Connection
+
+    /// Connect to tyd and request the session list.
+    public func connect() throws {
+        let conn = try connectionManager.connect()
+        wireConnection(conn)
+    }
+
+    /// Attach a pre-established connection (for when connect was done off-thread).
+    public func attachConnection(_ conn: TYDConnection) {
+        wireConnection(conn)
+    }
+
+    private func wireConnection(_ conn: TYDConnection) {
+        connection = conn
+
+        conn.onMessage = { [weak self] message in
+            self?.handleServerMessage(message)
+        }
+
+        connectionManager.onDisconnected = { [weak self] in
+            DispatchQueue.main.async {
+                self?.onDisconnected?()
+            }
+        }
+
+        conn.send(.listSessions)
+
+        DispatchQueue.main.async { [weak self] in
+            self?.onConnected?()
+        }
+    }
+
+    /// Disconnect from tyd.
+    public func disconnect() {
+        connectionManager.disconnect()
+        connection = nil
+        replicaLock.lock()
+        replicas.removeAll()
+        replicaLock.unlock()
+    }
+
+    public var isConnected: Bool {
+        connectionManager.isConnected
+    }
+
+    // MARK: - Session Operations
+
+    /// Ask the server to create a new session.
+    public func createSession(name: String? = nil) {
+        connection?.send(.createSession(name: name))
+    }
+
+    /// Attach to an existing server session (starts receiving screen updates).
+    public func attachSession(_ sessionID: SessionID) {
+        connection?.send(.attachSession(sessionID))
+    }
+
+    /// Detach from a server session (stops receiving screen updates).
+    public func detachSession(_ sessionID: SessionID) {
+        connection?.send(.detachSession(sessionID))
+    }
+
+    /// Ask the server to close a session.
+    public func closeSession(_ sessionID: SessionID) {
+        connection?.send(.closeSession(sessionID))
+    }
+
+    // MARK: - Terminal I/O
+
+    /// Send terminal input to a specific pane.
+    public func sendInput(sessionID: SessionID, paneID: PaneID, data: [UInt8]) {
+        connection?.send(.input(sessionID, paneID, data))
+    }
+
+    /// Resize a pane on the server.
+    public func resizePane(sessionID: SessionID, paneID: PaneID, cols: UInt16, rows: UInt16) {
+        connection?.send(.resize(sessionID, paneID, cols: cols, rows: rows))
+    }
+
+    // MARK: - Tab/Pane Operations
+
+    public func createTab(sessionID: SessionID) {
+        connection?.send(.createTab(sessionID))
+    }
+
+    public func closeTab(sessionID: SessionID, tabID: TabID) {
+        connection?.send(.closeTab(sessionID, tabID))
+    }
+
+    public func splitPane(sessionID: SessionID, paneID: PaneID, direction: SplitDirection) {
+        connection?.send(.splitPane(sessionID, paneID, direction))
+    }
+
+    public func closePane(sessionID: SessionID, paneID: PaneID) {
+        connection?.send(.closePane(sessionID, paneID))
+    }
+
+    public func focusPane(sessionID: SessionID, paneID: PaneID) {
+        connection?.send(.focusPane(sessionID, paneID))
+    }
+
+    // MARK: - Screen Replica Access
+
+    /// Get the screen replica for a pane, creating one if needed.
+    public func replica(for paneID: PaneID) -> ScreenReplica {
+        replicaLock.lock()
+        defer { replicaLock.unlock() }
+        if let existing = replicas[paneID] {
+            return existing
+        }
+        let replica = ScreenReplica()
+        replicas[paneID] = replica
+        return replica
+    }
+
+    /// Remove the screen replica for a pane.
+    public func removeReplica(for paneID: PaneID) {
+        replicaLock.lock()
+        replicas.removeValue(forKey: paneID)
+        replicaLock.unlock()
+    }
+
+    // MARK: - Private: Message Dispatch
+
+    private func handleServerMessage(_ message: ServerMessage) {
+        switch message {
+        case .sessionList(let sessions):
+            DispatchQueue.main.async { [weak self] in
+                self?.onSessionList?(sessions)
+            }
+
+        case .sessionCreated(let info):
+            DispatchQueue.main.async { [weak self] in
+                self?.onSessionCreated?(info)
+            }
+
+        case .sessionClosed(let sessionID):
+            DispatchQueue.main.async { [weak self] in
+                self?.onSessionClosed?(sessionID)
+            }
+
+        case .screenFull(let sessionID, let paneID, let snapshot):
+            let rep = replica(for: paneID)
+            rep.applyFullSnapshot(snapshot)
+            DispatchQueue.main.async { [weak self] in
+                self?.onScreenUpdated?(sessionID, paneID)
+            }
+
+        case .screenDiff(let sessionID, let paneID, let diff):
+            let rep = replica(for: paneID)
+            rep.applyDiff(diff)
+            DispatchQueue.main.async { [weak self] in
+                self?.onScreenUpdated?(sessionID, paneID)
+            }
+
+        case .titleChanged(let sessionID, let paneID, let title):
+            DispatchQueue.main.async { [weak self] in
+                self?.onTitleChanged?(sessionID, paneID, title)
+            }
+
+        case .bell(let sessionID, let paneID):
+            DispatchQueue.main.async { [weak self] in
+                self?.onBell?(sessionID, paneID)
+            }
+
+        case .paneExited(let sessionID, let paneID, let exitCode):
+            DispatchQueue.main.async { [weak self] in
+                self?.onPaneExited?(sessionID, paneID, exitCode)
+            }
+
+        case .layoutUpdate(let sessionID, let layout):
+            DispatchQueue.main.async { [weak self] in
+                self?.onLayoutUpdate?(sessionID, layout)
+            }
+
+        case .clipboardSet(let text):
+            DispatchQueue.main.async { [weak self] in
+                self?.onClipboardSet?(text)
+            }
+        }
+    }
+}
