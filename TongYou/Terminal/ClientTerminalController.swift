@@ -156,15 +156,14 @@ final class ClientTerminalController: TerminalControlling {
         updateSelection(col: col, row: clampedRow)
     }
 
+    /// Returns true if the request was sent; clipboard is set asynchronously
+    /// when the server replies with `.clipboardSet`.
     @discardableResult
     func copySelection() -> Bool {
         guard let sel = selection else { return false }
-        let snapshot = screenReplica.forceSnapshot(selection: sel)
-        let text = snapshot.extractText(from: sel)
-        guard !text.isEmpty else { return false }
-        let pb = NSPasteboard.general
-        pb.clearContents()
-        pb.setString(text, forType: .string)
+        remoteClient.extractSelection(
+            sessionID: sessionID, paneID: paneID, selection: sel
+        )
         return true
     }
 

@@ -176,6 +176,27 @@ public struct BinaryDecoder: Sendable {
         return (col, row, visible, shape)
     }
 
+    public mutating func readSelectionMode() throws -> SelectionMode {
+        let raw = try readUInt8()
+        guard let mode = SelectionMode(rawValue: raw) else {
+            throw BinaryDecoderError.invalidEnumValue(type: "SelectionMode", rawValue: UInt64(raw))
+        }
+        return mode
+    }
+
+    public mutating func readSelectionPoint() throws -> SelectionPoint {
+        let line = Int(try readInt32())
+        let col = Int(try readUInt16())
+        return SelectionPoint(line: line, col: col)
+    }
+
+    public mutating func readSelection() throws -> Selection {
+        let mode = try readSelectionMode()
+        let start = try readSelectionPoint()
+        let end = try readSelectionPoint()
+        return Selection(start: start, end: end, mode: mode)
+    }
+
     public mutating func readSplitDirection() throws -> SplitDirection {
         let raw = try readUInt8()
         switch raw {
@@ -411,6 +432,12 @@ public struct BinaryDecoder: Sendable {
             let paneID = try readPaneID()
             let delta = try readInt32()
             return .scrollViewport(sessionID, paneID, delta: delta)
+
+        case .extractSelection:
+            let sessionID = try readSessionID()
+            let paneID = try readPaneID()
+            let selection = try readSelection()
+            return .extractSelection(sessionID, paneID, selection)
 
         case .createTab:
             return .createTab(try readSessionID())

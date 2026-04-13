@@ -43,6 +43,7 @@ public enum ClientMessageType: UInt16, Sendable {
     case input           = 0x0210
     case resize          = 0x0211
     case scrollViewport  = 0x0212
+    case extractSelection = 0x0213
 
     // Tab/Pane operations
     case createTab       = 0x0220
@@ -149,6 +150,8 @@ public enum ClientMessage: Sendable {
     case resize(SessionID, PaneID, cols: UInt16, rows: UInt16)
     /// Scroll viewport: positive = up (older), negative = down (newer), Int32.max = jump to bottom.
     case scrollViewport(SessionID, PaneID, delta: Int32)
+    /// Extract selected text from a pane (server replies with .clipboardSet).
+    case extractSelection(SessionID, PaneID, Selection)
 
     // Tab/Pane operations
     case createTab(SessionID)
@@ -187,6 +190,9 @@ public enum ClientMessage: Sendable {
             return "resize(session=\(sid), pane=\(pid), \(cols)x\(rows))"
         case .scrollViewport(let sid, let pid, let delta):
             return "scrollViewport(session=\(sid), pane=\(pid), delta=\(delta))"
+        case .extractSelection(let sid, let pid, let sel):
+            let (s, e) = sel.ordered
+            return "extractSelection(session=\(sid), pane=\(pid), [\(s.line):\(s.col)..\(e.line):\(e.col)])"
         case .createTab(let sid):
             return "createTab(session=\(sid))"
         case .closeTab(let sid, let tid):
@@ -222,6 +228,7 @@ public enum ClientMessage: Sendable {
         case .input:          return .input
         case .resize:         return .resize
         case .scrollViewport: return .scrollViewport
+        case .extractSelection: return .extractSelection
         case .createTab:      return .createTab
         case .closeTab:       return .closeTab
         case .splitPane:      return .splitPane

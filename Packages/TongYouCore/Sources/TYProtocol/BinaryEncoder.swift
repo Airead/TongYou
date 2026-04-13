@@ -103,6 +103,21 @@ public struct BinaryEncoder: Sendable {
         writeUInt8(shape.rawValue)
     }
 
+    public mutating func writeSelectionMode(_ mode: SelectionMode) {
+        writeUInt8(mode.rawValue)
+    }
+
+    public mutating func writeSelectionPoint(_ point: SelectionPoint) {
+        writeInt32(Int32(point.line))
+        writeUInt16(UInt16(point.col))
+    }
+
+    public mutating func writeSelection(_ sel: Selection) {
+        writeSelectionMode(sel.mode)
+        writeSelectionPoint(sel.start)
+        writeSelectionPoint(sel.end)
+    }
+
     public mutating func writeSplitDirection(_ direction: SplitDirection) {
         switch direction {
         case .horizontal: writeUInt8(0)
@@ -284,6 +299,11 @@ public struct BinaryEncoder: Sendable {
             writeSessionID(sessionID)
             writePaneID(paneID)
             writeInt32(delta)
+
+        case .extractSelection(let sessionID, let paneID, let selection):
+            writeSessionID(sessionID)
+            writePaneID(paneID)
+            writeSelection(selection)
 
         case .createTab(let sessionID):
             writeSessionID(sessionID)

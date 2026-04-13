@@ -346,6 +346,12 @@ public final class SocketServer: @unchecked Sendable {
         case .scrollViewport(_, let paneID, let delta):
             sessionManager.scrollViewport(paneID: paneID, delta: delta)
 
+        case .extractSelection(_, let paneID, let selection):
+            if let text = sessionManager.extractText(paneID: paneID, selection: selection),
+               !text.isEmpty {
+                client.send(.clipboardSet(text))
+            }
+
         case .createTab(let sessionID):
             if sessionManager.createTab(sessionID: sessionID) != nil {
                 broadcastLayoutOrClosed(sessionID: sessionID)

@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 import TYClient
@@ -667,6 +668,11 @@ final class SessionManager {
         }
         client.onLayoutUpdate = { [weak self] info in
             self?.handleRemoteLayoutUpdate(info)
+        }
+        client.onClipboardSet = { text in
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(text, forType: .string)
         }
         client.onDisconnected = { [weak self] in
             self?.handleRemoteDisconnected()

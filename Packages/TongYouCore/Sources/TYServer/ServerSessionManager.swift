@@ -313,6 +313,12 @@ public final class ServerSessionManager {
         coreLookup[paneID]?.scrollViewport(delta: delta)
     }
 
+    /// Extract text from a selection range in a pane.
+    /// Delegates to TerminalCore which synchronizes internally via ptyQueue.
+    public func extractText(paneID: PaneID, selection: Selection) -> String? {
+        coreLookup[paneID]?.extractText(from: selection)
+    }
+
     /// Force a full snapshot (e.g., on client attach).
     public func snapshot(paneID: PaneID) -> ScreenSnapshot? {
         coreLookup[paneID]?.forceSnapshot()

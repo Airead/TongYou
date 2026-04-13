@@ -153,6 +153,11 @@ public final class RemoteSessionClient: @unchecked Sendable {
         connection?.send(.scrollViewport(sessionID, paneID, delta: delta))
     }
 
+    /// Ask the server to extract text from a selection. Server replies with `.clipboardSet`.
+    public func extractSelection(sessionID: SessionID, paneID: PaneID, selection: Selection) {
+        connection?.send(.extractSelection(sessionID, paneID, selection))
+    }
+
     // MARK: - Tab/Pane Operations
 
     public func createTab(sessionID: SessionID) {

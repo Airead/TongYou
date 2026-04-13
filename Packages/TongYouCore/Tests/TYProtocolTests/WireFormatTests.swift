@@ -398,6 +398,46 @@ struct WireFormatTests {
         #expect(id == sid)
     }
 
+    @Test func roundTripExtractSelection() throws {
+        let sid = SessionID(UUID())
+        let pid = PaneID(UUID())
+        let sel = Selection(
+            start: SelectionPoint(line: 150, col: 5),
+            end: SelectionPoint(line: 160, col: 42),
+            mode: .character
+        )
+        let msg = ClientMessage.extractSelection(sid, pid, sel)
+        let decoded = try encodeAndDecode(clientMessage: msg)
+        guard case .extractSelection(let dSid, let dPid, let dSel) = decoded else {
+            Issue.record("Expected .extractSelection")
+            return
+        }
+        #expect(dSid == sid)
+        #expect(dPid == pid)
+        #expect(dSel.start.line == 150)
+        #expect(dSel.start.col == 5)
+        #expect(dSel.end.line == 160)
+        #expect(dSel.end.col == 42)
+        #expect(dSel.mode == .character)
+    }
+
+    @Test func roundTripExtractSelectionLineMode() throws {
+        let sid = SessionID(UUID())
+        let pid = PaneID(UUID())
+        let sel = Selection(
+            start: SelectionPoint(line: 0, col: 0),
+            end: SelectionPoint(line: 5, col: 79),
+            mode: .line
+        )
+        let msg = ClientMessage.extractSelection(sid, pid, sel)
+        let decoded = try encodeAndDecode(clientMessage: msg)
+        guard case .extractSelection(_, _, let dSel) = decoded else {
+            Issue.record("Expected .extractSelection")
+            return
+        }
+        #expect(dSel.mode == .line)
+    }
+
     // MARK: - Unknown Type Codes
 
     @Test func unknownServerTypeThrows() throws {

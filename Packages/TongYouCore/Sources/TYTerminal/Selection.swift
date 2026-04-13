@@ -14,13 +14,13 @@ public struct SelectionPoint: Equatable, Sendable {
 }
 
 /// Selection granularity.
-public enum SelectionMode: Sendable {
+public enum SelectionMode: UInt8, Sendable {
     /// Character-by-character selection (drag).
-    case character
+    case character = 0
     /// Select whole words (double-click).
-    case word
+    case word = 1
     /// Select whole lines (triple-click).
-    case line
+    case line = 2
 }
 
 /// Represents a text selection in the terminal buffer.
