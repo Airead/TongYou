@@ -121,6 +121,7 @@
 				2C42370B2F88817B00DE6FC2 /* Sources */,
 				2C42370C2F88817B00DE6FC2 /* Frameworks */,
 				2C42370D2F88817B00DE6FC2 /* Resources */,
+				A1000004300000000000001 /* Build and Bundle tongyou CLI */,
 			);
 			buildRules = (
 			);
@@ -260,6 +261,23 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		A1000004300000000000001 /* Build and Bundle tongyou CLI */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Build and Bundle tongyou CLI";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "set -euo pipefail\n\nPKG_DIR=\"${SRCROOT}/Packages/TongYouCore\"\nCLI_DEST=\"${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Resources/app/bin\"\n\n# Build the tongyou CLI with matching configuration.\nif [ \"${CONFIGURATION}\" = \"Release\" ]; then\n  SWIFT_CONFIG=\"release\"\nelse\n  SWIFT_CONFIG=\"debug\"\nfi\n\ncd \"${PKG_DIR}\"\nswift build -c \"${SWIFT_CONFIG}\" --product tongyou 2>&1\n\n# Copy the built binary into the app bundle.\nmkdir -p \"${CLI_DEST}\"\ncp -f \"${PKG_DIR}/.build/${SWIFT_CONFIG}/tongyou\" \"${CLI_DEST}/tongyou\"\nchmod +x \"${CLI_DEST}/tongyou\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		2C42370B2F88817B00DE6FC2 /* Sources */ = {
@@ -431,6 +449,7 @@
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -463,6 +482,7 @@
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (

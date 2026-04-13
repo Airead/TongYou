@@ -101,16 +101,26 @@ public final class TYDConnectionManager: @unchecked Sendable {
 
     /// Find the tongyou executable by searching common locations.
     public static func findTongYou() throws -> String {
-        // Look for tongyou in the same directory as the running process.
+        let fm = FileManager.default
         let bundle = Bundle.main
+
+        // Look for tongyou in the auxiliary executables directory (Contents/MacOS/).
         if let inBundle = bundle.path(forAuxiliaryExecutable: "tongyou") {
             return inBundle
+        }
+
+        // Look for tongyou bundled in Contents/Resources/app/bin/.
+        if let resourceURL = bundle.resourceURL {
+            let bundledPath = resourceURL.appendingPathComponent("app/bin/tongyou").path
+            if fm.isExecutableFile(atPath: bundledPath) {
+                return bundledPath
+            }
         }
 
         // Look for tongyou next to the current executable.
         let execURL = bundle.executableURL ?? URL(fileURLWithPath: ProcessInfo.processInfo.arguments[0])
         let siblingURL = execURL.deletingLastPathComponent().appendingPathComponent("tongyou")
-        if FileManager.default.isExecutableFile(atPath: siblingURL.path) {
+        if fm.isExecutableFile(atPath: siblingURL.path) {
             return siblingURL.path
         }
 
@@ -121,7 +131,7 @@ public final class TYDConnectionManager: @unchecked Sendable {
             "\(NSHomeDirectory())/.local/bin/tongyou",
         ]
         for path in commonPaths {
-            if FileManager.default.isExecutableFile(atPath: path) {
+            if fm.isExecutableFile(atPath: path) {
                 return path
             }
         }
