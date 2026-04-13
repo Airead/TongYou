@@ -174,6 +174,12 @@ final class MetalView: NSView {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // Only handle key equivalents when this view is the first responder.
+        // performKeyEquivalent traverses the entire view hierarchy, not just
+        // the first responder. Without this guard the first MetalView in the
+        // tree would swallow shortcuts (e.g. Cmd+V paste) meant for another pane.
+        guard window?.firstResponder === self else { return false }
+
         // Only intercept modifier key combinations we handle.
         let deviceMods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         guard !deviceMods.intersection([.command, .control, .option]).isEmpty else {
