@@ -331,7 +331,9 @@ public struct BinaryDecoder: Sendable {
         for _ in 0..<fpCount {
             floatingPanes.append(try readFloatingPaneInfo())
         }
-        return TabInfo(id: id, title: title, layout: layout, floatingPanes: floatingPanes)
+        let hasFocusedPane = try readBool()
+        let focusedPaneID = hasFocusedPane ? try readPaneID() : nil
+        return TabInfo(id: id, title: title, layout: layout, floatingPanes: floatingPanes, focusedPaneID: focusedPaneID)
     }
 
     /// Decode a `ServerMessage` payload given its type code.
@@ -462,6 +464,11 @@ public struct BinaryDecoder: Sendable {
             let sessionID = try readSessionID()
             let paneID = try readPaneID()
             return .focusPane(sessionID, paneID)
+
+        case .selectTab:
+            let sessionID = try readSessionID()
+            let tabIndex = try readUInt16()
+            return .selectTab(sessionID, tabIndex: tabIndex)
 
         case .createFloatingPane:
             let sessionID = try readSessionID()

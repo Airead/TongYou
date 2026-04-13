@@ -22,12 +22,15 @@ public struct TabInfo: Equatable, Sendable {
     public var title: String
     public var layout: LayoutTree
     public var floatingPanes: [FloatingPaneInfo]
+    /// The pane that was last focused in this tab. Nil if unknown.
+    public var focusedPaneID: PaneID?
 
-    public init(id: TabID, title: String, layout: LayoutTree, floatingPanes: [FloatingPaneInfo] = []) {
+    public init(id: TabID, title: String, layout: LayoutTree, floatingPanes: [FloatingPaneInfo] = [], focusedPaneID: PaneID? = nil) {
         self.id = id
         self.title = title
         self.layout = layout
         self.floatingPanes = floatingPanes
+        self.focusedPaneID = focusedPaneID
     }
 }
 

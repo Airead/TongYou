@@ -52,6 +52,8 @@ public enum ClientMessageType: UInt16, Sendable {
     case closePane       = 0x0223
     case focusPane       = 0x0224
 
+    case selectTab       = 0x022A
+
     // Floating pane operations
     case createFloatingPane       = 0x0225
     case closeFloatingPane        = 0x0226
@@ -159,6 +161,7 @@ public enum ClientMessage: Sendable {
     case splitPane(SessionID, PaneID, SplitDirection)
     case closePane(SessionID, PaneID)
     case focusPane(SessionID, PaneID)
+    case selectTab(SessionID, tabIndex: UInt16)
 
     // Floating pane operations
     case createFloatingPane(SessionID, TabID)
@@ -203,6 +206,8 @@ public enum ClientMessage: Sendable {
             return "closePane(session=\(sid), pane=\(pid))"
         case .focusPane(let sid, let pid):
             return "focusPane(session=\(sid), pane=\(pid))"
+        case .selectTab(let sid, let tabIndex):
+            return "selectTab(session=\(sid), tabIndex=\(tabIndex))"
         case .createFloatingPane(let sid, let tid):
             return "createFloatingPane(session=\(sid), tab=\(tid))"
         case .closeFloatingPane(let sid, let pid):
@@ -234,6 +239,7 @@ public enum ClientMessage: Sendable {
         case .splitPane:      return .splitPane
         case .closePane:      return .closePane
         case .focusPane:      return .focusPane
+        case .selectTab:      return .selectTab
         case .createFloatingPane:       return .createFloatingPane
         case .closeFloatingPane:        return .closeFloatingPane
         case .updateFloatingPaneFrame:  return .updateFloatingPaneFrame

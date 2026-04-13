@@ -215,6 +215,9 @@ struct TerminalWindowView: View {
         }
         .onChange(of: focusManager.focusedPaneID) { _, newID in
             sessionManager.updateFloatingPanesVisibilityForFocus(focusedPaneID: newID)
+            if let paneID = newID {
+                sessionManager.notifyPaneFocused(paneID)
+            }
         }
     }
 
@@ -327,7 +330,7 @@ struct TerminalWindowView: View {
 
     private func switchToTab(at index: Int) {
         sessionManager.selectTab(at: index)
-        focusActiveTabRootPane()
+        restoreTabFocusedPane()
     }
 
     // MARK: - Pane Operations
@@ -525,6 +528,22 @@ struct TerminalWindowView: View {
         }
     }
 
+    /// Restore the last focused pane in the active tab, falling back to the root pane.
+    private func restoreTabFocusedPane() {
+        guard let activeTab = sessionManager.activeTab else { return }
+        Self.restoreFocusForTab(activeTab, focusManager: focusManager)
+    }
+
+    /// Focus the saved pane in a tab, or fall back to the root pane.
+    private static func restoreFocusForTab(_ tab: TerminalTab, focusManager: FocusManager) {
+        let allIDs = Set(tab.allPaneIDsIncludingFloating)
+        if let saved = tab.focusedPaneID, allIDs.contains(saved) {
+            focusManager.focusPane(id: saved)
+        } else {
+            focusManager.focusPane(id: tab.paneTree.firstPane.id)
+        }
+    }
+
     /// Focus a pane and make its MetalView the first responder for keyboard input.
     private func focusAndActivate(paneID: UUID) {
         focusManager.focusPane(id: paneID)
@@ -618,13 +637,13 @@ struct TerminalWindowView: View {
                   let activeTab = sessionManager.activeSession?.activeTab else { return }
             let activePaneIDs = Set(activeTab.allPaneIDsIncludingFloating)
 
-            let focusRoot = { focusManager.focusPane(id: activeTab.paneTree.firstPane.id) }
+            let restoreFocus = { TerminalWindowView.restoreFocusForTab(activeTab, focusManager: focusManager) }
 
             // If the focused pane is no longer in the active tab (e.g. tab switched
-            // or focused pane removed), focus the active tab's root pane.
+            // or focused pane removed), restore the tab's saved focus or fall back to root.
             if let focused = focusManager.focusedPaneID,
                !activePaneIDs.contains(focused) {
-                focusRoot()
+                restoreFocus()
                 return
             }
 
@@ -637,9 +656,9 @@ struct TerminalWindowView: View {
                 return
             }
 
-            // If no pane is focused, focus the active tab's root.
+            // If no pane is focused, restore saved focus or fall back to root.
             if focusManager.focusedPaneID == nil {
-                focusRoot()
+                restoreFocus()
             }
         }
     }

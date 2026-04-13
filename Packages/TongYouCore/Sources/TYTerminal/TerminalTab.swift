@@ -9,6 +9,8 @@ public struct TerminalTab: Identifiable, Sendable {
     public var title: String
     public var paneTree: PaneNode
     public var floatingPanes: [FloatingPane] = []
+    /// The pane that was last focused in this tab. Used to restore focus when switching back.
+    public var focusedPaneID: UUID?
 
     /// All pane IDs in this tab's pane tree (does not include floating panes).
     public var allPaneIDs: [UUID] { paneTree.allPaneIDs }

@@ -10,6 +10,8 @@ struct ServerTab {
     var terminalCores: [PaneID: TerminalCore]
     var floatingPanes: [FloatingPaneInfo] = []
     var floatingPaneCores: [PaneID: TerminalCore] = [:]
+    /// The pane that was last focused in this tab by any client.
+    var focusedPaneID: PaneID?
 }
 
 /// Server-side session containing tabs and panes.
@@ -25,7 +27,8 @@ struct ServerSession {
                 id: tab.id,
                 title: tab.title,
                 layout: LayoutTree(from: tab.paneTree),
-                floatingPanes: tab.floatingPanes
+                floatingPanes: tab.floatingPanes,
+                focusedPaneID: tab.focusedPaneID
             )
         }
         return SessionInfo(
@@ -202,6 +205,21 @@ public final class ServerSessionManager {
         }
 
         session.activeTabIndex = min(session.activeTabIndex, session.tabs.count - 1)
+        sessions[sessionID] = session
+    }
+
+    public func selectTab(sessionID: SessionID, tabIndex: Int) {
+        guard var session = sessions[sessionID] else { return }
+        let clamped = max(0, min(tabIndex, session.tabs.count - 1))
+        guard clamped != session.activeTabIndex else { return }
+        session.activeTabIndex = clamped
+        sessions[sessionID] = session
+    }
+
+    public func focusPane(sessionID: SessionID, paneID: PaneID) {
+        guard var session = sessions[sessionID] else { return }
+        guard let tabIndex = session.tabIndex(for: paneID) else { return }
+        session.tabs[tabIndex].focusedPaneID = paneID
         sessions[sessionID] = session
     }
 

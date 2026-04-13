@@ -289,6 +289,7 @@ final class SessionManager {
         let clamped = max(0, min(index, sessions[activeSessionIndex].tabs.count - 1))
         guard clamped != sessions[activeSessionIndex].activeTabIndex else { return }
         sessions[activeSessionIndex].activeTabIndex = clamped
+        notifyServerTabSelected(clamped)
     }
 
     func selectPreviousTab() {
@@ -296,7 +297,9 @@ final class SessionManager {
         let count = sessions[activeSessionIndex].tabs.count
         guard count > 1 else { return }
         let current = sessions[activeSessionIndex].activeTabIndex
-        sessions[activeSessionIndex].activeTabIndex = (current - 1 + count) % count
+        let newIndex = (current - 1 + count) % count
+        sessions[activeSessionIndex].activeTabIndex = newIndex
+        notifyServerTabSelected(newIndex)
     }
 
     func selectNextTab() {
@@ -304,7 +307,31 @@ final class SessionManager {
         let count = sessions[activeSessionIndex].tabs.count
         guard count > 1 else { return }
         let current = sessions[activeSessionIndex].activeTabIndex
-        sessions[activeSessionIndex].activeTabIndex = (current + 1) % count
+        let newIndex = (current + 1) % count
+        sessions[activeSessionIndex].activeTabIndex = newIndex
+        notifyServerTabSelected(newIndex)
+    }
+
+    private func notifyServerTabSelected(_ tabIndex: Int) {
+        guard let serverSessionID = sessions[activeSessionIndex].source.serverSessionID else { return }
+        remoteClient?.selectTab(sessionID: SessionID(serverSessionID), tabIndex: UInt16(tabIndex))
+    }
+
+    /// Record the focused pane on the current tab (local state) and notify the server if remote.
+    func notifyPaneFocused(_ paneID: UUID) {
+        guard sessions.indices.contains(activeSessionIndex) else { return }
+        let tabIndex = sessions[activeSessionIndex].activeTabIndex
+        guard sessions[activeSessionIndex].tabs.indices.contains(tabIndex) else { return }
+        guard sessions[activeSessionIndex].tabs[tabIndex].focusedPaneID != paneID else { return }
+        sessions[activeSessionIndex].tabs[tabIndex].focusedPaneID = paneID
+
+        if let serverSessionID = sessions[activeSessionIndex].source.serverSessionID,
+           let serverPaneUUID = serverPaneUUID(for: paneID) {
+            remoteClient?.focusPane(
+                sessionID: SessionID(serverSessionID),
+                paneID: PaneID(serverPaneUUID)
+            )
+        }
     }
 
     /// Cmd+9 always goes to the last tab (browser/terminal convention).
@@ -823,6 +850,9 @@ final class SessionManager {
             tab.paneTree = buildPaneNode(from: tabInfo.layout, sessionID: info.id)
             tab.floatingPanes = tabInfo.floatingPanes.map { fpInfo in
                 buildFloatingPane(from: fpInfo, sessionID: info.id)
+            }
+            if let serverFocusedID = tabInfo.focusedPaneID {
+                tab.focusedPaneID = serverToLocalPaneID[serverFocusedID.uuid]
             }
             return tab
         }

@@ -372,8 +372,11 @@ public final class SocketServer: @unchecked Sendable {
             sessionManager.closePane(sessionID: sessionID, paneID: paneID)
             broadcastLayoutOrClosed(sessionID: sessionID)
 
-        case .focusPane(_, _):
-            break
+        case .focusPane(let sessionID, let paneID):
+            sessionManager.focusPane(sessionID: sessionID, paneID: paneID)
+
+        case .selectTab(let sessionID, let tabIndex):
+            sessionManager.selectTab(sessionID: sessionID, tabIndex: Int(tabIndex))
 
         case .createFloatingPane(let sessionID, let tabID):
             if sessionManager.createFloatingPane(sessionID: sessionID, tabID: tabID) != nil {

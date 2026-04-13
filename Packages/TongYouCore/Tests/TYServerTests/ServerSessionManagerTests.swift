@@ -592,6 +592,94 @@ struct ServerSessionManagerTests {
         manager.closeSession(id: session.id)
     }
 
+    // MARK: - Tab Selection & Pane Focus
+
+    @Test("selectTab updates activeTabIndex")
+    func selectTab() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "SelectTab Test")
+        _ = manager.createTab(sessionID: session.id)
+        _ = manager.createTab(sessionID: session.id)
+
+        // activeTabIndex should be 2 (last created)
+        #expect(manager.sessionInfo(for: session.id)?.activeTabIndex == 2)
+
+        manager.selectTab(sessionID: session.id, tabIndex: 0)
+        #expect(manager.sessionInfo(for: session.id)?.activeTabIndex == 0)
+
+        manager.selectTab(sessionID: session.id, tabIndex: 1)
+        #expect(manager.sessionInfo(for: session.id)?.activeTabIndex == 1)
+
+        manager.closeSession(id: session.id)
+    }
+
+    @Test("selectTab clamps out-of-range index")
+    func selectTabClampsIndex() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "SelectTab Clamp")
+        _ = manager.createTab(sessionID: session.id) // 2 tabs total
+
+        manager.selectTab(sessionID: session.id, tabIndex: 999)
+        #expect(manager.sessionInfo(for: session.id)?.activeTabIndex == 1)
+
+        manager.closeSession(id: session.id)
+    }
+
+    @Test("focusPane records focusedPaneID on the correct tab")
+    func focusPane() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "FocusPane Test")
+        guard case .leaf(let pane1) = session.tabs[0].layout else {
+            Issue.record("Expected leaf layout")
+            return
+        }
+
+        // Split to get a second pane
+        guard let pane2 = manager.splitPane(
+            sessionID: session.id, paneID: pane1, direction: .vertical
+        ) else {
+            Issue.record("Split failed")
+            return
+        }
+
+        manager.focusPane(sessionID: session.id, paneID: pane2)
+        let info = manager.sessionInfo(for: session.id)
+        #expect(info?.tabs[0].focusedPaneID == pane2)
+
+        manager.focusPane(sessionID: session.id, paneID: pane1)
+        let info2 = manager.sessionInfo(for: session.id)
+        #expect(info2?.tabs[0].focusedPaneID == pane1)
+
+        manager.closeSession(id: session.id)
+    }
+
+    @Test("focusPane on floating pane records on correct tab")
+    func focusPaneFloating() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "FocusPane Float")
+        let tabID = session.tabs[0].id
+
+        let fpID = manager.createFloatingPane(sessionID: session.id, tabID: tabID)!
+
+        manager.focusPane(sessionID: session.id, paneID: fpID)
+        let info = manager.sessionInfo(for: session.id)
+        #expect(info?.tabs[0].focusedPaneID == fpID)
+
+        manager.closeSession(id: session.id)
+    }
+
+    @Test("focusPane with unknown pane is no-op")
+    func focusPaneUnknown() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "FocusPane Unknown")
+
+        manager.focusPane(sessionID: session.id, paneID: PaneID())
+        let info = manager.sessionInfo(for: session.id)
+        #expect(info?.tabs[0].focusedPaneID == nil)
+
+        manager.closeSession(id: session.id)
+    }
+
     @Test("removeClientFromPane with last client does not crash")
     func removeLastClient() {
         let manager = ServerSessionManager()

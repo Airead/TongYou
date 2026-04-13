@@ -214,6 +214,10 @@ public struct BinaryEncoder: Sendable {
         for fp in tab.floatingPanes {
             writeFloatingPaneInfo(fp)
         }
+        writeBool(tab.focusedPaneID != nil)
+        if let fpid = tab.focusedPaneID {
+            writePaneID(fpid)
+        }
     }
 
     /// Encode a `ServerMessage` payload (without frame header).
@@ -324,6 +328,10 @@ public struct BinaryEncoder: Sendable {
         case .focusPane(let sessionID, let paneID):
             writeSessionID(sessionID)
             writePaneID(paneID)
+
+        case .selectTab(let sessionID, let tabIndex):
+            writeSessionID(sessionID)
+            writeUInt16(tabIndex)
 
         case .createFloatingPane(let sessionID, let tabID):
             writeSessionID(sessionID)

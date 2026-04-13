@@ -180,6 +180,10 @@ public final class RemoteSessionClient: @unchecked Sendable {
         connection?.send(.focusPane(sessionID, paneID))
     }
 
+    public func selectTab(sessionID: SessionID, tabIndex: UInt16) {
+        connection?.send(.selectTab(sessionID, tabIndex: tabIndex))
+    }
+
     // MARK: - Floating Pane Operations
 
     public func createFloatingPane(sessionID: SessionID, tabID: TabID) {

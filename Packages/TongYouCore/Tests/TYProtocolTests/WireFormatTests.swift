@@ -438,6 +438,53 @@ struct WireFormatTests {
         #expect(dSel.mode == .line)
     }
 
+    @Test func roundTripSelectTab() throws {
+        let sid = SessionID()
+        let msg = ClientMessage.selectTab(sid, tabIndex: 3)
+        let decoded = try encodeAndDecode(clientMessage: msg)
+        guard case .selectTab(let dSid, let tabIndex) = decoded else {
+            Issue.record("Expected .selectTab")
+            return
+        }
+        #expect(dSid == sid)
+        #expect(tabIndex == 3)
+    }
+
+    @Test func roundTripTabInfoWithFocusedPaneID() throws {
+        let sid = SessionID()
+        let pid = PaneID()
+        let focusedPID = PaneID()
+        let tab = TabInfo(
+            id: TabID(), title: "focused",
+            layout: .leaf(pid),
+            focusedPaneID: focusedPID
+        )
+        let info = SessionInfo(id: sid, name: "focus test", tabs: [tab])
+        let msg = ServerMessage.layoutUpdate(info)
+
+        let decoded = try encodeAndDecode(serverMessage: msg)
+        guard case .layoutUpdate(let dInfo) = decoded else {
+            Issue.record("Expected .layoutUpdate")
+            return
+        }
+        #expect(dInfo.tabs[0].focusedPaneID == focusedPID)
+    }
+
+    @Test func roundTripTabInfoWithNilFocusedPaneID() throws {
+        let sid = SessionID()
+        let pid = PaneID()
+        let tab = TabInfo(id: TabID(), title: "no focus", layout: .leaf(pid))
+        let info = SessionInfo(id: sid, name: "nil focus test", tabs: [tab])
+        let msg = ServerMessage.layoutUpdate(info)
+
+        let decoded = try encodeAndDecode(serverMessage: msg)
+        guard case .layoutUpdate(let dInfo) = decoded else {
+            Issue.record("Expected .layoutUpdate")
+            return
+        }
+        #expect(dInfo.tabs[0].focusedPaneID == nil)
+    }
+
     // MARK: - Unknown Type Codes
 
     @Test func unknownServerTypeThrows() throws {
