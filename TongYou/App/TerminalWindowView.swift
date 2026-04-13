@@ -23,6 +23,7 @@ struct TerminalWindowView: View {
     @State private var focusManager = FocusManager()
     @State private var windowBackgroundColor: NSColor = .black
     @State private var sidebarVisibility: SidebarVisibility = .auto
+    @State private var showingSessionPicker = false
 
     /// Stores MetalView instances outside of SwiftUI state so that
     /// NSViewRepresentable.makeNSView can read/write without triggering
@@ -39,6 +40,7 @@ struct TerminalWindowView: View {
                 SessionSidebarView(
                     sessions: sessionManager.sessions,
                     activeSessionIndex: sessionManager.activeSessionIndex,
+                    attachedSessionIDs: sessionManager.attachedRemoteSessionIDs,
                     onSelect: { index in
                         switchToSession(at: index)
                     },
@@ -50,6 +52,12 @@ struct TerminalWindowView: View {
                     },
                     onRename: { index, name in
                         sessionManager.renameSession(at: index, to: name)
+                    },
+                    onAttach: { index in
+                        attachSessionAtIndex(index)
+                    },
+                    onDetach: { index in
+                        detachSessionAtIndex(index)
                     }
                 )
 
@@ -122,6 +130,32 @@ struct TerminalWindowView: View {
                         )
                     }
                     .id(activeTab.id)
+                }
+            }
+        }
+        .overlay {
+            if showingSessionPicker {
+                ZStack {
+                    Color.black.opacity(0.3)
+                        .ignoresSafeArea()
+                        .onTapGesture {
+                            showingSessionPicker = false
+                        }
+
+                    VStack {
+                        Spacer().frame(height: 60)
+                        SessionPickerView(
+                            sessions: sessionManager.sessions,
+                            attachedSessionIDs: sessionManager.attachedRemoteSessionIDs,
+                            onAttach: { serverSessionID in
+                                sessionManager.attachRemoteSession(serverSessionID: serverSessionID)
+                            },
+                            onDismiss: {
+                                showingSessionPicker = false
+                            }
+                        )
+                        Spacer()
+                    }
                 }
             }
         }
@@ -388,8 +422,14 @@ struct TerminalWindowView: View {
             closeFloatingPane(id: paneID)
         case .toggleOrCreateFloatingPane:
             toggleOrCreateFloatingPane()
-        case .connectTYD:
-            connectToTYD()
+        case .listRemoteSessions:
+            sessionManager.listRemoteSessions()
+            ensureSidebarVisible()
+        case .newRemoteSession:
+            sessionManager.createRemoteSession()
+            ensureSidebarVisible()
+        case .showSessionPicker:
+            showSessionPicker()
         }
     }
 
@@ -431,34 +471,41 @@ struct TerminalWindowView: View {
 
     // MARK: - Remote Session
 
-    private func connectToTYD() {
-        guard !sessionManager.isConnectedToTYD else {
-            print("[TongYou] Already connected to server")
-            return
+    private func showSessionPicker() {
+        sessionManager.listRemoteSessions()
+        showingSessionPicker = true
+    }
+
+    private func ensureSidebarVisible() {
+        if sidebarVisibility == .never {
+            sidebarVisibility = .auto
         }
-        // Prepare manager on main thread; do blocking connect off main.
-        let manager = TYDConnectionManager(autoStart: true)
-        DispatchQueue.global(qos: .userInitiated).async {
-            do {
-                let conn = try manager.connect()
-                DispatchQueue.main.async {
-                    sessionManager.attachToTYD(connectionManager: manager, connection: conn)
-                    print("[TongYou] Connected to server")
-                    if sidebarVisibility == .never {
-                        sidebarVisibility = .auto
-                    }
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    print("[TongYou] Failed to connect to server: \(error)")
-                }
-            }
-        }
+    }
+
+    private func withServerSession(at index: Int, _ action: (UUID) -> Void) {
+        guard sessionManager.sessions.indices.contains(index),
+              let serverID = sessionManager.sessions[index].source.serverSessionID else { return }
+        action(serverID)
+    }
+
+    private func attachSessionAtIndex(_ index: Int) {
+        withServerSession(at: index, sessionManager.attachRemoteSession)
+    }
+
+    private func detachSessionAtIndex(_ index: Int) {
+        withServerSession(at: index, sessionManager.detachRemoteSession)
     }
 
     /// Wire the callback that fires when the server updates a remote session's layout.
     /// Handles MetalView teardown for removed panes and refocuses the active pane.
     private func wireRemoteLayoutCallback() {
+        sessionManager.onRemoteDetached = { [viewStore, focusManager] paneIDs in
+            for paneID in paneIDs {
+                viewStore.tearDown(for: paneID)
+                focusManager.removeFromHistory(id: paneID)
+            }
+        }
+
         sessionManager.onRemoteLayoutChanged = { [viewStore, focusManager, sessionManager] sessionID, removedPaneIDs, addedPaneIDs in
             // Tear down MetalViews for removed panes.
             for paneID in removedPaneIDs {

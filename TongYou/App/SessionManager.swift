@@ -18,6 +18,15 @@ final class SessionManager {
     /// Remote session client for server communication. Nil when not connected.
     private(set) var remoteClient: RemoteSessionClient?
 
+    /// Connection manager for auto-connect. Reused across reconnections.
+    private var connectionManager: TYDConnectionManager?
+
+    /// Guards against concurrent `ensureConnected` calls dispatching multiple connections.
+    private var isConnecting = false
+
+    /// Tracks which remote sessions are currently attached (receiving screen updates).
+    private(set) var attachedRemoteSessionIDs: Set<UUID> = []
+
     deinit {
         remoteClient?.disconnect()
     }
@@ -534,7 +543,7 @@ final class SessionManager {
         case .splitVertical, .splitHorizontal, .closePane,
              .focusPane, .paneExited,
              .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane,
-             .connectTYD:
+             .listRemoteSessions, .newRemoteSession, .showSessionPicker:
             // Pane/remote actions are handled by TerminalWindowView.
             return false
         }
@@ -597,6 +606,7 @@ final class SessionManager {
         remoteControllers.removeAll()
         serverToLocalPaneID.removeAll()
         serverTabIDs.removeAll()
+        attachedRemoteSessionIDs.removeAll()
 
         if !sessions.isEmpty {
             activeSessionIndex = min(activeSessionIndex, sessions.count - 1)
@@ -615,6 +625,80 @@ final class SessionManager {
     var isConnectedToTYD: Bool {
         remoteClient != nil
     }
+
+    /// Ensure connection to the tongyou server, auto-starting if needed.
+    /// Performs blocking connect off main thread, then wires the client on main thread.
+    /// Calls `completion` on the main thread after the client is wired.
+    func ensureConnected(completion: @escaping @Sendable () -> Void = {}) {
+        if isConnectedToTYD {
+            completion()
+            return
+        }
+        guard !isConnecting else { return }
+        isConnecting = true
+        let manager = connectionManager ?? TYDConnectionManager(autoStart: true)
+        connectionManager = manager
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            do {
+                let conn = try manager.connect()
+                DispatchQueue.main.async {
+                    self?.isConnecting = false
+                    self?.attachToTYD(connectionManager: manager, connection: conn)
+                    completion()
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self?.isConnecting = false
+                    print("[TongYou] Failed to connect to server: \(error)")
+                }
+            }
+        }
+    }
+
+    /// List remote sessions: connect if needed, then request session list.
+    func listRemoteSessions() {
+        ensureConnected { [weak self] in
+            self?.remoteClient?.requestSessionList()
+        }
+    }
+
+    /// Create a new remote session: connect if needed, then request creation.
+    func createRemoteSession(name: String? = nil) {
+        ensureConnected { [weak self] in
+            self?.remoteClient?.createSession(name: name)
+        }
+    }
+
+    /// Attach to a remote session (start receiving screen updates).
+    func attachRemoteSession(serverSessionID: UUID) {
+        guard let client = remoteClient else { return }
+        client.attachSession(SessionID(serverSessionID))
+        attachedRemoteSessionIDs.insert(serverSessionID)
+    }
+
+    /// Detach from a remote session (stop receiving screen updates).
+    /// The session remains in the sidebar but its panes are torn down locally.
+    func detachRemoteSession(serverSessionID: UUID) {
+        guard let client = remoteClient else { return }
+        client.detachSession(SessionID(serverSessionID))
+        attachedRemoteSessionIDs.remove(serverSessionID)
+
+        // Tear down local panes for this session but keep the session entry.
+        if let sessionIndex = sessions.firstIndex(where: {
+            $0.source == .remote(serverSessionID: serverSessionID)
+        }) {
+            let paneIDs = sessions[sessionIndex].allPaneIDs
+            teardownRemotePanes(Set(paneIDs), sessionID: sessions[sessionIndex].id)
+            // Replace tabs with a single empty tab (session stays in sidebar).
+            sessions[sessionIndex].tabs = [TerminalTab()]
+            sessions[sessionIndex].activeTabIndex = 0
+            onRemoteDetached?(paneIDs)
+        }
+    }
+
+    /// Callback when a remote session is detached (view layer tears down MetalViews).
+    /// Parameter: pane IDs that were removed.
+    var onRemoteDetached: (([UUID]) -> Void)?
 
     /// Get the remote controller for a pane, if it exists.
     func remoteController(for paneID: UUID) -> ClientTerminalController? {
@@ -683,6 +767,7 @@ final class SessionManager {
         }) else { return }
 
         teardownRemotePanes(Set(sessions[index].allPaneIDs), sessionID: sessions[index].id)
+        attachedRemoteSessionIDs.remove(sessionID.uuid)
 
         sessions.remove(at: index)
 
@@ -752,18 +837,14 @@ final class SessionManager {
             return
         }
 
+        // Add the session to the sidebar with an empty tab (detached state).
+        // The session only gets real tabs/panes when the user explicitly attaches.
         let session = TerminalSession(
             remoteSessionID: sessionUUID,
             name: info.name,
-            tabs: buildTabs(from: info)
+            tabs: [TerminalTab()]
         )
         sessions.append(session)
-
-        // Store server tab IDs (parallel to tabs array).
-        serverTabIDs[session.id] = info.tabs.map(\.id)
-
-        // Auto-attach so we receive screen updates.
-        remoteClient?.attachSession(info.id)
     }
 
     /// Get or create a local TerminalPane for a server pane ID,

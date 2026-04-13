@@ -3,14 +3,18 @@ import TYTerminal
 
 /// Sidebar view showing the list of terminal sessions.
 /// Supports selection, new session, rename via context menu, and close.
+/// Remote sessions show attach/detach state and offer corresponding context actions.
 struct SessionSidebarView: View {
 
     let sessions: [TerminalSession]
     let activeSessionIndex: Int
+    let attachedSessionIDs: Set<UUID>
     let onSelect: (Int) -> Void
     let onClose: (Int) -> Void
     let onNew: () -> Void
     let onRename: (Int, String) -> Void
+    let onAttach: (Int) -> Void
+    let onDetach: (Int) -> Void
 
     @State private var editingSessionID: UUID?
     @State private var editingName: String = ""
@@ -47,7 +51,7 @@ struct SessionSidebarView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("New Session (Cmd+Shift+N)")
+            .help("New Session (Cmd+I)")
         }
         .frame(width: Self.sidebarWidth)
         .background(Color(nsColor: .windowBackgroundColor).opacity(0.5))
@@ -57,15 +61,11 @@ struct SessionSidebarView: View {
     private func sessionRow(_ session: TerminalSession, index: Int) -> some View {
         let isActive = index == activeSessionIndex
         let isEditing = editingSessionID == session.id
+        let isRemote = session.source.isRemote
+        let isAttached = session.source.serverSessionID.map { attachedSessionIDs.contains($0) } ?? false
 
         HStack(spacing: 4) {
-            // Icon: remote sessions show a server icon, local sessions show terminal icon.
-            Image(systemName: session.source.isRemote
-                  ? "rectangle.connected.to.line.below"
-                  : "terminal")
-                .font(.system(size: 10))
-                .foregroundStyle(session.source.isRemote ? .blue : .secondary)
-                .frame(width: 14)
+            sessionIcon(isRemote: isRemote, isAttached: isAttached)
 
             if isEditing {
                 TextField("", text: $editingName, onCommit: {
@@ -110,14 +110,37 @@ struct SessionSidebarView: View {
             }
         }
         .contextMenu {
-            Button("Rename") {
-                editingName = session.name
-                editingSessionID = session.id
+            if isRemote {
+                if isAttached {
+                    Button("Detach") {
+                        onDetach(index)
+                    }
+                } else {
+                    Button("Attach") {
+                        onAttach(index)
+                    }
+                }
+            } else {
+                Button("Rename") {
+                    editingName = session.name
+                    editingSessionID = session.id
+                }
             }
             Divider()
             Button("Close Session") {
                 onClose(index)
             }
         }
+    }
+
+    private func sessionIcon(isRemote: Bool, isAttached: Bool) -> some View {
+        let name = isRemote
+            ? (isAttached ? "rectangle.connected.to.line.below" : "rectangle.dashed")
+            : "terminal"
+        let color: Color = isRemote ? (isAttached ? .blue : .gray) : .secondary
+        return Image(systemName: name)
+            .font(.system(size: 10))
+            .foregroundStyle(color)
+            .frame(width: 14)
     }
 }

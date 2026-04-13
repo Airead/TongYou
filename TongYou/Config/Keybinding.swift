@@ -43,7 +43,9 @@ struct Keybinding: Equatable {
         case newFloatingPane
         case toggleOrCreateFloatingPane
         // Remote session management
-        case connectTYD
+        case listRemoteSessions
+        case newRemoteSession
+        case showSessionPicker
         // Pass through to PTY (disables the keybinding)
         case unbind
 
@@ -80,7 +82,9 @@ struct Keybinding: Equatable {
                 }
             case .newFloatingPane: "new_floating_pane"
             case .toggleOrCreateFloatingPane: "toggle_or_create_floating_pane"
-            case .connectTYD: "connect_tyd"
+            case .listRemoteSessions: "list_remote_sessions"
+            case .newRemoteSession: "new_remote_session"
+            case .showSessionPicker: "show_session_picker"
             case .unbind: "unbind"
             }
         }
@@ -104,7 +108,9 @@ struct Keybinding: Equatable {
             case .focusPane(let dir): .focusPane(dir)
             case .newFloatingPane: .newFloatingPane
             case .toggleOrCreateFloatingPane: .toggleOrCreateFloatingPane
-            case .connectTYD: .connectTYD
+            case .listRemoteSessions: .listRemoteSessions
+            case .newRemoteSession: .newRemoteSession
+            case .showSessionPicker: .showSessionPicker
             case .copy, .paste, .search, .searchNext, .searchPrevious,
                  .resetFontSize, .increaseFontSize, .decreaseFontSize,
                  .unbind:
@@ -141,7 +147,9 @@ struct Keybinding: Equatable {
             case "focus_pane_down": self = .focusPane(.down)
             case "new_floating_pane": self = .newFloatingPane
             case "toggle_or_create_floating_pane": self = .toggleOrCreateFloatingPane
-            case "connect_tyd": self = .connectTYD
+            case "list_remote_sessions": self = .listRemoteSessions
+            case "new_remote_session": self = .newRemoteSession
+            case "show_session_picker": self = .showSessionPicker
             case "unbind": self = .unbind
             default:
                 if rawValue.hasPrefix("goto_tab:"),
@@ -158,7 +166,7 @@ struct Keybinding: Equatable {
     /// Default keybindings.
     static let defaults: [Keybinding] = [
         // Session management
-        Keybinding(modifiers: [.command, .shift], key: "n", action: .newSession),
+        Keybinding(modifiers: .command, key: "i", action: .newSession),
         Keybinding(modifiers: .command, key: "up", action: .previousSession),
         Keybinding(modifiers: .command, key: "k", action: .previousSession),
         Keybinding(modifiers: .command, key: "down", action: .nextSession),
@@ -204,7 +212,9 @@ struct Keybinding: Equatable {
         Keybinding(modifiers: .option, key: "f", action: .toggleOrCreateFloatingPane),
         Keybinding(modifiers: .option, key: "n", action: .newFloatingPane),
         // Remote session management
-        Keybinding(modifiers: .command, key: "r", action: .connectTYD),
+        Keybinding(modifiers: .command, key: "l", action: .listRemoteSessions),
+        Keybinding(modifiers: [.command, .shift], key: "i", action: .newRemoteSession),
+        Keybinding(modifiers: .command, key: "r", action: .showSessionPicker),
     ]
 
     /// Parse a keybinding string like "cmd+shift+t=new_tab".

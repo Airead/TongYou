@@ -105,6 +105,11 @@ public final class RemoteSessionClient: @unchecked Sendable {
 
     // MARK: - Session Operations
 
+    /// Request the current session list from the server.
+    public func requestSessionList() {
+        connection?.send(.listSessions)
+    }
+
     /// Ask the server to create a new session.
     public func createSession(name: String? = nil) {
         connection?.send(.createSession(name: name))
