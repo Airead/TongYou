@@ -91,16 +91,22 @@ struct TerminalWindowView: View {
                     DetachedSessionPlaceholderView(
                         sessionName: sessionManager.activeSession?.name ?? "Session",
                         isPending: false,
+                        keybindings: configLoader.config.keybindings,
                         onAttach: {
                             attachSessionAtIndex(sessionManager.activeSessionIndex)
-                        }
+                        },
+                        onTabAction: handleTabAction
                     )
+                    .id(sessionManager.activeSession?.id)
                 } else if case .pendingAttach = sessionManager.activeSessionRemoteState {
                     DetachedSessionPlaceholderView(
                         sessionName: sessionManager.activeSession?.name ?? "Session",
                         isPending: true,
-                        onAttach: {}
+                        keybindings: configLoader.config.keybindings,
+                        onAttach: {},
+                        onTabAction: handleTabAction
                     )
+                    .id(sessionManager.activeSession?.id)
                 } else if let activeTab = sessionManager.activeTab {
                     let updateTabTitle: (String) -> Void = { title in
                         sessionManager.updateTitle(title, for: activeTab.id)
