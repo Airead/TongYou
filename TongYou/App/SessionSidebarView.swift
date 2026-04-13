@@ -12,16 +12,11 @@ struct SessionSidebarView: View {
     let onSelect: (Int) -> Void
     let onClose: (Int) -> Void
     let onNew: () -> Void
-    let onRename: (Int, String) -> Void
+    let onRenameRequest: (Int) -> Void
     let onAttach: (Int) -> Void
     let onDetach: (Int) -> Void
     let onDoubleClick: (Int) -> Void
 
-    /// Set externally to trigger rename on a session (e.g. from keyboard shortcut).
-    @Binding var renamingSessionID: UUID?
-
-    @State private var editingSessionID: UUID?
-    @State private var editingName: String = ""
     @State private var lastClickTime: Date = .distantPast
     @State private var lastClickIndex: Int = -1
 
@@ -61,48 +56,22 @@ struct SessionSidebarView: View {
         }
         .frame(width: Self.sidebarWidth)
         .background(Color(nsColor: .windowBackgroundColor).opacity(0.5))
-        .onChange(of: renamingSessionID) { _, newValue in
-            if let sessionID = newValue,
-               let session = sessions.first(where: { $0.id == sessionID }) {
-                beginEditing(session)
-                renamingSessionID = nil
-            }
-        }
-    }
-
-    private func beginEditing(_ session: TerminalSession) {
-        editingName = session.name
-        editingSessionID = session.id
     }
 
     @ViewBuilder
     private func sessionRow(_ session: TerminalSession, index: Int) -> some View {
         let isActive = index == activeSessionIndex
-        let isEditing = editingSessionID == session.id
         let isRemote = session.source.isRemote
         let isAttached = session.source.serverSessionID.map { attachedSessionIDs.contains($0) } ?? false
 
         HStack(spacing: 4) {
             sessionIcon(isRemote: isRemote, isAttached: isAttached)
 
-            if isEditing {
-                TextField("", text: $editingName, onCommit: {
-                    let trimmed = editingName.trimmingCharacters(in: .whitespaces)
-                    if !trimmed.isEmpty {
-                        onRename(index, trimmed)
-                    }
-                    editingSessionID = nil
-                })
-                .textFieldStyle(.plain)
+            Text(session.name)
                 .font(.system(size: 12))
-                .frame(maxWidth: .infinity)
-            } else {
-                Text(session.name)
-                    .font(.system(size: 12))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
             Text("\(session.tabCount)")
                 .font(.system(size: 10))
@@ -123,7 +92,6 @@ struct SessionSidebarView: View {
         .foregroundStyle(isActive ? .primary : .secondary)
         .contentShape(Rectangle())
         .onTapGesture {
-            if isEditing { return }
             let now = Date()
             if now.timeIntervalSince(lastClickTime) < 0.3 && lastClickIndex == index {
                 onDoubleClick(index)
@@ -136,7 +104,7 @@ struct SessionSidebarView: View {
         }
         .contextMenu {
             Button("Rename") {
-                beginEditing(session)
+                onRenameRequest(index)
             }
             if isRemote {
                 if isAttached {

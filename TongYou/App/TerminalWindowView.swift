@@ -24,7 +24,7 @@ struct TerminalWindowView: View {
     @State private var windowBackgroundColor: NSColor = .black
     @State private var sidebarVisibility: SidebarVisibility = .auto
     @State private var showingSessionPicker = false
-    @State private var renamingSessionID: UUID?
+    @State private var renamingSessionIndex: Int?
 
     /// Stores MetalView instances outside of SwiftUI state so that
     /// NSViewRepresentable.makeNSView can read/write without triggering
@@ -51,8 +51,8 @@ struct TerminalWindowView: View {
                     onNew: {
                         createNewSession()
                     },
-                    onRename: { index, name in
-                        sessionManager.renameSession(at: index, to: name)
+                    onRenameRequest: { index in
+                        startRenamingSession(at: index)
                     },
                     onAttach: { index in
                         attachSessionAtIndex(index)
@@ -62,8 +62,7 @@ struct TerminalWindowView: View {
                     },
                     onDoubleClick: { index in
                         handleSidebarDoubleClick(index)
-                    },
-                    renamingSessionID: $renamingSessionID
+                    }
                 )
 
                 Divider()
@@ -160,27 +159,32 @@ struct TerminalWindowView: View {
         }
         .overlay {
             if showingSessionPicker {
-                ZStack {
-                    Color.black.opacity(0.3)
-                        .ignoresSafeArea()
-                        .onTapGesture {
+                modalOverlay(onDismiss: { showingSessionPicker = false }) {
+                    SessionPickerView(
+                        sessions: sessionManager.sessions,
+                        attachedSessionIDs: sessionManager.attachedRemoteSessionIDs,
+                        onAttach: { serverSessionID in
+                            sessionManager.attachRemoteSession(serverSessionID: serverSessionID)
+                        },
+                        onDismiss: {
                             showingSessionPicker = false
                         }
+                    )
+                }
+            }
 
-                    VStack {
-                        Spacer().frame(height: 60)
-                        SessionPickerView(
-                            sessions: sessionManager.sessions,
-                            attachedSessionIDs: sessionManager.attachedRemoteSessionIDs,
-                            onAttach: { serverSessionID in
-                                sessionManager.attachRemoteSession(serverSessionID: serverSessionID)
-                            },
-                            onDismiss: {
-                                showingSessionPicker = false
-                            }
-                        )
-                        Spacer()
-                    }
+            if let index = renamingSessionIndex,
+               sessionManager.sessions.indices.contains(index) {
+                modalOverlay(onDismiss: { dismissRenamePanel() }) {
+                    SessionRenameView(
+                        currentName: sessionManager.sessions[index].name,
+                        onConfirm: { newName in
+                            sessionManager.renameSession(at: index, to: newName)
+                        },
+                        onDismiss: {
+                            dismissRenamePanel()
+                        }
+                    )
                 }
             }
         }
@@ -472,6 +476,23 @@ struct TerminalWindowView: View {
 
     // MARK: - Helpers
 
+    private func modalOverlay<Content: View>(
+        onDismiss: @escaping () -> Void,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        ZStack {
+            Color.black.opacity(0.3)
+                .ignoresSafeArea()
+                .onTapGesture(perform: onDismiss)
+
+            VStack {
+                Spacer().frame(height: 60)
+                content()
+                Spacer()
+            }
+        }
+    }
+
     /// Pick the best pane to focus after closing one: prefer focus history, fall back to `fallback`.
     private func focusNextPane(fallback: UUID) {
         let remaining = Set(sessionManager.activeTab?.allPaneIDsIncludingFloating ?? [])
@@ -531,9 +552,16 @@ struct TerminalWindowView: View {
     }
 
     private func startRenamingActiveSession() {
-        guard let session = sessionManager.activeSession else { return }
-        ensureSidebarVisible()
-        renamingSessionID = session.id
+        guard sessionManager.activeSession != nil else { return }
+        startRenamingSession(at: sessionManager.activeSessionIndex)
+    }
+
+    private func startRenamingSession(at index: Int) {
+        renamingSessionIndex = index
+    }
+
+    private func dismissRenamePanel() {
+        renamingSessionIndex = nil
     }
 
     /// Double-click on a sidebar session: attach if it's a detached remote session.
