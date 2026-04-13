@@ -67,13 +67,7 @@ struct SessionPickerView: View {
             }
         }
         .frame(width: 400)
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.primary.opacity(0.15), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.3), radius: 12, y: 4)
+        .overlayPanelStyle()
         .onChange(of: searchText) { _, _ in
             selectedIndex = 0
         }

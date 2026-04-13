@@ -188,6 +188,15 @@ struct TerminalWindowView: View {
                     )
                 }
             }
+
+            if sessionManager.connectionStatus != .idle {
+                DaemonConnectingOverlayView(
+                    status: sessionManager.connectionStatus,
+                    onDismiss: {
+                        sessionManager.dismissConnectionStatus()
+                    }
+                )
+            }
         }
         .preferredColorScheme(.dark)
         .background(WindowConfigurator(

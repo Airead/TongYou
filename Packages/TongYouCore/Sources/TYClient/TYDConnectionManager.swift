@@ -31,11 +31,14 @@ public final class TYDConnectionManager: @unchecked Sendable {
 
     /// Connect to the tongyou server. Auto-starts it if configured and not running.
     public func connect() throws -> TYDConnection {
+        print("[TYDClient] connect() called, autoStart=\(autoStart), socketPath=\(socketPath)")
         if autoStart {
             try ensureServerRunning()
         }
 
+        print("[TYDClient] Connecting to socket at \(socketPath)")
         let socket = try TYSocket.connect(path: socketPath)
+        print("[TYDClient] Socket connected successfully")
         let conn = TYDConnection(socket: socket)
 
         conn.onDisconnect = { [weak self] in
@@ -48,6 +51,7 @@ public final class TYDConnectionManager: @unchecked Sendable {
 
         conn.startReadLoop()
         onConnected?(conn)
+        print("[TYDClient] Connection established and read loop started")
         return conn
     }
 
@@ -78,74 +82,71 @@ public final class TYDConnectionManager: @unchecked Sendable {
 
     /// Ensure the server is running, starting it if necessary.
     private func ensureServerRunning() throws {
-        if DaemonLifecycle.checkExistingProcess() != nil {
+        let existingPID = DaemonLifecycle.checkExistingProcess()
+        print("[TYDClient] checkExistingProcess() = \(String(describing: existingPID))")
+        if existingPID != nil {
+            print("[TYDClient] Server already running, skipping start")
             return
         }
 
-        let execPath = try Self.findTongYou()
-        try startServer(at: execPath)
+        // Remove stale socket file from a previous run before starting.
+        print("[TYDClient] Removing stale socket file at \(socketPath)")
+        try? FileManager.default.removeItem(atPath: socketPath)
 
-        // Wait for socket to become available (server needs time to start).
+        let execPath = try Self.findTongYou()
+        print("[TYDClient] Found tongyou executable at: \(execPath)")
+        try startServer(at: execPath)
+        print("[TYDClient] startServer() returned, waiting for daemon to be ready...")
+
+        // Wait for both PID file (daemon is alive) and socket file (daemon is listening).
         let deadline = Date().addingTimeInterval(5.0)
+        var pollCount = 0
         while Date() < deadline {
-            if FileManager.default.fileExists(atPath: socketPath) {
-                // Give the server a moment to start listening after creating the socket file.
-                Thread.sleep(forTimeInterval: 0.1)
+            let pidExists = DaemonLifecycle.checkExistingProcess() != nil
+            let socketExists = FileManager.default.fileExists(atPath: socketPath)
+            pollCount += 1
+            if pollCount <= 5 || pollCount % 10 == 0 {
+                print("[TYDClient] Poll #\(pollCount): pid=\(pidExists), socket=\(socketExists)")
+            }
+            if pidExists && socketExists {
+                print("[TYDClient] Daemon ready after \(pollCount) polls, proceeding to connect")
                 return
             }
             Thread.sleep(forTimeInterval: 0.1)
         }
 
+        print("[TYDClient] Timeout waiting for daemon after \(pollCount) polls")
         throw TYDConnectionError.startTimeout
     }
 
-    /// Find the tongyou executable by searching common locations.
+    /// Find the tongyou CLI executable bundled in Contents/Resources/app/bin/.
     public static func findTongYou() throws -> String {
-        let fm = FileManager.default
         let bundle = Bundle.main
-
-        // Look for tongyou in the auxiliary executables directory (Contents/MacOS/).
-        if let inBundle = bundle.path(forAuxiliaryExecutable: "tongyou") {
-            return inBundle
+        guard let resourceURL = bundle.resourceURL else {
+            print("[TYDClient] findTongYou: bundle.resourceURL is nil")
+            throw TYDConnectionError.tydNotFound
         }
 
-        // Look for tongyou bundled in Contents/Resources/app/bin/.
-        if let resourceURL = bundle.resourceURL {
-            let bundledPath = resourceURL.appendingPathComponent("app/bin/tongyou").path
-            if fm.isExecutableFile(atPath: bundledPath) {
-                return bundledPath
-            }
+        let path = resourceURL.appendingPathComponent("app/bin/tongyou").path
+        print("[TYDClient] findTongYou: checking \(path)")
+        guard FileManager.default.isExecutableFile(atPath: path) else {
+            print("[TYDClient] findTongYou: not found or not executable")
+            throw TYDConnectionError.tydNotFound
         }
 
-        // Look for tongyou next to the current executable.
-        let execURL = bundle.executableURL ?? URL(fileURLWithPath: ProcessInfo.processInfo.arguments[0])
-        let siblingURL = execURL.deletingLastPathComponent().appendingPathComponent("tongyou")
-        if fm.isExecutableFile(atPath: siblingURL.path) {
-            return siblingURL.path
-        }
-
-        // Check common install locations.
-        let commonPaths = [
-            "/usr/local/bin/tongyou",
-            "/opt/homebrew/bin/tongyou",
-            "\(NSHomeDirectory())/.local/bin/tongyou",
-        ]
-        for path in commonPaths {
-            if fm.isExecutableFile(atPath: path) {
-                return path
-            }
-        }
-
-        throw TYDConnectionError.tydNotFound
+        print("[TYDClient] findTongYou: found at \(path)")
+        return path
     }
 
     private func startServer(at path: String) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = ["daemon", "--daemonize"]
+        process.arguments = ["daemon"]
         process.standardOutput = nil
         process.standardError = nil
+        print("[TYDClient] Launching: \(path) daemon")
         try process.run()
+        print("[TYDClient] Process launched, pid=\(process.processIdentifier)")
     }
 
     // MARK: - Private

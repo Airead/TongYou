@@ -21,8 +21,9 @@ final class SessionManager {
     /// Connection manager for auto-connect. Reused across reconnections.
     private var connectionManager: TYDConnectionManager?
 
-    /// Guards against concurrent `ensureConnected` calls dispatching multiple connections.
-    private var isConnecting = false
+    /// Connection status exposed to UI for overlay display.
+    /// Also guards against concurrent `ensureConnected` calls.
+    private(set) var connectionStatus: DaemonConnectionStatus = .idle
 
     /// Tracks which remote sessions are currently attached (receiving screen updates).
     private(set) var attachedRemoteSessionIDs: Set<UUID> = []
@@ -88,6 +89,21 @@ final class SessionManager {
     }
 
     var activeTab: TerminalTab? { activeSession?.activeTab }
+
+    /// Status of the daemon connection lifecycle, exposed to UI for overlay display.
+    enum DaemonConnectionStatus: Equatable {
+        /// No connection activity.
+        case idle
+        /// Starting daemon and/or connecting to socket.
+        case connecting
+        /// Connection failed with an error message.
+        case failed(String)
+    }
+
+    /// Dismiss the connection status overlay (used when user closes the failed state).
+    func dismissConnectionStatus() {
+        connectionStatus = .idle
+    }
 
     /// Describes the remote-attach state of a session from the UI's perspective.
     enum RemoteSessionState {
@@ -707,21 +723,21 @@ final class SessionManager {
             completion()
             return
         }
-        guard !isConnecting else { return }
-        isConnecting = true
+        guard connectionStatus == .idle else { return }
+        connectionStatus = .connecting
         let manager = connectionManager ?? TYDConnectionManager(autoStart: true)
         connectionManager = manager
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             do {
                 let conn = try manager.connect()
                 DispatchQueue.main.async {
-                    self?.isConnecting = false
+                    self?.connectionStatus = .idle
                     self?.attachToTYD(connectionManager: manager, connection: conn)
                     completion()
                 }
             } catch {
                 DispatchQueue.main.async {
-                    self?.isConnecting = false
+                    self?.connectionStatus = .failed("\(error)")
                     print("[TongYou] Failed to connect to server: \(error)")
                 }
             }
