@@ -314,6 +314,10 @@ public final class SocketServer: @unchecked Sendable {
 
         case .attachSession(let sessionID):
             client.attach(sessionID: sessionID)
+            // Send layout so the client can rebuild tabs/panes before screen data.
+            if let info = sessionManager.sessionInfo(for: sessionID) {
+                client.send(.layoutUpdate(info))
+            }
             sendFullSnapshots(to: client, sessionID: sessionID)
 
         case .detachSession(let sessionID):

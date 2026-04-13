@@ -156,15 +156,23 @@ struct IntegrationTests {
         let client2 = try TYSocket.connect(path: socketPath)
         try client2.send(ClientMessage.attachSession(info.id))
 
-        // Client 2 should receive a full snapshot for all panes
-        let attachResp = try client2.receiveServerMessage()
-        switch attachResp {
+        // Client 2 should first receive a layoutUpdate, then a full snapshot.
+        let layoutResp = try client2.receiveServerMessage()
+        switch layoutResp {
+        case .layoutUpdate(let layoutInfo):
+            #expect(layoutInfo.id == info.id)
+        default:
+            Issue.record("Expected layoutUpdate on attach, got \(layoutResp)")
+        }
+
+        let snapshotResp = try client2.receiveServerMessage()
+        switch snapshotResp {
         case .screenFull(let sid, _, let snapshot):
             #expect(sid == info.id)
             #expect(snapshot.columns == 80)
             #expect(snapshot.rows == 24)
         default:
-            Issue.record("Expected screenFull on attach, got \(attachResp)")
+            Issue.record("Expected screenFull on attach, got \(snapshotResp)")
         }
 
         // Both clients can see the session

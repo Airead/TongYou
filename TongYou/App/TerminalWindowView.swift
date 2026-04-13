@@ -58,6 +58,9 @@ struct TerminalWindowView: View {
                     },
                     onDetach: { index in
                         detachSessionAtIndex(index)
+                    },
+                    onDoubleClick: { index in
+                        handleSidebarDoubleClick(index)
                     }
                 )
 
@@ -84,7 +87,21 @@ struct TerminalWindowView: View {
                     )
                 }
 
-                if let activeTab = sessionManager.activeTab {
+                if case .detached = sessionManager.activeSessionRemoteState {
+                    DetachedSessionPlaceholderView(
+                        sessionName: sessionManager.activeSession?.name ?? "Session",
+                        isPending: false,
+                        onAttach: {
+                            attachSessionAtIndex(sessionManager.activeSessionIndex)
+                        }
+                    )
+                } else if case .pendingAttach = sessionManager.activeSessionRemoteState {
+                    DetachedSessionPlaceholderView(
+                        sessionName: sessionManager.activeSession?.name ?? "Session",
+                        isPending: true,
+                        onAttach: {}
+                    )
+                } else if let activeTab = sessionManager.activeTab {
                     let updateTabTitle: (String) -> Void = { title in
                         sessionManager.updateTitle(title, for: activeTab.id)
                     }
@@ -430,6 +447,8 @@ struct TerminalWindowView: View {
             ensureSidebarVisible()
         case .showSessionPicker:
             showSessionPicker()
+        case .detachSession:
+            detachActiveSession()
         }
     }
 
@@ -494,6 +513,17 @@ struct TerminalWindowView: View {
 
     private func detachSessionAtIndex(_ index: Int) {
         withServerSession(at: index, sessionManager.detachRemoteSession)
+    }
+
+    /// Detach the currently active remote session (Shift+Cmd+K).
+    private func detachActiveSession() {
+        detachSessionAtIndex(sessionManager.activeSessionIndex)
+    }
+
+    /// Double-click on a sidebar session: attach if it's a detached remote session.
+    private func handleSidebarDoubleClick(_ index: Int) {
+        guard sessionManager.isSessionDetachedRemote(at: index) else { return }
+        attachSessionAtIndex(index)
     }
 
     /// Wire the callback that fires when the server updates a remote session's layout.

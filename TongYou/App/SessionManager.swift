@@ -27,6 +27,10 @@ final class SessionManager {
     /// Tracks which remote sessions are currently attached (receiving screen updates).
     private(set) var attachedRemoteSessionIDs: Set<UUID> = []
 
+    /// Sessions that have been attached but haven't received their first layoutUpdate yet.
+    /// While pending, the placeholder view is shown instead of rendering empty local panes.
+    private(set) var pendingAttachSessionIDs: Set<UUID> = []
+
     deinit {
         remoteClient?.disconnect()
     }
@@ -37,6 +41,11 @@ final class SessionManager {
     private var serverToLocalPaneID: [UUID: UUID] = [:]
     /// Maps session UUID → ordered list of server TabIDs (parallel to session.tabs).
     private var serverTabIDs: [UUID: [TabID]] = [:]
+
+    /// Find the index of a remote session by its server-side UUID.
+    private func sessionIndex(forServerSessionID uuid: UUID) -> Int? {
+        sessions.firstIndex(where: { $0.source == .remote(serverSessionID: uuid) })
+    }
 
     /// Reverse lookup: find the server pane UUID for a local pane UUID.
     private func serverPaneUUID(for localID: UUID) -> UUID? {
@@ -50,6 +59,33 @@ final class SessionManager {
     }
 
     var activeTab: TerminalTab? { activeSession?.activeTab }
+
+    /// Describes the remote-attach state of a session from the UI's perspective.
+    enum RemoteSessionState {
+        /// Not a remote session, or session is fully attached with layout received.
+        case ready
+        /// Remote session is detached — show "Press Enter to attach" placeholder.
+        case detached
+        /// Attach sent but layoutUpdate not yet received — show "Connecting..." placeholder.
+        case pendingAttach
+    }
+
+    /// The remote-attach state of the active session.
+    var activeSessionRemoteState: RemoteSessionState {
+        guard let session = activeSession,
+              let serverID = session.source.serverSessionID else { return .ready }
+        if pendingAttachSessionIDs.contains(serverID) { return .pendingAttach }
+        if !attachedRemoteSessionIDs.contains(serverID) { return .detached }
+        return .ready
+    }
+
+    /// Whether a session at the given index is a detached remote session.
+    func isSessionDetachedRemote(at index: Int) -> Bool {
+        guard sessions.indices.contains(index),
+              let serverID = sessions[index].source.serverSessionID else { return false }
+        return !attachedRemoteSessionIDs.contains(serverID)
+    }
+
     var sessionCount: Int { sessions.count }
     var tabCount: Int { activeSession?.tabCount ?? 0 }
     var tabs: [TerminalTab] { activeSession?.tabs ?? [] }
@@ -543,7 +579,7 @@ final class SessionManager {
         case .splitVertical, .splitHorizontal, .closePane,
              .focusPane, .paneExited,
              .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane,
-             .listRemoteSessions, .newRemoteSession, .showSessionPicker:
+             .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession:
             // Pane/remote actions are handled by TerminalWindowView.
             return false
         }
@@ -607,6 +643,7 @@ final class SessionManager {
         serverToLocalPaneID.removeAll()
         serverTabIDs.removeAll()
         attachedRemoteSessionIDs.removeAll()
+        pendingAttachSessionIDs.removeAll()
 
         if !sessions.isEmpty {
             activeSessionIndex = min(activeSessionIndex, sessions.count - 1)
@@ -674,6 +711,7 @@ final class SessionManager {
         guard let client = remoteClient else { return }
         client.attachSession(SessionID(serverSessionID))
         attachedRemoteSessionIDs.insert(serverSessionID)
+        pendingAttachSessionIDs.insert(serverSessionID)
     }
 
     /// Detach from a remote session (stop receiving screen updates).
@@ -682,11 +720,10 @@ final class SessionManager {
         guard let client = remoteClient else { return }
         client.detachSession(SessionID(serverSessionID))
         attachedRemoteSessionIDs.remove(serverSessionID)
+        pendingAttachSessionIDs.remove(serverSessionID)
 
         // Tear down local panes for this session but keep the session entry.
-        if let sessionIndex = sessions.firstIndex(where: {
-            $0.source == .remote(serverSessionID: serverSessionID)
-        }) {
+        if let sessionIndex = sessionIndex(forServerSessionID: serverSessionID) {
             let paneIDs = sessions[sessionIndex].allPaneIDs
             teardownRemotePanes(Set(paneIDs), sessionID: sessions[sessionIndex].id)
             // Replace tabs with a single empty tab (session stays in sidebar).
@@ -759,12 +796,16 @@ final class SessionManager {
 
     private func handleRemoteSessionCreated(_ info: SessionInfo) {
         addOrUpdateRemoteSession(info)
+        // Auto-attach and select newly created remote sessions.
+        let sessionUUID = info.id.uuid
+        attachRemoteSession(serverSessionID: sessionUUID)
+        if let index = sessionIndex(forServerSessionID: sessionUUID) {
+            activeSessionIndex = index
+        }
     }
 
     private func handleRemoteSessionClosed(_ sessionID: SessionID) {
-        guard let index = sessions.firstIndex(where: {
-            $0.source == .remote(serverSessionID: sessionID.uuid)
-        }) else { return }
+        guard let index = sessionIndex(forServerSessionID: sessionID.uuid) else { return }
 
         teardownRemotePanes(Set(sessions[index].allPaneIDs), sessionID: sessions[index].id)
         attachedRemoteSessionIDs.remove(sessionID.uuid)
@@ -803,9 +844,11 @@ final class SessionManager {
     /// Returns the local pane IDs that were removed and need MetalView teardown.
     @discardableResult
     private func handleRemoteLayoutUpdate(_ info: SessionInfo) -> [UUID] {
-        guard let sessionIndex = sessions.firstIndex(where: {
-            $0.source == .remote(serverSessionID: info.id.uuid)
-        }) else { return [] }
+        guard let sessionIndex = sessionIndex(forServerSessionID: info.id.uuid)
+        else { return [] }
+
+        // Clear pending state — the layout is now known.
+        pendingAttachSessionIDs.remove(info.id.uuid)
 
         let oldPaneIDs = Set(sessions[sessionIndex].allPaneIDs)
 
@@ -833,7 +876,7 @@ final class SessionManager {
         let sessionUUID = info.id.uuid
 
         // Check if this session already exists.
-        if sessions.contains(where: { $0.source == .remote(serverSessionID: sessionUUID) }) {
+        if sessionIndex(forServerSessionID: sessionUUID) != nil {
             return
         }
 

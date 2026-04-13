@@ -15,6 +15,7 @@ struct SessionSidebarView: View {
     let onRename: (Int, String) -> Void
     let onAttach: (Int) -> Void
     let onDetach: (Int) -> Void
+    let onDoubleClick: (Int) -> Void
 
     @State private var editingSessionID: UUID?
     @State private var editingName: String = ""
@@ -104,6 +105,11 @@ struct SessionSidebarView: View {
         )
         .foregroundStyle(isActive ? .primary : .secondary)
         .contentShape(Rectangle())
+        .onTapGesture(count: 2) {
+            if !isEditing {
+                onDoubleClick(index)
+            }
+        }
         .onTapGesture {
             if !isEditing {
                 onSelect(index)

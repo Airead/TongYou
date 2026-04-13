@@ -284,6 +284,14 @@ struct KeybindingTests {
         #expect(kb.action.tabAction == nil)
     }
 
+    @Test func parseDetachSession() throws {
+        let kb = try Keybinding.parse("cmd+shift+k=detach_session")
+        #expect(kb.modifiers == [.command, .shift])
+        #expect(kb.key == "k")
+        #expect(kb.action == .detachSession)
+        #expect(kb.action.tabAction != nil)
+    }
+
     @Test func invalidAction() {
         #expect(throws: ConfigError.self) {
             try Keybinding.parse("cmd+t=nonexistent_action")
