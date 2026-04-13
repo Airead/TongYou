@@ -159,7 +159,7 @@ public final class TYSocket: @unchecked Sendable {
 
     /// Close the socket.
     public func closeSocket() {
-        sysClose(fileDescriptor)
+        _ = sysClose(fileDescriptor)
     }
 
     // MARK: - Internal Helpers

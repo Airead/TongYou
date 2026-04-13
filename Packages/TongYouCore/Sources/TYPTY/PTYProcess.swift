@@ -277,7 +277,7 @@ public final class PTYProcess {
         guard childPID > 0 else { return nil }
         var buf = [CChar](repeating: 0, count: Int(MAXPATHLEN))
         guard pty_get_cwd(childPID, &buf, Int32(buf.count)) == 0 else { return nil }
-        return String(cString: buf)
+        return String(decoding: buf.prefix(while: { $0 != 0 }).map { UInt8($0) }, as: UTF8.self)
     }
 
     /// Query the name of the foreground process running in this PTY.
@@ -287,7 +287,7 @@ public final class PTYProcess {
         guard pty_get_foreground_process_name(masterFD, &buf, Int32(buf.count)) == 0 else {
             return nil
         }
-        return String(cString: buf)
+        return String(decoding: buf.prefix(while: { $0 != 0 }).map { UInt8($0) }, as: UTF8.self)
     }
 
     // MARK: - Private: Read Source

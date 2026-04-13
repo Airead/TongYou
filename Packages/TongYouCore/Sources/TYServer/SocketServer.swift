@@ -444,10 +444,11 @@ public final class SocketServer: @unchecked Sendable {
         }
 
         sessionManager.onPaneExited = { [weak self] sessionID, paneID, exitCode in
-            self?.messageQueue.async {
+            guard let self else { return }
+            self.messageQueue.async { [weak self] in
                 self?.lastSentState.removeValue(forKey: paneID)
             }
-            self?.broadcast(
+            self.broadcast(
                 .paneExited(sessionID, paneID, exitCode: exitCode),
                 toSession: sessionID
             )
