@@ -43,15 +43,25 @@ public struct FloatingPane: Identifiable, Equatable, Sendable {
     /// Clamp the frame so it stays within the container bounds (0–1)
     /// and respects the minimum size.
     public mutating func clampFrame() {
-        let w = max(frame.width, Self.minSize.width)
-        let h = max(frame.height, Self.minSize.height)
+        frame = Self.clamped(frame)
+    }
+
+    /// Return a clamped copy of a normalized frame (0–1 bounds, minimum size enforced).
+    public static func clamped(_ frame: CGRect) -> CGRect {
+        let w = max(frame.width, minSize.width)
+        let h = max(frame.height, minSize.height)
         let x = min(max(frame.origin.x, 0), 1 - w)
         let y = min(max(frame.origin.y, 0), 1 - h)
-        frame = CGRect(x: x, y: y, width: w, height: h)
+        return CGRect(x: x, y: y, width: w, height: h)
     }
 
     /// Convert the normalized frame to pixel coordinates for a given container size.
     public func pixelFrame(in containerSize: CGSize) -> CGRect {
+        Self.pixelFrame(for: frame, in: containerSize)
+    }
+
+    /// Convert an arbitrary normalized frame to pixel coordinates.
+    public static func pixelFrame(for frame: CGRect, in containerSize: CGSize) -> CGRect {
         CGRect(
             x: frame.origin.x * containerSize.width,
             y: frame.origin.y * containerSize.height,

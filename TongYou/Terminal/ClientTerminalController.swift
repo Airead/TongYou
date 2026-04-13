@@ -205,9 +205,15 @@ final class ClientTerminalController: TerminalControlling {
 
     // MARK: - Resize
 
+    private var lastResizeCols: Int?
+    private var lastResizeRows: Int?
+
     func resize(columns: Int, rows: Int, cellWidth: UInt32 = 0, cellHeight: UInt32 = 0) {
         let cols = max(Screen.minColumns, columns)
         let rows = max(Screen.minRows, rows)
+        guard cols != lastResizeCols || rows != lastResizeRows else { return }
+        lastResizeCols = cols
+        lastResizeRows = rows
         remoteClient.resizePane(
             sessionID: sessionID,
             paneID: paneID,
