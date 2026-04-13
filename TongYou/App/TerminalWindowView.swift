@@ -289,7 +289,7 @@ struct TerminalWindowView: View {
 
     private func switchToSession(at index: Int) {
         sessionManager.selectSession(at: index)
-        focusActiveTabRootPane()
+        restoreTabFocusedPane()
     }
 
     private func toggleSidebar() {
