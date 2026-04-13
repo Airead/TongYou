@@ -1,4 +1,5 @@
 import SwiftUI
+import TYTerminal
 
 /// Placeholder view shown when the active session is a detached or pending-attach remote session.
 /// Displays the session name and either a hint to press Enter (detached) or a connecting indicator (pending).
@@ -8,10 +9,15 @@ struct DetachedSessionPlaceholderView: View {
     /// True when attach has been sent but layoutUpdate hasn't arrived yet.
     let isPending: Bool
     let keybindings: [Keybinding]
+    let themeForeground: RGBColor
+    let themeBackground: RGBColor
     let onAttach: () -> Void
     var onTabAction: ((TabAction) -> Void)?
 
     var body: some View {
+        let fgColor = Color(nsColor: themeForeground.nsColor)
+        let bgColor = Color(nsColor: themeBackground.nsColor)
+
         ZStack {
             PlaceholderResponderView(
                 isPending: isPending,
@@ -23,26 +29,26 @@ struct DetachedSessionPlaceholderView: View {
             VStack(spacing: 16) {
                 Image(systemName: isPending ? "antenna.radiowaves.left.and.right" : "rectangle.dashed")
                     .font(.system(size: 48))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(fgColor.opacity(0.3))
 
                 Text(sessionName)
                     .font(.title3)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(fgColor.opacity(0.6))
 
                 if isPending {
                     Text("Connecting...")
                         .font(.system(size: 13))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(fgColor.opacity(0.3))
                 } else {
                     Text("Press Enter to attach")
                         .font(.system(size: 13))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(fgColor.opacity(0.3))
                 }
             }
             .allowsHitTesting(false)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(bgColor)
     }
 }
 

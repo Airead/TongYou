@@ -9,6 +9,7 @@ struct FloatingPaneView: View {
     let containerSize: CGSize
     let viewStore: MetalViewStore
     let focusManager: FocusManager
+    let focusColor: Color
     let controllerForPane: (UUID) -> (any TerminalControlling)?
     let onTabAction: (TabAction) -> Void
     let onTitleChanged: (String) -> Void
@@ -50,7 +51,7 @@ struct FloatingPaneView: View {
         .clipShape(RoundedRectangle(cornerRadius: Self.cornerRadius))
         .overlay(
             RoundedRectangle(cornerRadius: Self.cornerRadius)
-                .stroke(isFocused ? Color.accentColor : Color.white.opacity(0.2), lineWidth: 1)
+                .stroke(isFocused ? focusColor : Color.white.opacity(0.2), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.5), radius: 8, x: 0, y: 4)
         .position(x: frame.midX, y: frame.midY)
@@ -88,7 +89,7 @@ struct FloatingPaneView: View {
             Button(action: { onTogglePin(floatingPane.pane.id) }) {
                 Image(systemName: floatingPane.isPinned ? "pin.fill" : "pin")
                     .font(.system(size: 9))
-                    .foregroundStyle(floatingPane.isPinned ? Color.accentColor : .white.opacity(0.5))
+                    .foregroundStyle(floatingPane.isPinned ? focusColor : .white.opacity(0.5))
             }
             .buttonStyle(.plain)
             .help(floatingPane.isPinned ? "Unpin" : "Pin")

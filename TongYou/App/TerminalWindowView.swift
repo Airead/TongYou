@@ -42,6 +42,8 @@ struct TerminalWindowView: View {
                     sessions: sessionManager.sessions,
                     activeSessionIndex: sessionManager.activeSessionIndex,
                     attachedSessionIDs: sessionManager.attachedRemoteSessionIDs,
+                    themeForeground: configLoader.config.foreground,
+                    themeBackground: configLoader.config.background,
                     onSelect: { index in
                         switchToSession(at: index)
                     },
@@ -93,6 +95,8 @@ struct TerminalWindowView: View {
                         sessionName: sessionManager.activeSession?.name ?? "Session",
                         isPending: false,
                         keybindings: configLoader.config.keybindings,
+                        themeForeground: configLoader.config.foreground,
+                        themeBackground: configLoader.config.background,
                         onAttach: {
                             attachSessionAtIndex(sessionManager.activeSessionIndex)
                         },
@@ -104,6 +108,8 @@ struct TerminalWindowView: View {
                         sessionName: sessionManager.activeSession?.name ?? "Session",
                         isPending: true,
                         keybindings: configLoader.config.keybindings,
+                        themeForeground: configLoader.config.foreground,
+                        themeBackground: configLoader.config.background,
                         onAttach: {},
                         onTabAction: handleTabAction
                     )
@@ -113,11 +119,15 @@ struct TerminalWindowView: View {
                         sessionManager.updateTitle(title, for: activeTab.id)
                     }
 
+                    let isRemoteSession = sessionManager.activeSession?.source.isRemote == true
+                    let paneFocusColor: Color = isRemoteSession ? .blue : .green
+
                     ZStack {
                         PaneSplitView(
                             node: activeTab.paneTree,
                             viewStore: viewStore,
                             focusManager: focusManager,
+                            focusColor: paneFocusColor,
                             controllerForPane: { paneID in
                                 sessionManager.remoteController(for: paneID)
                             },
@@ -132,6 +142,7 @@ struct TerminalWindowView: View {
                             floatingPanes: activeTab.floatingPanes,
                             viewStore: viewStore,
                             focusManager: focusManager,
+                            focusColor: paneFocusColor,
                             controllerForPane: { paneID in
                                 sessionManager.remoteController(for: paneID)
                             },

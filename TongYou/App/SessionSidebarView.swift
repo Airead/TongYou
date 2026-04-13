@@ -9,6 +9,8 @@ struct SessionSidebarView: View {
     let sessions: [TerminalSession]
     let activeSessionIndex: Int
     let attachedSessionIDs: Set<UUID>
+    let themeForeground: RGBColor
+    let themeBackground: RGBColor
     let onSelect: (Int) -> Void
     let onClose: (Int) -> Void
     let onNew: () -> Void
@@ -23,12 +25,15 @@ struct SessionSidebarView: View {
     static let sidebarWidth: CGFloat = 180
 
     var body: some View {
+        let fgColor = Color(nsColor: themeForeground.nsColor)
+        let bgColor = Color(nsColor: themeBackground.nsColor)
+
         VStack(spacing: 0) {
             // Session list
             ScrollView {
                 LazyVStack(spacing: 2) {
                     ForEach(Array(sessions.enumerated()), id: \.element.id) { index, session in
-                        sessionRow(session, index: index)
+                        sessionRow(session, index: index, fgColor: fgColor)
                     }
                 }
                 .padding(.vertical, 4)
@@ -45,7 +50,7 @@ struct SessionSidebarView: View {
                     Text("New Session")
                         .font(.system(size: 11))
                 }
-                .foregroundStyle(.secondary)
+                .foregroundStyle(fgColor.opacity(0.6))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
@@ -55,17 +60,17 @@ struct SessionSidebarView: View {
             .help("New Session (Cmd+I)")
         }
         .frame(width: Self.sidebarWidth)
-        .background(Color(nsColor: .windowBackgroundColor).opacity(0.5))
+        .background(bgColor.opacity(0.5))
     }
 
     @ViewBuilder
-    private func sessionRow(_ session: TerminalSession, index: Int) -> some View {
+    private func sessionRow(_ session: TerminalSession, index: Int, fgColor: Color) -> some View {
         let isActive = index == activeSessionIndex
         let isRemote = session.source.isRemote
         let isAttached = session.source.serverSessionID.map { attachedSessionIDs.contains($0) } ?? false
 
         HStack(spacing: 4) {
-            sessionIcon(isRemote: isRemote, isAttached: isAttached)
+            sessionIcon(isRemote: isRemote, isAttached: isAttached, fgColor: fgColor)
 
             Text(session.name)
                 .font(.system(size: 12))
@@ -75,12 +80,12 @@ struct SessionSidebarView: View {
 
             Text("\(session.tabCount)")
                 .font(.system(size: 10))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(fgColor.opacity(0.3))
                 .padding(.horizontal, 4)
                 .padding(.vertical, 1)
                 .background(
                     Capsule()
-                        .fill(Color.primary.opacity(0.08))
+                        .fill(fgColor.opacity(0.08))
                 )
         }
         .padding(.horizontal, 8)
@@ -89,7 +94,7 @@ struct SessionSidebarView: View {
             RoundedRectangle(cornerRadius: 4)
                 .fill(isActive ? Color.accentColor.opacity(0.2) : Color.clear)
         )
-        .foregroundStyle(isActive ? .primary : .secondary)
+        .foregroundStyle(isActive ? fgColor : fgColor.opacity(0.6))
         .contentShape(Rectangle())
         .onTapGesture {
             let now = Date()
@@ -124,11 +129,11 @@ struct SessionSidebarView: View {
         }
     }
 
-    private func sessionIcon(isRemote: Bool, isAttached: Bool) -> some View {
+    private func sessionIcon(isRemote: Bool, isAttached: Bool, fgColor: Color) -> some View {
         let name = isRemote
             ? (isAttached ? "rectangle.connected.to.line.below" : "rectangle.dashed")
             : "terminal"
-        let color: Color = isRemote ? (isAttached ? .blue : .gray) : .secondary
+        let color: Color = isRemote ? (isAttached ? .blue : fgColor.opacity(0.4)) : fgColor.opacity(0.6)
         return Image(systemName: name)
             .font(.system(size: 10))
             .foregroundStyle(color)
