@@ -3,6 +3,7 @@ import CoreGraphics
 import Foundation
 import TYClient
 import TYProtocol
+import TYServer
 import TYTerminal
 
 /// Manages terminal sessions, each containing its own set of tabs and panes.
@@ -33,6 +34,9 @@ final class SessionManager {
     /// While pending, the placeholder view is shown instead of rendering empty local panes.
     private(set) var pendingAttachSessionIDs: Set<UUID> = []
 
+    /// Tracks which local sessions are currently attached (rendering).
+    private(set) var attachedLocalSessionIDs: Set<UUID> = []
+
     deinit {
         remoteClient?.disconnect()
     }
@@ -43,6 +47,24 @@ final class SessionManager {
     private var serverToLocalPaneID: [UUID: UUID] = [:]
     /// Maps session UUID → ordered list of server TabIDs (parallel to session.tabs).
     private var serverTabIDs: [UUID: [TabID]] = [:]
+
+    /// Controllers for local panes, keyed by pane UUID.
+    private var localControllers: [UUID: TerminalController] = [:]
+
+    /// Local session persistence store.
+    private let localSessionStore: SessionStore
+
+    /// Debounced save work items per local session.
+    private var pendingLocalSaves: [UUID: DispatchWorkItem] = [:]
+    private let pendingLocalSavesLock = NSLock()
+
+    init(localSessionStore: SessionStore? = nil) {
+        if let store = localSessionStore {
+            self.localSessionStore = store
+        } else {
+            self.localSessionStore = SessionStore(directory: ServerConfig.defaultLocalPersistenceDirectory())
+        }
+    }
 
     /// Generate the next available name with a given prefix (e.g. "LSession 1", "LSession 2").
     private func nextAvailableName(prefix: String) -> String {
@@ -106,30 +128,44 @@ final class SessionManager {
         connectionStatus = .idle
     }
 
-    /// Describes the remote-attach state of a session from the UI's perspective.
-    enum RemoteSessionState {
-        /// Not a remote session, or session is fully attached with layout received.
+    /// Describes the display state of a session from the UI's perspective.
+    enum SessionDisplayState {
+        /// Session is fully attached with layout received.
         case ready
-        /// Remote session is detached — show "Press Enter to attach" placeholder.
+        /// Session is detached — show "Press Enter to attach" placeholder.
         case detached
         /// Attach sent but layoutUpdate not yet received — show "Connecting..." placeholder.
         case pendingAttach
     }
 
-    /// The remote-attach state of the active session.
-    var activeSessionRemoteState: RemoteSessionState {
-        guard let session = activeSession,
-              let serverID = session.source.serverSessionID else { return .ready }
-        if pendingAttachSessionIDs.contains(serverID) { return .pendingAttach }
-        if !attachedRemoteSessionIDs.contains(serverID) { return .detached }
+    /// The display state of the active session.
+    var activeSessionDisplayState: SessionDisplayState {
+        guard let session = activeSession else { return .ready }
+        if let serverID = session.source.serverSessionID {
+            if pendingAttachSessionIDs.contains(serverID) { return .pendingAttach }
+            if !attachedRemoteSessionIDs.contains(serverID) { return .detached }
+            return .ready
+        }
+        if session.source == .local {
+            if !attachedLocalSessionIDs.contains(session.id) { return .detached }
+        }
         return .ready
     }
 
-    /// Whether a session at the given index is a detached remote session.
-    func isSessionDetachedRemote(at index: Int) -> Bool {
-        guard sessions.indices.contains(index),
-              let serverID = sessions[index].source.serverSessionID else { return false }
-        return !attachedRemoteSessionIDs.contains(serverID)
+    var allAttachedSessionIDs: Set<UUID> {
+        attachedRemoteSessionIDs.union(attachedLocalSessionIDs)
+    }
+
+    func isSessionDetached(at index: Int) -> Bool {
+        guard sessions.indices.contains(index) else { return false }
+        let session = sessions[index]
+        if let serverID = session.source.serverSessionID {
+            return !attachedRemoteSessionIDs.contains(serverID)
+        }
+        if session.source == .local {
+            return !attachedLocalSessionIDs.contains(session.id)
+        }
+        return false
     }
 
     var sessionCount: Int { sessions.count }
@@ -146,6 +182,8 @@ final class SessionManager {
         session.name = uniqueSessionName(baseName, for: session.id)
         sessions.append(session)
         activeSessionIndex = sessions.count - 1
+        attachedLocalSessionIDs.insert(session.id)
+        scheduleLocalSave(sessionID: session.id)
         return session.id
     }
 
@@ -161,6 +199,16 @@ final class SessionManager {
         if let serverSessionID = session.source.serverSessionID {
             teardownRemotePanes(Set(paneIDs), sessionID: session.id)
             remoteClient?.closeSession(SessionID(serverSessionID))
+        }
+
+        // Clean up local controllers and persistence if this is a local session.
+        if session.source == .local {
+            for paneID in paneIDs {
+                localControllers.removeValue(forKey: paneID)?.stop()
+            }
+            attachedLocalSessionIDs.remove(session.id)
+            cancelPendingLocalSave(sessionID: session.id)
+            localSessionStore.delete(sessionID: SessionID(session.id))
         }
 
         sessions.remove(at: index)
@@ -207,11 +255,16 @@ final class SessionManager {
 
     func renameSession(at index: Int, to name: String) {
         guard sessions.indices.contains(index) else { return }
+        let oldName = sessions[index].name
         sessions[index].name = uniqueSessionName(name, for: sessions[index].id, excludingIndex: index)
+        guard sessions[index].name != oldName else { return }
 
-        // Sync rename to server for remote sessions.
         if let serverSessionID = sessions[index].source.serverSessionID {
-            remoteClient?.renameSession(SessionID(serverSessionID), name: name)
+            remoteClient?.renameSession(SessionID(serverSessionID), name: sessions[index].name)
+        }
+
+        if sessions[index].source == .local {
+            scheduleLocalSave(sessionID: sessions[index].id)
         }
     }
 
@@ -239,6 +292,12 @@ final class SessionManager {
         let tab = TerminalTab(title: title, initialWorkingDirectory: initialWorkingDirectory)
         sessions[activeSessionIndex].tabs.append(tab)
         sessions[activeSessionIndex].activeTabIndex = sessions[activeSessionIndex].tabs.count - 1
+        if attachedLocalSessionIDs.contains(session.id) {
+            for paneID in tab.allPaneIDsIncludingFloating {
+                _ = ensureLocalController(for: paneID)
+            }
+        }
+        scheduleLocalSave(sessionID: session.id)
         return tab.id
     }
 
@@ -261,6 +320,11 @@ final class SessionManager {
             return true
         }
 
+        let removedPaneIDs = sessions[activeSessionIndex].tabs[index].allPaneIDsIncludingFloating
+        for paneID in removedPaneIDs {
+            localControllers.removeValue(forKey: paneID)?.stop()
+        }
+
         sessions[activeSessionIndex].tabs.remove(at: index)
 
         let tabCount = sessions[activeSessionIndex].tabs.count
@@ -272,6 +336,7 @@ final class SessionManager {
             sessions[activeSessionIndex].activeTabIndex -= 1
         }
 
+        scheduleLocalSave(sessionID: session.id)
         return true
     }
 
@@ -290,6 +355,9 @@ final class SessionManager {
         guard clamped != sessions[activeSessionIndex].activeTabIndex else { return }
         sessions[activeSessionIndex].activeTabIndex = clamped
         notifyServerTabSelected(clamped)
+        if sessions[activeSessionIndex].source == .local {
+            scheduleLocalSave(sessionID: sessions[activeSessionIndex].id)
+        }
     }
 
     func selectPreviousTab() {
@@ -332,6 +400,10 @@ final class SessionManager {
                 paneID: PaneID(serverPaneUUID)
             )
         }
+
+        if sessions[activeSessionIndex].source == .local {
+            scheduleLocalSave(sessionID: sessions[activeSessionIndex].id)
+        }
     }
 
     /// Cmd+9 always goes to the last tab (browser/terminal convention).
@@ -354,6 +426,8 @@ final class SessionManager {
               destination >= 0, destination < tabs.count,
               source != destination else { return }
 
+        let sessionID = sessions[activeSessionIndex].id
+        let isLocal = sessions[activeSessionIndex].source == .local
         let tab = sessions[activeSessionIndex].tabs.remove(at: source)
         sessions[activeSessionIndex].tabs.insert(tab, at: destination)
 
@@ -364,6 +438,10 @@ final class SessionManager {
             sessions[activeSessionIndex].activeTabIndex = active - 1
         } else if source > active && destination <= active {
             sessions[activeSessionIndex].activeTabIndex = active + 1
+        }
+
+        if isLocal {
+            scheduleLocalSave(sessionID: sessionID)
         }
     }
 
@@ -392,6 +470,10 @@ final class SessionManager {
                 paneID: paneID, direction: direction, newPane: newPane
             ) {
                 sessions[activeSessionIndex].tabs[i].paneTree = newTree
+                if attachedLocalSessionIDs.contains(session.id) {
+                    _ = ensureLocalController(for: newPane.id)
+                }
+                scheduleLocalSave(sessionID: session.id)
                 return true
             }
         }
@@ -420,8 +502,10 @@ final class SessionManager {
         for i in sessions[activeSessionIndex].tabs.indices {
             guard sessions[activeSessionIndex].tabs[i].paneTree.contains(paneID: paneID)
             else { continue }
+            localControllers.removeValue(forKey: paneID)?.stop()
             if let newTree = sessions[activeSessionIndex].tabs[i].paneTree.removePane(id: paneID) {
                 sessions[activeSessionIndex].tabs[i].paneTree = newTree
+                scheduleLocalSave(sessionID: session.id)
                 return newTree.firstPane.id
             } else {
                 closeTab(at: i)
@@ -437,6 +521,9 @@ final class SessionManager {
         let tabIdx = sessions[activeSessionIndex].activeTabIndex
         guard sessions[activeSessionIndex].tabs.indices.contains(tabIdx) else { return }
         sessions[activeSessionIndex].tabs[tabIdx].paneTree = newTree
+        if sessions[activeSessionIndex].source == .local {
+            scheduleLocalSave(sessionID: sessions[activeSessionIndex].id)
+        }
     }
 
     // MARK: - Floating Pane Operations
@@ -484,6 +571,10 @@ final class SessionManager {
         var floating = FloatingPane(pane: pane, frame: frame, zIndex: nextZ)
         floating.clampFrame()
         activeFloatingPanes.append(floating)
+        if attachedLocalSessionIDs.contains(session.id) {
+            _ = ensureLocalController(for: pane.id)
+        }
+        scheduleLocalSave(sessionID: session.id)
         return pane.id
     }
 
@@ -535,6 +626,10 @@ final class SessionManager {
                     where: { $0.pane.id == paneID })
                 {
                     sessions[s].tabs[t].floatingPanes.remove(at: idx)
+                    localControllers.removeValue(forKey: paneID)?.stop()
+                    if sessions[s].source == .local {
+                        scheduleLocalSave(sessionID: sessions[s].id)
+                    }
                     return true
                 }
             }
@@ -560,6 +655,9 @@ final class SessionManager {
         let maxZ = activeFloatingPanes.max(by: { $0.zIndex < $1.zIndex })?.zIndex ?? 0
         guard activeFloatingPanes[idx].zIndex < maxZ else { return }
         activeFloatingPanes[idx].zIndex = maxZ + 1
+        if activeSession?.source == .local {
+            scheduleLocalSave(sessionID: activeSession!.id)
+        }
     }
 
     func updateFloatingPaneFrame(paneID: UUID, frame: CGRect) {
@@ -577,13 +675,21 @@ final class SessionManager {
         guard let idx = activeFloatingPaneIndex(for: paneID) else { return }
         activeFloatingPanes[idx].frame = frame
         activeFloatingPanes[idx].clampFrame()
+        if activeSession?.source == .local {
+            scheduleLocalSave(sessionID: activeSession!.id)
+        }
     }
 
     func setFloatingPanesVisibility(visible: Bool) {
+        var changed = false
         for i in activeFloatingPanes.indices {
             if activeFloatingPanes[i].isVisible != visible {
                 activeFloatingPanes[i].isVisible = visible
+                changed = true
             }
+        }
+        if changed, activeSession?.source == .local {
+            scheduleLocalSave(sessionID: activeSession!.id)
         }
     }
 
@@ -599,12 +705,18 @@ final class SessionManager {
 
         guard let idx = activeFloatingPaneIndex(for: paneID) else { return }
         activeFloatingPanes[idx].isPinned.toggle()
+        if activeSession?.source == .local {
+            scheduleLocalSave(sessionID: activeSession!.id)
+        }
     }
 
     func updateFloatingPaneTitle(paneID: UUID, title: String) {
         guard let idx = activeFloatingPaneIndex(for: paneID) else { return }
         guard activeFloatingPanes[idx].title != title else { return }
         activeFloatingPanes[idx].title = title
+        if activeSession?.source == .local {
+            scheduleLocalSave(sessionID: activeSession!.id)
+        }
     }
 
     func updateFloatingPanesVisibilityForFocus(focusedPaneID: UUID?) {
@@ -1036,5 +1148,217 @@ final class SessionManager {
                 second: buildPaneNode(from: second, sessionID: sessionID)
             )
         }
+    }
+
+    // MARK: - Local Session Persistence
+
+    func restoreLocalSessions() {
+        for persisted in localSessionStore.loadAll() {
+            let session = buildLocalSession(from: persisted)
+            sessions.append(session)
+        }
+    }
+
+    private func buildLocalSession(from persisted: PersistedSession) -> TerminalSession {
+        let info = persisted.sessionInfo
+        let contexts = persisted.paneContexts
+        let tabs: [TerminalTab] = info.tabs.map { tabInfo in
+            let floatingPanes = tabInfo.floatingPanes.map { fpInfo in
+                let pane = TerminalPane(
+                    id: fpInfo.paneID.uuid,
+                    initialWorkingDirectory: contexts[fpInfo.paneID]?.cwd
+                )
+                let frame = CGRect(
+                    x: CGFloat(fpInfo.frameX), y: CGFloat(fpInfo.frameY),
+                    width: CGFloat(fpInfo.frameWidth), height: CGFloat(fpInfo.frameHeight)
+                )
+                return FloatingPane(
+                    pane: pane,
+                    frame: frame,
+                    isVisible: fpInfo.isVisible,
+                    zIndex: Int(fpInfo.zIndex),
+                    isPinned: fpInfo.isPinned,
+                    title: fpInfo.title
+                )
+            }
+            return TerminalTab(
+                id: tabInfo.id.uuid,
+                title: tabInfo.title,
+                paneTree: buildLocalPaneNode(from: tabInfo.layout, contexts: contexts),
+                floatingPanes: floatingPanes,
+                focusedPaneID: tabInfo.focusedPaneID?.uuid
+            )
+        }
+        return TerminalSession(
+            id: info.id.uuid,
+            name: info.name,
+            tabs: tabs,
+            activeTabIndex: info.activeTabIndex,
+            source: .local
+        )
+    }
+
+    private func buildLocalPaneNode(from layout: LayoutTree, contexts: [PaneID: PersistedPaneContext]) -> PaneNode {
+        switch layout {
+        case .leaf(let paneID):
+            let pane = TerminalPane(
+                id: paneID.uuid,
+                initialWorkingDirectory: contexts[paneID]?.cwd
+            )
+            return .leaf(pane)
+        case .split(let direction, let ratio, let first, let second):
+            return .split(
+                direction: direction,
+                ratio: CGFloat(ratio),
+                first: buildLocalPaneNode(from: first, contexts: contexts),
+                second: buildLocalPaneNode(from: second, contexts: contexts)
+            )
+        }
+    }
+
+    private func scheduleLocalSave(sessionID: UUID) {
+        pendingLocalSavesLock.lock()
+        pendingLocalSaves[sessionID]?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.flushLocalSave(sessionID: sessionID)
+        }
+        pendingLocalSaves[sessionID] = workItem
+        pendingLocalSavesLock.unlock()
+
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.5, execute: workItem)
+    }
+
+    private func cancelPendingLocalSave(sessionID: UUID) {
+        pendingLocalSavesLock.lock()
+        pendingLocalSaves.removeValue(forKey: sessionID)?.cancel()
+        pendingLocalSavesLock.unlock()
+    }
+
+    func flushPendingLocalSaves() {
+        let ids: [UUID]
+        pendingLocalSavesLock.lock()
+        ids = Array(pendingLocalSaves.keys)
+        pendingLocalSaves.removeAll()
+        pendingLocalSavesLock.unlock()
+        for id in ids {
+            flushLocalSave(sessionID: id)
+        }
+    }
+
+    private func flushLocalSave(sessionID: UUID) {
+        guard let session = sessions.first(where: { $0.id == sessionID && $0.source == .local }) else {
+            localSessionStore.delete(sessionID: SessionID(sessionID))
+            return
+        }
+        let info = session.toSessionInfo()
+        var contexts: [PaneID: PersistedPaneContext] = [:]
+        for tab in session.tabs {
+            for pane in tab.paneTree.allPanes {
+                let cwd = localControllers[pane.id]?.currentWorkingDirectory
+                    ?? pane.initialWorkingDirectory
+                    ?? ""
+                contexts[PaneID(pane.id)] = PersistedPaneContext(cwd: cwd)
+            }
+            for fp in tab.floatingPanes {
+                let cwd = localControllers[fp.pane.id]?.currentWorkingDirectory
+                    ?? fp.pane.initialWorkingDirectory
+                    ?? ""
+                contexts[PaneID(fp.pane.id)] = PersistedPaneContext(cwd: cwd)
+            }
+        }
+        let persisted = PersistedSession(sessionInfo: info, paneContexts: contexts)
+        localSessionStore.save(persisted)
+    }
+
+    // MARK: - Local Session Attach / Detach
+
+    func attachLocalSession(sessionID: UUID) {
+        attachedLocalSessionIDs.insert(sessionID)
+        if let session = sessions.first(where: { $0.id == sessionID }) {
+            for paneID in session.allPaneIDs {
+                _ = ensureLocalController(for: paneID)
+            }
+        }
+    }
+
+    func detachLocalSession(sessionID: UUID) {
+        attachedLocalSessionIDs.remove(sessionID)
+    }
+
+    /// Get or create a local TerminalController for a pane.
+    func ensureLocalController(for paneID: UUID) -> TerminalController {
+        if let existing = localControllers[paneID] {
+            return existing
+        }
+        var cwd: String?
+        // Fast path: search active session first.
+        if let session = activeSession, session.source == .local {
+            cwd = findWorkingDirectory(for: paneID, in: session)
+        }
+        // Fallback: search all local sessions.
+        if cwd == nil {
+            for session in sessions where session.source == .local {
+                cwd = findWorkingDirectory(for: paneID, in: session)
+                if cwd != nil { break }
+            }
+        }
+        let controller = TerminalController(columns: 80, rows: 24)
+        controller.start(workingDirectory: cwd)
+        localControllers[paneID] = controller
+        return controller
+    }
+
+    private func findWorkingDirectory(for paneID: UUID, in session: TerminalSession) -> String? {
+        for tab in session.tabs {
+            if let pane = tab.paneTree.findPane(id: paneID) {
+                return pane.initialWorkingDirectory
+            }
+            if let fp = tab.floatingPanes.first(where: { $0.pane.id == paneID }) {
+                return fp.pane.initialWorkingDirectory
+            }
+        }
+        return nil
+    }
+
+    /// Look up a controller for any pane (local or remote).
+    func controller(for paneID: UUID) -> (any TerminalControlling)? {
+        if let local = localControllers[paneID] {
+            return local
+        }
+        return remoteControllers[paneID]
+    }
+}
+
+// MARK: - TerminalSession + SessionInfo Conversion
+
+extension TerminalSession {
+    func toSessionInfo() -> SessionInfo {
+        let tabInfos = tabs.map { tab in
+            TabInfo(
+                id: TabID(tab.id),
+                title: tab.title,
+                layout: LayoutTree(from: tab.paneTree),
+                floatingPanes: tab.floatingPanes.map { fp in
+                    FloatingPaneInfo(
+                        paneID: PaneID(fp.pane.id),
+                        frameX: Float(fp.frame.origin.x),
+                        frameY: Float(fp.frame.origin.y),
+                        frameWidth: Float(fp.frame.width),
+                        frameHeight: Float(fp.frame.height),
+                        zIndex: Int32(fp.zIndex),
+                        isPinned: fp.isPinned,
+                        isVisible: fp.isVisible,
+                        title: fp.title
+                    )
+                },
+                focusedPaneID: tab.focusedPaneID.map(PaneID.init)
+            )
+        }
+        return SessionInfo(
+            id: SessionID(id),
+            name: name,
+            tabs: tabInfos,
+            activeTabIndex: activeTabIndex
+        )
     }
 }

@@ -811,7 +811,8 @@ final class MetalView: NSView {
 
     func tearDown() {
         stopDisplayLink()
-        terminalController?.stop()
+        // Do NOT stop the terminalController here — its lifecycle is managed
+        // by SessionManager (local) or the remote client (remote).
         terminalController = nil
         renderer = nil
     }

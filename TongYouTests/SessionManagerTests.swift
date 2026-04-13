@@ -1,15 +1,28 @@
 import Foundation
 import Testing
+import TYProtocol
+import TYServer
 import TYTerminal
 @testable import TongYou
 
 @Suite("SessionManager")
 struct SessionManagerTests {
 
+    private func makeTempDir() -> String {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .path
+    }
+
+    private func makeManager() -> SessionManager {
+        let store = SessionStore(directory: makeTempDir())
+        return SessionManager(localSessionStore: store)
+    }
+
     // MARK: - Session Creation
 
     @Test func createFirstSession() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         let id = mgr.createSession(name: "dev")
         #expect(mgr.sessionCount == 1)
         #expect(mgr.activeSessionIndex == 0)
@@ -20,7 +33,7 @@ struct SessionManagerTests {
     }
 
     @Test func createMultipleSessions() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession(name: "s1")
         _ = mgr.createSession(name: "s2")
         let id3 = mgr.createSession(name: "s3")
@@ -31,7 +44,7 @@ struct SessionManagerTests {
     }
 
     @Test func createSessionAutoName() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession()
         _ = mgr.createSession()
 
@@ -42,7 +55,7 @@ struct SessionManagerTests {
     // MARK: - Session Close
 
     @Test func closeActiveSession() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession(name: "s1")
         let id2 = mgr.createSession(name: "s2")
         _ = mgr.createSession(name: "s3")
@@ -59,7 +72,7 @@ struct SessionManagerTests {
     }
 
     @Test func closeFirstSession() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession(name: "s1")
         let id2 = mgr.createSession(name: "s2")
 
@@ -72,7 +85,7 @@ struct SessionManagerTests {
     }
 
     @Test func closeLastRemainingSession() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession()
 
         let paneIDs = mgr.closeActiveSession()
@@ -82,7 +95,7 @@ struct SessionManagerTests {
     }
 
     @Test func closeSessionReturnsAllPaneIDs() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession()
         // Add a second tab to the session.
         _ = mgr.createTab()
@@ -94,7 +107,7 @@ struct SessionManagerTests {
     }
 
     @Test func closeSessionBeforeActive() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession(name: "s1")
         _ = mgr.createSession(name: "s2")
         let id3 = mgr.createSession(name: "s3")
@@ -110,7 +123,7 @@ struct SessionManagerTests {
     // MARK: - Session Switching
 
     @Test func selectSession() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         let id1 = mgr.createSession(name: "s1")
         _ = mgr.createSession(name: "s2")
 
@@ -120,7 +133,7 @@ struct SessionManagerTests {
     }
 
     @Test func selectSessionClamped() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession()
         _ = mgr.createSession()
 
@@ -132,7 +145,7 @@ struct SessionManagerTests {
     }
 
     @Test func previousSessionWraps() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession(name: "s1")
         _ = mgr.createSession(name: "s2")
         _ = mgr.createSession(name: "s3")
@@ -143,7 +156,7 @@ struct SessionManagerTests {
     }
 
     @Test func nextSessionWraps() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession(name: "s1")
         _ = mgr.createSession(name: "s2")
 
@@ -153,7 +166,7 @@ struct SessionManagerTests {
     }
 
     @Test func previousAndNextNoOpWithSingleSession() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession()
 
         mgr.selectPreviousSession()
@@ -166,7 +179,7 @@ struct SessionManagerTests {
     // MARK: - Session Rename
 
     @Test func renameSession() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession(name: "old")
 
         mgr.renameSession(at: 0, to: "new")
@@ -174,7 +187,7 @@ struct SessionManagerTests {
     }
 
     @Test func renameActiveSession() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession(name: "old")
 
         mgr.renameActiveSession(to: "renamed")
@@ -184,7 +197,7 @@ struct SessionManagerTests {
     // MARK: - Unique Session Names
 
     @Test func createSessionAutoNameSkipsTaken() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession(name: "LSession 1")
         _ = mgr.createSession()  // "LSession 1" is taken, should get "LSession 2"
 
@@ -193,7 +206,7 @@ struct SessionManagerTests {
     }
 
     @Test func createSessionWithDuplicateNameGetsSuffix() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession(name: "dev")
         _ = mgr.createSession(name: "dev")
 
@@ -203,7 +216,7 @@ struct SessionManagerTests {
     }
 
     @Test func createSessionWithUniqueNameUnchanged() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession(name: "alpha")
         _ = mgr.createSession(name: "beta")
 
@@ -212,7 +225,7 @@ struct SessionManagerTests {
     }
 
     @Test func renameSessionDeduplicates() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession(name: "work")
         _ = mgr.createSession(name: "play")
 
@@ -222,7 +235,7 @@ struct SessionManagerTests {
     }
 
     @Test func renameSessionToSameNameUnchanged() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession(name: "dev")
 
         mgr.renameSession(at: 0, to: "dev")
@@ -232,7 +245,7 @@ struct SessionManagerTests {
     // MARK: - Tab Operations Within Session
 
     @Test func createTabInActiveSession() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession()
         #expect(mgr.tabCount == 1)
 
@@ -242,7 +255,7 @@ struct SessionManagerTests {
     }
 
     @Test func tabsAreScopedToSession() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession(name: "s1")
         _ = mgr.createTab(title: "s1-tab2")
         #expect(mgr.tabCount == 2)
@@ -255,7 +268,7 @@ struct SessionManagerTests {
     }
 
     @Test func closeTabInSession() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession()
         _ = mgr.createTab(title: "tab2")
         #expect(mgr.tabCount == 2)
@@ -265,7 +278,7 @@ struct SessionManagerTests {
     }
 
     @Test func closeLastTabLeavesEmptySession() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession()
         #expect(mgr.tabCount == 1)
 
@@ -276,7 +289,7 @@ struct SessionManagerTests {
     }
 
     @Test func selectTabInSession() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession()
         let id1 = mgr.tabs.first!.id
         _ = mgr.createTab(title: "tab2")
@@ -286,7 +299,7 @@ struct SessionManagerTests {
     }
 
     @Test func previousAndNextTab() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession()
         _ = mgr.createTab(title: "tab2")
         _ = mgr.createTab(title: "tab3")
@@ -301,7 +314,7 @@ struct SessionManagerTests {
     }
 
     @Test func moveTabInSession() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession()
         let id1 = mgr.tabs.first!.id
         let id2 = mgr.createTab(title: "tab2")
@@ -316,7 +329,7 @@ struct SessionManagerTests {
     // MARK: - Pane Operations Within Session
 
     @Test func splitPaneInSession() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession()
         guard let rootPaneID = mgr.activeTab?.paneTree.firstPane.id else {
             Issue.record("No active tab")
@@ -330,7 +343,7 @@ struct SessionManagerTests {
     }
 
     @Test func closePaneInSession() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession()
         guard let rootPaneID = mgr.activeTab?.paneTree.firstPane.id else {
             Issue.record("No active tab")
@@ -346,7 +359,7 @@ struct SessionManagerTests {
     }
 
     @Test func closeLastPaneClosesTab() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession()
         _ = mgr.createTab(title: "tab2")
         #expect(mgr.tabCount == 2)
@@ -364,7 +377,7 @@ struct SessionManagerTests {
     // MARK: - Floating Pane Operations
 
     @Test func createFloatingPaneInSession() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession()
 
         let paneID = mgr.createFloatingPane()
@@ -373,7 +386,7 @@ struct SessionManagerTests {
     }
 
     @Test func closeFloatingPaneInSession() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession()
 
         guard let paneID = mgr.createFloatingPane() else {
@@ -387,7 +400,7 @@ struct SessionManagerTests {
     }
 
     @Test func floatingPanesScopedToSession() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession(name: "s1")
         _ = mgr.createFloatingPane()
         #expect(mgr.activeTab?.floatingPanes.count == 1)
@@ -402,7 +415,7 @@ struct SessionManagerTests {
     // MARK: - Title Updates
 
     @Test func updateTabTitle() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession()
         guard let tabID = mgr.activeTab?.id else {
             Issue.record("No active tab")
@@ -416,21 +429,21 @@ struct SessionManagerTests {
     // MARK: - handleAction
 
     @Test func handleActionNewTab() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession()
         #expect(mgr.handleAction(.newTab))
         #expect(mgr.tabCount == 2)
     }
 
     @Test func handleActionNewSession() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession()
         #expect(mgr.handleAction(.newSession))
         #expect(mgr.sessionCount == 2)
     }
 
     @Test func handleActionSessionActionsReturnFalse() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession()
 
         // These actions are handled by TerminalWindowView.
@@ -441,10 +454,94 @@ struct SessionManagerTests {
     }
 
     @Test func handleActionPaneActionsReturnFalse() {
-        let mgr = SessionManager()
+        let mgr = makeManager()
         _ = mgr.createSession()
 
         #expect(!mgr.handleAction(.splitVertical))
         #expect(!mgr.handleAction(.closePane))
+    }
+
+    // MARK: - Local Session Attach / Detach
+
+    @Test func localSessionStartsAttached() {
+        let mgr = makeManager()
+        let id = mgr.createSession(name: "local")
+        #expect(mgr.attachedLocalSessionIDs.contains(id))
+        #expect(mgr.activeSessionDisplayState == .ready)
+    }
+
+    @Test func localSessionCanDetachAndAttach() {
+        let mgr = makeManager()
+        let id = mgr.createSession(name: "local")
+
+        mgr.detachLocalSession(sessionID: id)
+        #expect(!mgr.attachedLocalSessionIDs.contains(id))
+        #expect(mgr.isSessionDetached(at: 0))
+        #expect(mgr.activeSessionDisplayState == .detached)
+
+        mgr.attachLocalSession(sessionID: id)
+        #expect(mgr.attachedLocalSessionIDs.contains(id))
+        #expect(!mgr.isSessionDetached(at: 0))
+        #expect(mgr.activeSessionDisplayState == .ready)
+    }
+
+    @Test func localControllerCreatedOnAttach() {
+        let mgr = makeManager()
+        let id = mgr.createSession(name: "local")
+        let paneID = mgr.activeTab!.paneTree.firstPane.id
+
+        mgr.detachLocalSession(sessionID: id)
+        #expect(mgr.controller(for: paneID) == nil)
+
+        mgr.attachLocalSession(sessionID: id)
+        #expect(mgr.controller(for: paneID) != nil)
+    }
+
+    // MARK: - Local Session Persistence
+
+    @Test func localSessionPersistenceRoundTrip() throws {
+        let tempDir = makeTempDir()
+        let store = SessionStore(directory: tempDir)
+
+        let mgr1 = SessionManager(localSessionStore: store)
+        let id = mgr1.createSession(name: "persisted")
+        _ = mgr1.createTab(title: "tab2")
+        mgr1.flushPendingLocalSaves()
+
+        let mgr2 = SessionManager(localSessionStore: store)
+        mgr2.restoreLocalSessions()
+        #expect(mgr2.sessionCount == 1)
+        #expect(mgr2.sessions[0].name == "persisted")
+        #expect(mgr2.sessions[0].tabs.count == 2)
+        #expect(mgr2.sessions[0].tabs[1].title == "tab2")
+        #expect(!mgr2.attachedLocalSessionIDs.contains(id))
+    }
+
+    @Test func localSessionSplitPanePersistence() throws {
+        let tempDir = makeTempDir()
+        let store = SessionStore(directory: tempDir)
+
+        let mgr1 = SessionManager(localSessionStore: store)
+        _ = mgr1.createSession()
+        let rootPane = mgr1.activeTab!.paneTree.firstPane
+        mgr1.splitPane(id: rootPane.id, direction: .vertical, newPane: TerminalPane())
+        mgr1.flushPendingLocalSaves()
+
+        let mgr2 = SessionManager(localSessionStore: store)
+        mgr2.restoreLocalSessions()
+        #expect(mgr2.sessions[0].tabs[0].paneTree.paneCount == 2)
+    }
+
+    @Test func closeLocalSessionDeletesPersistence() throws {
+        let tempDir = makeTempDir()
+        let store = SessionStore(directory: tempDir)
+
+        let mgr = SessionManager(localSessionStore: store)
+        _ = mgr.createSession()
+        mgr.flushPendingLocalSaves()
+        #expect(store.loadAll().count == 1)
+
+        _ = mgr.closeActiveSession()
+        #expect(store.loadAll().isEmpty)
     }
 }

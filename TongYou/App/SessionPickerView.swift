@@ -93,7 +93,7 @@ struct SessionPickerView: View {
         let isSelected = pickerIndex == selectedIndex
         let isCurrent = originalIndex == activeSessionIndex
         let isRemote = session.source.isRemote
-        let isAttached = session.source.serverSessionID.map { attachedSessionIDs.contains($0) } ?? false
+        let isAttached = attachedSessionIDs.contains(session.id)
 
         HStack(spacing: 8) {
             sessionIcon(isRemote: isRemote, isAttached: isAttached)

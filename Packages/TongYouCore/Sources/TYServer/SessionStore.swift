@@ -1,34 +1,14 @@
 import Foundation
 import TYProtocol
 
-/// Per-pane context saved for restoration.
-struct PersistedPaneContext: Codable, Sendable {
-    let cwd: String
-
-    init(cwd: String) {
-        self.cwd = cwd
-    }
-}
-
-/// Persistent representation of a server session.
-struct PersistedSession: Codable, Sendable {
-    let sessionInfo: SessionInfo
-    let paneContexts: [PaneID: PersistedPaneContext]
-
-    init(sessionInfo: SessionInfo, paneContexts: [PaneID: PersistedPaneContext]) {
-        self.sessionInfo = sessionInfo
-        self.paneContexts = paneContexts
-    }
-}
-
 /// Manages reading and writing session persistence files.
-final class SessionStore: Sendable {
-    let directory: String
+public final class SessionStore: Sendable {
+    public let directory: String
     private let fileExtension = ".json"
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 
-    init(directory: String) {
+    public init(directory: String) {
         self.directory = directory
         self.encoder = JSONEncoder()
         self.encoder.outputFormatting = .sortedKeys
@@ -39,7 +19,7 @@ final class SessionStore: Sendable {
         )
     }
 
-    func loadAll() -> [PersistedSession] {
+    public func loadAll() -> [PersistedSession] {
         guard let files = try? FileManager.default.contentsOfDirectory(atPath: directory) else {
             return []
         }
@@ -54,14 +34,14 @@ final class SessionStore: Sendable {
         return sessions
     }
 
-    func save(_ session: PersistedSession) {
+    public func save(_ session: PersistedSession) {
         let fileName = "\(session.sessionInfo.id.uuid.uuidString)\(fileExtension)"
         let path = (directory as NSString).appendingPathComponent(fileName)
         guard let data = try? encoder.encode(session) else { return }
         try? data.write(to: URL(fileURLWithPath: path))
     }
 
-    func delete(sessionID: SessionID) {
+    public func delete(sessionID: SessionID) {
         let fileName = "\(sessionID.uuid.uuidString)\(fileExtension)"
         let path = (directory as NSString).appendingPathComponent(fileName)
         try? FileManager.default.removeItem(atPath: path)

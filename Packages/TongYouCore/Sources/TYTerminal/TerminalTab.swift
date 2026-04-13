@@ -25,4 +25,12 @@ public struct TerminalTab: Identifiable, Sendable {
         self.title = title
         self.paneTree = .leaf(TerminalPane(initialWorkingDirectory: initialWorkingDirectory))
     }
+
+    public init(id: UUID, title: String, paneTree: PaneNode, floatingPanes: [FloatingPane] = [], focusedPaneID: UUID? = nil) {
+        self.id = id
+        self.title = title
+        self.paneTree = paneTree
+        self.floatingPanes = floatingPanes
+        self.focusedPaneID = focusedPaneID
+    }
 }

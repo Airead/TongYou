@@ -52,6 +52,15 @@ public struct TerminalSession: Identifiable, Sendable {
         self.tabs = [tab]
     }
 
+    /// Create a local session with a specific ID (used for restoration from persistence).
+    public init(id: UUID, name: String, tabs: [TerminalTab], activeTabIndex: Int = 0, source: SessionSource = .local) {
+        self.id = id
+        self.name = name
+        self.source = source
+        self.tabs = tabs.isEmpty ? [TerminalTab()] : tabs
+        self.activeTabIndex = activeTabIndex
+    }
+
     /// Create a remote session from server-provided info.
     /// Uses the server's session UUID as the local session ID for 1:1 mapping.
     public init(remoteSessionID: UUID, name: String, tabs: [TerminalTab]) {

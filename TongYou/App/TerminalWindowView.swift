@@ -41,7 +41,7 @@ struct TerminalWindowView: View {
                 SessionSidebarView(
                     sessions: sessionManager.sessions,
                     activeSessionIndex: sessionManager.activeSessionIndex,
-                    attachedSessionIDs: sessionManager.attachedRemoteSessionIDs,
+                    attachedSessionIDs: sessionManager.allAttachedSessionIDs,
                     themeForeground: configLoader.config.foreground,
                     themeBackground: configLoader.config.background,
                     onSelect: { index in
@@ -90,7 +90,7 @@ struct TerminalWindowView: View {
                     )
                 }
 
-                if case .detached = sessionManager.activeSessionRemoteState {
+                if case .detached = sessionManager.activeSessionDisplayState {
                     DetachedSessionPlaceholderView(
                         sessionName: sessionManager.activeSession?.name ?? "Session",
                         isPending: false,
@@ -103,7 +103,7 @@ struct TerminalWindowView: View {
                         onTabAction: handleTabAction
                     )
                     .id(sessionManager.activeSession?.id)
-                } else if case .pendingAttach = sessionManager.activeSessionRemoteState {
+                } else if case .pendingAttach = sessionManager.activeSessionDisplayState {
                     DetachedSessionPlaceholderView(
                         sessionName: sessionManager.activeSession?.name ?? "Session",
                         isPending: true,
@@ -129,7 +129,7 @@ struct TerminalWindowView: View {
                             focusManager: focusManager,
                             focusColor: paneFocusColor,
                             controllerForPane: { paneID in
-                                sessionManager.remoteController(for: paneID)
+                                sessionManager.controller(for: paneID)
                             },
                             onTabAction: handleTabAction,
                             onTitleChanged: updateTabTitle,
@@ -144,7 +144,7 @@ struct TerminalWindowView: View {
                             focusManager: focusManager,
                             focusColor: paneFocusColor,
                             controllerForPane: { paneID in
-                                sessionManager.remoteController(for: paneID)
+                                sessionManager.controller(for: paneID)
                             },
                             onTabAction: handleTabAction,
                             onTitleChanged: { paneID, title in
@@ -174,7 +174,7 @@ struct TerminalWindowView: View {
                     SessionPickerView(
                         sessions: sessionManager.sessions,
                         activeSessionIndex: sessionManager.activeSessionIndex,
-                        attachedSessionIDs: sessionManager.attachedRemoteSessionIDs,
+                        attachedSessionIDs: sessionManager.allAttachedSessionIDs,
                         onSelect: { index in
                             switchToSessionFromPicker(at: index)
                         },
@@ -214,9 +214,11 @@ struct TerminalWindowView: View {
             title: windowTitle,
             onWindowClose: { [sessionManager] in
                 sessionManager.disconnectFromTYD()
+                sessionManager.flushPendingLocalSaves()
             }
         ))
         .onAppear {
+            sessionManager.restoreLocalSessions()
             if sessionManager.sessions.isEmpty {
                 sessionManager.createSession()
             }
@@ -576,7 +578,7 @@ struct TerminalWindowView: View {
     /// Handle session selection from the quick picker.
     /// For detached remote sessions, attach first; then switch.
     private func switchToSessionFromPicker(at index: Int) {
-        if sessionManager.isSessionDetachedRemote(at: index) {
+        if sessionManager.isSessionDetached(at: index) {
             attachSessionAtIndex(index)
         }
         switchToSession(at: index)
@@ -588,22 +590,37 @@ struct TerminalWindowView: View {
         }
     }
 
-    private func withServerSession(at index: Int, _ action: (UUID) -> Void) {
-        guard sessionManager.sessions.indices.contains(index),
-              let serverID = sessionManager.sessions[index].source.serverSessionID else { return }
-        action(serverID)
-    }
-
     private func attachSessionAtIndex(_ index: Int) {
-        withServerSession(at: index, sessionManager.attachRemoteSession)
+        guard sessionManager.sessions.indices.contains(index) else { return }
+        let session = sessionManager.sessions[index]
+        if let serverID = session.source.serverSessionID {
+            sessionManager.attachRemoteSession(serverSessionID: serverID)
+        } else if session.source == .local {
+            sessionManager.attachLocalSession(sessionID: session.id)
+            // After attaching a local session, focus its root pane.
+            if let activeTab = sessionManager.activeTab {
+                focusManager.focusPane(id: activeTab.paneTree.firstPane.id)
+            }
+        }
     }
-
 
     private func detachSessionAtIndex(_ index: Int) {
-        withServerSession(at: index, sessionManager.detachRemoteSession)
+        guard sessionManager.sessions.indices.contains(index) else { return }
+        let session = sessionManager.sessions[index]
+        if let serverID = session.source.serverSessionID {
+            sessionManager.detachRemoteSession(serverSessionID: serverID)
+            // Remote teardown is handled by onRemoteDetached callback.
+        } else if session.source == .local {
+            sessionManager.detachLocalSession(sessionID: session.id)
+            for tab in session.tabs {
+                for paneID in tab.allPaneIDsIncludingFloating {
+                    viewStore.tearDown(for: paneID)
+                }
+            }
+        }
     }
 
-    /// Detach the currently active remote session (Shift+Cmd+K).
+    /// Detach the currently active session (Shift+Cmd+K).
     private func detachActiveSession() {
         detachSessionAtIndex(sessionManager.activeSessionIndex)
     }
@@ -621,9 +638,9 @@ struct TerminalWindowView: View {
         renamingSessionIndex = nil
     }
 
-    /// Double-click on a sidebar session: attach if it's a detached remote session.
+    /// Double-click on a sidebar session: attach if it's detached.
     private func handleSidebarDoubleClick(_ index: Int) {
-        guard sessionManager.isSessionDetachedRemote(at: index) else { return }
+        guard sessionManager.isSessionDetached(at: index) else { return }
         attachSessionAtIndex(index)
     }
 

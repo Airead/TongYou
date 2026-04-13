@@ -67,7 +67,7 @@ struct SessionSidebarView: View {
     private func sessionRow(_ session: TerminalSession, index: Int, fgColor: Color) -> some View {
         let isActive = index == activeSessionIndex
         let isRemote = session.source.isRemote
-        let isAttached = session.source.serverSessionID.map { attachedSessionIDs.contains($0) } ?? false
+        let isAttached = attachedSessionIDs.contains(session.id)
 
         HStack(spacing: 4) {
             sessionIcon(isRemote: isRemote, isAttached: isAttached, fgColor: fgColor)

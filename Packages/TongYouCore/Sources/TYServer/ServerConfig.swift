@@ -60,8 +60,17 @@ public struct ServerConfig: Sendable {
     }
 
     public static func defaultPersistenceDirectory() -> String {
+        persistenceDirectory(subpath: "remote")
+    }
+
+    public static func defaultLocalPersistenceDirectory() -> String {
+        persistenceDirectory(subpath: "local")
+    }
+
+    private static func persistenceDirectory(subpath: String) -> String {
         let home = ProcessInfo.processInfo.environment["HOME"] ?? NSTemporaryDirectory()
-        return (home as NSString).appendingPathComponent(".local/share/TongYou/sessions")
+        let base = (home as NSString).appendingPathComponent(".local/share/TongYou/sessions")
+        return (base as NSString).appendingPathComponent(subpath)
     }
 
     /// Ensure the parent directory of the given path exists, creating it if needed.
