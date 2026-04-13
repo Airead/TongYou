@@ -198,7 +198,6 @@ struct TerminalWindowView: View {
                 )
             }
         }
-        .preferredColorScheme(.dark)
         .background(WindowConfigurator(
             backgroundColor: windowBackgroundColor,
             title: windowTitle,
@@ -220,11 +219,20 @@ struct TerminalWindowView: View {
     }
 
     /// Window title derived from the active tab's OSC title, falling back to session name.
+    /// When multiple sessions exist, the session name is prepended for clarity.
     private var windowTitle: String {
+        let baseTitle: String
         if let tab = sessionManager.activeTab, tab.title != TerminalTab.defaultTitle {
-            return tab.title
+            baseTitle = tab.title
+        } else {
+            baseTitle = sessionManager.activeSession?.name ?? "TongYou"
         }
-        return sessionManager.activeSession?.name ?? "TongYou"
+
+        if sessionManager.sessionCount > 1,
+           let sessionName = sessionManager.activeSession?.name {
+            return "\(sessionName) — \(baseTitle)"
+        }
+        return baseTitle
     }
 
     private var shouldShowSidebar: Bool {
@@ -694,9 +702,7 @@ struct WindowConfigurator: NSViewRepresentable {
 /// Applies window-level NSWindow configuration that SwiftUI cannot
 /// express declaratively: transparent titlebar, background color, title.
 ///
-/// The dark titlebar appearance (light text, colored traffic lights) is
-/// driven by `.preferredColorScheme(.dark)` on the SwiftUI side, which
-/// SwiftUI propagates to the NSWindow's effective appearance.
+/// The titlebar appearance follows the system light/dark theme automatically.
 private class ConfiguratorView: NSView {
     var desiredBackgroundColor: NSColor = .black
     var desiredTitle: String = "TongYou"
