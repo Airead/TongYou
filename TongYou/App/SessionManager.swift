@@ -896,9 +896,11 @@ final class SessionManager {
     private func handleRemoteSessionClosed(_ sessionID: SessionID) {
         guard let index = sessionIndex(forServerSessionID: sessionID.uuid) else { return }
 
-        teardownRemotePanes(Set(sessions[index].allPaneIDs), sessionID: sessions[index].id)
+        let paneIDs = sessions[index].allPaneIDs
+        teardownRemotePanes(Set(paneIDs), sessionID: sessions[index].id)
         attachedRemoteSessionIDs.remove(sessionID.uuid)
 
+        let localSessionID = sessions[index].id
         sessions.remove(at: index)
 
         if !sessions.isEmpty {
@@ -910,6 +912,8 @@ final class SessionManager {
         } else {
             activeSessionIndex = 0
         }
+
+        onRemoteSessionEmpty?(localSessionID, paneIDs)
     }
 
     private func controllerForServerPane(_ paneID: PaneID) -> ClientTerminalController? {
@@ -948,7 +952,16 @@ final class SessionManager {
         let oldPaneIDs = Set(sessions[sessionIndex].allPaneIDs)
 
         let newTabs = buildTabs(from: info)
-        sessions[sessionIndex].tabs = newTabs.isEmpty ? [TerminalTab()] : newTabs
+
+        // Server removed all tabs — the remote session is finished.
+        if newTabs.isEmpty {
+            let removedPaneIDs = Array(oldPaneIDs)
+            teardownRemotePanes(oldPaneIDs)
+            onRemoteSessionEmpty?(sessions[sessionIndex].id, removedPaneIDs)
+            return removedPaneIDs
+        }
+
+        sessions[sessionIndex].tabs = newTabs
         sessions[sessionIndex].activeTabIndex = min(
             info.activeTabIndex, max(sessions[sessionIndex].tabs.count - 1, 0)
         )
@@ -962,6 +975,10 @@ final class SessionManager {
         onRemoteLayoutChanged?(sessions[sessionIndex].id, Array(removedPaneIDs), Array(addedPaneIDs))
         return Array(removedPaneIDs)
     }
+
+    /// Callback when a remote session has no more tabs (all closed on the server).
+    /// Parameters: (sessionID, removedPaneIDs)
+    var onRemoteSessionEmpty: ((UUID, [UUID]) -> Void)?
 
     /// Callback for the view layer to handle layout changes (e.g. teardown MetalViews, refocus).
     /// Parameters: (sessionID, removedPaneIDs, addedPaneIDs)

@@ -637,6 +637,25 @@ struct TerminalWindowView: View {
             }
         }
 
+        sessionManager.onRemoteSessionEmpty = { [viewStore, focusManager, sessionManager] sessionID, removedPaneIDs in
+            for paneID in removedPaneIDs {
+                viewStore.tearDown(for: paneID)
+                focusManager.removeFromHistory(id: paneID)
+            }
+            // Session may already be removed by handleRemoteSessionClosed;
+            // close it here only if it still exists.
+            if let index = sessionManager.sessions.firstIndex(where: { $0.id == sessionID }) {
+                let paneIDs = sessionManager.closeSession(at: index)
+                for paneID in paneIDs {
+                    viewStore.tearDown(for: paneID)
+                    focusManager.removeFromHistory(id: paneID)
+                }
+            }
+            if sessionManager.sessions.isEmpty {
+                NSApp.keyWindow?.close()
+            }
+        }
+
         sessionManager.onRemoteLayoutChanged = { [viewStore, focusManager, sessionManager] sessionID, removedPaneIDs, addedPaneIDs in
             // Tear down MetalViews for removed panes.
             for paneID in removedPaneIDs {
