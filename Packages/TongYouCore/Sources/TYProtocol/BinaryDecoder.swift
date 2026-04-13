@@ -388,6 +388,11 @@ public struct BinaryDecoder: Sendable {
         case .closeSession:
             return .closeSession(try readSessionID())
 
+        case .renameSession:
+            let sessionID = try readSessionID()
+            let name = try readString()
+            return .renameSession(sessionID, name: name)
+
         case .input:
             let sessionID = try readSessionID()
             let paneID = try readPaneID()

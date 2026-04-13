@@ -130,6 +130,11 @@ public final class RemoteSessionClient: @unchecked Sendable {
         connection?.send(.closeSession(sessionID))
     }
 
+    /// Ask the server to rename a session.
+    public func renameSession(_ sessionID: SessionID, name: String) {
+        connection?.send(.renameSession(sessionID, name: name))
+    }
+
     // MARK: - Terminal I/O
 
     /// Send terminal input to a specific pane.

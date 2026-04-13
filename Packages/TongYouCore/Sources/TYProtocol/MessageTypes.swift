@@ -37,6 +37,7 @@ public enum ClientMessageType: UInt16, Sendable {
     case attachSession   = 0x0202
     case detachSession   = 0x0203
     case closeSession    = 0x0204
+    case renameSession   = 0x0205
 
     // Terminal I/O (hot path)
     case input           = 0x0210
@@ -141,6 +142,7 @@ public enum ClientMessage: Sendable {
     case attachSession(SessionID)
     case detachSession(SessionID)
     case closeSession(SessionID)
+    case renameSession(SessionID, name: String)
 
     // Terminal I/O (hot path)
     case input(SessionID, PaneID, [UInt8])
@@ -175,6 +177,8 @@ public enum ClientMessage: Sendable {
             return "detachSession(id=\(id))"
         case .closeSession(let id):
             return "closeSession(id=\(id))"
+        case .renameSession(let id, let name):
+            return "renameSession(id=\(id), name=\(truncate(name, maxLength: 80)))"
         case .input(let sid, let pid, let bytes):
             let preview = bytes.prefix(32).map { String(format: "%02x", $0) }.joined(separator: " ")
             let suffix = bytes.count > 32 ? "... (len=\(bytes.count))" : ""
@@ -214,6 +218,7 @@ public enum ClientMessage: Sendable {
         case .attachSession:  return .attachSession
         case .detachSession:  return .detachSession
         case .closeSession:   return .closeSession
+        case .renameSession:  return .renameSession
         case .input:          return .input
         case .resize:         return .resize
         case .scrollViewport: return .scrollViewport

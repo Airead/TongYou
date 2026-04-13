@@ -144,6 +144,12 @@ public final class ServerSessionManager {
         return session.toSessionInfo()
     }
 
+    public func renameSession(id: SessionID, name: String) {
+        guard sessions[id] != nil else { return }
+        sessions[id]?.name = name
+        Log.info("Session renamed: \(name) (\(id))", category: .session)
+    }
+
     public func closeSession(id: SessionID) {
         guard let session = sessions.removeValue(forKey: id) else { return }
         for tab in session.tabs { teardownAllPanes(in: tab) }

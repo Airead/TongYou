@@ -433,6 +433,26 @@ struct BinaryCoderTests {
         }
     }
 
+    // MARK: - Rename Session
+
+    @Test func roundTripRenameSessionMessage() throws {
+        let sessionID = SessionID()
+        let msg = ClientMessage.renameSession(sessionID, name: "New Name")
+
+        var encoder = BinaryEncoder()
+        encoder.writeClientMessage(msg)
+
+        var decoder = BinaryDecoder(encoder.data)
+        let decoded = try decoder.readClientMessage(type: .renameSession)
+        if case .renameSession(let sid, let name) = decoded {
+            #expect(sid == sessionID)
+            #expect(name == "New Name")
+        } else {
+            Issue.record("Expected renameSession, got \(decoded)")
+        }
+        #expect(decoder.remaining == 0)
+    }
+
     // MARK: - ScreenDiff
 
     @Test func roundTripScreenDiff() throws {

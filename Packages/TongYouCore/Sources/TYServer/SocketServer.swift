@@ -331,6 +331,10 @@ public final class SocketServer: @unchecked Sendable {
             broadcastAll(.sessionClosed(sessionID))
             checkAutoExit()
 
+        case .renameSession(let sessionID, let name):
+            sessionManager.renameSession(id: sessionID, name: name)
+            broadcastLayoutOrClosed(sessionID: sessionID)
+
         case .input(_, let paneID, let bytes):
             sessionManager.sendInput(paneID: paneID, data: bytes)
 

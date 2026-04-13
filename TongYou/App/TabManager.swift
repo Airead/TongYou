@@ -31,6 +31,7 @@ enum TabAction {
     case newRemoteSession
     case showSessionPicker
     case detachSession
+    case renameSession
 }
 
 /// Manages the list of terminal tabs and the active tab index.
@@ -331,7 +332,8 @@ final class TabManager {
         case .splitVertical, .splitHorizontal, .closePane,
              .focusPane, .paneExited,
              .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane,
-             .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession:
+             .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession,
+             .renameSession:
             // Pane/remote actions are handled by TerminalWindowView, not TabManager.
             return false
         }

@@ -24,6 +24,7 @@ struct TerminalWindowView: View {
     @State private var windowBackgroundColor: NSColor = .black
     @State private var sidebarVisibility: SidebarVisibility = .auto
     @State private var showingSessionPicker = false
+    @State private var renamingSessionID: UUID?
 
     /// Stores MetalView instances outside of SwiftUI state so that
     /// NSViewRepresentable.makeNSView can read/write without triggering
@@ -61,7 +62,8 @@ struct TerminalWindowView: View {
                     },
                     onDoubleClick: { index in
                         handleSidebarDoubleClick(index)
-                    }
+                    },
+                    renamingSessionID: $renamingSessionID
                 )
 
                 Divider()
@@ -455,6 +457,8 @@ struct TerminalWindowView: View {
             showSessionPicker()
         case .detachSession:
             detachActiveSession()
+        case .renameSession:
+            startRenamingActiveSession()
         }
     }
 
@@ -524,6 +528,12 @@ struct TerminalWindowView: View {
     /// Detach the currently active remote session (Shift+Cmd+K).
     private func detachActiveSession() {
         detachSessionAtIndex(sessionManager.activeSessionIndex)
+    }
+
+    private func startRenamingActiveSession() {
+        guard let session = sessionManager.activeSession else { return }
+        ensureSidebarVisible()
+        renamingSessionID = session.id
     }
 
     /// Double-click on a sidebar session: attach if it's a detached remote session.

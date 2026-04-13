@@ -47,6 +47,7 @@ struct Keybinding: Equatable {
         case newRemoteSession
         case showSessionPicker
         case detachSession
+        case renameSession
         // Pass through to PTY (disables the keybinding)
         case unbind
 
@@ -87,6 +88,7 @@ struct Keybinding: Equatable {
             case .newRemoteSession: "new_remote_session"
             case .showSessionPicker: "show_session_picker"
             case .detachSession: "detach_session"
+            case .renameSession: "rename_session"
             case .unbind: "unbind"
             }
         }
@@ -114,6 +116,7 @@ struct Keybinding: Equatable {
             case .newRemoteSession: .newRemoteSession
             case .showSessionPicker: .showSessionPicker
             case .detachSession: .detachSession
+            case .renameSession: .renameSession
             case .copy, .paste, .search, .searchNext, .searchPrevious,
                  .resetFontSize, .increaseFontSize, .decreaseFontSize,
                  .unbind:
@@ -154,6 +157,7 @@ struct Keybinding: Equatable {
             case "new_remote_session": self = .newRemoteSession
             case "show_session_picker": self = .showSessionPicker
             case "detach_session": self = .detachSession
+            case "rename_session": self = .renameSession
             case "unbind": self = .unbind
             default:
                 if rawValue.hasPrefix("goto_tab:"),
@@ -220,6 +224,7 @@ struct Keybinding: Equatable {
         Keybinding(modifiers: [.command, .shift], key: "i", action: .newRemoteSession),
         Keybinding(modifiers: .command, key: "r", action: .showSessionPicker),
         Keybinding(modifiers: [.command, .shift], key: "k", action: .detachSession),
+        Keybinding(modifiers: [.command, .shift], key: "r", action: .renameSession),
     ]
 
     /// Parse a keybinding string like "cmd+shift+t=new_tab".

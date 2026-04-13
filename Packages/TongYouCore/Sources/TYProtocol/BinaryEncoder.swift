@@ -265,6 +265,10 @@ public struct BinaryEncoder: Sendable {
         case .closeSession(let id):
             writeSessionID(id)
 
+        case .renameSession(let id, let name):
+            writeSessionID(id)
+            writeString(name)
+
         case .input(let sessionID, let paneID, let bytes):
             writeSessionID(sessionID)
             writePaneID(paneID)

@@ -17,6 +17,9 @@ struct SessionSidebarView: View {
     let onDetach: (Int) -> Void
     let onDoubleClick: (Int) -> Void
 
+    /// Set externally to trigger rename on a session (e.g. from keyboard shortcut).
+    @Binding var renamingSessionID: UUID?
+
     @State private var editingSessionID: UUID?
     @State private var editingName: String = ""
     @State private var lastClickTime: Date = .distantPast
@@ -58,6 +61,18 @@ struct SessionSidebarView: View {
         }
         .frame(width: Self.sidebarWidth)
         .background(Color(nsColor: .windowBackgroundColor).opacity(0.5))
+        .onChange(of: renamingSessionID) { _, newValue in
+            if let sessionID = newValue,
+               let session = sessions.first(where: { $0.id == sessionID }) {
+                beginEditing(session)
+                renamingSessionID = nil
+            }
+        }
+    }
+
+    private func beginEditing(_ session: TerminalSession) {
+        editingName = session.name
+        editingSessionID = session.id
     }
 
     @ViewBuilder
@@ -120,6 +135,9 @@ struct SessionSidebarView: View {
             lastClickIndex = index
         }
         .contextMenu {
+            Button("Rename") {
+                beginEditing(session)
+            }
             if isRemote {
                 if isAttached {
                     Button("Detach") {
@@ -129,11 +147,6 @@ struct SessionSidebarView: View {
                     Button("Attach") {
                         onAttach(index)
                     }
-                }
-            } else {
-                Button("Rename") {
-                    editingName = session.name
-                    editingSessionID = session.id
                 }
             }
             Divider()

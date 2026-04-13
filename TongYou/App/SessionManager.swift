@@ -161,6 +161,11 @@ final class SessionManager {
     func renameSession(at index: Int, to name: String) {
         guard sessions.indices.contains(index) else { return }
         sessions[index].name = name
+
+        // Sync rename to server for remote sessions.
+        if let serverSessionID = sessions[index].source.serverSessionID {
+            remoteClient?.renameSession(SessionID(serverSessionID), name: name)
+        }
     }
 
     func renameActiveSession(to name: String) {
@@ -579,7 +584,8 @@ final class SessionManager {
         case .splitVertical, .splitHorizontal, .closePane,
              .focusPane, .paneExited,
              .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane,
-             .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession:
+             .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession,
+             .renameSession:
             // Pane/remote actions are handled by TerminalWindowView.
             return false
         }
@@ -849,6 +855,11 @@ final class SessionManager {
 
         // Clear pending state — the layout is now known.
         pendingAttachSessionIDs.remove(info.id.uuid)
+
+        // Sync session name from server (guard avoids no-op SwiftUI invalidation).
+        if sessions[sessionIndex].name != info.name {
+            sessions[sessionIndex].name = info.name
+        }
 
         let oldPaneIDs = Set(sessions[sessionIndex].allPaneIDs)
 
