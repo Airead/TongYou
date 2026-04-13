@@ -10,6 +10,12 @@ DerivedData/
 .build/
 .swiftpm/
 
+# Swift compiler artifacts
+*.d
+*.dia
+*.swiftdeps
+*.swiftmodule
+
 # macOS
 .DS_Store
 
