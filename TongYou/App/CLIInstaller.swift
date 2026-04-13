@@ -29,22 +29,20 @@ enum CLIInstaller {
 
     /// Install the CLI by creating a symlink at /usr/local/bin/tongyou.
     /// Uses AppleScript to request admin privileges (single prompt).
-    static func install() throws {
+    static func install() async throws {
         guard let source = bundledCLIPath else {
             throw CLIInstallerError.cliNotFoundInBundle
         }
 
         let escaped = shellEscape(source)
-        try runPrivileged(
+        try await runPrivileged(
             "mkdir -p /usr/local/bin && rm -f \(shellEscape(installPath)) && ln -s \(escaped) \(shellEscape(installPath))"
         )
     }
 
     /// Uninstall the CLI by removing the symlink.
-    static func uninstall() throws {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: installPath) else { return }
-        try runPrivileged("rm -f \(shellEscape(installPath))")
+    static func uninstall() async throws {
+        try await runPrivileged("rm -f \(shellEscape(installPath))")
     }
 
     /// Escape a string for safe use inside a single-quoted shell argument.
@@ -53,7 +51,9 @@ enum CLIInstaller {
     }
 
     /// Execute a shell command with administrator privileges via AppleScript.
-    private static func runPrivileged(_ command: String) throws {
+    /// Runs on a background thread to avoid blocking the main actor.
+    @concurrent
+    private static func runPrivileged(_ command: String) async throws {
         let escaped = command.replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
         let script = "do shell script \"\(escaped)\" with administrator privileges"

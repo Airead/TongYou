@@ -21,6 +21,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 struct TongYouCommands: Commands {
+    @State private var isInstalling = false
+
     var body: some Commands {
         CommandGroup(after: .appSettings) {
             Button(CLIInstaller.isInstalled
@@ -28,26 +30,30 @@ struct TongYouCommands: Commands {
                    : "Install Command Line Tool...") {
                 installOrUninstallCLI()
             }
-            .disabled(CLIInstaller.bundledCLIPath == nil)
+            .disabled(CLIInstaller.bundledCLIPath == nil || isInstalling)
         }
     }
 
     private func installOrUninstallCLI() {
         let wasInstalled = CLIInstaller.isInstalled
-        do {
-            if wasInstalled {
-                try CLIInstaller.uninstall()
-            } else {
-                try CLIInstaller.install()
+        isInstalling = true
+        Task {
+            defer { isInstalling = false }
+            do {
+                if wasInstalled {
+                    try await CLIInstaller.uninstall()
+                } else {
+                    try await CLIInstaller.install()
+                }
+            } catch {
+                let alert = NSAlert()
+                alert.messageText = wasInstalled
+                    ? "Failed to Uninstall CLI"
+                    : "Failed to Install CLI"
+                alert.informativeText = error.localizedDescription
+                alert.alertStyle = .warning
+                alert.runModal()
             }
-        } catch {
-            let alert = NSAlert()
-            alert.messageText = wasInstalled
-                ? "Failed to Uninstall CLI"
-                : "Failed to Install CLI"
-            alert.informativeText = error.localizedDescription
-            alert.alertStyle = .warning
-            alert.runModal()
         }
     }
 }
