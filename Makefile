@@ -1,4 +1,4 @@
-.PHONY: build build-release test clean run install install-cli icon dmg-resources build-dmg
+.PHONY: build build-release test clean run install install-cli icon dmg-resources build-dmg swift-build
 
 SCHEME = TongYou
 DESTINATION = platform=macOS
@@ -31,8 +31,18 @@ install-cli:
 test:
 	xcodebuild test -scheme $(SCHEME) -destination '$(DESTINATION)' -parallel-testing-enabled NO -only-testing TongYouTests | xcbeautify || true
 
+swift-build:
+	swift build --build-path $(BUILD_DIR)/spn
+
+swift-test:
+	swift test --build-path $(BUILD_DIR)/spn
+
 clean:
 	xcodebuild clean -scheme $(SCHEME) -destination '$(DESTINATION)'
+	@echo "Cleaning SPM build artifacts..."
+	rm -rf .build build/spn
+	rm -f *.d *.dia *.swiftdeps *.swiftmodule
+	@echo "Clean complete."
 
 run: build
 	@open "$$(xcodebuild -scheme $(SCHEME) -destination '$(DESTINATION)' -showBuildSettings 2>/dev/null | grep ' BUILT_PRODUCTS_DIR' | awk '{print $$3}')/TongYou.app"
