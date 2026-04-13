@@ -456,27 +456,39 @@ struct TerminalWindowView: View {
     /// Wire the callback that fires when the server updates a remote session's layout.
     /// Handles MetalView teardown for removed panes and refocuses the active pane.
     private func wireRemoteLayoutCallback() {
-        sessionManager.onRemoteLayoutChanged = { [viewStore, focusManager, sessionManager] sessionID, removedPaneIDs in
+        sessionManager.onRemoteLayoutChanged = { [viewStore, focusManager, sessionManager] sessionID, removedPaneIDs, addedPaneIDs in
             // Tear down MetalViews for removed panes.
             for paneID in removedPaneIDs {
                 viewStore.tearDown(for: paneID)
                 focusManager.removeFromHistory(id: paneID)
             }
 
-            // If the focused pane was removed, refocus the active tab's root pane.
+            guard sessionManager.activeSession?.id == sessionID,
+                  let activeTab = sessionManager.activeSession?.activeTab else { return }
+            let activePaneIDs = Set(activeTab.allPaneIDsIncludingFloating)
+
+            let focusRoot = { focusManager.focusPane(id: activeTab.paneTree.firstPane.id) }
+
+            // If the focused pane is no longer in the active tab (e.g. tab switched
+            // or focused pane removed), focus the active tab's root pane.
             if let focused = focusManager.focusedPaneID,
-               removedPaneIDs.contains(focused) {
-                if let activeTab = sessionManager.activeSession?.activeTab {
-                    focusManager.focusPane(id: activeTab.paneTree.firstPane.id)
-                }
+               !activePaneIDs.contains(focused) {
+                focusRoot()
+                return
             }
 
-            // If no pane is focused (e.g. new tab created), focus the active tab's root.
-            if focusManager.focusedPaneID == nil,
-               sessionManager.activeSession?.id == sessionID {
-                if let activeTab = sessionManager.activeSession?.activeTab {
-                    focusManager.focusPane(id: activeTab.paneTree.firstPane.id)
-                }
+            // If a new pane was added (e.g. split), focus it.
+            // Use tree order (deterministic) rather than Set iteration order.
+            let addedSet = Set(addedPaneIDs)
+            if let newPaneID = activeTab.allPaneIDsIncludingFloating
+                .last(where: { addedSet.contains($0) }) {
+                focusManager.focusPane(id: newPaneID)
+                return
+            }
+
+            // If no pane is focused, focus the active tab's root.
+            if focusManager.focusedPaneID == nil {
+                focusRoot()
             }
         }
     }

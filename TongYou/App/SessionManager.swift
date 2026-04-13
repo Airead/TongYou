@@ -727,16 +727,18 @@ final class SessionManager {
         )
         serverTabIDs[sessions[sessionIndex].id] = info.tabs.map(\.id)
 
-        let removedPaneIDs = oldPaneIDs.subtracting(Set(sessions[sessionIndex].allPaneIDs))
+        let newPaneIDs = Set(sessions[sessionIndex].allPaneIDs)
+        let removedPaneIDs = oldPaneIDs.subtracting(newPaneIDs)
+        let addedPaneIDs = newPaneIDs.subtracting(oldPaneIDs)
         teardownRemotePanes(removedPaneIDs)
 
-        onRemoteLayoutChanged?(sessions[sessionIndex].id, Array(removedPaneIDs))
+        onRemoteLayoutChanged?(sessions[sessionIndex].id, Array(removedPaneIDs), Array(addedPaneIDs))
         return Array(removedPaneIDs)
     }
 
     /// Callback for the view layer to handle layout changes (e.g. teardown MetalViews, refocus).
-    /// Parameters: (sessionID, removedPaneIDs)
-    var onRemoteLayoutChanged: ((UUID, [UUID]) -> Void)?
+    /// Parameters: (sessionID, removedPaneIDs, addedPaneIDs)
+    var onRemoteLayoutChanged: ((UUID, [UUID], [UUID]) -> Void)?
 
     private func addOrUpdateRemoteSession(_ info: SessionInfo) {
         let sessionUUID = info.id.uuid
