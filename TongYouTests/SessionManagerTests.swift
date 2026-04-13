@@ -35,8 +35,8 @@ struct SessionManagerTests {
         _ = mgr.createSession()
         _ = mgr.createSession()
 
-        #expect(mgr.sessions[0].name == "Session 1")
-        #expect(mgr.sessions[1].name == "Session 2")
+        #expect(mgr.sessions[0].name == "LSession 1")
+        #expect(mgr.sessions[1].name == "LSession 2")
     }
 
     // MARK: - Session Close
@@ -179,6 +179,54 @@ struct SessionManagerTests {
 
         mgr.renameActiveSession(to: "renamed")
         #expect(mgr.activeSession?.name == "renamed")
+    }
+
+    // MARK: - Unique Session Names
+
+    @Test func createSessionAutoNameSkipsTaken() {
+        let mgr = SessionManager()
+        _ = mgr.createSession(name: "LSession 1")
+        _ = mgr.createSession()  // "LSession 1" is taken, should get "LSession 2"
+
+        #expect(mgr.sessions[0].name == "LSession 1")
+        #expect(mgr.sessions[1].name == "LSession 2")
+    }
+
+    @Test func createSessionWithDuplicateNameGetsSuffix() {
+        let mgr = SessionManager()
+        _ = mgr.createSession(name: "dev")
+        _ = mgr.createSession(name: "dev")
+
+        #expect(mgr.sessions[0].name == "dev")
+        #expect(mgr.sessions[1].name != "dev")
+        #expect(mgr.sessions[1].name.hasPrefix("dev-"))
+    }
+
+    @Test func createSessionWithUniqueNameUnchanged() {
+        let mgr = SessionManager()
+        _ = mgr.createSession(name: "alpha")
+        _ = mgr.createSession(name: "beta")
+
+        #expect(mgr.sessions[0].name == "alpha")
+        #expect(mgr.sessions[1].name == "beta")
+    }
+
+    @Test func renameSessionDeduplicates() {
+        let mgr = SessionManager()
+        _ = mgr.createSession(name: "work")
+        _ = mgr.createSession(name: "play")
+
+        mgr.renameSession(at: 1, to: "work")
+        #expect(mgr.sessions[1].name != "work")
+        #expect(mgr.sessions[1].name.hasPrefix("work-"))
+    }
+
+    @Test func renameSessionToSameNameUnchanged() {
+        let mgr = SessionManager()
+        _ = mgr.createSession(name: "dev")
+
+        mgr.renameSession(at: 0, to: "dev")
+        #expect(mgr.sessions[0].name == "dev")
     }
 
     // MARK: - Tab Operations Within Session

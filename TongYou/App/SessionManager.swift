@@ -42,6 +42,35 @@ final class SessionManager {
     /// Maps session UUID → ordered list of server TabIDs (parallel to session.tabs).
     private var serverTabIDs: [UUID: [TabID]] = [:]
 
+    /// Generate the next available name with a given prefix (e.g. "LSession 1", "LSession 2").
+    private func nextAvailableName(prefix: String) -> String {
+        let existingNames = Set(sessions.map(\.name))
+        for n in 1... {
+            let candidate = "\(prefix) \(n)"
+            if !existingNames.contains(candidate) { return candidate }
+        }
+        fatalError("unreachable")
+    }
+
+    /// Ensure a session name is unique among existing sessions.
+    /// If `name` conflicts, appends "-X" where X is an incrementally longer prefix
+    /// of `sessionID`'s hex string until unique.
+    private func uniqueSessionName(_ name: String, for sessionID: UUID, excludingIndex: Int? = nil) -> String {
+        let otherNames = sessions.enumerated()
+            .filter { $0.offset != excludingIndex }
+            .map(\.element.name)
+        let nameSet = Set(otherNames)
+        if !nameSet.contains(name) { return name }
+
+        let hex = sessionID.uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        for length in 1...hex.count {
+            let suffix = String(hex.prefix(length))
+            let candidate = "\(name)-\(suffix)"
+            if !nameSet.contains(candidate) { return candidate }
+        }
+        return name
+    }
+
     /// Find the index of a remote session by its server-side UUID.
     private func sessionIndex(forServerSessionID uuid: UUID) -> Int? {
         sessions.firstIndex(where: { $0.source == .remote(serverSessionID: uuid) })
@@ -95,8 +124,9 @@ final class SessionManager {
 
     @discardableResult
     func createSession(name: String? = nil, initialWorkingDirectory: String? = nil) -> UUID {
-        let sessionName = name ?? "Session \(sessions.count + 1)"
-        let session = TerminalSession(name: sessionName, initialWorkingDirectory: initialWorkingDirectory)
+        let baseName = name ?? nextAvailableName(prefix: "LSession")
+        var session = TerminalSession(name: baseName, initialWorkingDirectory: initialWorkingDirectory)
+        session.name = uniqueSessionName(baseName, for: session.id)
         sessions.append(session)
         activeSessionIndex = sessions.count - 1
         return session.id
@@ -160,7 +190,7 @@ final class SessionManager {
 
     func renameSession(at index: Int, to name: String) {
         guard sessions.indices.contains(index) else { return }
-        sessions[index].name = name
+        sessions[index].name = uniqueSessionName(name, for: sessions[index].id, excludingIndex: index)
 
         // Sync rename to server for remote sessions.
         if let serverSessionID = sessions[index].source.serverSessionID {
@@ -707,8 +737,9 @@ final class SessionManager {
 
     /// Create a new remote session: connect if needed, then request creation.
     func createRemoteSession(name: String? = nil) {
+        let sessionName = name ?? nextAvailableName(prefix: "RSession")
         ensureConnected { [weak self] in
-            self?.remoteClient?.createSession(name: name)
+            self?.remoteClient?.createSession(name: sessionName)
         }
     }
 
@@ -857,8 +888,9 @@ final class SessionManager {
         pendingAttachSessionIDs.remove(info.id.uuid)
 
         // Sync session name from server (guard avoids no-op SwiftUI invalidation).
-        if sessions[sessionIndex].name != info.name {
-            sessions[sessionIndex].name = info.name
+        let resolvedName = uniqueSessionName(info.name, for: sessions[sessionIndex].id, excludingIndex: sessionIndex)
+        if sessions[sessionIndex].name != resolvedName {
+            sessions[sessionIndex].name = resolvedName
         }
 
         let oldPaneIDs = Set(sessions[sessionIndex].allPaneIDs)
@@ -893,11 +925,12 @@ final class SessionManager {
 
         // Add the session to the sidebar with an empty tab (detached state).
         // The session only gets real tabs/panes when the user explicitly attaches.
-        let session = TerminalSession(
+        var session = TerminalSession(
             remoteSessionID: sessionUUID,
             name: info.name,
             tabs: [TerminalTab()]
         )
+        session.name = uniqueSessionName(info.name, for: session.id)
         sessions.append(session)
     }
 

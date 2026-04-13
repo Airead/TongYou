@@ -162,9 +162,10 @@ struct TerminalWindowView: View {
                 modalOverlay(onDismiss: { showingSessionPicker = false }) {
                     SessionPickerView(
                         sessions: sessionManager.sessions,
+                        activeSessionIndex: sessionManager.activeSessionIndex,
                         attachedSessionIDs: sessionManager.attachedRemoteSessionIDs,
-                        onAttach: { serverSessionID in
-                            sessionManager.attachRemoteSession(serverSessionID: serverSessionID)
+                        onSelect: { index in
+                            switchToSessionFromPicker(at: index)
                         },
                         onDismiss: {
                             showingSessionPicker = false
@@ -522,8 +523,16 @@ struct TerminalWindowView: View {
     // MARK: - Remote Session
 
     private func showSessionPicker() {
-        sessionManager.listRemoteSessions()
         showingSessionPicker = true
+    }
+
+    /// Handle session selection from the quick picker.
+    /// For detached remote sessions, attach first; then switch.
+    private func switchToSessionFromPicker(at index: Int) {
+        if sessionManager.isSessionDetachedRemote(at: index) {
+            attachSessionAtIndex(index)
+        }
+        switchToSession(at: index)
     }
 
     private func ensureSidebarVisible() {
@@ -541,6 +550,7 @@ struct TerminalWindowView: View {
     private func attachSessionAtIndex(_ index: Int) {
         withServerSession(at: index, sessionManager.attachRemoteSession)
     }
+
 
     private func detachSessionAtIndex(_ index: Int) {
         withServerSession(at: index, sessionManager.detachRemoteSession)
