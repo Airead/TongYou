@@ -200,7 +200,7 @@ func runServer(daemonize: Bool, debug: Bool) {
         _ = DaemonLifecycle.daemonize()
     }
 
-    let config = ServerConfig()
+    let config = ServerConfig(persistenceDirectory: ServerConfig.defaultPersistenceDirectory())
     let lifecycle = DaemonLifecycle()
     let sessionManager = ServerSessionManager(config: config)
     let server = SocketServer(config: config, sessionManager: sessionManager)

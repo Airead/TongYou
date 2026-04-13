@@ -7,6 +7,23 @@ import TYTerminal
 @Suite("ServerSessionManager Tests", .serialized)
 struct ServerSessionManagerTests {
 
+    // MARK: - Helpers
+
+    private func makeTempDir() -> String {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .path
+    }
+
+    private func makePersistentManager(directory: String) -> ServerSessionManager {
+        let config = ServerConfig(
+            defaultColumns: 80,
+            defaultRows: 24,
+            persistenceDirectory: directory
+        )
+        return ServerSessionManager(config: config)
+    }
+
     @Test("Create session returns valid SessionInfo")
     func createSession() {
         let manager = ServerSessionManager()
@@ -16,7 +33,6 @@ struct ServerSessionManagerTests {
         #expect(info.tabs.count == 1)
         #expect(info.activeTabIndex == 0)
 
-        // The tab should have a leaf layout with one pane
         if case .leaf = info.tabs[0].layout {
             // OK
         } else {
@@ -134,7 +150,6 @@ struct ServerSessionManagerTests {
         let manager = ServerSessionManager()
         let session = manager.createSession(name: "Split Test")
 
-        // Get the initial pane ID from the layout
         guard case .leaf(let firstPaneID) = session.tabs[0].layout else {
             Issue.record("Expected leaf layout")
             return
@@ -214,10 +229,7 @@ struct ServerSessionManagerTests {
             return
         }
 
-        // Wait for PTY to start
         Thread.sleep(forTimeInterval: 0.2)
-
-        // Should not crash
         manager.sendInput(paneID: paneID, data: Array("ls\n".utf8))
 
         manager.closeSession(id: session.id)
@@ -233,7 +245,6 @@ struct ServerSessionManagerTests {
         }
 
         manager.resizePane(paneID: paneID, cols: 120, rows: 40)
-
         Thread.sleep(forTimeInterval: 0.1)
 
         manager.closeSession(id: session.id)
@@ -336,13 +347,11 @@ struct ServerSessionManagerTests {
         let fp1 = manager.createFloatingPane(sessionID: session.id, tabID: tabID)!
         let fp2 = manager.createFloatingPane(sessionID: session.id, tabID: tabID)!
 
-        // fp2 should have higher zIndex than fp1
         var info = manager.sessionInfo(for: session.id)!
         let z1Before = info.tabs[0].floatingPanes.first(where: { $0.paneID == fp1 })!.zIndex
         let z2Before = info.tabs[0].floatingPanes.first(where: { $0.paneID == fp2 })!.zIndex
         #expect(z2Before > z1Before)
 
-        // Bring fp1 to front
         manager.bringFloatingPaneToFront(sessionID: session.id, paneID: fp1)
 
         info = manager.sessionInfo(for: session.id)!
@@ -393,11 +402,8 @@ struct ServerSessionManagerTests {
         let tabID = session.tabs[0].id
 
         let fpID = manager.createFloatingPane(sessionID: session.id, tabID: tabID)!
-
-        // Wait for PTY to start
         Thread.sleep(forTimeInterval: 0.2)
 
-        // Should not crash — confirms the pane is in coreLookup
         manager.sendInput(paneID: fpID, data: Array("echo hello\n".utf8))
 
         let snap = manager.snapshot(paneID: fpID)
@@ -419,16 +425,13 @@ struct ServerSessionManagerTests {
 
         let session = manager.createSession(name: "Dirty Callback Test")
 
-        // Send a command to trigger output
         guard case .leaf(let paneID) = session.tabs[0].layout else {
             Issue.record("Expected leaf layout")
             return
         }
-        // Wait for PTY to be ready, then send a command to trigger output
         Thread.sleep(forTimeInterval: 0.2)
         manager.sendInput(paneID: paneID, data: Array("echo test\n".utf8))
 
-        // Poll for the callback with a timeout
         for _ in 0..<30 {
             Thread.sleep(forTimeInterval: 0.1)
             if receivedPairs.withLock({ !$0.isEmpty }) { break }
@@ -494,7 +497,6 @@ struct ServerSessionManagerTests {
 
         let clientA = UUID()
         let clientB = UUID()
-        // A: wide but short. B: narrow but tall.
         manager.registerClientSize(clientID: clientA, paneID: paneID, cols: 200, rows: 20)
         let result = manager.registerClientSize(clientID: clientB, paneID: paneID, cols: 80, rows: 50)
 
@@ -518,10 +520,8 @@ struct ServerSessionManagerTests {
         manager.registerClientSize(clientID: clientA, paneID: paneID, cols: 120, rows: 40)
         manager.registerClientSize(clientID: clientB, paneID: paneID, cols: 80, rows: 24)
 
-        // Remove the smaller client — effective size should grow back to A's size
         manager.removeClientFromPane(clientID: clientB, paneID: paneID)
 
-        // Re-register A to verify the effective size (registerClientSize returns current effective)
         let result = manager.registerClientSize(clientID: clientA, paneID: paneID, cols: 120, rows: 40)
         #expect(result?.cols == 120)
         #expect(result?.rows == 40)
@@ -538,7 +538,6 @@ struct ServerSessionManagerTests {
             return
         }
 
-        // Create a second pane via split
         guard let paneID2 = manager.splitPane(
             sessionID: session.id, paneID: paneID1, direction: .vertical
         ) else {
@@ -553,10 +552,8 @@ struct ServerSessionManagerTests {
         manager.registerClientSize(clientID: clientA, paneID: paneID2, cols: 100, rows: 30)
         manager.registerClientSize(clientID: clientB, paneID: paneID2, cols: 60, rows: 20)
 
-        // Remove client B from all panes
         manager.removeClientFromAllPanes(clientID: clientB)
 
-        // Only client A remains — verify by re-registering
         let r1 = manager.registerClientSize(clientID: clientA, paneID: paneID1, cols: 120, rows: 40)
         #expect(r1?.cols == 120)
         #expect(r1?.rows == 40)
@@ -582,10 +579,8 @@ struct ServerSessionManagerTests {
         manager.registerClientSize(clientID: clientA, paneID: paneID, cols: 80, rows: 24)
         manager.registerClientSize(clientID: clientB, paneID: paneID, cols: 120, rows: 40)
 
-        // A resizes to be larger than B
         let result = manager.registerClientSize(clientID: clientA, paneID: paneID, cols: 200, rows: 50)
 
-        // min should now be B: 120x40
         #expect(result?.cols == 120)
         #expect(result?.rows == 40)
 
@@ -601,7 +596,6 @@ struct ServerSessionManagerTests {
         _ = manager.createTab(sessionID: session.id)
         _ = manager.createTab(sessionID: session.id)
 
-        // activeTabIndex should be 2 (last created)
         #expect(manager.sessionInfo(for: session.id)?.activeTabIndex == 2)
 
         manager.selectTab(sessionID: session.id, tabIndex: 0)
@@ -634,7 +628,6 @@ struct ServerSessionManagerTests {
             return
         }
 
-        // Split to get a second pane
         guard let pane2 = manager.splitPane(
             sessionID: session.id, paneID: pane1, direction: .vertical
         ) else {
@@ -693,7 +686,108 @@ struct ServerSessionManagerTests {
         manager.registerClientSize(clientID: clientA, paneID: paneID, cols: 120, rows: 40)
         manager.removeClientFromPane(clientID: clientA, paneID: paneID)
 
-        // Should not crash, pane retains its last size
+        manager.closeSession(id: session.id)
+    }
+
+    // MARK: - Persistence
+
+    @Test("Session manager with persistence directory restores sessions on init")
+    func persistenceRestoreSession() throws {
+        let tempDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: tempDir) }
+
+        let sessionID = SessionID()
+        let tabID = TabID()
+        let paneID = PaneID()
+        let layout = LayoutTree.leaf(paneID)
+        let sessionInfo = SessionInfo(
+            id: sessionID,
+            name: "Persisted",
+            tabs: [
+                TabInfo(id: tabID, title: "Tab", layout: layout, focusedPaneID: paneID)
+            ],
+            activeTabIndex: 0
+        )
+        let cwd = ProcessInfo.processInfo.environment["HOME"] ?? "/"
+        let persisted = PersistedSession(
+            sessionInfo: sessionInfo,
+            paneContexts: [paneID: PersistedPaneContext(cwd: cwd)]
+        )
+
+        let store = SessionStore(directory: tempDir)
+        store.save(persisted)
+
+        let manager = makePersistentManager(directory: tempDir)
+
+        #expect(manager.sessionCount == 1)
+        let info = manager.sessionInfo(for: sessionID)
+        #expect(info?.name == "Persisted")
+        #expect(info?.tabs.count == 1)
+
+        manager.closeSession(id: sessionID)
+    }
+
+    @Test("Creating session writes persistence file")
+    func persistenceSaveOnCreate() throws {
+        let tempDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: tempDir) }
+
+        let manager = makePersistentManager(directory: tempDir)
+        let session = manager.createSession(name: "Save Test")
+        manager.flushPendingSaves()
+
+        let store = SessionStore(directory: tempDir)
+        let loaded = store.loadAll()
+        #expect(loaded.count == 1)
+        #expect(loaded.first?.sessionInfo.name == "Save Test")
+
+        manager.closeSession(id: session.id)
+    }
+
+    @Test("Closing session removes persistence file")
+    func persistenceDeleteOnClose() throws {
+        let tempDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: tempDir) }
+
+        let manager = makePersistentManager(directory: tempDir)
+        let session = manager.createSession(name: "Delete Test")
+        manager.flushPendingSaves()
+
+        manager.closeSession(id: session.id)
+
+        let store = SessionStore(directory: tempDir)
+        let loaded = store.loadAll()
+        #expect(loaded.isEmpty)
+    }
+
+    @Test("Split pane updates persistence")
+    func persistenceAfterSplit() throws {
+        let tempDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: tempDir) }
+
+        let manager = makePersistentManager(directory: tempDir)
+        let session = manager.createSession(name: "Split Persist")
+        manager.flushPendingSaves()
+
+        guard case .leaf(let paneID) = session.tabs[0].layout else {
+            Issue.record("Expected leaf layout")
+            manager.closeSession(id: session.id)
+            return
+        }
+
+        _ = manager.splitPane(sessionID: session.id, paneID: paneID, direction: .vertical)
+        manager.flushPendingSaves()
+
+        let store = SessionStore(directory: tempDir)
+        let loaded = store.loadAll()
+        #expect(loaded.count == 1)
+        let layout = loaded.first?.sessionInfo.tabs.first?.layout
+        if case .split(let dir, _, _, _) = layout {
+            #expect(dir == .vertical)
+        } else {
+            Issue.record("Expected split layout in persisted data")
+        }
+
         manager.closeSession(id: session.id)
     }
 }

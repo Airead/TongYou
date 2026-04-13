@@ -1,7 +1,7 @@
 import Foundation
 
 /// Type-safe session identifier.
-public struct SessionID: Hashable, Sendable, CustomStringConvertible {
+public struct SessionID: Hashable, Sendable, Codable, CustomStringConvertible {
     public let uuid: UUID
 
     public init() { self.uuid = UUID() }
@@ -11,7 +11,7 @@ public struct SessionID: Hashable, Sendable, CustomStringConvertible {
 }
 
 /// Type-safe tab identifier.
-public struct TabID: Hashable, Sendable, CustomStringConvertible {
+public struct TabID: Hashable, Sendable, Codable, CustomStringConvertible {
     public let uuid: UUID
 
     public init() { self.uuid = UUID() }
@@ -21,7 +21,7 @@ public struct TabID: Hashable, Sendable, CustomStringConvertible {
 }
 
 /// Type-safe pane identifier.
-public struct PaneID: Hashable, Sendable, CustomStringConvertible {
+public struct PaneID: Hashable, Sendable, Codable, CustomStringConvertible {
     public let uuid: UUID
 
     public init() { self.uuid = UUID() }

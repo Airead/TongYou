@@ -2,7 +2,7 @@ import Foundation
 import TYTerminal
 
 /// Information about a session, suitable for listing and display.
-public struct SessionInfo: Equatable, Sendable {
+public struct SessionInfo: Equatable, Sendable, Codable {
     public let id: SessionID
     public var name: String
     public var tabs: [TabInfo]
@@ -17,7 +17,7 @@ public struct SessionInfo: Equatable, Sendable {
 }
 
 /// Information about a tab within a session.
-public struct TabInfo: Equatable, Sendable {
+public struct TabInfo: Equatable, Sendable, Codable {
     public let id: TabID
     public var title: String
     public var layout: LayoutTree
@@ -35,7 +35,7 @@ public struct TabInfo: Equatable, Sendable {
 }
 
 /// Serializable representation of a floating pane's state.
-public struct FloatingPaneInfo: Equatable, Sendable {
+public struct FloatingPaneInfo: Equatable, Sendable, Codable {
     public let paneID: PaneID
     /// Normalized frame (0–1) relative to the container size.
     public var frameX: Float
@@ -70,7 +70,52 @@ public struct FloatingPaneInfo: Equatable, Sendable {
 
 /// Serializable representation of the pane layout tree.
 /// Mirrors `PaneNode` from TYTerminal but uses protocol-layer IDs.
-public indirect enum LayoutTree: Sendable, Equatable {
+public indirect enum LayoutTree: Sendable, Equatable, Codable {
     case leaf(PaneID)
     case split(direction: SplitDirection, ratio: Float, first: LayoutTree, second: LayoutTree)
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case paneID
+        case direction
+        case ratio
+        case first
+        case second
+    }
+
+    private enum LayoutType: String, Codable {
+        case leaf
+        case split
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .leaf(let paneID):
+            try container.encode(LayoutType.leaf, forKey: .type)
+            try container.encode(paneID, forKey: .paneID)
+        case .split(let direction, let ratio, let first, let second):
+            try container.encode(LayoutType.split, forKey: .type)
+            try container.encode(direction, forKey: .direction)
+            try container.encode(ratio, forKey: .ratio)
+            try container.encode(first, forKey: .first)
+            try container.encode(second, forKey: .second)
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let type = try container.decode(LayoutType.self, forKey: .type)
+        switch type {
+        case .leaf:
+            let paneID = try container.decode(PaneID.self, forKey: .paneID)
+            self = .leaf(paneID)
+        case .split:
+            let direction = try container.decode(SplitDirection.self, forKey: .direction)
+            let ratio = try container.decode(Float.self, forKey: .ratio)
+            let first = try container.decode(LayoutTree.self, forKey: .first)
+            let second = try container.decode(LayoutTree.self, forKey: .second)
+            self = .split(direction: direction, ratio: ratio, first: first, second: second)
+        }
+    }
 }

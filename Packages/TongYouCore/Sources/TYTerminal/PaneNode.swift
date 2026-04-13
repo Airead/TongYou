@@ -2,7 +2,7 @@ import CoreGraphics
 import Foundation
 
 /// Direction for splitting a pane.
-public enum SplitDirection: Equatable, Sendable {
+public enum SplitDirection: Equatable, Sendable, Codable {
     case horizontal  // top / bottom
     case vertical    // left / right
 }

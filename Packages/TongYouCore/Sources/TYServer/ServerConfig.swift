@@ -23,6 +23,10 @@ public struct ServerConfig: Sendable {
     /// Interval in seconds between periodic stats logging (0 = disabled).
     public var statsInterval: TimeInterval
 
+    /// Directory where session persistence files are stored.
+    /// If nil, sessions are not persisted to disk.
+    public var persistenceDirectory: String?
+
     public init(
         socketPath: String? = nil,
         autoExitOnNoSessions: Bool = false,
@@ -32,7 +36,8 @@ public struct ServerConfig: Sendable {
         screenUpdateInterval: TimeInterval = 1.0 / 60.0,
         defaultWorkingDirectory: String? = nil,
         maxPendingScreenUpdates: Int = 3,
-        statsInterval: TimeInterval = 30.0
+        statsInterval: TimeInterval = 30.0,
+        persistenceDirectory: String? = nil
     ) {
         self.socketPath = socketPath ?? Self.defaultSocketPath()
         self.autoExitOnNoSessions = autoExitOnNoSessions
@@ -43,6 +48,7 @@ public struct ServerConfig: Sendable {
         self.defaultWorkingDirectory = defaultWorkingDirectory
         self.maxPendingScreenUpdates = maxPendingScreenUpdates
         self.statsInterval = statsInterval
+        self.persistenceDirectory = persistenceDirectory
     }
 
     public static func defaultSocketPath() -> String {
@@ -51,6 +57,11 @@ public struct ServerConfig: Sendable {
 
     public static func defaultPIDPath() -> String {
         runtimeDirectory().appending("/tongyou.pid")
+    }
+
+    public static func defaultPersistenceDirectory() -> String {
+        let home = ProcessInfo.processInfo.environment["HOME"] ?? NSTemporaryDirectory()
+        return (home as NSString).appendingPathComponent(".local/share/TongYou/sessions")
     }
 
     /// Ensure the parent directory of the given path exists, creating it if needed.
