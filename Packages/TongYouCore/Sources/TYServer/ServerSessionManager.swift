@@ -12,6 +12,12 @@ struct ServerTab {
     var floatingPaneCores: [PaneID: TerminalCore] = [:]
     /// The pane that was last focused in this tab by any client.
     var focusedPaneID: PaneID?
+
+    /// Return the cwd of the focused pane (or the first pane as fallback).
+    func focusedPaneCwd(coreLookup: [PaneID: TerminalCore]) -> String? {
+        let target = focusedPaneID ?? PaneID(paneTree.firstPane.id)
+        return coreLookup[target]?.currentWorkingDirectory
+    }
 }
 
 /// Server-side session containing tabs and panes.
@@ -20,6 +26,11 @@ struct ServerSession {
     var name: String
     var tabs: [ServerTab]
     var activeTabIndex: Int
+
+    var activeTab: ServerTab? {
+        guard tabs.indices.contains(activeTabIndex) else { return nil }
+        return tabs[activeTabIndex]
+    }
 
     func toSessionInfo() -> SessionInfo {
         let tabInfos = tabs.map { tab in
@@ -170,10 +181,13 @@ public final class ServerSessionManager {
 
     @discardableResult
     public func createTab(sessionID: SessionID) -> TabID? {
-        guard sessions[sessionID] != nil else { return nil }
+        guard let session = sessions[sessionID] else { return nil }
+
+        // Inherit cwd from the focused pane of the active tab.
+        let focusedCwd = session.activeTab?.focusedPaneCwd(coreLookup: coreLookup)
 
         let tabID = TabID()
-        let (paneID, pane, core) = createAndStartPane(sessionID: sessionID)
+        let (paneID, pane, core) = createAndStartPane(sessionID: sessionID, workingDirectory: focusedCwd)
         let paneTree = PaneNode.leaf(pane)
 
         let tab = ServerTab(
@@ -234,7 +248,10 @@ public final class ServerSessionManager {
         guard var session = sessions[sessionID] else { return nil }
         guard let tabIndex = session.tabIndex(for: paneID) else { return nil }
 
-        let (newPaneID, newPane, core) = createAndStartPane(sessionID: sessionID)
+        // Inherit cwd from the pane being split.
+        let sourceCwd = coreLookup[paneID]?.currentWorkingDirectory
+
+        let (newPaneID, newPane, core) = createAndStartPane(sessionID: sessionID, workingDirectory: sourceCwd)
 
         guard let newTree = session.tabs[tabIndex].paneTree.split(
             paneID: paneID.uuid,
@@ -354,7 +371,10 @@ public final class ServerSessionManager {
         guard var session = sessions[sessionID] else { return nil }
         guard let tabIndex = session.tabs.firstIndex(where: { $0.id == tabID }) else { return nil }
 
-        let (paneID, _, core) = createAndStartPane(sessionID: sessionID)
+        // Inherit cwd from the focused pane of the target tab.
+        let focusedCwd = session.tabs[tabIndex].focusedPaneCwd(coreLookup: coreLookup)
+
+        let (paneID, _, core) = createAndStartPane(sessionID: sessionID, workingDirectory: focusedCwd)
         let nextZ = (session.tabs[tabIndex].floatingPanes.max(by: { $0.zIndex < $1.zIndex })?.zIndex ?? -1) + 1
         let fp = FloatingPaneInfo(paneID: paneID, zIndex: nextZ)
 
@@ -445,7 +465,12 @@ public final class ServerSessionManager {
     }
 
     /// Create a new pane with its TerminalCore and start the PTY.
-    private func createAndStartPane(sessionID: SessionID) -> (PaneID, TerminalPane, TerminalCore) {
+    /// - Parameter workingDirectory: If provided, the new pane starts in this directory;
+    ///   otherwise falls back to `config.defaultWorkingDirectory` / `$HOME` / `/`.
+    private func createAndStartPane(
+        sessionID: SessionID,
+        workingDirectory: String? = nil
+    ) -> (PaneID, TerminalPane, TerminalCore) {
         let pane = TerminalPane()
         let paneID = PaneID(pane.id)
 
@@ -474,13 +499,16 @@ public final class ServerSessionManager {
 
         coreLookup[paneID] = core
 
+        let effectiveCwd = workingDirectory
+            ?? config.defaultWorkingDirectory
+            ?? ProcessInfo.processInfo.environment["HOME"]
+            ?? "/"
+
         do {
             try core.start(
                 columns: config.defaultColumns,
                 rows: config.defaultRows,
-                workingDirectory: config.defaultWorkingDirectory
-                    ?? ProcessInfo.processInfo.environment["HOME"]
-                    ?? "/"
+                workingDirectory: effectiveCwd
             )
         } catch {
             Log.error("Failed to start PTY for pane \(paneID): \(error)", category: .session)
