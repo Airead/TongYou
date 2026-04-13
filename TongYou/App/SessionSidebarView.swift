@@ -19,6 +19,8 @@ struct SessionSidebarView: View {
 
     @State private var editingSessionID: UUID?
     @State private var editingName: String = ""
+    @State private var lastClickTime: Date = .distantPast
+    @State private var lastClickIndex: Int = -1
 
     static let sidebarWidth: CGFloat = 180
 
@@ -105,15 +107,17 @@ struct SessionSidebarView: View {
         )
         .foregroundStyle(isActive ? .primary : .secondary)
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) {
-            if !isEditing {
-                onDoubleClick(index)
-            }
-        }
         .onTapGesture {
-            if !isEditing {
+            if isEditing { return }
+            let now = Date()
+            if now.timeIntervalSince(lastClickTime) < 0.3 && lastClickIndex == index {
+                onDoubleClick(index)
+                lastClickTime = .distantPast
+            } else {
                 onSelect(index)
             }
+            lastClickTime = now
+            lastClickIndex = index
         }
         .contextMenu {
             if isRemote {
