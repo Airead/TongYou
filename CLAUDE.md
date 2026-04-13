@@ -45,9 +45,18 @@ Run unit tests with parallel testing disabled and skip UI tests:
 xcodebuild test -scheme TongYou -destination 'platform=macOS' -parallel-testing-enabled NO -only-testing:TongYouTests
 ```
 
-**Avoid running multiple `xcodebuild` processes concurrently** — they compete for DerivedData and CodeSign, causing hangs or build failures. Always wait for the previous build/test to finish before starting a new one.
+**Avoid running multiple `xcodebuild` or `swift build`/`swift test` processes concurrently** — they compete for DerivedData / `.build` directory locks, causing hangs or build failures. Always wait for the previous build/test to finish before starting a new one. **Before every build or test, run `pgrep -fl "swift|xcodebuild"` to check for existing processes.** Only proceed when no build/test processes are active (background services like `swift-plugin-server` are fine).
 
 **Never use real user data in tests.** Use isolated/mock resources instead of the real system state. For example, use a custom `NSPasteboard(name:)` instead of `.general`, use a temporary directory instead of `~/Desktop`, and use in-memory `UserDefaults` instead of `.standard`.
+
+**Swift Testing `.serialized` trait:** Swift Testing runs `@Test` cases concurrently by default. For test suites that create real servers, sockets, or PTY processes, add `.serialized` to the `@Suite` to prevent concurrent execution within the suite:
+
+```swift
+@Suite("My Tests", .serialized)
+struct MyTests { ... }
+```
+
+Note: `--no-parallel` only controls process-level parallelism (how many test runner processes are spawned), NOT Swift Testing's internal concurrency. The `.serialized` trait is the only way to serialize tests within a process.
 
 ## Actor Pitfalls
 

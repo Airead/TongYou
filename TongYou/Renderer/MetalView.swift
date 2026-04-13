@@ -1,6 +1,7 @@
 import AppKit
 import Metal
 import QuartzCore
+import TYTerminal
 
 /// NSView subclass hosting a CAMetalLayer for GPU rendering.
 /// Bridged into SwiftUI via TerminalPaneContainerView (NSViewRepresentable).
@@ -10,13 +11,17 @@ final class MetalView: NSView {
     private var device: MTLDevice!
     private var renderer: MetalRenderer?
     private var fontSystem: FontSystem?
-    private var terminalController: TerminalController?
+    private var terminalController: (any TerminalControlling)?
     // nonisolated(unsafe) because deinit must invalidate without actor hop
     nonisolated(unsafe) private var displayLink: CADisplayLink?
     private var cursorBlinkTimer: Timer?
 
     /// Working directory for the shell spawned in this tab.
     var initialWorkingDirectory: String?
+
+    /// External controller injected for remote sessions.
+    /// When set, MetalView skips creating a local TerminalController.
+    var externalController: (any TerminalControlling)?
 
     /// Configuration loader with hot reload support.
     private let configLoader = ConfigLoader()
@@ -25,6 +30,13 @@ final class MetalView: NSView {
     private var pendingScrollY: Double = 0
     /// Lines per discrete mouse-wheel tick.
     private static let discreteScrollMultiplier = 3
+
+    // nonisolated(unsafe) because deinit must invalidate without actor hop
+    nonisolated(unsafe) private var dragAutoScrollTimer: Timer?
+    /// Last known drag column (for auto-scroll timer updates).
+    private var dragLastCol: Int = 0
+    /// Last known unclamped drag row (for auto-scroll timer updates).
+    private var dragLastUnclampedRow: Int = 0
 
     /// The pane ID this MetalView belongs to (set by TerminalPaneContainerView).
     var paneID: UUID?
@@ -393,6 +405,7 @@ final class MetalView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        stopDragAutoScrollTimer()
         if isMouseTrackingActive {
             sendMouseEvent(event, action: .release, button: .left)
         }
@@ -435,9 +448,20 @@ final class MetalView: NSView {
         if isMouseTrackingActive {
             sendMouseEvent(event, action: .motion, button: .left)
         } else {
-            // Update selection during drag
-            let (col, row) = gridPosition(for: event)
-            terminalController?.updateSelection(col: col, row: row)
+            let (col, unclampedRow) = gridPosition(for: event, clampRow: false)
+            let visibleRows = Int(renderer?.gridSize.rows ?? 1)
+
+            dragLastCol = col
+            dragLastUnclampedRow = unclampedRow
+
+            if unclampedRow < 0 || unclampedRow >= visibleRows {
+                terminalController?.updateSelectionWithAutoScroll(
+                    col: col, viewportRow: unclampedRow)
+                startDragAutoScrollTimer()
+            } else {
+                stopDragAutoScrollTimer()
+                terminalController?.updateSelection(col: col, row: unclampedRow)
+            }
         }
     }
 
@@ -533,7 +557,8 @@ final class MetalView: NSView {
     // MARK: - Mouse Helpers
 
     /// Convert an NSEvent's window location to grid (col, row).
-    private func gridPosition(for event: NSEvent) -> (col: Int, row: Int) {
+    /// When `clampRow` is false, row may be negative (above) or >= rows (below).
+    private func gridPosition(for event: NSEvent, clampRow: Bool = true) -> (col: Int, row: Int) {
         guard let fontSystem, let renderer else { return (0, 0) }
         let viewPos = convert(event.locationInWindow, from: nil)
         let scale = displayScale
@@ -541,9 +566,27 @@ final class MetalView: NSView {
         let pixelY = (bounds.height - viewPos.y) * scale
         let col = max(0, min(Int(pixelX / CGFloat(fontSystem.cellSize.width)),
                              Int(renderer.gridSize.columns) - 1))
-        let row = max(0, min(Int(pixelY / CGFloat(fontSystem.cellSize.height)),
-                             Int(renderer.gridSize.rows) - 1))
+        let rawRow = Int(floor(pixelY / CGFloat(fontSystem.cellSize.height)))
+        let row = clampRow ? max(0, min(rawRow, Int(renderer.gridSize.rows) - 1)) : rawRow
         return (col, row)
+    }
+
+    // MARK: - Drag Auto-Scroll
+
+    private func startDragAutoScrollTimer() {
+        guard dragAutoScrollTimer == nil else { return }
+        dragAutoScrollTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) {
+            [weak self] _ in
+            guard let self else { return }
+            self.terminalController?.updateSelectionWithAutoScroll(
+                col: self.dragLastCol,
+                viewportRow: self.dragLastUnclampedRow)
+        }
+    }
+
+    private func stopDragAutoScrollTimer() {
+        dragAutoScrollTimer?.invalidate()
+        dragAutoScrollTimer = nil
     }
 
     private func sendMouseEvent(
@@ -581,6 +624,7 @@ final class MetalView: NSView {
                     self.wakeDisplayLink()
                 }
             } else {
+                self.stopDragAutoScrollTimer()
                 self.stopDisplayLink()
                 self.removeWindowActivationObservers()
             }
@@ -636,27 +680,23 @@ final class MetalView: NSView {
             }
         }
 
-        if terminalController == nil, let grid = renderer?.gridSize {
-            let config = configLoader.config
-            let tc = TerminalController(
-                columns: Int(grid.columns),
-                rows: Int(grid.rows),
-                config: config
-            )
-            tc.onNeedsDisplay = { [weak self] in
-                DispatchQueue.main.async {
-                    self?.wakeDisplayLink()
-                }
+        setupTerminalControllerIfNeeded()
+    }
+
+    private func wireControllerCallbacks(_ controller: any TerminalControlling) {
+        controller.onNeedsDisplay = { [weak self] in
+            if Thread.isMainThread {
+                self?.wakeDisplayLink()
+            } else {
+                DispatchQueue.main.async { self?.wakeDisplayLink() }
             }
-            tc.onProcessExited = { [weak self] in
-                guard let self, let paneID = self.paneID else { return }
-                self.onTabAction?(.paneExited(paneID))
-            }
-            tc.onTitleChanged = { [weak self] title in
-                self?.onTitleChanged?(title)
-            }
-            tc.start(workingDirectory: initialWorkingDirectory)
-            terminalController = tc
+        }
+        controller.onProcessExited = { [weak self] in
+            guard let self, let paneID = self.paneID else { return }
+            self.onTabAction?(.paneExited(paneID))
+        }
+        controller.onTitleChanged = { [weak self] title in
+            self?.onTitleChanged?(title)
         }
     }
 
@@ -821,6 +861,8 @@ final class MetalView: NSView {
         metalLayer.drawableSize = CGSize(width: Int(width), height: Int(height))
         renderer?.resize(screen: ScreenSize(width: width, height: height))
 
+        setupTerminalControllerIfNeeded()
+
         if let grid = renderer?.gridSize, let fs = fontSystem {
             terminalController?.resize(
                 columns: Int(grid.columns),
@@ -832,8 +874,37 @@ final class MetalView: NSView {
         wakeDisplayLink()
     }
 
+    private func setupTerminalControllerIfNeeded() {
+        guard terminalController == nil,
+              let grid = renderer?.gridSize,
+              grid.columns > 0, grid.rows > 0 else { return }
+
+        let controller: any TerminalControlling
+        if let external = externalController {
+            external.resize(
+                columns: Int(grid.columns),
+                rows: Int(grid.rows),
+                cellWidth: 0, cellHeight: 0
+            )
+            external.applyConfig(configLoader.config)
+            controller = external
+        } else {
+            let config = configLoader.config
+            let tc = TerminalController(
+                columns: Int(grid.columns),
+                rows: Int(grid.rows),
+                config: config
+            )
+            tc.start(workingDirectory: initialWorkingDirectory)
+            controller = tc
+        }
+        wireControllerCallbacks(controller)
+        terminalController = controller
+    }
+
     deinit {
         cursorBlinkTimer?.invalidate()
+        dragAutoScrollTimer?.invalidate()
         displayLink?.invalidate()
         displayLink = nil
     }

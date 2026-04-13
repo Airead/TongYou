@@ -1,4 +1,5 @@
 import Metal
+import TYTerminal
 @testable import TongYou
 
 /// Shared test helpers for building snapshots and renderers.

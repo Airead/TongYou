@@ -1,4 +1,8 @@
 import Foundation
+import TYTerminal
+
+/// Disambiguate from QuickDraw's RGBColor in ApplicationServices.
+typealias RGBColor = TYTerminal.RGBColor
 
 /// Terminal configuration with sensible defaults.
 /// All fields can be overridden by the user's config file.
@@ -306,16 +310,9 @@ enum TabBarVisibility: String, Equatable {
     case never
 }
 
-/// Simple RGB color for configuration (no alpha).
-struct RGBColor: Equatable {
-    let r: UInt8
-    let g: UInt8
-    let b: UInt8
-
+extension RGBColor {
     init(_ r: UInt8, _ g: UInt8, _ b: UInt8) {
-        self.r = r
-        self.g = g
-        self.b = b
+        self.init(r: r, g: g, b: b)
     }
 
     /// Convert to SIMD4<UInt8> with full alpha.
@@ -327,9 +324,9 @@ struct RGBColor: Equatable {
               let value = UInt32(hex, radix: 16) else {
             throw ConfigError.invalidValue(key: "color", value: hex)
         }
-        self.r = UInt8((value >> 16) & 0xFF)
-        self.g = UInt8((value >> 8) & 0xFF)
-        self.b = UInt8(value & 0xFF)
+        self.init(r: UInt8((value >> 16) & 0xFF),
+                  g: UInt8((value >> 8) & 0xFF),
+                  b: UInt8(value & 0xFF))
     }
 }
 

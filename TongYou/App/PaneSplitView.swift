@@ -1,4 +1,5 @@
 import SwiftUI
+import TYTerminal
 
 /// Recursively renders a `PaneNode` tree with draggable dividers and focus highlighting.
 struct PaneSplitView: View {
@@ -6,6 +7,9 @@ struct PaneSplitView: View {
     let node: PaneNode
     let viewStore: MetalViewStore
     let focusManager: FocusManager
+    let focusColor: Color
+    /// Returns a pre-built controller for remote panes, or nil for local panes.
+    let controllerForPane: (UUID) -> (any TerminalControlling)?
     let onTabAction: (TabAction) -> Void
     let onTitleChanged: (String) -> Void
     let onNodeChanged: (PaneNode) -> Void
@@ -23,6 +27,8 @@ struct PaneSplitView: View {
                 second: second,
                 viewStore: viewStore,
                 focusManager: focusManager,
+                focusColor: focusColor,
+                controllerForPane: controllerForPane,
                 onTabAction: onTabAction,
                 onTitleChanged: onTitleChanged,
                 onNodeChanged: onNodeChanged
@@ -37,6 +43,7 @@ struct PaneSplitView: View {
             paneID: pane.id,
             viewStore: viewStore,
             initialWorkingDirectory: pane.initialWorkingDirectory,
+            externalController: controllerForPane(pane.id),
             onTabAction: onTabAction,
             onTitleChanged: onTitleChanged,
             onFocused: {
@@ -46,7 +53,7 @@ struct PaneSplitView: View {
         .id(pane.id)
         .overlay(
             Rectangle()
-                .stroke(Color.accentColor, lineWidth: 1)
+                .stroke(focusColor, lineWidth: 1)
                 .opacity(isFocused ? 1 : 0)
                 .allowsHitTesting(false)
         )
@@ -67,6 +74,8 @@ private struct SplitContainerView: View {
     let second: PaneNode
     let viewStore: MetalViewStore
     let focusManager: FocusManager
+    let focusColor: Color
+    let controllerForPane: (UUID) -> (any TerminalControlling)?
     let onTabAction: (TabAction) -> Void
     let onTitleChanged: (String) -> Void
     let onNodeChanged: (PaneNode) -> Void
@@ -134,6 +143,8 @@ private struct SplitContainerView: View {
             node: first,
             viewStore: viewStore,
             focusManager: focusManager,
+            focusColor: focusColor,
+            controllerForPane: controllerForPane,
             onTabAction: onTabAction,
             onTitleChanged: onTitleChanged,
             onNodeChanged: { newFirst in
@@ -147,6 +158,8 @@ private struct SplitContainerView: View {
             node: second,
             viewStore: viewStore,
             focusManager: focusManager,
+            focusColor: focusColor,
+            controllerForPane: controllerForPane,
             onTabAction: onTabAction,
             onTitleChanged: onTitleChanged,
             onNodeChanged: { newSecond in

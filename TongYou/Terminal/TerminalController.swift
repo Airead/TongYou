@@ -1,5 +1,7 @@
 import AppKit
 import Foundation
+import TYTerminal
+import TYPTY
 
 /// Coordinates PTY process, VT parser, stream handler, and screen buffer.
 ///
@@ -7,7 +9,7 @@ import Foundation
 /// - PTY reads, VT parsing, and screen mutations happen on `ptyQueue` (background).
 /// - A dirty flag is set on ptyQueue; the snapshot is taken only when consumed.
 /// - `consumeSnapshot()` is called on MainActor by the display link.
-final class TerminalController {
+final class TerminalController: TerminalControlling {
 
     private var ptyProcess: PTYProcess?
 
@@ -184,15 +186,7 @@ final class TerminalController {
     // MARK: - Keyboard Input
 
     func handleKeyDown(_ event: NSEvent) {
-        let input = KeyEncoder.KeyInput(
-            keyCode: event.keyCode,
-            characters: event.characters,
-            charactersIgnoringModifiers: event.charactersIgnoringModifiers,
-            shift: event.modifierFlags.contains(.shift),
-            control: event.modifierFlags.contains(.control),
-            option: event.modifierFlags.contains(.option),
-            command: event.modifierFlags.contains(.command)
-        )
+        let input = KeyEncoder.KeyInput(event: event)
         let options = KeyEncoder.Options(
             appCursorMode: streamHandler.modes.isSet(.cursorKeys),
             optionAsAlt: optionAsAlt
@@ -267,14 +261,37 @@ final class TerminalController {
 
     /// Update the selection end point (for drag).
     func updateSelection(col: Int, row: Int) {
-        guard var sel = selection else { return }
-        let line = viewportRowToAbsoluteLine(row)
-        sel.end = SelectionPoint(line: line, col: col)
+        applySelectionEnd(col: col, absoluteLine: viewportRowToAbsoluteLine(row))
+    }
 
+    /// Update selection and auto-scroll when dragging outside viewport.
+    func updateSelectionWithAutoScroll(col: Int, viewportRow: Int) {
+        ptyQueue.async { [weak self] in
+            guard let self else { return }
+            let visibleRows = self.screen.rows
+
+            let clampedRow: Int
+            if viewportRow < 0 {
+                self.screen.scrollViewportUp(lines: min(-viewportRow, 3))
+                clampedRow = 0
+            } else if viewportRow >= visibleRows {
+                self.screen.scrollViewportDown(lines: min(viewportRow - visibleRows + 1, 3))
+                clampedRow = visibleRows - 1
+            } else {
+                clampedRow = viewportRow
+            }
+
+            self.applySelectionEnd(col: col, absoluteLine: self.viewportRowToAbsoluteLine(clampedRow))
+        }
+    }
+
+    /// Shared helper: set selection end-point and mark dirty.
+    private func applySelectionEnd(col: Int, absoluteLine: Int) {
+        guard var sel = selection else { return }
+        sel.end = SelectionPoint(line: absoluteLine, col: col)
         if sel.mode == .line {
             sel.end.col = screen.columns - 1
         }
-
         selection = sel
         markScreenDirty()
     }
@@ -392,8 +409,8 @@ final class TerminalController {
 
     func resize(columns newCols: Int, rows newRows: Int,
                 cellWidth: UInt32 = 0, cellHeight: UInt32 = 0) {
-        let cols = max(1, newCols)
-        let rows = max(1, newRows)
+        let cols = max(Screen.minColumns, newCols)
+        let rows = max(Screen.minRows, newRows)
         let process = ptyProcess  // Capture on MainActor before dispatching
 
         ptyQueue.async { [weak self] in
@@ -466,18 +483,11 @@ final class TerminalController {
 
     // MARK: - Paste
 
-    /// Paste text into the terminal. Applies safety filtering and bracketed paste encoding.
-    private static let unsafePasteBytes: Set<UInt8> = [
-        0x00, 0x08, 0x05, 0x04, 0x1B, 0x7F, // NUL, BS, ENQ, EOT, ESC, DEL
-        0x03, 0x1C, 0x15, 0x1A, 0x11, 0x13,  // VINTR, VQUIT, VKILL, VSUSP, VSTART, VSTOP
-        0x17, 0x16, 0x12, 0x0F,               // VWERASE, VLNEXT, VREPRINT, VDISCARD
-    ]
-
     func handlePaste(_ text: String) {
         guard !text.isEmpty else { return }
         var bytes = Array(text.utf8)
 
-        for i in bytes.indices where Self.unsafePasteBytes.contains(bytes[i]) {
+        for i in bytes.indices where unsafePasteBytes.contains(bytes[i]) {
             bytes[i] = 0x20
         }
 

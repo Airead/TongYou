@@ -1,4 +1,5 @@
 import SwiftUI
+import TYTerminal
 
 /// Renders a single floating pane with a title bar (drag to move),
 /// edge handles (drag to resize), and a close button.
@@ -8,6 +9,8 @@ struct FloatingPaneView: View {
     let containerSize: CGSize
     let viewStore: MetalViewStore
     let focusManager: FocusManager
+    let focusColor: Color
+    let controllerForPane: (UUID) -> (any TerminalControlling)?
     let onTabAction: (TabAction) -> Void
     let onTitleChanged: (String) -> Void
     let onFrameChanged: (UUID, CGRect) -> Void
@@ -19,8 +22,15 @@ struct FloatingPaneView: View {
     private static let resizeHandleSize: CGFloat = 6
     private static let cornerRadius: CGFloat = 6
 
+    /// Local frame used during drag. Nil when not dragging (uses model frame).
+    @State private var liveFrame: CGRect?
+
+    private var effectiveFrame: CGRect {
+        liveFrame ?? floatingPane.frame
+    }
+
     private var pixelFrame: CGRect {
-        floatingPane.pixelFrame(in: containerSize)
+        FloatingPane.pixelFrame(for: effectiveFrame, in: containerSize)
     }
 
     private var isFocused: Bool {
@@ -41,12 +51,18 @@ struct FloatingPaneView: View {
         .clipShape(RoundedRectangle(cornerRadius: Self.cornerRadius))
         .overlay(
             RoundedRectangle(cornerRadius: Self.cornerRadius)
-                .stroke(isFocused ? Color.accentColor : Color.white.opacity(0.2), lineWidth: 1)
+                .stroke(isFocused ? focusColor : Color.white.opacity(0.2), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.5), radius: 8, x: 0, y: 4)
         .position(x: frame.midX, y: frame.midY)
         .onTapGesture {
             bringToFrontAndFocus()
+        }
+        .onChange(of: floatingPane.frame) { _, _ in
+            // Model caught up from server — drop local override.
+            if dragStartFrame == nil {
+                liveFrame = nil
+            }
         }
     }
 
@@ -73,7 +89,7 @@ struct FloatingPaneView: View {
             Button(action: { onTogglePin(floatingPane.pane.id) }) {
                 Image(systemName: floatingPane.isPinned ? "pin.fill" : "pin")
                     .font(.system(size: 9))
-                    .foregroundStyle(floatingPane.isPinned ? Color.accentColor : .white.opacity(0.5))
+                    .foregroundStyle(floatingPane.isPinned ? focusColor : .white.opacity(0.5))
             }
             .buttonStyle(.plain)
             .help(floatingPane.isPinned ? "Unpin" : "Pin")
@@ -91,6 +107,7 @@ struct FloatingPaneView: View {
             paneID: floatingPane.pane.id,
             viewStore: viewStore,
             initialWorkingDirectory: floatingPane.pane.initialWorkingDirectory,
+            externalController: controllerForPane(floatingPane.pane.id),
             onTabAction: onTabAction,
             onTitleChanged: onTitleChanged,
             onFocused: { bringToFrontAndFocus() }
@@ -147,7 +164,6 @@ struct FloatingPaneView: View {
     @State private var dragStartFrame: CGRect?
 
     private func beginDrag() -> CGRect {
-        bringToFrontAndFocus()
         let start = dragStartFrame ?? floatingPane.frame
         if dragStartFrame == nil { dragStartFrame = floatingPane.frame }
         return start
@@ -162,15 +178,14 @@ struct FloatingPaneView: View {
             .onChanged { value in
                 let startFrame = beginDrag()
                 let (dx, dy) = normalizedDelta(value.translation)
-                let newFrame = CGRect(
+                liveFrame = FloatingPane.clamped(CGRect(
                     x: startFrame.origin.x + dx,
                     y: startFrame.origin.y + dy,
                     width: startFrame.width,
                     height: startFrame.height
-                )
-                onFrameChanged(floatingPane.pane.id, newFrame)
+                ))
             }
-            .onEnded { _ in dragStartFrame = nil }
+            .onEnded { _ in commitDrag() }
     }
 
     private func resizeGesture(edge: ResizeEdge) -> some Gesture {
@@ -194,9 +209,22 @@ struct FloatingPaneView: View {
                     newFrame.origin.y = startFrame.maxY - newHeight
                     newFrame.size.height = newHeight
                 }
-                onFrameChanged(floatingPane.pane.id, newFrame)
+                liveFrame = FloatingPane.clamped(newFrame)
             }
-            .onEnded { _ in dragStartFrame = nil }
+            .onEnded { _ in commitDrag() }
+    }
+
+
+    private func commitDrag() {
+        guard let frame = liveFrame else {
+            dragStartFrame = nil
+            return
+        }
+        dragStartFrame = nil
+        // Send frame before bringToFront so the server has the new position
+        // before broadcasting layoutUpdate. liveFrame persists until onChange.
+        onFrameChanged(floatingPane.pane.id, frame)
+        bringToFrontAndFocus()
     }
 
     // MARK: - Helpers

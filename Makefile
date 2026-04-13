@@ -1,10 +1,12 @@
-.PHONY: build build-release test clean run install icon dmg-resources build-dmg
+.PHONY: build build-release test clean run install install-cli icon dmg-resources build-dmg
 
 SCHEME = TongYou
 DESTINATION = platform=macOS
 BUILD_DIR = $(CURDIR)/build
 APP_NAME = TongYou.app
 INSTALL_DIR = /Applications
+CLI_INSTALL_DIR = $(HOME)/.local/bin
+PKG_DIR = Packages/TongYouCore
 
 build:
 	xcodebuild build -scheme $(SCHEME) -destination '$(DESTINATION)' | xcbeautify || true
@@ -17,6 +19,14 @@ install: build-release
 	rm -rf "$(INSTALL_DIR)/$(APP_NAME)"
 	cp -R "$(BUILD_DIR)/Release/$(APP_NAME)" "$(INSTALL_DIR)/$(APP_NAME)"
 	@echo "Done."
+
+install-cli:
+	@echo "Building tongyou CLI..."
+	cd $(PKG_DIR) && swift build -c release --product tongyou
+	@mkdir -p $(CLI_INSTALL_DIR)
+	@echo "Installing tongyou to $(CLI_INSTALL_DIR)..."
+	cp $(PKG_DIR)/.build/release/tongyou $(CLI_INSTALL_DIR)/tongyou
+	@echo "Done. Make sure $(CLI_INSTALL_DIR) is in your PATH."
 
 test:
 	xcodebuild test -scheme $(SCHEME) -destination '$(DESTINATION)' -parallel-testing-enabled NO -only-testing TongYouTests | xcbeautify || true

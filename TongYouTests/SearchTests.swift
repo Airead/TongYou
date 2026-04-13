@@ -1,4 +1,5 @@
 import Testing
+import TYTerminal
 @testable import TongYou
 
 @Suite struct SearchTests {

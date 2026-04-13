@@ -1,5 +1,7 @@
 import Foundation
 import Testing
+import TYShell
+import TYTerminal
 @testable import TongYou
 
 @Suite("ShellIntegration")

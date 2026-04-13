@@ -1,4 +1,5 @@
 import XCTest
+import TYPTY
 @testable import TongYou
 
 final class PTYWriteTests: XCTestCase {

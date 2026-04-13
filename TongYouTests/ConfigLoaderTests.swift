@@ -1,6 +1,7 @@
 import AppKit
 import Testing
 import Foundation
+import TYTerminal
 @testable import TongYou
 
 @Suite("Config")
@@ -281,6 +282,14 @@ struct KeybindingTests {
         #expect(kb.key == "f")
         #expect(kb.action == .unbind)
         #expect(kb.action.tabAction == nil)
+    }
+
+    @Test func parseDetachSession() throws {
+        let kb = try Keybinding.parse("cmd+shift+k=detach_session")
+        #expect(kb.modifiers == [.command, .shift])
+        #expect(kb.key == "k")
+        #expect(kb.action == .detachSession)
+        #expect(kb.action.tabAction != nil)
     }
 
     @Test func invalidAction() {

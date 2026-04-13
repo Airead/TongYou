@@ -1,4 +1,7 @@
 import SwiftUI
+import TYClient
+import TYProtocol
+import TYTerminal
 
 /// Root view for a terminal window, managing sessions, tabs, and panes.
 ///
@@ -20,6 +23,8 @@ struct TerminalWindowView: View {
     @State private var focusManager = FocusManager()
     @State private var windowBackgroundColor: NSColor = .black
     @State private var sidebarVisibility: SidebarVisibility = .auto
+    @State private var showingSessionPicker = false
+    @State private var renamingSessionIndex: Int?
 
     /// Stores MetalView instances outside of SwiftUI state so that
     /// NSViewRepresentable.makeNSView can read/write without triggering
@@ -36,6 +41,9 @@ struct TerminalWindowView: View {
                 SessionSidebarView(
                     sessions: sessionManager.sessions,
                     activeSessionIndex: sessionManager.activeSessionIndex,
+                    attachedSessionIDs: sessionManager.attachedRemoteSessionIDs,
+                    themeForeground: configLoader.config.foreground,
+                    themeBackground: configLoader.config.background,
                     onSelect: { index in
                         switchToSession(at: index)
                     },
@@ -45,8 +53,17 @@ struct TerminalWindowView: View {
                     onNew: {
                         createNewSession()
                     },
-                    onRename: { index, name in
-                        sessionManager.renameSession(at: index, to: name)
+                    onRenameRequest: { index in
+                        startRenamingSession(at: index)
+                    },
+                    onAttach: { index in
+                        attachSessionAtIndex(index)
+                    },
+                    onDetach: { index in
+                        detachSessionAtIndex(index)
+                    },
+                    onDoubleClick: { index in
+                        handleSidebarDoubleClick(index)
                     }
                 )
 
@@ -73,16 +90,47 @@ struct TerminalWindowView: View {
                     )
                 }
 
-                if let activeTab = sessionManager.activeTab {
+                if case .detached = sessionManager.activeSessionRemoteState {
+                    DetachedSessionPlaceholderView(
+                        sessionName: sessionManager.activeSession?.name ?? "Session",
+                        isPending: false,
+                        keybindings: configLoader.config.keybindings,
+                        themeForeground: configLoader.config.foreground,
+                        themeBackground: configLoader.config.background,
+                        onAttach: {
+                            attachSessionAtIndex(sessionManager.activeSessionIndex)
+                        },
+                        onTabAction: handleTabAction
+                    )
+                    .id(sessionManager.activeSession?.id)
+                } else if case .pendingAttach = sessionManager.activeSessionRemoteState {
+                    DetachedSessionPlaceholderView(
+                        sessionName: sessionManager.activeSession?.name ?? "Session",
+                        isPending: true,
+                        keybindings: configLoader.config.keybindings,
+                        themeForeground: configLoader.config.foreground,
+                        themeBackground: configLoader.config.background,
+                        onAttach: {},
+                        onTabAction: handleTabAction
+                    )
+                    .id(sessionManager.activeSession?.id)
+                } else if let activeTab = sessionManager.activeTab {
                     let updateTabTitle: (String) -> Void = { title in
                         sessionManager.updateTitle(title, for: activeTab.id)
                     }
+
+                    let isRemoteSession = sessionManager.activeSession?.source.isRemote == true
+                    let paneFocusColor: Color = isRemoteSession ? .blue : .green
 
                     ZStack {
                         PaneSplitView(
                             node: activeTab.paneTree,
                             viewStore: viewStore,
                             focusManager: focusManager,
+                            focusColor: paneFocusColor,
+                            controllerForPane: { paneID in
+                                sessionManager.remoteController(for: paneID)
+                            },
                             onTabAction: handleTabAction,
                             onTitleChanged: updateTabTitle,
                             onNodeChanged: { newTree in
@@ -94,6 +142,10 @@ struct TerminalWindowView: View {
                             floatingPanes: activeTab.floatingPanes,
                             viewStore: viewStore,
                             focusManager: focusManager,
+                            focusColor: paneFocusColor,
+                            controllerForPane: { paneID in
+                                sessionManager.remoteController(for: paneID)
+                            },
                             onTabAction: handleTabAction,
                             onTitleChanged: { paneID, title in
                                 sessionManager.updateFloatingPaneTitle(paneID: paneID, title: title)
@@ -116,10 +168,53 @@ struct TerminalWindowView: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
+        .overlay {
+            if showingSessionPicker {
+                modalOverlay(onDismiss: { showingSessionPicker = false }) {
+                    SessionPickerView(
+                        sessions: sessionManager.sessions,
+                        activeSessionIndex: sessionManager.activeSessionIndex,
+                        attachedSessionIDs: sessionManager.attachedRemoteSessionIDs,
+                        onSelect: { index in
+                            switchToSessionFromPicker(at: index)
+                        },
+                        onDismiss: {
+                            showingSessionPicker = false
+                        }
+                    )
+                }
+            }
+
+            if let index = renamingSessionIndex,
+               sessionManager.sessions.indices.contains(index) {
+                modalOverlay(onDismiss: { dismissRenamePanel() }) {
+                    SessionRenameView(
+                        currentName: sessionManager.sessions[index].name,
+                        onConfirm: { newName in
+                            sessionManager.renameSession(at: index, to: newName)
+                        },
+                        onDismiss: {
+                            dismissRenamePanel()
+                        }
+                    )
+                }
+            }
+
+            if sessionManager.connectionStatus != .idle {
+                DaemonConnectingOverlayView(
+                    status: sessionManager.connectionStatus,
+                    onDismiss: {
+                        sessionManager.dismissConnectionStatus()
+                    }
+                )
+            }
+        }
         .background(WindowConfigurator(
             backgroundColor: windowBackgroundColor,
-            title: windowTitle
+            title: windowTitle,
+            onWindowClose: { [sessionManager] in
+                sessionManager.disconnectFromTYD()
+            }
         ))
         .onAppear {
             if sessionManager.sessions.isEmpty {
@@ -127,18 +222,31 @@ struct TerminalWindowView: View {
             }
             focusActiveTabRootPane()
             loadWindowBackground()
+            wireRemoteLayoutCallback()
         }
         .onChange(of: focusManager.focusedPaneID) { _, newID in
             sessionManager.updateFloatingPanesVisibilityForFocus(focusedPaneID: newID)
+            if let paneID = newID {
+                sessionManager.notifyPaneFocused(paneID)
+            }
         }
     }
 
     /// Window title derived from the active tab's OSC title, falling back to session name.
+    /// When multiple sessions exist, the session name is prepended for clarity.
     private var windowTitle: String {
+        let baseTitle: String
         if let tab = sessionManager.activeTab, tab.title != TerminalTab.defaultTitle {
-            return tab.title
+            baseTitle = tab.title
+        } else {
+            baseTitle = sessionManager.activeSession?.name ?? "TongYou"
         }
-        return sessionManager.activeSession?.name ?? "TongYou"
+
+        if sessionManager.sessionCount > 1,
+           let sessionName = sessionManager.activeSession?.name {
+            return "\(sessionName) — \(baseTitle)"
+        }
+        return baseTitle
     }
 
     private var shouldShowSidebar: Bool {
@@ -199,12 +307,22 @@ struct TerminalWindowView: View {
 
     private func createNewTab() {
         let cwd: String? = focusedPaneCWD
-        sessionManager.createTab(initialWorkingDirectory: cwd)
-        focusActiveTabRootPane()
+        let tabID = sessionManager.createTab(initialWorkingDirectory: cwd)
+        // Remote sessions return nil — focus happens when layoutUpdate arrives.
+        if tabID != nil {
+            focusActiveTabRootPane()
+        }
     }
 
     private func closeTab(at index: Int) {
         guard sessionManager.tabs.indices.contains(index) else { return }
+
+        // Remote session: just send to server; layoutUpdate handles the rest.
+        if sessionManager.activeSession?.source.isRemote == true {
+            sessionManager.closeTab(at: index)
+            return
+        }
+
         let tab = sessionManager.tabs[index]
 
         // Tear down all MetalViews in this tab's pane tree and floating panes.
@@ -223,7 +341,7 @@ struct TerminalWindowView: View {
 
     private func switchToTab(at index: Int) {
         sessionManager.selectTab(at: index)
-        focusActiveTabRootPane()
+        restoreTabFocusedPane()
     }
 
     // MARK: - Pane Operations
@@ -248,6 +366,12 @@ struct TerminalWindowView: View {
         // Check if this is a floating pane first.
         if sessionManager.activeTab?.floatingPanes.contains(where: { $0.pane.id == paneID }) == true {
             closeFloatingPane(id: paneID)
+            return
+        }
+
+        // Remote session: just send to server; layoutUpdate handles the rest.
+        if sessionManager.activeSession?.source.isRemote == true {
+            sessionManager.closePane(id: paneID)
             return
         }
 
@@ -359,6 +483,18 @@ struct TerminalWindowView: View {
             closeFloatingPane(id: paneID)
         case .toggleOrCreateFloatingPane:
             toggleOrCreateFloatingPane()
+        case .listRemoteSessions:
+            sessionManager.listRemoteSessions()
+            ensureSidebarVisible()
+        case .newRemoteSession:
+            sessionManager.createRemoteSession()
+            ensureSidebarVisible()
+        case .showSessionPicker:
+            showSessionPicker()
+        case .detachSession:
+            detachActiveSession()
+        case .renameSession:
+            startRenamingActiveSession()
         }
     }
 
@@ -371,6 +507,23 @@ struct TerminalWindowView: View {
     }
 
     // MARK: - Helpers
+
+    private func modalOverlay<Content: View>(
+        onDismiss: @escaping () -> Void,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        ZStack {
+            Color.black.opacity(0.3)
+                .ignoresSafeArea()
+                .onTapGesture(perform: onDismiss)
+
+            VStack {
+                Spacer().frame(height: 60)
+                content()
+                Spacer()
+            }
+        }
+    }
 
     /// Pick the best pane to focus after closing one: prefer focus history, fall back to `fallback`.
     private func focusNextPane(fallback: UUID) {
@@ -386,6 +539,22 @@ struct TerminalWindowView: View {
         }
     }
 
+    /// Restore the last focused pane in the active tab, falling back to the root pane.
+    private func restoreTabFocusedPane() {
+        guard let activeTab = sessionManager.activeTab else { return }
+        Self.restoreFocusForTab(activeTab, focusManager: focusManager)
+    }
+
+    /// Focus the saved pane in a tab, or fall back to the root pane.
+    private static func restoreFocusForTab(_ tab: TerminalTab, focusManager: FocusManager) {
+        let allIDs = Set(tab.allPaneIDsIncludingFloating)
+        if let saved = tab.focusedPaneID, allIDs.contains(saved) {
+            focusManager.focusPane(id: saved)
+        } else {
+            focusManager.focusPane(id: tab.paneTree.firstPane.id)
+        }
+    }
+
     /// Focus a pane and make its MetalView the first responder for keyboard input.
     private func focusAndActivate(paneID: UUID) {
         focusManager.focusPane(id: paneID)
@@ -395,6 +564,113 @@ struct TerminalWindowView: View {
     private func activateFirstResponder(for paneID: UUID) {
         if let metalView = viewStore.view(for: paneID) {
             metalView.window?.makeFirstResponder(metalView)
+        }
+    }
+
+    // MARK: - Remote Session
+
+    private func showSessionPicker() {
+        showingSessionPicker = true
+    }
+
+    /// Handle session selection from the quick picker.
+    /// For detached remote sessions, attach first; then switch.
+    private func switchToSessionFromPicker(at index: Int) {
+        if sessionManager.isSessionDetachedRemote(at: index) {
+            attachSessionAtIndex(index)
+        }
+        switchToSession(at: index)
+    }
+
+    private func ensureSidebarVisible() {
+        if sidebarVisibility == .never {
+            sidebarVisibility = .auto
+        }
+    }
+
+    private func withServerSession(at index: Int, _ action: (UUID) -> Void) {
+        guard sessionManager.sessions.indices.contains(index),
+              let serverID = sessionManager.sessions[index].source.serverSessionID else { return }
+        action(serverID)
+    }
+
+    private func attachSessionAtIndex(_ index: Int) {
+        withServerSession(at: index, sessionManager.attachRemoteSession)
+    }
+
+
+    private func detachSessionAtIndex(_ index: Int) {
+        withServerSession(at: index, sessionManager.detachRemoteSession)
+    }
+
+    /// Detach the currently active remote session (Shift+Cmd+K).
+    private func detachActiveSession() {
+        detachSessionAtIndex(sessionManager.activeSessionIndex)
+    }
+
+    private func startRenamingActiveSession() {
+        guard sessionManager.activeSession != nil else { return }
+        startRenamingSession(at: sessionManager.activeSessionIndex)
+    }
+
+    private func startRenamingSession(at index: Int) {
+        renamingSessionIndex = index
+    }
+
+    private func dismissRenamePanel() {
+        renamingSessionIndex = nil
+    }
+
+    /// Double-click on a sidebar session: attach if it's a detached remote session.
+    private func handleSidebarDoubleClick(_ index: Int) {
+        guard sessionManager.isSessionDetachedRemote(at: index) else { return }
+        attachSessionAtIndex(index)
+    }
+
+    /// Wire the callback that fires when the server updates a remote session's layout.
+    /// Handles MetalView teardown for removed panes and refocuses the active pane.
+    private func wireRemoteLayoutCallback() {
+        sessionManager.onRemoteDetached = { [viewStore, focusManager] paneIDs in
+            for paneID in paneIDs {
+                viewStore.tearDown(for: paneID)
+                focusManager.removeFromHistory(id: paneID)
+            }
+        }
+
+        sessionManager.onRemoteLayoutChanged = { [viewStore, focusManager, sessionManager] sessionID, removedPaneIDs, addedPaneIDs in
+            // Tear down MetalViews for removed panes.
+            for paneID in removedPaneIDs {
+                viewStore.tearDown(for: paneID)
+                focusManager.removeFromHistory(id: paneID)
+            }
+
+            guard sessionManager.activeSession?.id == sessionID,
+                  let activeTab = sessionManager.activeSession?.activeTab else { return }
+            let activePaneIDs = Set(activeTab.allPaneIDsIncludingFloating)
+
+            let restoreFocus = { TerminalWindowView.restoreFocusForTab(activeTab, focusManager: focusManager) }
+
+            // If the focused pane is no longer in the active tab (e.g. tab switched
+            // or focused pane removed), restore the tab's saved focus or fall back to root.
+            if let focused = focusManager.focusedPaneID,
+               !activePaneIDs.contains(focused) {
+                restoreFocus()
+                return
+            }
+
+            // If a new pane was added (e.g. split), focus it.
+            // Use tree order (deterministic) rather than Set iteration order.
+            let addedSet = Set(addedPaneIDs)
+            if let newPaneID = activeTab.allPaneIDsIncludingFloating
+                .last(where: { addedSet.contains($0) }) {
+                focusManager.focusPane(id: newPaneID)
+                return
+            }
+
+            // If no pane is focused, restore saved focus or fall back to root.
+            if focusManager.focusedPaneID == nil {
+                restoreFocus()
+            }
         }
     }
 
@@ -438,6 +714,7 @@ extension RGBColor {
 struct WindowConfigurator: NSViewRepresentable {
     let backgroundColor: NSColor
     let title: String
+    var onWindowClose: (() -> Void)?
 
     func makeNSView(context: Context) -> NSView {
         ConfiguratorView()
@@ -447,6 +724,7 @@ struct WindowConfigurator: NSViewRepresentable {
         guard let view = nsView as? ConfiguratorView else { return }
         view.desiredBackgroundColor = backgroundColor
         view.desiredTitle = title
+        view.onWindowClose = onWindowClose
         view.applyIfNeeded()
     }
 }
@@ -454,17 +732,39 @@ struct WindowConfigurator: NSViewRepresentable {
 /// Applies window-level NSWindow configuration that SwiftUI cannot
 /// express declaratively: transparent titlebar, background color, title.
 ///
-/// The dark titlebar appearance (light text, colored traffic lights) is
-/// driven by `.preferredColorScheme(.dark)` on the SwiftUI side, which
-/// SwiftUI propagates to the NSWindow's effective appearance.
+/// The titlebar appearance follows the system light/dark theme automatically.
 private class ConfiguratorView: NSView {
     var desiredBackgroundColor: NSColor = .black
     var desiredTitle: String = "TongYou"
+    var onWindowClose: (() -> Void)?
     private var didConfigureStyle = false
+    private var observingWindow: NSWindow?
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         applyIfNeeded()
+
+        // Observe window close to trigger cleanup
+        if let window, window !== observingWindow {
+            if let old = observingWindow {
+                NotificationCenter.default.removeObserver(self, name: NSWindow.willCloseNotification, object: old)
+            }
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(windowWillClose(_:)),
+                name: NSWindow.willCloseNotification, object: window
+            )
+            observingWindow = window
+        }
+    }
+
+    @objc private func windowWillClose(_ notification: Notification) {
+        onWindowClose?()
+    }
+
+    deinit {
+        if let observingWindow {
+            NotificationCenter.default.removeObserver(self, name: NSWindow.willCloseNotification, object: observingWindow)
+        }
     }
 
     override func layout() {

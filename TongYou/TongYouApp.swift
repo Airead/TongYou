@@ -8,11 +8,52 @@ struct TongYouApp: App {
         WindowGroup {
             TerminalWindowView()
         }
+        .commands {
+            TongYouCommands()
+        }
     }
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
+    }
+}
+
+struct TongYouCommands: Commands {
+    @State private var isInstalling = false
+
+    var body: some Commands {
+        CommandGroup(after: .appSettings) {
+            Button(CLIInstaller.isInstalled
+                   ? "Uninstall Command Line Tool..."
+                   : "Install Command Line Tool...") {
+                installOrUninstallCLI()
+            }
+            .disabled(CLIInstaller.bundledCLIPath == nil || isInstalling)
+        }
+    }
+
+    private func installOrUninstallCLI() {
+        let wasInstalled = CLIInstaller.isInstalled
+        isInstalling = true
+        Task {
+            defer { isInstalling = false }
+            do {
+                if wasInstalled {
+                    try await CLIInstaller.uninstall()
+                } else {
+                    try await CLIInstaller.install()
+                }
+            } catch {
+                let alert = NSAlert()
+                alert.messageText = wasInstalled
+                    ? "Failed to Uninstall CLI"
+                    : "Failed to Install CLI"
+                alert.informativeText = error.localizedDescription
+                alert.alertStyle = .warning
+                alert.runModal()
+            }
+        }
     }
 }

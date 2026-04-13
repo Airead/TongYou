@@ -7,9 +7,17 @@ import PackageDescription
 let package = Package(
     name: "TongYou",
     platforms: [.macOS(.v15)],
+    dependencies: [
+        .package(path: "Packages/TongYouCore"),
+    ],
     targets: [
         .target(
             name: "TongYou",
+            dependencies: [
+                .product(name: "TYTerminal", package: "TongYouCore"),
+                .product(name: "TYPTY", package: "TongYouCore"),
+                .product(name: "TYShell", package: "TongYouCore"),
+            ],
             path: "TongYou",
             exclude: ["Renderer/Shaders.metal"],
             linkerSettings: [
@@ -20,7 +28,12 @@ let package = Package(
         ),
         .testTarget(
             name: "TongYouTests",
-            dependencies: ["TongYou"],
+            dependencies: [
+                "TongYou",
+                .product(name: "TYTerminal", package: "TongYouCore"),
+                .product(name: "TYPTY", package: "TongYouCore"),
+                .product(name: "TYShell", package: "TongYouCore"),
+            ],
             path: "TongYouTests"
         ),
     ]
