@@ -170,6 +170,13 @@ public final class SocketServer: @unchecked Sendable {
         clientsLock.unlock()
         client.stop()
         Log.info("Client removed: \(client.id.uuidString.prefix(8)), remaining: \(clientCount)")
+
+        // Clean up client size entries on messageQueue (sessionManager is not thread-safe)
+        let clientID = client.id
+        Log.debug("Scheduling size cleanup for disconnected client \(clientID.uuidString.prefix(8))")
+        messageQueue.async { [weak self] in
+            self?.sessionManager.removeClientFromAllPanes(clientID: clientID)
+        }
     }
 
     // MARK: - Private: Timers
@@ -255,6 +262,9 @@ public final class SocketServer: @unchecked Sendable {
 
         case .detachSession(let sessionID):
             client.detach(sessionID: sessionID)
+            for paneID in sessionManager.allPaneIDs(sessionID: sessionID) {
+                sessionManager.removeClientFromPane(clientID: client.id, paneID: paneID)
+            }
 
         case .closeSession(let sessionID):
             sessionManager.closeSession(id: sessionID)
@@ -265,7 +275,9 @@ public final class SocketServer: @unchecked Sendable {
             sessionManager.sendInput(paneID: paneID, data: bytes)
 
         case .resize(_, let paneID, let cols, let rows):
-            sessionManager.resizePane(paneID: paneID, cols: cols, rows: rows)
+            sessionManager.registerClientSize(
+                clientID: client.id, paneID: paneID, cols: cols, rows: rows
+            )
 
         case .scrollViewport(_, let paneID, let delta):
             sessionManager.scrollViewport(paneID: paneID, delta: delta)

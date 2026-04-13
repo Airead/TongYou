@@ -18,6 +18,10 @@ final class SessionManager {
     /// Remote session client for server communication. Nil when not connected.
     private(set) var remoteClient: RemoteSessionClient?
 
+    deinit {
+        remoteClient?.disconnect()
+    }
+
     /// Controllers for remote panes, keyed by local pane UUID.
     private var remoteControllers: [UUID: ClientTerminalController] = [:]
     /// Bidirectional mapping between server pane UUID and local pane UUID.

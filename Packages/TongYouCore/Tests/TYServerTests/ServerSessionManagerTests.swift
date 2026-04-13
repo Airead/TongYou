@@ -442,6 +442,172 @@ struct ServerSessionManagerTests {
 
         manager.closeSession(id: session.id)
     }
+
+    // MARK: - Multi-Client Size Negotiation
+
+    @Test("registerClientSize with single client uses that client's size")
+    func registerClientSizeSingleClient() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "Size Single")
+        guard case .leaf(let paneID) = session.tabs[0].layout else {
+            Issue.record("Expected leaf layout")
+            return
+        }
+
+        let clientA = UUID()
+        let result = manager.registerClientSize(clientID: clientA, paneID: paneID, cols: 120, rows: 40)
+
+        #expect(result?.cols == 120)
+        #expect(result?.rows == 40)
+
+        manager.closeSession(id: session.id)
+    }
+
+    @Test("registerClientSize with two clients uses minimum")
+    func registerClientSizeMinimum() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "Size Min")
+        guard case .leaf(let paneID) = session.tabs[0].layout else {
+            Issue.record("Expected leaf layout")
+            return
+        }
+
+        let clientA = UUID()
+        let clientB = UUID()
+        manager.registerClientSize(clientID: clientA, paneID: paneID, cols: 120, rows: 40)
+        let result = manager.registerClientSize(clientID: clientB, paneID: paneID, cols: 80, rows: 24)
+
+        #expect(result?.cols == 80)
+        #expect(result?.rows == 24)
+
+        manager.closeSession(id: session.id)
+    }
+
+    @Test("registerClientSize picks min per dimension independently")
+    func registerClientSizeMinPerDimension() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "Size Mixed")
+        guard case .leaf(let paneID) = session.tabs[0].layout else {
+            Issue.record("Expected leaf layout")
+            return
+        }
+
+        let clientA = UUID()
+        let clientB = UUID()
+        // A: wide but short. B: narrow but tall.
+        manager.registerClientSize(clientID: clientA, paneID: paneID, cols: 200, rows: 20)
+        let result = manager.registerClientSize(clientID: clientB, paneID: paneID, cols: 80, rows: 50)
+
+        #expect(result?.cols == 80)
+        #expect(result?.rows == 20)
+
+        manager.closeSession(id: session.id)
+    }
+
+    @Test("removeClientFromPane recalculates size for remaining clients")
+    func removeClientFromPaneRecalculates() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "Size Remove")
+        guard case .leaf(let paneID) = session.tabs[0].layout else {
+            Issue.record("Expected leaf layout")
+            return
+        }
+
+        let clientA = UUID()
+        let clientB = UUID()
+        manager.registerClientSize(clientID: clientA, paneID: paneID, cols: 120, rows: 40)
+        manager.registerClientSize(clientID: clientB, paneID: paneID, cols: 80, rows: 24)
+
+        // Remove the smaller client — effective size should grow back to A's size
+        manager.removeClientFromPane(clientID: clientB, paneID: paneID)
+
+        // Re-register A to verify the effective size (registerClientSize returns current effective)
+        let result = manager.registerClientSize(clientID: clientA, paneID: paneID, cols: 120, rows: 40)
+        #expect(result?.cols == 120)
+        #expect(result?.rows == 40)
+
+        manager.closeSession(id: session.id)
+    }
+
+    @Test("removeClientFromAllPanes cleans up all panes")
+    func removeClientFromAllPanes() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "Size RemoveAll")
+        guard case .leaf(let paneID1) = session.tabs[0].layout else {
+            Issue.record("Expected leaf layout")
+            return
+        }
+
+        // Create a second pane via split
+        guard let paneID2 = manager.splitPane(
+            sessionID: session.id, paneID: paneID1, direction: .vertical
+        ) else {
+            Issue.record("Split failed")
+            return
+        }
+
+        let clientA = UUID()
+        let clientB = UUID()
+        manager.registerClientSize(clientID: clientA, paneID: paneID1, cols: 120, rows: 40)
+        manager.registerClientSize(clientID: clientB, paneID: paneID1, cols: 80, rows: 24)
+        manager.registerClientSize(clientID: clientA, paneID: paneID2, cols: 100, rows: 30)
+        manager.registerClientSize(clientID: clientB, paneID: paneID2, cols: 60, rows: 20)
+
+        // Remove client B from all panes
+        manager.removeClientFromAllPanes(clientID: clientB)
+
+        // Only client A remains — verify by re-registering
+        let r1 = manager.registerClientSize(clientID: clientA, paneID: paneID1, cols: 120, rows: 40)
+        #expect(r1?.cols == 120)
+        #expect(r1?.rows == 40)
+
+        let r2 = manager.registerClientSize(clientID: clientA, paneID: paneID2, cols: 100, rows: 30)
+        #expect(r2?.cols == 100)
+        #expect(r2?.rows == 30)
+
+        manager.closeSession(id: session.id)
+    }
+
+    @Test("Client size update overwrites previous size for same client")
+    func clientSizeUpdateOverwrite() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "Size Overwrite")
+        guard case .leaf(let paneID) = session.tabs[0].layout else {
+            Issue.record("Expected leaf layout")
+            return
+        }
+
+        let clientA = UUID()
+        let clientB = UUID()
+        manager.registerClientSize(clientID: clientA, paneID: paneID, cols: 80, rows: 24)
+        manager.registerClientSize(clientID: clientB, paneID: paneID, cols: 120, rows: 40)
+
+        // A resizes to be larger than B
+        let result = manager.registerClientSize(clientID: clientA, paneID: paneID, cols: 200, rows: 50)
+
+        // min should now be B: 120x40
+        #expect(result?.cols == 120)
+        #expect(result?.rows == 40)
+
+        manager.closeSession(id: session.id)
+    }
+
+    @Test("removeClientFromPane with last client does not crash")
+    func removeLastClient() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "Size LastClient")
+        guard case .leaf(let paneID) = session.tabs[0].layout else {
+            Issue.record("Expected leaf layout")
+            return
+        }
+
+        let clientA = UUID()
+        manager.registerClientSize(clientID: clientA, paneID: paneID, cols: 120, rows: 40)
+        manager.removeClientFromPane(clientID: clientA, paneID: paneID)
+
+        // Should not crash, pane retains its last size
+        manager.closeSession(id: session.id)
+    }
 }
 
 /// Simple thread-safe wrapper for test assertions.

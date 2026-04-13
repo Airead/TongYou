@@ -83,6 +83,10 @@ public final class ServerSessionManager {
     /// Flat lookup from PaneID to its TerminalCore for O(1) access on the hot path.
     private var coreLookup: [PaneID: TerminalCore] = [:]
 
+    /// Per-pane map of client window sizes for multi-client size negotiation.
+    /// Effective PTY size = min(cols) × min(rows) across all clients (tmux-style).
+    private var clientPaneSizes: [PaneID: [UUID: (cols: UInt16, rows: UInt16)]] = [:]
+
     var onScreenDirty: ((SessionID, PaneID) -> Void)?
     var onTitleChanged: ((SessionID, PaneID, String) -> Void)?
     var onBell: ((SessionID, PaneID) -> Void)?
@@ -142,16 +146,7 @@ public final class ServerSessionManager {
 
     public func closeSession(id: SessionID) {
         guard let session = sessions.removeValue(forKey: id) else { return }
-        for tab in session.tabs {
-            for (paneID, core) in tab.terminalCores {
-                core.stop()
-                coreLookup.removeValue(forKey: paneID)
-            }
-            for (paneID, core) in tab.floatingPaneCores {
-                core.stop()
-                coreLookup.removeValue(forKey: paneID)
-            }
-        }
+        for tab in session.tabs { teardownAllPanes(in: tab) }
         Log.info("Session closed: \(session.name) (\(id))", category: .session)
     }
 
@@ -189,15 +184,7 @@ public final class ServerSessionManager {
         guard var session = sessions[sessionID] else { return }
         guard let tabIndex = session.tabs.firstIndex(where: { $0.id == tabID }) else { return }
 
-        let tab = session.tabs[tabIndex]
-        for (paneID, core) in tab.terminalCores {
-            core.stop()
-            coreLookup.removeValue(forKey: paneID)
-        }
-        for (paneID, core) in tab.floatingPaneCores {
-            core.stop()
-            coreLookup.removeValue(forKey: paneID)
-        }
+        teardownAllPanes(in: session.tabs[tabIndex])
 
         session.tabs.remove(at: tabIndex)
         Log.info("Tab closed: \(tabID) in session \(sessionID)", category: .session)
@@ -242,8 +229,7 @@ public final class ServerSessionManager {
         guard let tabIndex = session.tabIndex(for: paneID) else { return }
 
         if let core = session.tabs[tabIndex].terminalCores.removeValue(forKey: paneID) {
-            core.stop()
-            coreLookup.removeValue(forKey: paneID)
+            teardownPane(paneID, core: core)
         }
 
         if let newTree = session.tabs[tabIndex].paneTree.removePane(id: paneID.uuid) {
@@ -262,6 +248,59 @@ public final class ServerSessionManager {
 
     public func resizePane(paneID: PaneID, cols: UInt16, rows: UInt16) {
         coreLookup[paneID]?.resize(columns: cols, rows: rows)
+    }
+
+    // MARK: - Multi-Client Size Negotiation
+
+    /// Register a client's window size for a pane and recalculate the effective PTY size.
+    @discardableResult
+    public func registerClientSize(
+        clientID: UUID, paneID: PaneID, cols: UInt16, rows: UInt16
+    ) -> (cols: UInt16, rows: UInt16)? {
+        clientPaneSizes[paneID, default: [:]][clientID] = (cols, rows)
+        Log.debug(
+            "registerClientSize: client=\(clientID.uuidString.prefix(8)) pane=\(paneID) "
+            + "requested=\(cols)x\(rows) totalClients=\(clientPaneSizes[paneID]?.count ?? 0)",
+            category: .session
+        )
+        return applyEffectiveSize(paneID: paneID)
+    }
+
+    /// Remove a client's size entries from all panes (called on disconnect).
+    public func removeClientFromAllPanes(clientID: UUID) {
+        Log.debug(
+            "removeClientFromAllPanes: client=\(clientID.uuidString.prefix(8)) "
+            + "paneCount=\(clientPaneSizes.count)",
+            category: .session
+        )
+        for paneID in Array(clientPaneSizes.keys) {
+            removeClientFromPane(clientID: clientID, paneID: paneID)
+        }
+    }
+
+    /// Remove a client's size for a specific pane (called on session detach).
+    public func removeClientFromPane(clientID: UUID, paneID: PaneID) {
+        guard clientPaneSizes[paneID]?.removeValue(forKey: clientID) != nil else { return }
+        if clientPaneSizes[paneID]?.isEmpty == true {
+            clientPaneSizes.removeValue(forKey: paneID)
+        } else {
+            applyEffectiveSize(paneID: paneID)
+        }
+    }
+
+    /// Compute min(cols) × min(rows) across all clients for this pane and resize the PTY.
+    @discardableResult
+    private func applyEffectiveSize(paneID: PaneID) -> (cols: UInt16, rows: UInt16)? {
+        guard let sizes = clientPaneSizes[paneID], !sizes.isEmpty else { return nil }
+        let effectiveCols = sizes.values.map(\.cols).min()!
+        let effectiveRows = sizes.values.map(\.rows).min()!
+        Log.debug(
+            "applyEffectiveSize: pane=\(paneID) effective=\(effectiveCols)x\(effectiveRows) "
+            + "from \(sizes.count) client(s)",
+            category: .session
+        )
+        coreLookup[paneID]?.resize(columns: effectiveCols, rows: effectiveRows)
+        return (effectiveCols, effectiveRows)
     }
 
     public func scrollViewport(paneID: PaneID, delta: Int32) {
@@ -301,8 +340,7 @@ public final class ServerSessionManager {
         guard let (tabIndex, _) = session.floatingPaneLocation(for: paneID) else { return }
 
         if let core = session.tabs[tabIndex].floatingPaneCores.removeValue(forKey: paneID) {
-            core.stop()
-            coreLookup.removeValue(forKey: paneID)
+            teardownPane(paneID, core: core)
         }
         session.tabs[tabIndex].floatingPanes.removeAll { $0.paneID == paneID }
         sessions[sessionID] = session
@@ -353,6 +391,17 @@ public final class ServerSessionManager {
     }
 
     // MARK: - Private
+
+    private func teardownPane(_ paneID: PaneID, core: TerminalCore) {
+        core.stop()
+        coreLookup.removeValue(forKey: paneID)
+        clientPaneSizes.removeValue(forKey: paneID)
+    }
+
+    private func teardownAllPanes(in tab: ServerTab) {
+        for (paneID, core) in tab.terminalCores { teardownPane(paneID, core: core) }
+        for (paneID, core) in tab.floatingPaneCores { teardownPane(paneID, core: core) }
+    }
 
     /// Mutate a floating pane in-place, handling session/tab/index lookup.
     private func modifyFloatingPane(

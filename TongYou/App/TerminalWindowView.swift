@@ -128,7 +128,10 @@ struct TerminalWindowView: View {
         .preferredColorScheme(.dark)
         .background(WindowConfigurator(
             backgroundColor: windowBackgroundColor,
-            title: windowTitle
+            title: windowTitle,
+            onWindowClose: { [sessionManager] in
+                sessionManager.disconnectFromTYD()
+            }
         ))
         .onAppear {
             if sessionManager.sessions.isEmpty {
@@ -533,6 +536,7 @@ extension RGBColor {
 struct WindowConfigurator: NSViewRepresentable {
     let backgroundColor: NSColor
     let title: String
+    var onWindowClose: (() -> Void)?
 
     func makeNSView(context: Context) -> NSView {
         ConfiguratorView()
@@ -542,6 +546,7 @@ struct WindowConfigurator: NSViewRepresentable {
         guard let view = nsView as? ConfiguratorView else { return }
         view.desiredBackgroundColor = backgroundColor
         view.desiredTitle = title
+        view.onWindowClose = onWindowClose
         view.applyIfNeeded()
     }
 }
@@ -555,11 +560,35 @@ struct WindowConfigurator: NSViewRepresentable {
 private class ConfiguratorView: NSView {
     var desiredBackgroundColor: NSColor = .black
     var desiredTitle: String = "TongYou"
+    var onWindowClose: (() -> Void)?
     private var didConfigureStyle = false
+    private var observingWindow: NSWindow?
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         applyIfNeeded()
+
+        // Observe window close to trigger cleanup
+        if let window, window !== observingWindow {
+            if let old = observingWindow {
+                NotificationCenter.default.removeObserver(self, name: NSWindow.willCloseNotification, object: old)
+            }
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(windowWillClose(_:)),
+                name: NSWindow.willCloseNotification, object: window
+            )
+            observingWindow = window
+        }
+    }
+
+    @objc private func windowWillClose(_ notification: Notification) {
+        onWindowClose?()
+    }
+
+    deinit {
+        if let observingWindow {
+            NotificationCenter.default.removeObserver(self, name: NSWindow.willCloseNotification, object: observingWindow)
+        }
     }
 
     override func layout() {
