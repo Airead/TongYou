@@ -258,6 +258,156 @@ struct ServerSessionManagerTests {
         manager.closeSession(id: session.id)
     }
 
+    // MARK: - Floating Pane Operations
+
+    @Test("Create floating pane adds to tab")
+    func createFloatingPane() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "Float Test")
+        let tabID = session.tabs[0].id
+
+        let fpID = manager.createFloatingPane(sessionID: session.id, tabID: tabID)
+        #expect(fpID != nil)
+
+        let info = manager.sessionInfo(for: session.id)
+        #expect(info?.tabs[0].floatingPanes.count == 1)
+        #expect(info?.tabs[0].floatingPanes[0].paneID == fpID)
+        #expect(info?.tabs[0].floatingPanes[0].title == "Float")
+
+        manager.closeSession(id: session.id)
+    }
+
+    @Test("Create floating pane returns nil for unknown tab")
+    func createFloatingPaneUnknownTab() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "Float Unknown Tab")
+
+        let fpID = manager.createFloatingPane(sessionID: session.id, tabID: TabID())
+        #expect(fpID == nil)
+
+        manager.closeSession(id: session.id)
+    }
+
+    @Test("Close floating pane removes from tab")
+    func closeFloatingPane() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "Float Close Test")
+        let tabID = session.tabs[0].id
+
+        let fpID = manager.createFloatingPane(sessionID: session.id, tabID: tabID)!
+
+        manager.closeFloatingPane(sessionID: session.id, paneID: fpID)
+
+        let info = manager.sessionInfo(for: session.id)
+        #expect(info?.tabs[0].floatingPanes.isEmpty == true)
+
+        manager.closeSession(id: session.id)
+    }
+
+    @Test("Update floating pane frame persists")
+    func updateFloatingPaneFrame() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "Float Frame Test")
+        let tabID = session.tabs[0].id
+
+        let fpID = manager.createFloatingPane(sessionID: session.id, tabID: tabID)!
+
+        manager.updateFloatingPaneFrame(
+            sessionID: session.id, paneID: fpID,
+            x: 0.1, y: 0.2, width: 0.5, height: 0.6
+        )
+
+        let info = manager.sessionInfo(for: session.id)
+        let fp = info?.tabs[0].floatingPanes[0]
+        #expect(fp?.frameX == Float(0.1))
+        #expect(fp?.frameY == Float(0.2))
+        #expect(fp?.frameWidth == Float(0.5))
+        #expect(fp?.frameHeight == Float(0.6))
+
+        manager.closeSession(id: session.id)
+    }
+
+    @Test("Bring floating pane to front updates zIndex")
+    func bringFloatingPaneToFront() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "Float ZIndex Test")
+        let tabID = session.tabs[0].id
+
+        let fp1 = manager.createFloatingPane(sessionID: session.id, tabID: tabID)!
+        let fp2 = manager.createFloatingPane(sessionID: session.id, tabID: tabID)!
+
+        // fp2 should have higher zIndex than fp1
+        var info = manager.sessionInfo(for: session.id)!
+        let z1Before = info.tabs[0].floatingPanes.first(where: { $0.paneID == fp1 })!.zIndex
+        let z2Before = info.tabs[0].floatingPanes.first(where: { $0.paneID == fp2 })!.zIndex
+        #expect(z2Before > z1Before)
+
+        // Bring fp1 to front
+        manager.bringFloatingPaneToFront(sessionID: session.id, paneID: fp1)
+
+        info = manager.sessionInfo(for: session.id)!
+        let z1After = info.tabs[0].floatingPanes.first(where: { $0.paneID == fp1 })!.zIndex
+        #expect(z1After > z2Before)
+
+        manager.closeSession(id: session.id)
+    }
+
+    @Test("Toggle floating pane pin")
+    func toggleFloatingPanePin() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "Float Pin Test")
+        let tabID = session.tabs[0].id
+
+        let fpID = manager.createFloatingPane(sessionID: session.id, tabID: tabID)!
+
+        var info = manager.sessionInfo(for: session.id)!
+        #expect(info.tabs[0].floatingPanes[0].isPinned == false)
+
+        manager.toggleFloatingPanePin(sessionID: session.id, paneID: fpID)
+
+        info = manager.sessionInfo(for: session.id)!
+        #expect(info.tabs[0].floatingPanes[0].isPinned == true)
+
+        manager.closeSession(id: session.id)
+    }
+
+    @Test("allPaneIDs includes floating panes")
+    func allPaneIDsIncludesFloatingPanes() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "All IDs Float Test")
+        let tabID = session.tabs[0].id
+
+        let fpID = manager.createFloatingPane(sessionID: session.id, tabID: tabID)!
+
+        let allIDs = manager.allPaneIDs(sessionID: session.id)
+        #expect(allIDs.count == 2) // 1 tree pane + 1 floating pane
+        #expect(allIDs.contains(fpID))
+
+        manager.closeSession(id: session.id)
+    }
+
+    @Test("Floating pane I/O works via coreLookup")
+    func floatingPaneIO() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "Float IO Test")
+        let tabID = session.tabs[0].id
+
+        let fpID = manager.createFloatingPane(sessionID: session.id, tabID: tabID)!
+
+        // Wait for PTY to start
+        Thread.sleep(forTimeInterval: 0.2)
+
+        // Should not crash — confirms the pane is in coreLookup
+        manager.sendInput(paneID: fpID, data: Array("echo hello\n".utf8))
+
+        let snap = manager.snapshot(paneID: fpID)
+        #expect(snap != nil)
+        #expect(snap?.columns == 80)
+        #expect(snap?.rows == 24)
+
+        manager.closeSession(id: session.id)
+    }
+
     @Test("onScreenDirty callback fires with correct IDs")
     func onScreenDirtyCallback() {
         let manager = ServerSessionManager()

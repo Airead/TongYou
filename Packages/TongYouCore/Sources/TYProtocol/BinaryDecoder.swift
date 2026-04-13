@@ -186,6 +186,27 @@ public struct BinaryDecoder: Sendable {
         }
     }
 
+    public mutating func readFloatingPaneInfo() throws -> FloatingPaneInfo {
+        let paneID = try readPaneID()
+        let frameX = try readFloat()
+        let frameY = try readFloat()
+        let frameWidth = try readFloat()
+        let frameHeight = try readFloat()
+        let zIndex = try readInt32()
+        let isPinned = try readBool()
+        let isVisible = try readBool()
+        let title = try readString()
+        return FloatingPaneInfo(
+            paneID: paneID,
+            frameX: frameX, frameY: frameY,
+            frameWidth: frameWidth, frameHeight: frameHeight,
+            zIndex: zIndex,
+            isPinned: isPinned,
+            isVisible: isVisible,
+            title: title
+        )
+    }
+
     public mutating func readLayoutTree() throws -> LayoutTree {
         let tag = try readUInt8()
         switch tag {
@@ -283,7 +304,13 @@ public struct BinaryDecoder: Sendable {
         let id = try readTabID()
         let title = try readString()
         let layout = try readLayoutTree()
-        return TabInfo(id: id, title: title, layout: layout)
+        let fpCount = Int(try readUInt16())
+        var floatingPanes: [FloatingPaneInfo] = []
+        floatingPanes.reserveCapacity(fpCount)
+        for _ in 0..<fpCount {
+            floatingPanes.append(try readFloatingPaneInfo())
+        }
+        return TabInfo(id: id, title: title, layout: layout, floatingPanes: floatingPanes)
     }
 
     /// Decode a `ServerMessage` payload given its type code.
@@ -403,6 +430,35 @@ public struct BinaryDecoder: Sendable {
             let sessionID = try readSessionID()
             let paneID = try readPaneID()
             return .focusPane(sessionID, paneID)
+
+        case .createFloatingPane:
+            let sessionID = try readSessionID()
+            let tabID = try readTabID()
+            return .createFloatingPane(sessionID, tabID)
+
+        case .closeFloatingPane:
+            let sessionID = try readSessionID()
+            let paneID = try readPaneID()
+            return .closeFloatingPane(sessionID, paneID)
+
+        case .updateFloatingPaneFrame:
+            let sessionID = try readSessionID()
+            let paneID = try readPaneID()
+            let x = try readFloat()
+            let y = try readFloat()
+            let width = try readFloat()
+            let height = try readFloat()
+            return .updateFloatingPaneFrame(sessionID, paneID, x: x, y: y, width: width, height: height)
+
+        case .bringFloatingPaneToFront:
+            let sessionID = try readSessionID()
+            let paneID = try readPaneID()
+            return .bringFloatingPaneToFront(sessionID, paneID)
+
+        case .toggleFloatingPanePin:
+            let sessionID = try readSessionID()
+            let paneID = try readPaneID()
+            return .toggleFloatingPanePin(sessionID, paneID)
         }
     }
 }

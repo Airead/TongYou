@@ -110,6 +110,18 @@ public struct BinaryEncoder: Sendable {
         }
     }
 
+    public mutating func writeFloatingPaneInfo(_ info: FloatingPaneInfo) {
+        writePaneID(info.paneID)
+        writeFloat(info.frameX)
+        writeFloat(info.frameY)
+        writeFloat(info.frameWidth)
+        writeFloat(info.frameHeight)
+        writeInt32(info.zIndex)
+        writeBool(info.isPinned)
+        writeBool(info.isVisible)
+        writeString(info.title)
+    }
+
     public mutating func writeLayoutTree(_ tree: LayoutTree) {
         switch tree {
         case .leaf(let paneID):
@@ -183,6 +195,10 @@ public struct BinaryEncoder: Sendable {
         writeTabID(tab.id)
         writeString(tab.title)
         writeLayoutTree(tab.layout)
+        writeUInt16(UInt16(tab.floatingPanes.count))
+        for fp in tab.floatingPanes {
+            writeFloatingPaneInfo(fp)
+        }
     }
 
     /// Encode a `ServerMessage` payload (without frame header).
@@ -282,6 +298,30 @@ public struct BinaryEncoder: Sendable {
             writePaneID(paneID)
 
         case .focusPane(let sessionID, let paneID):
+            writeSessionID(sessionID)
+            writePaneID(paneID)
+
+        case .createFloatingPane(let sessionID, let tabID):
+            writeSessionID(sessionID)
+            writeTabID(tabID)
+
+        case .closeFloatingPane(let sessionID, let paneID):
+            writeSessionID(sessionID)
+            writePaneID(paneID)
+
+        case .updateFloatingPaneFrame(let sessionID, let paneID, let x, let y, let width, let height):
+            writeSessionID(sessionID)
+            writePaneID(paneID)
+            writeFloat(x)
+            writeFloat(y)
+            writeFloat(width)
+            writeFloat(height)
+
+        case .bringFloatingPaneToFront(let sessionID, let paneID):
+            writeSessionID(sessionID)
+            writePaneID(paneID)
+
+        case .toggleFloatingPanePin(let sessionID, let paneID):
             writeSessionID(sessionID)
             writePaneID(paneID)
         }

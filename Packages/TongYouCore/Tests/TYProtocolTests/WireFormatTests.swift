@@ -201,15 +201,20 @@ struct WireFormatTests {
             direction: .vertical, ratio: 0.6,
             first: .leaf(p1), second: .leaf(p2)
         )
-        let msg = ServerMessage.layoutUpdate(sid, tree)
+        let info = SessionInfo(
+            id: sid,
+            name: "layout test",
+            tabs: [TabInfo(id: TabID(), title: "t", layout: tree)]
+        )
+        let msg = ServerMessage.layoutUpdate(info)
 
         let decoded = try encodeAndDecode(serverMessage: msg)
-        guard case .layoutUpdate(let dSid, let dTree) = decoded else {
+        guard case .layoutUpdate(let dInfo) = decoded else {
             Issue.record("Expected .layoutUpdate")
             return
         }
-        #expect(dSid == sid)
-        #expect(dTree == tree)
+        #expect(dInfo.id == sid)
+        #expect(dInfo.tabs[0].layout == tree)
     }
 
     @Test func roundTripClipboardSet() throws {

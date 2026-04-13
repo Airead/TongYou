@@ -330,11 +330,26 @@ final class SessionManager {
     }
 
     /// Create a new floating pane in the active tab.
+    /// For remote sessions, sends the request to the server and returns nil —
+    /// the floating pane will be created when the server broadcasts a layoutUpdate.
     @discardableResult
     func createFloatingPane(initialWorkingDirectory: String? = nil) -> UUID? {
         guard sessions.indices.contains(activeSessionIndex),
               sessions[activeSessionIndex].tabs.indices.contains(
                   sessions[activeSessionIndex].activeTabIndex) else { return nil }
+
+        let session = sessions[activeSessionIndex]
+
+        if let serverSessionID = session.source.serverSessionID,
+           let tabIDs = serverTabIDs[session.id],
+           tabIDs.indices.contains(session.activeTabIndex) {
+            remoteClient?.createFloatingPane(
+                sessionID: SessionID(serverSessionID),
+                tabID: tabIDs[session.activeTabIndex]
+            )
+            return nil
+        }
+
         let pane = TerminalPane(initialWorkingDirectory: initialWorkingDirectory)
         let nextZ = (activeFloatingPanes.max(by: { $0.zIndex < $1.zIndex })?.zIndex ?? -1) + 1
         let frame = nextFloatingPaneFrame()
@@ -370,10 +385,22 @@ final class SessionManager {
     }
 
     /// Close a floating pane by its pane ID. Returns true if found and removed.
-    /// Searches all tabs in all sessions because a PTY exit may arrive after
-    /// the user has switched away.
+    /// For remote sessions, sends the request to the server — local state
+    /// updates when the server broadcasts a layoutUpdate.
     @discardableResult
     func closeFloatingPane(paneID: UUID) -> Bool {
+        if let serverPaneUUID = serverPaneUUID(for: paneID) {
+            if let session = sessions.first(where: {
+                $0.source.isRemote && $0.allPaneIDs.contains(paneID)
+            }), let serverSessionID = session.source.serverSessionID {
+                remoteClient?.closeFloatingPane(
+                    sessionID: SessionID(serverSessionID),
+                    paneID: PaneID(serverPaneUUID)
+                )
+                return true
+            }
+        }
+
         for s in sessions.indices {
             for t in sessions[s].tabs.indices {
                 if let idx = sessions[s].tabs[t].floatingPanes.firstIndex(
@@ -392,6 +419,15 @@ final class SessionManager {
     }
 
     func bringFloatingPaneToFront(paneID: UUID) {
+        if let sid = activeSession?.source.serverSessionID,
+           let serverPaneUUID = serverPaneUUID(for: paneID) {
+            remoteClient?.bringFloatingPaneToFront(
+                sessionID: SessionID(sid),
+                paneID: PaneID(serverPaneUUID)
+            )
+            return
+        }
+
         guard let idx = activeFloatingPaneIndex(for: paneID) else { return }
         let maxZ = activeFloatingPanes.max(by: { $0.zIndex < $1.zIndex })?.zIndex ?? 0
         guard activeFloatingPanes[idx].zIndex < maxZ else { return }
@@ -399,6 +435,17 @@ final class SessionManager {
     }
 
     func updateFloatingPaneFrame(paneID: UUID, frame: CGRect) {
+        if let sid = activeSession?.source.serverSessionID,
+           let serverPaneUUID = serverPaneUUID(for: paneID) {
+            remoteClient?.updateFloatingPaneFrame(
+                sessionID: SessionID(sid),
+                paneID: PaneID(serverPaneUUID),
+                x: Float(frame.origin.x), y: Float(frame.origin.y),
+                width: Float(frame.width), height: Float(frame.height)
+            )
+            return
+        }
+
         guard let idx = activeFloatingPaneIndex(for: paneID) else { return }
         activeFloatingPanes[idx].frame = frame
         activeFloatingPanes[idx].clampFrame()
@@ -413,6 +460,15 @@ final class SessionManager {
     }
 
     func toggleFloatingPanePin(paneID: UUID) {
+        if let sid = activeSession?.source.serverSessionID,
+           let serverPaneUUID = serverPaneUUID(for: paneID) {
+            remoteClient?.toggleFloatingPanePin(
+                sessionID: SessionID(sid),
+                paneID: PaneID(serverPaneUUID)
+            )
+            return
+        }
+
         guard let idx = activeFloatingPaneIndex(for: paneID) else { return }
         activeFloatingPanes[idx].isPinned.toggle()
     }
@@ -581,8 +637,28 @@ final class SessionManager {
         info.tabs.map { tabInfo -> TerminalTab in
             var tab = TerminalTab(title: tabInfo.title)
             tab.paneTree = buildPaneNode(from: tabInfo.layout, sessionID: info.id)
+            tab.floatingPanes = tabInfo.floatingPanes.map { fpInfo in
+                buildFloatingPane(from: fpInfo, sessionID: info.id)
+            }
             return tab
         }
+    }
+
+    /// Build a FloatingPane from a server FloatingPaneInfo.
+    private func buildFloatingPane(from info: FloatingPaneInfo, sessionID: SessionID) -> FloatingPane {
+        let localPane = getOrCreateRemotePane(serverPaneID: info.paneID, sessionID: sessionID)
+        let frame = CGRect(
+            x: CGFloat(info.frameX), y: CGFloat(info.frameY),
+            width: CGFloat(info.frameWidth), height: CGFloat(info.frameHeight)
+        )
+        return FloatingPane(
+            pane: localPane,
+            frame: frame,
+            isVisible: info.isVisible,
+            zIndex: Int(info.zIndex),
+            isPinned: info.isPinned,
+            title: info.title
+        )
     }
 
     // MARK: - Private: Remote Event Handlers
@@ -684,28 +760,30 @@ final class SessionManager {
         remoteClient?.attachSession(info.id)
     }
 
-    /// Recursively build a PaneNode from a server LayoutTree,
-    /// creating a ClientTerminalController for each leaf pane.
-    /// Reuses existing controllers for panes that already have a local mapping.
+    /// Get or create a local TerminalPane for a server pane ID,
+    /// reusing existing controllers when a mapping already exists.
+    private func getOrCreateRemotePane(serverPaneID: PaneID, sessionID: SessionID) -> TerminalPane {
+        if let existingLocalID = serverToLocalPaneID[serverPaneID.uuid] {
+            return TerminalPane(id: existingLocalID)
+        }
+        let pane = TerminalPane()
+        if let client = remoteClient {
+            let controller = ClientTerminalController(
+                remoteClient: client,
+                sessionID: sessionID,
+                paneID: serverPaneID
+            )
+            remoteControllers[pane.id] = controller
+            serverToLocalPaneID[serverPaneID.uuid] = pane.id
+        }
+        return pane
+    }
+
+    /// Recursively build a PaneNode from a server LayoutTree.
     private func buildPaneNode(from layout: LayoutTree, sessionID: SessionID) -> PaneNode {
         switch layout {
         case .leaf(let paneID):
-            // Reuse existing local pane if we already have a mapping.
-            if let existingLocalID = serverToLocalPaneID[paneID.uuid] {
-                return .leaf(TerminalPane(id: existingLocalID))
-            }
-
-            let pane = TerminalPane()
-            if let client = remoteClient {
-                let controller = ClientTerminalController(
-                    remoteClient: client,
-                    sessionID: sessionID,
-                    paneID: paneID
-                )
-                remoteControllers[pane.id] = controller
-                serverToLocalPaneID[paneID.uuid] = pane.id
-            }
-            return .leaf(pane)
+            return .leaf(getOrCreateRemotePane(serverPaneID: paneID, sessionID: sessionID))
 
         case .split(let direction, let ratio, let first, let second):
             return .split(

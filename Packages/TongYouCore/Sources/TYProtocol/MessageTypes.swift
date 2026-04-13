@@ -49,6 +49,13 @@ public enum ClientMessageType: UInt16, Sendable {
     case splitPane       = 0x0222
     case closePane       = 0x0223
     case focusPane       = 0x0224
+
+    // Floating pane operations
+    case createFloatingPane       = 0x0225
+    case closeFloatingPane        = 0x0226
+    case updateFloatingPaneFrame  = 0x0227
+    case bringFloatingPaneToFront = 0x0228
+    case toggleFloatingPanePin    = 0x0229
 }
 
 // MARK: - Server Messages
@@ -148,6 +155,13 @@ public enum ClientMessage: Sendable {
     case closePane(SessionID, PaneID)
     case focusPane(SessionID, PaneID)
 
+    // Floating pane operations
+    case createFloatingPane(SessionID, TabID)
+    case closeFloatingPane(SessionID, PaneID)
+    case updateFloatingPaneFrame(SessionID, PaneID, x: Float, y: Float, width: Float, height: Float)
+    case bringFloatingPaneToFront(SessionID, PaneID)
+    case toggleFloatingPanePin(SessionID, PaneID)
+
     /// Human-readable summary for debug logging. Long payloads are truncated.
     public var debugDescription: String {
         switch self {
@@ -179,6 +193,16 @@ public enum ClientMessage: Sendable {
             return "closePane(session=\(sid), pane=\(pid))"
         case .focusPane(let sid, let pid):
             return "focusPane(session=\(sid), pane=\(pid))"
+        case .createFloatingPane(let sid, let tid):
+            return "createFloatingPane(session=\(sid), tab=\(tid))"
+        case .closeFloatingPane(let sid, let pid):
+            return "closeFloatingPane(session=\(sid), pane=\(pid))"
+        case .updateFloatingPaneFrame(let sid, let pid, let x, let y, let w, let h):
+            return "updateFloatingPaneFrame(session=\(sid), pane=\(pid), frame=(\(x),\(y),\(w),\(h)))"
+        case .bringFloatingPaneToFront(let sid, let pid):
+            return "bringFloatingPaneToFront(session=\(sid), pane=\(pid))"
+        case .toggleFloatingPanePin(let sid, let pid):
+            return "toggleFloatingPanePin(session=\(sid), pane=\(pid))"
         }
     }
 
@@ -198,6 +222,11 @@ public enum ClientMessage: Sendable {
         case .splitPane:      return .splitPane
         case .closePane:      return .closePane
         case .focusPane:      return .focusPane
+        case .createFloatingPane:       return .createFloatingPane
+        case .closeFloatingPane:        return .closeFloatingPane
+        case .updateFloatingPaneFrame:  return .updateFloatingPaneFrame
+        case .bringFloatingPaneToFront: return .bringFloatingPaneToFront
+        case .toggleFloatingPanePin:    return .toggleFloatingPanePin
         }
     }
 }

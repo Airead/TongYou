@@ -165,6 +165,31 @@ public final class RemoteSessionClient: @unchecked Sendable {
         connection?.send(.focusPane(sessionID, paneID))
     }
 
+    // MARK: - Floating Pane Operations
+
+    public func createFloatingPane(sessionID: SessionID, tabID: TabID) {
+        connection?.send(.createFloatingPane(sessionID, tabID))
+    }
+
+    public func closeFloatingPane(sessionID: SessionID, paneID: PaneID) {
+        connection?.send(.closeFloatingPane(sessionID, paneID))
+    }
+
+    public func updateFloatingPaneFrame(
+        sessionID: SessionID, paneID: PaneID,
+        x: Float, y: Float, width: Float, height: Float
+    ) {
+        connection?.send(.updateFloatingPaneFrame(sessionID, paneID, x: x, y: y, width: width, height: height))
+    }
+
+    public func bringFloatingPaneToFront(sessionID: SessionID, paneID: PaneID) {
+        connection?.send(.bringFloatingPaneToFront(sessionID, paneID))
+    }
+
+    public func toggleFloatingPanePin(sessionID: SessionID, paneID: PaneID) {
+        connection?.send(.toggleFloatingPanePin(sessionID, paneID))
+    }
+
     // MARK: - Screen Replica Access
 
     /// Get the screen replica for a pane, creating one if needed.

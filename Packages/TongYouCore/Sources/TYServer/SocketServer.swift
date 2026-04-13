@@ -292,6 +292,33 @@ public final class SocketServer: @unchecked Sendable {
 
         case .focusPane(_, _):
             break
+
+        case .createFloatingPane(let sessionID, let tabID):
+            if sessionManager.createFloatingPane(sessionID: sessionID, tabID: tabID) != nil {
+                broadcastLayoutOrClosed(sessionID: sessionID)
+            }
+
+        case .closeFloatingPane(let sessionID, let paneID):
+            sessionManager.closeFloatingPane(sessionID: sessionID, paneID: paneID)
+            broadcastLayoutOrClosed(sessionID: sessionID)
+
+        case .updateFloatingPaneFrame(let sessionID, let paneID, let x, let y, let width, let height):
+            // Store the frame on the server but don't broadcast — the sending client
+            // already has the correct frame locally, and other clients will receive
+            // the updated position on the next structural layout change.
+            // Broadcasting here would serialize the full SessionInfo on every drag pixel.
+            sessionManager.updateFloatingPaneFrame(
+                sessionID: sessionID, paneID: paneID,
+                x: x, y: y, width: width, height: height
+            )
+
+        case .bringFloatingPaneToFront(let sessionID, let paneID):
+            sessionManager.bringFloatingPaneToFront(sessionID: sessionID, paneID: paneID)
+            broadcastLayoutOrClosed(sessionID: sessionID)
+
+        case .toggleFloatingPanePin(let sessionID, let paneID):
+            sessionManager.toggleFloatingPanePin(sessionID: sessionID, paneID: paneID)
+            broadcastLayoutOrClosed(sessionID: sessionID)
         }
     }
 

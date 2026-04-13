@@ -93,7 +93,12 @@ struct ServerMessageTests {
 
     @Test("layoutUpdate is not a screen update")
     func layoutUpdateNotScreenUpdate() {
-        let msg = ServerMessage.layoutUpdate(Self.dummySessionID, .leaf(Self.dummyPaneID))
+        let info = SessionInfo(
+            id: Self.dummySessionID,
+            name: "test",
+            tabs: [TabInfo(id: TabID(), title: "t", layout: .leaf(Self.dummyPaneID))]
+        )
+        let msg = ServerMessage.layoutUpdate(info)
         #expect(msg.isScreenUpdate == false)
     }
 

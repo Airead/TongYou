@@ -8,6 +8,8 @@ struct ServerTab {
     var title: String
     var paneTree: PaneNode
     var terminalCores: [PaneID: TerminalCore]
+    var floatingPanes: [FloatingPaneInfo] = []
+    var floatingPaneCores: [PaneID: TerminalCore] = [:]
 }
 
 /// Server-side session containing tabs and panes.
@@ -22,7 +24,8 @@ struct ServerSession {
             TabInfo(
                 id: tab.id,
                 title: tab.title,
-                layout: LayoutTree(from: tab.paneTree)
+                layout: LayoutTree(from: tab.paneTree),
+                floatingPanes: tab.floatingPanes
             )
         }
         return SessionInfo(
@@ -33,9 +36,22 @@ struct ServerSession {
         )
     }
 
-    /// Find the tab index that contains a given pane.
+    /// Find the tab index that contains a given pane (tree or floating).
     func tabIndex(for paneID: PaneID) -> Int? {
-        tabs.firstIndex { $0.paneTree.allPaneIDs.contains(paneID.uuid) }
+        tabs.firstIndex {
+            $0.paneTree.allPaneIDs.contains(paneID.uuid)
+            || $0.floatingPanes.contains(where: { $0.paneID == paneID })
+        }
+    }
+
+    /// Find the tab index and floating pane index for a given pane ID.
+    func floatingPaneLocation(for paneID: PaneID) -> (tabIndex: Int, fpIndex: Int)? {
+        for (tabIdx, tab) in tabs.enumerated() {
+            if let fpIdx = tab.floatingPanes.firstIndex(where: { $0.paneID == paneID }) {
+                return (tabIdx, fpIdx)
+            }
+        }
+        return nil
     }
 }
 
@@ -131,6 +147,10 @@ public final class ServerSessionManager {
                 core.stop()
                 coreLookup.removeValue(forKey: paneID)
             }
+            for (paneID, core) in tab.floatingPaneCores {
+                core.stop()
+                coreLookup.removeValue(forKey: paneID)
+            }
         }
         Log.info("Session closed: \(session.name) (\(id))", category: .session)
     }
@@ -171,6 +191,10 @@ public final class ServerSessionManager {
 
         let tab = session.tabs[tabIndex]
         for (paneID, core) in tab.terminalCores {
+            core.stop()
+            coreLookup.removeValue(forKey: paneID)
+        }
+        for (paneID, core) in tab.floatingPaneCores {
             core.stop()
             coreLookup.removeValue(forKey: paneID)
         }
@@ -254,12 +278,92 @@ public final class ServerSessionManager {
         coreLookup[paneID]?.consumeSnapshot()
     }
 
+    // MARK: - Floating Pane Operations
+
+    @discardableResult
+    public func createFloatingPane(sessionID: SessionID, tabID: TabID) -> PaneID? {
+        guard var session = sessions[sessionID] else { return nil }
+        guard let tabIndex = session.tabs.firstIndex(where: { $0.id == tabID }) else { return nil }
+
+        let (paneID, _, core) = createAndStartPane(sessionID: sessionID)
+        let nextZ = (session.tabs[tabIndex].floatingPanes.max(by: { $0.zIndex < $1.zIndex })?.zIndex ?? -1) + 1
+        let fp = FloatingPaneInfo(paneID: paneID, zIndex: nextZ)
+
+        session.tabs[tabIndex].floatingPanes.append(fp)
+        session.tabs[tabIndex].floatingPaneCores[paneID] = core
+        sessions[sessionID] = session
+        Log.info("Floating pane created: \(paneID) in tab \(tabID)", category: .session)
+        return paneID
+    }
+
+    public func closeFloatingPane(sessionID: SessionID, paneID: PaneID) {
+        guard var session = sessions[sessionID] else { return }
+        guard let (tabIndex, _) = session.floatingPaneLocation(for: paneID) else { return }
+
+        if let core = session.tabs[tabIndex].floatingPaneCores.removeValue(forKey: paneID) {
+            core.stop()
+            coreLookup.removeValue(forKey: paneID)
+        }
+        session.tabs[tabIndex].floatingPanes.removeAll { $0.paneID == paneID }
+        sessions[sessionID] = session
+        Log.info("Floating pane closed: \(paneID) in session \(sessionID)", category: .session)
+    }
+
+    public func updateFloatingPaneFrame(
+        sessionID: SessionID, paneID: PaneID,
+        x: Float, y: Float, width: Float, height: Float
+    ) {
+        modifyFloatingPane(sessionID: sessionID, paneID: paneID) { fp in
+            fp.frameX = x
+            fp.frameY = y
+            fp.frameWidth = width
+            fp.frameHeight = height
+        }
+    }
+
+    public func bringFloatingPaneToFront(sessionID: SessionID, paneID: PaneID) {
+        guard var session = sessions[sessionID] else { return }
+        guard let (tabIndex, fpIndex) = session.floatingPaneLocation(for: paneID) else { return }
+
+        let maxZ = session.tabs[tabIndex].floatingPanes.max(by: { $0.zIndex < $1.zIndex })?.zIndex ?? 0
+        guard session.tabs[tabIndex].floatingPanes[fpIndex].zIndex < maxZ else { return }
+        session.tabs[tabIndex].floatingPanes[fpIndex].zIndex = maxZ + 1
+        sessions[sessionID] = session
+    }
+
+    public func updateFloatingPaneTitle(sessionID: SessionID, paneID: PaneID, title: String) {
+        modifyFloatingPane(sessionID: sessionID, paneID: paneID) { fp in
+            fp.title = title
+        }
+    }
+
+    public func toggleFloatingPanePin(sessionID: SessionID, paneID: PaneID) {
+        modifyFloatingPane(sessionID: sessionID, paneID: paneID) { fp in
+            fp.isPinned.toggle()
+        }
+    }
+
+    // MARK: - Pane ID Queries
+
     public func allPaneIDs(sessionID: SessionID) -> [PaneID] {
         guard let session = sessions[sessionID] else { return [] }
-        return session.tabs.flatMap { Array($0.terminalCores.keys) }
+        return session.tabs.flatMap {
+            Array($0.terminalCores.keys) + Array($0.floatingPaneCores.keys)
+        }
     }
 
     // MARK: - Private
+
+    /// Mutate a floating pane in-place, handling session/tab/index lookup.
+    private func modifyFloatingPane(
+        sessionID: SessionID, paneID: PaneID,
+        _ body: (inout FloatingPaneInfo) -> Void
+    ) {
+        guard var session = sessions[sessionID] else { return }
+        guard let (tabIndex, fpIndex) = session.floatingPaneLocation(for: paneID) else { return }
+        body(&session.tabs[tabIndex].floatingPanes[fpIndex])
+        sessions[sessionID] = session
+    }
 
     /// Create a new pane with its TerminalCore and start the PTY.
     private func createAndStartPane(sessionID: SessionID) -> (PaneID, TerminalPane, TerminalCore) {
@@ -276,6 +380,7 @@ public final class ServerSessionManager {
             self?.onScreenDirty?(sessionID, paneID)
         }
         core.onTitleChanged = { [weak self] title in
+            self?.updateFloatingPaneTitle(sessionID: sessionID, paneID: paneID, title: title)
             self?.onTitleChanged?(sessionID, paneID, title)
         }
         core.onBell = { [weak self] in

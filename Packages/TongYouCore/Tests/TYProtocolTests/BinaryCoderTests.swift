@@ -250,6 +250,189 @@ struct BinaryCoderTests {
         #expect(decoded == tree)
     }
 
+    // MARK: - FloatingPaneInfo
+
+    @Test func roundTripFloatingPaneInfo() throws {
+        let paneID = PaneID()
+        let info = FloatingPaneInfo(
+            paneID: paneID,
+            frameX: 0.1, frameY: 0.2,
+            frameWidth: 0.5, frameHeight: 0.6,
+            zIndex: 3,
+            isPinned: true,
+            isVisible: false,
+            title: "my float"
+        )
+
+        var encoder = BinaryEncoder()
+        encoder.writeFloatingPaneInfo(info)
+
+        var decoder = BinaryDecoder(encoder.data)
+        let decoded = try decoder.readFloatingPaneInfo()
+        #expect(decoded == info)
+        #expect(decoder.remaining == 0)
+    }
+
+    @Test func roundTripTabInfoWithFloatingPanes() throws {
+        let treePaneID = PaneID()
+        let floatPaneID = PaneID()
+        let tabID = TabID()
+        let tab = TabInfo(
+            id: tabID,
+            title: "tab1",
+            layout: .leaf(treePaneID),
+            floatingPanes: [
+                FloatingPaneInfo(paneID: floatPaneID, zIndex: 1, title: "Float 1"),
+            ]
+        )
+
+        var encoder = BinaryEncoder()
+        encoder.writeTabInfo(tab)
+
+        var decoder = BinaryDecoder(encoder.data)
+        let decoded = try decoder.readTabInfo()
+        #expect(decoded.id == tabID)
+        #expect(decoded.title == "tab1")
+        #expect(decoded.layout == .leaf(treePaneID))
+        #expect(decoded.floatingPanes.count == 1)
+        #expect(decoded.floatingPanes[0].paneID == floatPaneID)
+        #expect(decoded.floatingPanes[0].zIndex == 1)
+        #expect(decoded.floatingPanes[0].title == "Float 1")
+        #expect(decoder.remaining == 0)
+    }
+
+    @Test func roundTripSessionInfoWithFloatingPanes() throws {
+        let treePaneID = PaneID()
+        let floatPaneID1 = PaneID()
+        let floatPaneID2 = PaneID()
+        let tabID = TabID()
+        let sessionID = SessionID()
+        let info = SessionInfo(
+            id: sessionID,
+            name: "test",
+            tabs: [
+                TabInfo(
+                    id: tabID,
+                    title: "tab",
+                    layout: .leaf(treePaneID),
+                    floatingPanes: [
+                        FloatingPaneInfo(paneID: floatPaneID1, zIndex: 0, title: "F1"),
+                        FloatingPaneInfo(paneID: floatPaneID2, zIndex: 1, isPinned: true, title: "F2"),
+                    ]
+                ),
+            ],
+            activeTabIndex: 0
+        )
+
+        var encoder = BinaryEncoder()
+        encoder.writeSessionInfo(info)
+
+        var decoder = BinaryDecoder(encoder.data)
+        let decoded = try decoder.readSessionInfo()
+        #expect(decoded.id == sessionID)
+        #expect(decoded.tabs.count == 1)
+        #expect(decoded.tabs[0].floatingPanes.count == 2)
+        #expect(decoded.tabs[0].floatingPanes[0].paneID == floatPaneID1)
+        #expect(decoded.tabs[0].floatingPanes[1].isPinned == true)
+        #expect(decoder.remaining == 0)
+    }
+
+    // MARK: - Floating Pane Client Messages
+
+    @Test func roundTripCreateFloatingPaneMessage() throws {
+        let sessionID = SessionID()
+        let tabID = TabID()
+        let msg = ClientMessage.createFloatingPane(sessionID, tabID)
+
+        var encoder = BinaryEncoder()
+        encoder.writeClientMessage(msg)
+
+        var decoder = BinaryDecoder(encoder.data)
+        let decoded = try decoder.readClientMessage(type: .createFloatingPane)
+        if case .createFloatingPane(let sid, let tid) = decoded {
+            #expect(sid == sessionID)
+            #expect(tid == tabID)
+        } else {
+            Issue.record("Expected createFloatingPane, got \(decoded)")
+        }
+    }
+
+    @Test func roundTripCloseFloatingPaneMessage() throws {
+        let sessionID = SessionID()
+        let paneID = PaneID()
+        let msg = ClientMessage.closeFloatingPane(sessionID, paneID)
+
+        var encoder = BinaryEncoder()
+        encoder.writeClientMessage(msg)
+
+        var decoder = BinaryDecoder(encoder.data)
+        let decoded = try decoder.readClientMessage(type: .closeFloatingPane)
+        if case .closeFloatingPane(let sid, let pid) = decoded {
+            #expect(sid == sessionID)
+            #expect(pid == paneID)
+        } else {
+            Issue.record("Expected closeFloatingPane, got \(decoded)")
+        }
+    }
+
+    @Test func roundTripUpdateFloatingPaneFrameMessage() throws {
+        let sessionID = SessionID()
+        let paneID = PaneID()
+        let msg = ClientMessage.updateFloatingPaneFrame(sessionID, paneID, x: 0.1, y: 0.2, width: 0.5, height: 0.6)
+
+        var encoder = BinaryEncoder()
+        encoder.writeClientMessage(msg)
+
+        var decoder = BinaryDecoder(encoder.data)
+        let decoded = try decoder.readClientMessage(type: .updateFloatingPaneFrame)
+        if case .updateFloatingPaneFrame(let sid, let pid, let x, let y, let w, let h) = decoded {
+            #expect(sid == sessionID)
+            #expect(pid == paneID)
+            #expect(x == Float(0.1))
+            #expect(y == Float(0.2))
+            #expect(w == Float(0.5))
+            #expect(h == Float(0.6))
+        } else {
+            Issue.record("Expected updateFloatingPaneFrame, got \(decoded)")
+        }
+    }
+
+    @Test func roundTripBringFloatingPaneToFrontMessage() throws {
+        let sessionID = SessionID()
+        let paneID = PaneID()
+        let msg = ClientMessage.bringFloatingPaneToFront(sessionID, paneID)
+
+        var encoder = BinaryEncoder()
+        encoder.writeClientMessage(msg)
+
+        var decoder = BinaryDecoder(encoder.data)
+        let decoded = try decoder.readClientMessage(type: .bringFloatingPaneToFront)
+        if case .bringFloatingPaneToFront(let sid, let pid) = decoded {
+            #expect(sid == sessionID)
+            #expect(pid == paneID)
+        } else {
+            Issue.record("Expected bringFloatingPaneToFront, got \(decoded)")
+        }
+    }
+
+    @Test func roundTripToggleFloatingPanePinMessage() throws {
+        let sessionID = SessionID()
+        let paneID = PaneID()
+        let msg = ClientMessage.toggleFloatingPanePin(sessionID, paneID)
+
+        var encoder = BinaryEncoder()
+        encoder.writeClientMessage(msg)
+
+        var decoder = BinaryDecoder(encoder.data)
+        let decoded = try decoder.readClientMessage(type: .toggleFloatingPanePin)
+        if case .toggleFloatingPanePin(let sid, let pid) = decoded {
+            #expect(sid == sessionID)
+            #expect(pid == paneID)
+        } else {
+            Issue.record("Expected toggleFloatingPanePin, got \(decoded)")
+        }
+    }
+
     // MARK: - ScreenDiff
 
     @Test func roundTripScreenDiff() throws {
