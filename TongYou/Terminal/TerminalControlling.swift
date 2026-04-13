@@ -1,10 +1,10 @@
 import AppKit
 import TYTerminal
 
-/// Common interface for terminal controllers (local PTY or remote tyd).
+/// Common interface for terminal controllers (local PTY or remote server).
 ///
 /// MetalView works with this protocol so it doesn't need to know whether
-/// the terminal is running locally or on a tyd server.
+/// the terminal is running locally or on a tongyou server.
 protocol TerminalControlling: AnyObject {
 
     // MARK: - Snapshot

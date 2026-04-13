@@ -2,7 +2,7 @@ import Foundation
 import TYProtocol
 import TYTerminal
 
-/// Client-side connection to a tyd server.
+/// Client-side connection to a tongyou server.
 ///
 /// Manages socket communication, message dispatch, and the read loop.
 /// The server-side counterpart is `TYServer.TYDConnection` (different type,

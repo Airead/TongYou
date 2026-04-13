@@ -12,8 +12,7 @@ let package = Package(
         .library(name: "TYShell", targets: ["TYShell"]),
         .library(name: "TYServer", targets: ["TYServer"]),
         .library(name: "TYClient", targets: ["TYClient"]),
-        .executable(name: "tyd", targets: ["tyd"]),
-        .executable(name: "tyctl", targets: ["tyctl"]),
+        .executable(name: "tongyou", targets: ["tongyou"]),
     ],
     targets: [
         // Pure terminal state machine: Screen, VTParser, StreamHandler, etc.
@@ -58,23 +57,16 @@ let package = Package(
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 
-        // Client library: connects to tyd, manages screen replicas.
+        // Client library: connects to tongyou server, manages screen replicas.
         .target(
             name: "TYClient",
             dependencies: ["TYTerminal", "TYProtocol", "TYServer"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 
-        // tyd executable: the server daemon entry point.
+        // tongyou executable: unified CLI for daemon and session management.
         .executableTarget(
-            name: "tyd",
-            dependencies: ["TYServer"],
-            swiftSettings: [.swiftLanguageMode(.v6)]
-        ),
-
-        // tyctl executable: CLI tool for managing tyd sessions.
-        .executableTarget(
-            name: "tyctl",
+            name: "tongyou",
             dependencies: ["TYClient", "TYProtocol", "TYServer"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),

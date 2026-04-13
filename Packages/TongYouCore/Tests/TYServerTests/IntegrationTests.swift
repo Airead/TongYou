@@ -9,7 +9,7 @@ struct IntegrationTests {
 
     @Test("Full flow: start server, connect client, create session, send input, receive screen update")
     func fullFlow() throws {
-        let socketPath = NSTemporaryDirectory() + "tyd-test-\(UUID().uuidString).sock"
+        let socketPath = NSTemporaryDirectory() + "ty-test-\(UUID().uuidString).sock"
         defer { try? FileManager.default.removeItem(atPath: socketPath) }
 
         let config = ServerConfig(
@@ -85,7 +85,7 @@ struct IntegrationTests {
 
     @Test("Client disconnect does not affect sessions")
     func clientDisconnectPreservesSession() throws {
-        let socketPath = NSTemporaryDirectory() + "tyd-test-\(UUID().uuidString).sock"
+        let socketPath = NSTemporaryDirectory() + "ty-test-\(UUID().uuidString).sock"
         defer { try? FileManager.default.removeItem(atPath: socketPath) }
 
         let config = ServerConfig(socketPath: socketPath)
@@ -132,7 +132,7 @@ struct IntegrationTests {
 
     @Test("Multiple clients attach to same session")
     func multipleClientsAttach() throws {
-        let socketPath = NSTemporaryDirectory() + "tyd-test-\(UUID().uuidString).sock"
+        let socketPath = NSTemporaryDirectory() + "ty-test-\(UUID().uuidString).sock"
         defer { try? FileManager.default.removeItem(atPath: socketPath) }
 
         let config = ServerConfig(socketPath: socketPath)
@@ -177,9 +177,9 @@ struct IntegrationTests {
 
     @Test("DaemonLifecycle PID file operations")
     func pidFileOperations() throws {
-        let tmpDir = NSTemporaryDirectory() + "tyd-lifecycle-test-\(UUID().uuidString)"
-        let pidPath = tmpDir + "/tyd.pid"
-        let socketPath = tmpDir + "/tyd.sock"
+        let tmpDir = NSTemporaryDirectory() + "ty-lifecycle-\(UUID().uuidString)"
+        let pidPath = tmpDir + "/tongyou.pid"
+        let socketPath = tmpDir + "/tongyou.sock"
         defer { try? FileManager.default.removeItem(atPath: tmpDir) }
 
         let lifecycle = DaemonLifecycle(pidPath: pidPath, socketPath: socketPath)
@@ -204,17 +204,17 @@ struct IntegrationTests {
         let config = ServerConfig()
         #expect(!config.socketPath.isEmpty)
         #expect(config.socketPath.contains("tongyou"))
-        #expect(config.socketPath.hasSuffix("tyd.sock"))
+        #expect(config.socketPath.hasSuffix("tongyou.sock"))
 
         let pidPath = ServerConfig.defaultPIDPath()
         #expect(!pidPath.isEmpty)
         #expect(pidPath.contains("tongyou"))
-        #expect(pidPath.hasSuffix("tyd.pid"))
+        #expect(pidPath.hasSuffix("tongyou.pid"))
     }
 
     @Test("Backpressure drops screen updates when over threshold")
     func backpressureDropsScreenUpdates() throws {
-        let socketPath = NSTemporaryDirectory() + "tyd-test-bp-\(UUID().uuidString).sock"
+        let socketPath = NSTemporaryDirectory() + "ty-bp-\(UUID().uuidString).sock"
         defer { try? FileManager.default.removeItem(atPath: socketPath) }
 
         let listenSocket = try TYSocket.listen(path: socketPath)

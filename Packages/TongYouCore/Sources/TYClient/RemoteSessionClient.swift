@@ -2,7 +2,7 @@ import Foundation
 import TYProtocol
 import TYTerminal
 
-/// Manages the client-side view of all remote sessions from a tyd server.
+/// Manages the client-side view of all remote sessions from a tongyou server.
 ///
 /// Subscribes to session lifecycle events and screen updates, maintaining
 /// a `ScreenReplica` for each attached pane. The GUI layer observes changes
@@ -47,10 +47,10 @@ public final class RemoteSessionClient: @unchecked Sendable {
     /// Called when the server sets the clipboard.
     public var onClipboardSet: ((String) -> Void)?
 
-    /// Called when the connection to tyd is established.
+    /// Called when the connection to the server is established.
     public var onConnected: (() -> Void)?
 
-    /// Called when the connection to tyd is lost.
+    /// Called when the connection to the server is lost.
     public var onDisconnected: (() -> Void)?
 
     public init(connectionManager: TYDConnectionManager) {
@@ -59,7 +59,7 @@ public final class RemoteSessionClient: @unchecked Sendable {
 
     // MARK: - Connection
 
-    /// Connect to tyd and request the session list.
+    /// Connect to the server and request the session list.
     public func connect() throws {
         let conn = try connectionManager.connect()
         wireConnection(conn)
@@ -90,7 +90,7 @@ public final class RemoteSessionClient: @unchecked Sendable {
         }
     }
 
-    /// Disconnect from tyd.
+    /// Disconnect from the server.
     public func disconnect() {
         connectionManager.disconnect()
         connection = nil

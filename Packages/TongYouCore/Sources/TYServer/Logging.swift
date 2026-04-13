@@ -1,7 +1,7 @@
 import Foundation
 import os
 
-/// Dual-backend logging for tyd.
+/// Dual-backend logging for tongyou server.
 ///
 /// - Foreground mode: writes to stderr (visible in terminal).
 /// - Daemon mode: writes to `os.Logger` (visible via `log stream`).
@@ -36,7 +36,7 @@ public enum Log {
     nonisolated(unsafe) private static var useSyslog = false
     nonisolated(unsafe) private static var minLevel: Level = .info
 
-    private static let subsystem = "io.github.airead.tongyou.tyd"
+    private static let subsystem = "io.github.airead.tongyou"
 
     // Lazily created os.Logger instances (only used in daemon mode).
     nonisolated(unsafe) private static var loggers: [Category: Logger] = [:]
@@ -84,7 +84,7 @@ public enum Log {
             case .error:   logger.error("\(message, privacy: .public)")
             }
         } else {
-            fputs("[tyd] [\(level.label)] [\(category.rawValue)] \(message)\n", stderr)
+            fputs("[tongyou] [\(level.label)] [\(category.rawValue)] \(message)\n", stderr)
         }
     }
 

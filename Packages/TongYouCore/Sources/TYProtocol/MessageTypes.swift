@@ -60,7 +60,7 @@ public enum ClientMessageType: UInt16, Sendable {
 
 // MARK: - Server Messages
 
-/// Messages sent from server (tyd) to client (GUI).
+/// Messages sent from server to client (GUI).
 public enum ServerMessage: Sendable {
     // Session lifecycle
     case sessionList([SessionInfo])
@@ -133,7 +133,7 @@ public enum ServerMessage: Sendable {
 
 // MARK: - Client Messages
 
-/// Messages sent from client (GUI) to server (tyd).
+/// Messages sent from client (GUI) to server.
 public enum ClientMessage: Sendable {
     // Session management
     case listSessions

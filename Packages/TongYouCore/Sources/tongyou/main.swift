@@ -6,9 +6,16 @@ import TYServer
 // MARK: - Argument Parsing
 
 enum Command {
+    // Daemon commands
+    case daemonRun(daemonize: Bool, debug: Bool)
+    case daemonStop
+    case daemonStatus
+
+    // Session commands
     case list
     case create(name: String?)
     case close(sessionID: String)
+
     case help
 }
 
@@ -20,6 +27,9 @@ func parseArguments() -> Command {
     }
 
     switch subcommand {
+    case "daemon":
+        return parseDaemonArgs(Array(args.dropFirst()))
+
     case "list", "ls":
         return .list
 
@@ -31,7 +41,7 @@ func parseArguments() -> Command {
                 name = args[i + 1]
                 i += 2
             } else {
-                fputs("tyctl: unknown option '\(args[i])' for create\n", stderr)
+                fputs("tongyou: unknown option '\(args[i])' for create\n", stderr)
                 exit(1)
             }
         }
@@ -39,7 +49,7 @@ func parseArguments() -> Command {
 
     case "close", "rm":
         guard args.count >= 2 else {
-            fputs("tyctl: close requires a session ID\n", stderr)
+            fputs("tongyou: close requires a session ID\n", stderr)
             exit(1)
         }
         return .close(sessionID: args[1])
@@ -48,26 +58,78 @@ func parseArguments() -> Command {
         return .help
 
     default:
-        fputs("tyctl: unknown command '\(subcommand)'\n", stderr)
+        fputs("tongyou: unknown command '\(subcommand)'\n", stderr)
         printUsage()
         exit(1)
     }
 }
 
+func parseDaemonArgs(_ args: [String]) -> Command {
+    var daemonize = false
+    var debug = false
+
+    for arg in args {
+        switch arg {
+        case "stop":
+            return .daemonStop
+        case "status":
+            return .daemonStatus
+        case "--daemonize", "-d":
+            daemonize = true
+        case "--debug":
+            debug = true
+        case "--help", "-h":
+            printDaemonUsage()
+            exit(0)
+        default:
+            fputs("tongyou: unknown option '\(arg)' for daemon\n", stderr)
+            printDaemonUsage()
+            exit(1)
+        }
+    }
+
+    return .daemonRun(daemonize: daemonize, debug: debug)
+}
+
 func printUsage() {
     let usage = """
-    Usage: tyctl <command> [options]
+    Usage: tongyou <command> [options]
 
-    Commands:
-      list (ls)                 List all sessions on the tyd server
+    TongYou terminal — GPU-accelerated terminal emulator.
+
+    Daemon:
+      daemon                    Start server in foreground (for development)
+      daemon --daemonize        Start server as background daemon
+      daemon stop               Stop a running server
+      daemon status             Check if server is running
+
+    Session:
+      list (ls)                 List all sessions
       create (new) [--name N]   Create a new session
       close (rm) <session-id>   Close a session by ID (prefix match supported)
+
+    Other:
       help                      Show this help message
+    """
+    print(usage)
+}
+
+func printDaemonUsage() {
+    let usage = """
+    Usage: tongyou daemon [OPTIONS|COMMAND]
+
+    Manage the TongYou server daemon.
+
+    Commands:
+      stop               Stop a running server
+      status             Check if server is running
 
     Options:
-      --socket <path>     Path to tyd socket (default: auto-detect)
+      --daemonize, -d    Start as background daemon
+      --debug            Enable debug logging
+      --help             Show this help message
 
-    The tyd server is auto-started if not running.
+    Without options, starts in foreground mode (for development).
     """
     print(usage)
 }
@@ -85,19 +147,19 @@ func connectToServer() -> TYDConnection {
         return TYDConnection(socket: socket)
     }
 
-    // tyd not running — try to auto-start it.
+    // Server not running — try to auto-start it.
     if DaemonLifecycle.checkExistingProcess() == nil {
-        fputs("tyctl: tyd not running, starting...\n", stderr)
-        if let tydPath = try? TYDConnectionManager.findTYD() {
+        fputs("tongyou: server not running, starting...\n", stderr)
+        if let execPath = try? TYDConnectionManager.findTongYou() {
             let process = Process()
-            process.executableURL = URL(fileURLWithPath: tydPath)
-            process.arguments = ["--daemon"]
+            process.executableURL = URL(fileURLWithPath: execPath)
+            process.arguments = ["daemon", "--daemonize"]
             process.standardOutput = nil
             process.standardError = nil
             do {
                 try process.run()
             } catch {
-                fputs("tyctl: failed to start tyd at \(tydPath): \(error)\n", stderr)
+                fputs("tongyou: failed to start server at \(execPath): \(error)\n", stderr)
             }
 
             // Wait for socket to appear.
@@ -117,13 +179,83 @@ func connectToServer() -> TYDConnection {
         let socket = try TYSocket.connect(path: socketPath)
         return TYDConnection(socket: socket)
     } catch {
-        fputs("tyctl: failed to connect to tyd: \(error)\n", stderr)
-        fputs("tyctl: is tyd running? Start it with: tyd\n", stderr)
+        fputs("tongyou: failed to connect to server: \(error)\n", stderr)
+        fputs("tongyou: is the server running? Start it with: tongyou daemon\n", stderr)
         exit(1)
     }
 }
 
-// MARK: - Commands
+// MARK: - Daemon Commands
+
+func runServer(daemonize: Bool, debug: Bool) {
+    // Configure logging before anything else.
+    Log.configure(useSyslog: daemonize, minLevel: debug ? .debug : .info)
+
+    if let existingPID = DaemonLifecycle.checkExistingProcess() {
+        fputs("tongyou: server already running (pid \(existingPID))\n", stderr)
+        exit(1)
+    }
+
+    if daemonize {
+        _ = DaemonLifecycle.daemonize()
+    }
+
+    let config = ServerConfig()
+    let lifecycle = DaemonLifecycle()
+    let sessionManager = ServerSessionManager(config: config)
+    let server = SocketServer(config: config, sessionManager: sessionManager)
+
+    do {
+        try lifecycle.writePIDFile()
+    } catch {
+        Log.error("Failed to write PID file: \(error)")
+        exit(1)
+    }
+
+    lifecycle.onShutdown = {
+        server.stop()
+        Log.info("Shutting down")
+        exit(0)
+    }
+
+    lifecycle.installSignalHandlers()
+
+    server.onAllSessionsClosed = {
+        Log.info("All sessions closed, exiting")
+        lifecycle.cleanup()
+        exit(0)
+    }
+
+    do {
+        try server.start()
+    } catch {
+        Log.error("Failed to start server: \(error)")
+        lifecycle.cleanup()
+        exit(1)
+    }
+
+    dispatchMain()
+}
+
+func stopDaemon() {
+    if DaemonLifecycle.stopRunningDaemon() {
+        print("tongyou: stop signal sent")
+    } else {
+        print("tongyou: server not running")
+        exit(1)
+    }
+}
+
+func showStatus() {
+    let (running, pid) = DaemonLifecycle.status()
+    if running, let pid {
+        print("tongyou: server running (pid \(pid))")
+    } else {
+        print("tongyou: server not running")
+    }
+}
+
+// MARK: - Session Commands
 
 func listSessions() {
     let conn = connectToServer()
@@ -132,7 +264,7 @@ func listSessions() {
         let response = try conn.receiveSync()
 
         guard case .sessionList(let sessions) = response else {
-            fputs("tyctl: unexpected response from server\n", stderr)
+            fputs("tongyou: unexpected response from server\n", stderr)
             exit(1)
         }
 
@@ -147,7 +279,7 @@ func listSessions() {
             }
         }
     } catch {
-        fputs("tyctl: communication error: \(error)\n", stderr)
+        fputs("tongyou: communication error: \(error)\n", stderr)
         exit(1)
     }
     conn.close()
@@ -166,11 +298,11 @@ func createSession(name: String?) {
             // Server might broadcast session list after create.
             print("Session created.")
         default:
-            fputs("tyctl: unexpected response from server\n", stderr)
+            fputs("tongyou: unexpected response from server\n", stderr)
             exit(1)
         }
     } catch {
-        fputs("tyctl: communication error: \(error)\n", stderr)
+        fputs("tongyou: communication error: \(error)\n", stderr)
         exit(1)
     }
     conn.close()
@@ -184,7 +316,7 @@ func closeSession(idPrefix: String) {
         let listResponse = try conn.receiveSync()
 
         guard case .sessionList(let sessions) = listResponse else {
-            fputs("tyctl: unexpected response from server\n", stderr)
+            fputs("tongyou: unexpected response from server\n", stderr)
             exit(1)
         }
 
@@ -195,9 +327,9 @@ func closeSession(idPrefix: String) {
 
         guard matches.count == 1, let session = matches.first else {
             if matches.isEmpty {
-                fputs("tyctl: no session matching '\(idPrefix)'\n", stderr)
+                fputs("tongyou: no session matching '\(idPrefix)'\n", stderr)
             } else {
-                fputs("tyctl: ambiguous session ID '\(idPrefix)' — matches \(matches.count) sessions\n", stderr)
+                fputs("tongyou: ambiguous session ID '\(idPrefix)' — matches \(matches.count) sessions\n", stderr)
                 for m in matches {
                     fputs("  \(m.id.uuid.uuidString.prefix(8))  \(m.name)\n", stderr)
                 }
@@ -208,7 +340,7 @@ func closeSession(idPrefix: String) {
         try conn.sendSync(ClientMessage.closeSession(session.id))
         print("Closed session: \(session.id.uuid.uuidString.prefix(8))  \(session.name)")
     } catch {
-        fputs("tyctl: communication error: \(error)\n", stderr)
+        fputs("tongyou: communication error: \(error)\n", stderr)
         exit(1)
     }
     conn.close()
@@ -219,6 +351,12 @@ func closeSession(idPrefix: String) {
 let command = parseArguments()
 
 switch command {
+case .daemonRun(let daemonize, let debug):
+    runServer(daemonize: daemonize, debug: debug)
+case .daemonStop:
+    stopDaemon()
+case .daemonStatus:
+    showStatus()
 case .list:
     listSessions()
 case .create(let name):

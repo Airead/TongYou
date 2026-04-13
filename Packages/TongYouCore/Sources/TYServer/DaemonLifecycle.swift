@@ -11,7 +11,7 @@ import Foundation
 @_silgen_name("fork")
 private func cFork() -> pid_t
 
-/// Manages PID file, signal handling, and daemon lifecycle for tyd.
+/// Manages PID file, signal handling, and daemon lifecycle for tongyou server.
 public final class DaemonLifecycle {
 
     private let pidPath: String
@@ -57,7 +57,7 @@ public final class DaemonLifecycle {
         return pid
     }
 
-    /// Check if another tyd process is already running.
+    /// Check if another tongyou server process is already running.
     /// Returns the PID if running, nil otherwise.
     public static func checkExistingProcess(pidPath: String? = nil) -> pid_t? {
         guard let pid = readPID(from: pidPath) else { return nil }
@@ -71,7 +71,7 @@ public final class DaemonLifecycle {
         return nil
     }
 
-    /// Send SIGTERM to a running tyd process.
+    /// Send SIGTERM to a running tongyou server process.
     public static func stopRunningDaemon(pidPath: String? = nil) -> Bool {
         guard let pid = checkExistingProcess(pidPath: pidPath) else {
             return false
@@ -80,7 +80,7 @@ public final class DaemonLifecycle {
         return true
     }
 
-    /// Check if tyd is running and return status info.
+    /// Check if tongyou server is running and return status info.
     public static func status(pidPath: String? = nil) -> (running: Bool, pid: pid_t?) {
         let pid = checkExistingProcess(pidPath: pidPath)
         return (pid != nil, pid)
@@ -128,7 +128,7 @@ public final class DaemonLifecycle {
     public static func daemonize() -> Bool {
         let pid = cFork()
         if pid < 0 {
-            fputs("tyd: fork failed: \(String(cString: strerror(errno)))\n", stderr)
+            fputs("tongyou: fork failed: \(String(cString: strerror(errno)))\n", stderr)
             exit(1)
         }
         if pid > 0 {
@@ -137,7 +137,7 @@ public final class DaemonLifecycle {
         }
         // Child — become session leader
         if setsid() < 0 {
-            fputs("tyd: setsid failed: \(String(cString: strerror(errno)))\n", stderr)
+            fputs("tongyou: setsid failed: \(String(cString: strerror(errno)))\n", stderr)
             exit(1)
         }
         // Close standard file descriptors

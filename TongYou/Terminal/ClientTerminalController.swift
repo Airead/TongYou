@@ -4,7 +4,7 @@ import TYClient
 import TYProtocol
 import TYTerminal
 
-/// Terminal controller backed by a remote tyd session.
+/// Terminal controller backed by a remote tongyou session.
 ///
 /// Maintains a local `ScreenReplica` updated by server diffs/snapshots.
 /// User input is encoded locally and sent to the server via the socket.

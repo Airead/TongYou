@@ -8,14 +8,14 @@ import TYTerminal
 /// Absorbs all logic previously in TabManager, scoped to the active session.
 ///
 /// Supports mixed-mode operation: local sessions (direct PTY) and remote sessions
-/// (backed by a tyd server) can coexist in the same sidebar.
+/// (backed by a tongyou server) can coexist in the same sidebar.
 @Observable
 final class SessionManager {
 
     private(set) var sessions: [TerminalSession] = []
     private(set) var activeSessionIndex: Int = 0
 
-    /// Remote session client for tyd communication. Nil when not connected.
+    /// Remote session client for server communication. Nil when not connected.
     private(set) var remoteClient: RemoteSessionClient?
 
     /// Controllers for remote panes, keyed by local pane UUID.
@@ -536,9 +536,9 @@ final class SessionManager {
         }
     }
 
-    // MARK: - Remote Session Support (tyd)
+    // MARK: - Remote Session Support
 
-    /// Attach to a tyd server using a pre-established connection.
+    /// Attach to a tongyou server using a pre-established connection.
     /// Must be called on the main thread.
     func attachToTYD(connectionManager: TYDConnectionManager, connection: TYDConnection) {
         // Clean up stale state from a previous connection before wiring the new one.
@@ -575,7 +575,7 @@ final class SessionManager {
         remoteClient = client
     }
 
-    /// Disconnect from the tyd server.
+    /// Disconnect from the tongyou server.
     func disconnectFromTYD() {
         remoteClient?.disconnect()
         remoteClient = nil
@@ -601,13 +601,13 @@ final class SessionManager {
         }
     }
 
-    /// Called when the tyd connection drops unexpectedly.
+    /// Called when the server connection drops unexpectedly.
     private func handleRemoteDisconnected() {
         remoteClient = nil
         cleanupRemoteState()
     }
 
-    /// Whether we are connected to a tyd server.
+    /// Whether we are connected to a tongyou server.
     var isConnectedToTYD: Bool {
         remoteClient != nil
     }

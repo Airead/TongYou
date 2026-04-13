@@ -19,7 +19,7 @@ final class MetalView: NSView {
     /// Working directory for the shell spawned in this tab.
     var initialWorkingDirectory: String?
 
-    /// External controller injected for remote (tyd) sessions.
+    /// External controller injected for remote sessions.
     /// When set, MetalView skips creating a local TerminalController.
     var externalController: (any TerminalControlling)?
 

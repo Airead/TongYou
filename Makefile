@@ -21,13 +21,11 @@ install: build-release
 	@echo "Done."
 
 install-cli:
-	@echo "Building tyd and tyctl..."
-	cd $(PKG_DIR) && swift build -c release --product tyd
-	cd $(PKG_DIR) && swift build -c release --product tyctl
+	@echo "Building tongyou CLI..."
+	cd $(PKG_DIR) && swift build -c release --product tongyou
 	@mkdir -p $(CLI_INSTALL_DIR)
-	@echo "Installing tyd and tyctl to $(CLI_INSTALL_DIR)..."
-	cp $(PKG_DIR)/.build/release/tyd $(CLI_INSTALL_DIR)/tyd
-	cp $(PKG_DIR)/.build/release/tyctl $(CLI_INSTALL_DIR)/tyctl
+	@echo "Installing tongyou to $(CLI_INSTALL_DIR)..."
+	cp $(PKG_DIR)/.build/release/tongyou $(CLI_INSTALL_DIR)/tongyou
 	@echo "Done. Make sure $(CLI_INSTALL_DIR) is in your PATH."
 
 test:

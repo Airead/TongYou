@@ -2,9 +2,9 @@ import Foundation
 import TYProtocol
 import TYServer
 
-/// Manages the lifecycle of a connection to a tyd server instance.
+/// Manages the lifecycle of a connection to a tongyou server instance.
 ///
-/// Handles auto-starting tyd if not running, establishing the socket connection,
+/// Handles auto-starting the server if not running, establishing the socket connection,
 /// and reconnection on disconnect.
 public final class TYDConnectionManager: @unchecked Sendable {
 
@@ -29,10 +29,10 @@ public final class TYDConnectionManager: @unchecked Sendable {
 
     // MARK: - Connect
 
-    /// Connect to the tyd server. Auto-starts tyd if configured and not running.
+    /// Connect to the tongyou server. Auto-starts it if configured and not running.
     public func connect() throws -> TYDConnection {
         if autoStart {
-            try ensureTYDRunning()
+            try ensureServerRunning()
         }
 
         let socket = try TYSocket.connect(path: socketPath)
@@ -51,7 +51,7 @@ public final class TYDConnectionManager: @unchecked Sendable {
         return conn
     }
 
-    /// Disconnect from tyd without stopping the server.
+    /// Disconnect from the server without stopping it.
     public func disconnect() {
         lock.lock()
         let conn = connection
@@ -76,20 +76,20 @@ public final class TYDConnectionManager: @unchecked Sendable {
 
     // MARK: - Auto-Start
 
-    /// Ensure tyd is running, starting it if necessary.
-    private func ensureTYDRunning() throws {
+    /// Ensure the server is running, starting it if necessary.
+    private func ensureServerRunning() throws {
         if DaemonLifecycle.checkExistingProcess() != nil {
             return
         }
 
-        let tydPath = try Self.findTYD()
-        try startTYD(at: tydPath)
+        let execPath = try Self.findTongYou()
+        try startServer(at: execPath)
 
-        // Wait for socket to become available (tyd needs time to start).
+        // Wait for socket to become available (server needs time to start).
         let deadline = Date().addingTimeInterval(5.0)
         while Date() < deadline {
             if FileManager.default.fileExists(atPath: socketPath) {
-                // Give tyd a moment to start listening after creating the socket file.
+                // Give the server a moment to start listening after creating the socket file.
                 Thread.sleep(forTimeInterval: 0.1)
                 return
             }
@@ -99,26 +99,26 @@ public final class TYDConnectionManager: @unchecked Sendable {
         throw TYDConnectionError.startTimeout
     }
 
-    /// Find the tyd executable by searching common locations.
-    public static func findTYD() throws -> String {
-        // Look for tyd in the same directory as the running process.
+    /// Find the tongyou executable by searching common locations.
+    public static func findTongYou() throws -> String {
+        // Look for tongyou in the same directory as the running process.
         let bundle = Bundle.main
-        if let tydInBundle = bundle.path(forAuxiliaryExecutable: "tyd") {
-            return tydInBundle
+        if let inBundle = bundle.path(forAuxiliaryExecutable: "tongyou") {
+            return inBundle
         }
 
-        // Look for tyd next to the current executable.
+        // Look for tongyou next to the current executable.
         let execURL = bundle.executableURL ?? URL(fileURLWithPath: ProcessInfo.processInfo.arguments[0])
-        let siblingURL = execURL.deletingLastPathComponent().appendingPathComponent("tyd")
+        let siblingURL = execURL.deletingLastPathComponent().appendingPathComponent("tongyou")
         if FileManager.default.isExecutableFile(atPath: siblingURL.path) {
             return siblingURL.path
         }
 
         // Check common install locations.
         let commonPaths = [
-            "/usr/local/bin/tyd",
-            "/opt/homebrew/bin/tyd",
-            "\(NSHomeDirectory())/.local/bin/tyd",
+            "/usr/local/bin/tongyou",
+            "/opt/homebrew/bin/tongyou",
+            "\(NSHomeDirectory())/.local/bin/tongyou",
         ]
         for path in commonPaths {
             if FileManager.default.isExecutableFile(atPath: path) {
@@ -129,10 +129,10 @@ public final class TYDConnectionManager: @unchecked Sendable {
         throw TYDConnectionError.tydNotFound
     }
 
-    private func startTYD(at path: String) throws {
+    private func startServer(at path: String) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = ["--daemon"]
+        process.arguments = ["daemon", "--daemonize"]
         process.standardOutput = nil
         process.standardError = nil
         try process.run()

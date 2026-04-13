@@ -1,10 +1,10 @@
 import Foundation
 
-/// Identifies whether a session runs locally or is backed by a remote tyd server.
+/// Identifies whether a session runs locally or is backed by a remote tongyou server.
 public enum SessionSource: Sendable, Equatable {
     /// Local PTY session managed directly by the GUI.
     case local
-    /// Remote session managed by a tyd server.
+    /// Remote session managed by a tongyou server.
     /// `serverSessionID` is the UUID of the session on the server side.
     case remote(serverSessionID: UUID)
 
@@ -27,7 +27,7 @@ public struct TerminalSession: Identifiable, Sendable {
     public var tabs: [TerminalTab] = []
     public var activeTabIndex: Int = 0
 
-    /// Whether this session is local or backed by a remote tyd server.
+    /// Whether this session is local or backed by a remote tongyou server.
     public var source: SessionSource
 
     /// The currently active tab, if any.

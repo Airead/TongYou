@@ -426,11 +426,11 @@ struct TerminalWindowView: View {
         }
     }
 
-    // MARK: - Remote Session (tyd)
+    // MARK: - Remote Session
 
     private func connectToTYD() {
         guard !sessionManager.isConnectedToTYD else {
-            print("[TongYou] Already connected to tyd")
+            print("[TongYou] Already connected to server")
             return
         }
         // Prepare manager on main thread; do blocking connect off main.
@@ -440,14 +440,14 @@ struct TerminalWindowView: View {
                 let conn = try manager.connect()
                 DispatchQueue.main.async {
                     sessionManager.attachToTYD(connectionManager: manager, connection: conn)
-                    print("[TongYou] Connected to tyd")
+                    print("[TongYou] Connected to server")
                     if sidebarVisibility == .never {
                         sidebarVisibility = .auto
                     }
                 }
             } catch {
                 DispatchQueue.main.async {
-                    print("[TongYou] Failed to connect to tyd: \(error)")
+                    print("[TongYou] Failed to connect to server: \(error)")
                 }
             }
         }

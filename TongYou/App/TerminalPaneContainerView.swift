@@ -8,7 +8,7 @@ struct TerminalPaneContainerView: NSViewRepresentable {
     let paneID: UUID
     let viewStore: MetalViewStore
     let initialWorkingDirectory: String?
-    /// External controller for remote (tyd) sessions. Nil for local sessions.
+    /// External controller for remote sessions. Nil for local sessions.
     let externalController: (any TerminalControlling)?
     let onTabAction: (TabAction) -> Void
     let onTitleChanged: (String) -> Void

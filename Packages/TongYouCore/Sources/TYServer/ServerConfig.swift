@@ -1,6 +1,6 @@
 import Foundation
 
-/// Configuration for the tyd server daemon.
+/// Configuration for the tongyou server daemon.
 public struct ServerConfig: Sendable {
     public var socketPath: String
     public var autoExitOnNoSessions: Bool
@@ -46,11 +46,11 @@ public struct ServerConfig: Sendable {
     }
 
     public static func defaultSocketPath() -> String {
-        runtimeDirectory().appending("/tyd.sock")
+        runtimeDirectory().appending("/tongyou.sock")
     }
 
     public static func defaultPIDPath() -> String {
-        runtimeDirectory().appending("/tyd.pid")
+        runtimeDirectory().appending("/tongyou.pid")
     }
 
     /// Ensure the parent directory of the given path exists, creating it if needed.
