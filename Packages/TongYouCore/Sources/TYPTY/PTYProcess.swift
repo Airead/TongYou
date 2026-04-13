@@ -36,10 +36,14 @@ public final class PTYProcess {
     private let readQueue: DispatchQueue
     private let writeQueue: DispatchQueue
 
-    private static let readBufSize = 16384
+    private static let readBufSize = 65536
     /// Time budget per event handler invocation (milliseconds).
     /// Balances throughput vs. main-thread responsiveness.
+    /// Adaptive: uses bulkBudgetMs when sustained full-buffer reads are detected.
     private static let readBudgetMs = 8
+    private static let bulkBudgetMs = 16
+    /// Number of consecutive full-buffer reads before switching to bulk budget.
+    private static let bulkReadThreshold = 3
 
     /// Maximum time (ms) to wait for the PTY to become writable per poll call.
     private static let writePollTimeoutMs: Int32 = 1000
@@ -295,20 +299,26 @@ public final class PTYProcess {
         // Allocate read buffer once; freed in cancel handler
         let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: Self.readBufSize)
 
+        // Track consecutive full-buffer reads to detect bulk output (e.g. cat).
+        var consecutiveFullReads = 0
+
         source.setEventHandler { [weak self] in
             guard let self else { return }
 
-            // Time-budgeted read loop: yield the ptyQueue periodically so
-            // consumeSnapshot's ptyQueue.sync can interleave, preventing
-            // main-thread starvation during bulk output (e.g. cat).
-            let deadline = DispatchTime.now() + .milliseconds(Self.readBudgetMs)
+            // Adaptive time budget: use longer budget during sustained bulk output
+            // to improve throughput, shorter budget during interactive use to keep
+            // main-thread responsive.
+            let budgetMs = consecutiveFullReads >= Self.bulkReadThreshold ? Self.bulkBudgetMs : Self.readBudgetMs
+            let deadline = DispatchTime.now() + .milliseconds(budgetMs)
             while true {
                 let n = Darwin.read(fd, buf, Self.readBufSize)
                 if n > 0 {
+                    consecutiveFullReads = n >= Self.readBufSize ? consecutiveFullReads + 1 : 0
                     let bufPtr = UnsafeBufferPointer(start: buf, count: n)
                     self.onRead?(bufPtr)
                     if DispatchTime.now() >= deadline { break }
                 } else if n == -1 && (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    consecutiveFullReads = 0
                     break
                 } else if n == -1 && errno == EINTR {
                     continue  // Interrupted by signal (e.g. SIGWINCH) — retry

@@ -20,6 +20,11 @@ public final class SocketServer: @unchecked Sendable {
     private var dirtyPanes: Set<DirtyPaneKey> = []
     private let dirtyLock = NSLock()
 
+    /// Last-sent snapshot state per pane, used to suppress duplicate updates
+    /// when the viewport content hasn't actually changed (e.g. scrolled up
+    /// while new output arrives at the bottom).
+    private var lastSentState: [PaneID: SentSnapshotState] = [:]
+
     /// Single server-wide timer for coalescing screen updates.
     private var updateTimer: DispatchSourceTimer?
 
@@ -82,6 +87,7 @@ public final class SocketServer: @unchecked Sendable {
         for client in allClients {
             client.stop()
         }
+        lastSentState.removeAll()
         Log.info("Server stopped")
     }
 
@@ -216,8 +222,42 @@ public final class SocketServer: @unchecked Sendable {
                 paneID: key.paneID
             ) else { continue }
 
+            // Suppress duplicate updates: if viewport content hasn't changed
+            // (e.g. user scrolled up while new output arrives at the bottom),
+            // skip sending entirely.
+            let paneShort = key.paneID.uuid.uuidString.prefix(8)
+            if let prev = lastSentState[key.paneID] {
+                if prev.matches(snapshot) {
+                    Log.debug(
+                        "Suppressed duplicate for pane \(paneShort)"
+                        + " (vpOff=\(snapshot.viewportOffset), sb=\(snapshot.scrollbackCount), prevSb=\(prev.scrollbackCount))"
+                    )
+                    continue
+                } else {
+                    Log.debug(
+                        "Dedup miss for pane \(paneShort)"
+                        + " (vpOff=\(prev.viewportOffset)->\(snapshot.viewportOffset)"
+                        + ", sb=\(prev.scrollbackCount)->\(snapshot.scrollbackCount)"
+                        + ", cursor=\(prev.cursorCol),\(prev.cursorRow)->\(snapshot.cursorCol),\(snapshot.cursorRow)"
+                        + ", vis=\(prev.cursorVisible)->\(snapshot.cursorVisible))"
+                    )
+                }
+            } else {
+                Log.debug("No prev state for pane \(paneShort), first send")
+            }
+            lastSentState[key.paneID] = SentSnapshotState(from: snapshot)
+
             let message: ServerMessage
-            if snapshot.dirtyRegion.fullRebuild {
+            // Use full snapshot when the screen was fully rebuilt OR when
+            // ≥80% of rows are dirty — at that point a diff carries more
+            // overhead (row index array) than a plain full snapshot.
+            let mostlyDirty: Bool
+            if let range = snapshot.dirtyRegion.lineRange {
+                mostlyDirty = range.count >= snapshot.rows * 4 / 5
+            } else {
+                mostlyDirty = false
+            }
+            if snapshot.dirtyRegion.fullRebuild || mostlyDirty {
                 message = .screenFull(key.sessionID, key.paneID, snapshot)
             } else {
                 message = .screenDiff(key.sessionID, key.paneID, ScreenDiff(from: snapshot))
@@ -387,6 +427,9 @@ public final class SocketServer: @unchecked Sendable {
         }
 
         sessionManager.onPaneExited = { [weak self] sessionID, paneID, exitCode in
+            self?.messageQueue.async {
+                self?.lastSentState.removeValue(forKey: paneID)
+            }
             self?.broadcast(
                 .paneExited(sessionID, paneID, exitCode: exitCode),
                 toSession: sessionID
@@ -398,4 +441,51 @@ public final class SocketServer: @unchecked Sendable {
 private struct DirtyPaneKey: Hashable {
     let sessionID: SessionID
     let paneID: PaneID
+}
+
+/// Lightweight record of the last snapshot sent for a pane,
+/// used to detect and suppress duplicate screen updates.
+private struct SentSnapshotState {
+    let cells: [Cell]
+    let cursorCol: Int
+    let cursorRow: Int
+    let cursorVisible: Bool
+    let cursorShape: CursorShape
+    let viewportOffset: Int
+    let scrollbackCount: Int
+
+    init(from snapshot: ScreenSnapshot) {
+        self.cells = snapshot.cells
+        self.cursorCol = snapshot.cursorCol
+        self.cursorRow = snapshot.cursorRow
+        self.cursorVisible = snapshot.cursorVisible
+        self.cursorShape = snapshot.cursorShape
+        self.viewportOffset = snapshot.viewportOffset
+        self.scrollbackCount = snapshot.scrollbackCount
+    }
+
+    /// Check whether the snapshot represents the same visible content.
+    /// Falls back to full cell comparison when the fast path doesn't apply.
+    func matches(_ snapshot: ScreenSnapshot) -> Bool {
+        // Scrolled-up fast path: both viewports are scrolled up and anchored
+        // to the same absolute line (scrollbackCount - viewportOffset).
+        // New output only appends to scrollback below the viewport, so the
+        // visible rows are identical — skip without comparing cells.
+        if viewportOffset > 0 && snapshot.viewportOffset > 0
+            && (scrollbackCount - viewportOffset) == (snapshot.scrollbackCount - snapshot.viewportOffset)
+            && snapshot.scrollbackCount >= scrollbackCount {
+            return true
+        }
+
+        // At bottom or viewport moved: compare cursor and cell content.
+        guard viewportOffset == snapshot.viewportOffset,
+              cursorCol == snapshot.cursorCol,
+              cursorRow == snapshot.cursorRow,
+              cursorVisible == snapshot.cursorVisible,
+              cursorShape == snapshot.cursorShape else {
+            return false
+        }
+
+        return cells == snapshot.cells
+    }
 }
