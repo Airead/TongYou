@@ -52,14 +52,14 @@ extension Unicode.Scalar {
         // SMP blocks (v > 0xFFFF) — less common, check last
         guard v > 0xFFFF else { return false }
 
-        // Common wide emoji ranges
-        if v >= 0x1F300 && v <= 0x1F64F { return true }
-        if v >= 0x1F680 && v <= 0x1F6FF { return true }
-        if v >= 0x1F900 && v <= 0x1F9FF { return true }
-        if v >= 0x1FA00 && v <= 0x1FA6F { return true }
-        if v >= 0x1FA70 && v <= 0x1FAFF { return true }
-        if v >= 0x1F200 && v <= 0x1F2FF { return true }
-        // Regional Indicators for flag emoji
+        // Emoji with default emoji presentation are wide
+        // Use Unicode standard property for accurate detection
+        if let scalar = Unicode.Scalar(v), scalar.properties.isEmojiPresentation {
+            return true
+        }
+
+        // Regional Indicators for flag emoji (individual indicators are narrow,
+        // but pairs should be wide - handled by grapheme cluster logic)
         if v >= 0x1F1E6 && v <= 0x1F1FF { return true }
         // CJK Unified Ideographs Extension B..I and Compatibility Supplement
         if v >= 0x20000 && v <= 0x2A6DF { return true }

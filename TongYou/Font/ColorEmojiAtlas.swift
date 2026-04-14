@@ -113,24 +113,23 @@ final class ColorEmojiAtlas {
     private func isEmojiScalar(_ scalar: Unicode.Scalar?) -> Bool {
         guard let scalar = scalar else { return false }
 
-        // Emoji ranges
+        // Use Unicode standard's emoji presentation property for accurate detection.
+        // This identifies scalars that should be rendered with emoji presentation by default.
+        if scalar.isEmojiPresentation {
+            return true
+        }
+
+        // Regional indicators (flags) are emoji but may not have isEmojiPresentation = true
+        // when examined individually. They are handled via isEmojiSequence when paired.
         let v = scalar.value
+        if v >= 0x1F1E6 && v <= 0x1F1FF {
+            return false  // Will be handled by isEmojiSequence for flag pairs
+        }
 
-        // Basic emoji
-        if v >= 0x1F600 && v <= 0x1F64F { return true }  // Emoticons
-        if v >= 0x1F300 && v <= 0x1F5FF { return true }  // Misc Symbols and Pictographs
-        if v >= 0x1F680 && v <= 0x1F6FF { return true }  // Transport and Map
-        if v >= 0x1F1E6 && v <= 0x1F1FF { return true }  // Regional indicators (flags)
-        if v >= 0x2600 && v <= 0x26FF { return true }    // Misc symbols
-        if v >= 0x2700 && v <= 0x27BF { return true }    // Dingbats
-        if v >= 0x1F900 && v <= 0x1F9FF { return true }  // Supplemental Symbols and Pictographs
-        if v >= 0x1FA00 && v <= 0x1FA6F { return true }  // Chess Symbols, Symbols and Pictographs Extended-A
-        if v >= 0x1FA70 && v <= 0x1FAFF { return true }  // Symbols and Pictographs Extended-B
-
-        // Keycap and other emoji-like characters
+        // ASCII digits 0-9 and #/* can be emoji with variation selector (U+FE0F),
+        // but without VS16 they should be treated as text. Let isEmojiSequence handle them.
         if v == 0x0023 || v == 0x002A || (v >= 0x0030 && v <= 0x0039) {
-            // These can be emoji with variation selector
-            return false  // Will be handled by isEmojiSequence
+            return false
         }
 
         return false
