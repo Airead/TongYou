@@ -807,10 +807,10 @@ final class MetalRenderer {
             for col in 0..<snapCols {
                 let cell = snapshot.cells[rowBase + col]
                 guard cell.width.isRenderable else { continue }
-                guard cell.codepoint != " " else { continue }
+                guard cell.content.firstScalar != " " else { continue }
 
                 guard let glyphInfo = glyphAtlas.getOrRasterize(
-                    character: cell.codepoint, fontSystem: fontSystem,
+                    character: cell.content.firstScalar ?? " ", fontSystem: fontSystem,
                     frameNumber: frameNumber
                 ) else { continue }
 

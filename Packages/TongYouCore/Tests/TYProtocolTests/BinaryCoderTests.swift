@@ -142,7 +142,7 @@ struct BinaryCoderTests {
 
         var encoder = BinaryEncoder()
         encoder.writeCell(cell)
-        #expect(encoder.data.count == 15)
+        #expect(encoder.data.count == 16) // 1B count + 4B scalar + 4B fg + 4B bg + 2B flags + 1B width
 
         var decoder = BinaryDecoder(encoder.data)
         let decoded = try decoder.readCell()
@@ -151,6 +151,24 @@ struct BinaryCoderTests {
         #expect(decoded.attributes.fgColor.raw == 0x0200FF00)
         #expect(decoded.attributes.bgColor.raw == 0x010010FF)
         #expect(decoded.width == .normal)
+    }
+
+    @Test func roundTripMultiScalarCell() throws {
+        let cell = Cell(
+            content: GraphemeCluster(Character("👨‍👩‍👧‍👦")),
+            attributes: .default,
+            width: .wide
+        )
+
+        var encoder = BinaryEncoder()
+        encoder.writeCell(cell)
+        #expect(encoder.data.count == 40) // 1B count + 7*4B scalars + 4B fg + 4B bg + 2B flags + 1B width
+
+        var decoder = BinaryDecoder(encoder.data)
+        let decoded = try decoder.readCell()
+        #expect(decoded.content.scalarCount == 7)
+        #expect(decoded.content == cell.content)
+        #expect(decoded.width == .wide)
     }
 
     @Test func roundTripEmptyCell() throws {
@@ -620,6 +638,7 @@ struct BinaryCoderTests {
 
     @Test func decoderInvalidCellWidth() throws {
         var encoder = BinaryEncoder()
+        encoder.writeUInt8(1)           // scalar count
         encoder.writeUInt32(0x41)       // codepoint
         encoder.writeUInt32(0)          // fgColor
         encoder.writeUInt32(0)          // bgColor

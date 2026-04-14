@@ -59,6 +59,8 @@ extension Unicode.Scalar {
         if v >= 0x1FA00 && v <= 0x1FA6F { return true }
         if v >= 0x1FA70 && v <= 0x1FAFF { return true }
         if v >= 0x1F200 && v <= 0x1F2FF { return true }
+        // Regional Indicators for flag emoji
+        if v >= 0x1F1E6 && v <= 0x1F1FF { return true }
         // CJK Unified Ideographs Extension B..I and Compatibility Supplement
         if v >= 0x20000 && v <= 0x2A6DF { return true }
         if v >= 0x2A700 && v <= 0x2B73F { return true }
