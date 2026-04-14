@@ -515,6 +515,7 @@ final class TerminalController: TerminalControlling {
         vtParser.feed(bytes) { [self] action in
             streamHandler.handle(action)
         }
+        streamHandler.flush()
         contentGeneration &+= 1
         markScreenDirty()
     }
