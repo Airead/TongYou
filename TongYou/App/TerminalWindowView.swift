@@ -586,8 +586,9 @@ struct TerminalWindowView: View {
     private func switchToSessionFromPicker(at index: Int) {
         if sessionManager.isSessionDetached(at: index) {
             attachSessionAtIndex(index)
+        } else {
+            switchToSession(at: index)
         }
-        switchToSession(at: index)
     }
 
     private func ensureSidebarVisible() {
@@ -603,11 +604,9 @@ struct TerminalWindowView: View {
             sessionManager.attachRemoteSession(serverSessionID: serverID)
         } else if session.source == .local {
             sessionManager.attachLocalSession(sessionID: session.id)
-            // After attaching a local session, focus its root pane.
-            if let activeTab = sessionManager.activeTab {
-                focusManager.focusPane(id: activeTab.paneTree.firstPane.id)
-            }
         }
+        let newIndex = sessionManager.sessions.firstIndex(where: { $0.id == session.id }) ?? index
+        switchToSession(at: newIndex)
     }
 
     private func detachSessionAtIndex(_ index: Int) {
