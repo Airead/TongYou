@@ -108,6 +108,50 @@ struct TerminalControllerTests {
 
         controller.stop()
     }
+
+    @Test
+    @MainActor
+    func suspendAndResumeAccumulatesOutput() async throws {
+        let controller = TerminalController(columns: 80, rows: 24)
+        var displayCallCount = 0
+        var capturedSnapshot: ScreenSnapshot?
+
+        controller.onNeedsDisplay = {
+            displayCallCount += 1
+            DispatchQueue.main.async {
+                if let s = controller.consumeSnapshot() {
+                    capturedSnapshot = s
+                }
+            }
+        }
+
+        controller.start(command: "/bin/cat")
+
+        // Wait for initial display callback to settle
+        try await Task.sleep(for: .milliseconds(50))
+        let callCountAfterStart = displayCallCount
+
+        controller.sendText("before_suspend\n")
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(displayCallCount > callCountAfterStart, "Expected onNeedsDisplay after writing")
+
+        controller.suspend()
+        let callCountAfterSuspend = displayCallCount
+
+        controller.sendText("during_suspend\n")
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(displayCallCount == callCountAfterSuspend, "Expected no onNeedsDisplay while suspended")
+
+        controller.resume()
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(displayCallCount > callCountAfterSuspend, "Expected onNeedsDisplay immediately after resume")
+
+        let text = extractText(from: capturedSnapshot)
+        #expect(text.contains("before_suspend"), "Expected screen to contain 'before_suspend', got: \(text)")
+        #expect(text.contains("during_suspend"), "Expected screen to contain 'during_suspend', got: \(text)")
+
+        controller.stop()
+    }
 }
 
 private func extractText(from snapshot: ScreenSnapshot?) -> String {

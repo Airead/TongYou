@@ -57,6 +57,8 @@ final class TerminalController: TerminalControlling {
     /// Called on the main thread when the window title changes (OSC 0/2).
     var onTitleChanged: ((String) -> Void)?
 
+    private(set) var isSuspended: Bool = false
+
     private let ptyQueue = DispatchQueue(
         label: "io.github.airead.tongyou.pty.read",
         qos: .userInteractive
@@ -173,6 +175,17 @@ final class TerminalController: TerminalControlling {
     func stop() {
         ptyProcess?.stop()
         ptyProcess = nil
+    }
+
+    func suspend() {
+        isSuspended = true
+    }
+
+    func resume() {
+        isSuspended = false
+        if screenDirty {
+            onNeedsDisplay?()
+        }
     }
 
     // MARK: - Snapshot (called by display link on MainActor)
@@ -535,7 +548,7 @@ final class TerminalController: TerminalControlling {
     private func markScreenDirty() {
         let wasDirty = screenDirty
         screenDirty = true
-        if !wasDirty {
+        if !wasDirty && !isSuspended {
             onNeedsDisplay?()
         }
     }
