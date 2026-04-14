@@ -127,3 +127,14 @@ fragment float4 cell_text_fragment(
     float alpha = atlas.sample(s, in.texCoord).r;
     return float4(in.color.rgb * alpha, alpha);
 }
+
+// MARK: - Cell Emoji (Color)
+
+fragment float4 cell_emoji_fragment(
+    CellTextVertexOut in [[stage_in]],
+    texture2d<float> emojiAtlas [[texture(0)]]
+) {
+    constexpr sampler s(coord::pixel, filter::linear, address::clamp_to_edge);
+    float4 color = emojiAtlas.sample(s, in.texCoord);
+    return color;  // Pre-multiplied alpha from CGContext
+}

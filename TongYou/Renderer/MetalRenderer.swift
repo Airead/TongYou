@@ -19,9 +19,11 @@ final class MetalRenderer {
     private let bgPipelineState: MTLRenderPipelineState
     private let underlinePipelineState: MTLRenderPipelineState
     private let textPipelineState: MTLRenderPipelineState
+    private let emojiPipelineState: MTLRenderPipelineState
 
     private var fontSystem: FontSystem
-    private let glyphAtlas: GlyphAtlas
+    private(set) var glyphAtlas: GlyphAtlas
+    private(set) var emojiAtlas: ColorEmojiAtlas
     private var colorPalette: ColorPalette
 
     // Triple buffering (semaphore paces CPU vs GPU, not thread synchronization)
@@ -142,12 +144,16 @@ final class MetalRenderer {
         var textInstanceBuffer: MTLBuffer
         var textInstanceCapacity: Int
         var textInstanceCount: Int
+        var emojiInstanceBuffer: MTLBuffer
+        var emojiInstanceCapacity: Int
+        var emojiInstanceCount: Int
     }
 
     init(device: MTLDevice, fontSystem: FontSystem, config: Config = .default) {
         self.device = device
         self.fontSystem = fontSystem
         self.glyphAtlas = GlyphAtlas(device: device)
+        self.emojiAtlas = ColorEmojiAtlas(device: device)
 
         (self.clearColor, self.colorPalette) = Self.buildColors(from: config)
         self.frameMetrics = config.debugMetrics ? FrameMetrics() : nil
@@ -251,40 +257,65 @@ final class MetalRenderer {
             fatalError("Failed to create text pipeline state: \(error)")
         }
 
+        // --- Emoji pipeline (reuses text vertex descriptor) ---
+        guard let emojiFragmentFunc = library.makeFunction(name: "cell_emoji_fragment") else {
+            fatalError("Failed to load emoji fragment shader function")
+        }
+
+        let emojiPipelineDesc = MTLRenderPipelineDescriptor()
+        emojiPipelineDesc.vertexFunction = textVertexFunc
+        emojiPipelineDesc.fragmentFunction = emojiFragmentFunc
+        emojiPipelineDesc.vertexDescriptor = textVertexDescriptor
+        emojiPipelineDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
+        Self.enablePremultipliedAlpha(emojiPipelineDesc.colorAttachments[0]!)
+
+        do {
+            emojiPipelineState = try device.makeRenderPipelineState(descriptor: emojiPipelineDesc)
+        } catch {
+            fatalError("Failed to create emoji pipeline state: \(error)")
+        }
+
         // --- Frame states ---
         let initialCapacity = 256 * 64
-        let underlineInitialCapacity = 256
-        for _ in 0..<Self.swapChainCount {
-            guard let uniformBuf = device.makeBuffer(
-                length: MemoryLayout<Uniforms>.stride,
-                options: .storageModeShared
-            ),
-            let bgBuf = device.makeBuffer(
-                length: MemoryLayout<CellBgInstance>.stride * initialCapacity,
-                options: .storageModeShared
-            ),
-            let underlineBuf = device.makeBuffer(
-                length: MemoryLayout<CellBgInstance>.stride * underlineInitialCapacity,
-                options: .storageModeShared
-            ),
-            let textBuf = device.makeBuffer(
-                length: MemoryLayout<CellTextInstance>.stride * initialCapacity,
-                options: .storageModeShared
-            ) else {
-                fatalError("Failed to allocate frame state buffers")
+            let underlineInitialCapacity = 256
+            for _ in 0..<Self.swapChainCount {
+                guard let uniformBuf = device.makeBuffer(
+                    length: MemoryLayout<Uniforms>.stride,
+                    options: .storageModeShared
+                ),
+                let bgBuf = device.makeBuffer(
+                    length: MemoryLayout<CellBgInstance>.stride * initialCapacity,
+                    options: .storageModeShared
+                ),
+                let underlineBuf = device.makeBuffer(
+                    length: MemoryLayout<CellBgInstance>.stride * underlineInitialCapacity,
+                    options: .storageModeShared
+                ),
+                let textBuf = device.makeBuffer(
+                    length: MemoryLayout<CellTextInstance>.stride * initialCapacity,
+                    options: .storageModeShared
+                ),
+                let emojiBuf = device.makeBuffer(
+                    length: MemoryLayout<CellTextInstance>.stride * initialCapacity,
+                    options: .storageModeShared
+                ) else {
+                    fatalError("Failed to allocate frame state buffers")
+                }
+                frameStates.append(FrameState(
+                    uniformBuffer: uniformBuf,
+                    bgInstanceBuffer: bgBuf,
+                    bgInstanceCapacity: initialCapacity,
+                    underlineInstanceBuffer: underlineBuf,
+                    underlineInstanceCapacity: underlineInitialCapacity,
+                    underlineInstanceCount: 0,
+                    textInstanceBuffer: textBuf,
+                    textInstanceCapacity: initialCapacity,
+                    textInstanceCount: 0,
+                    emojiInstanceBuffer: emojiBuf,
+                    emojiInstanceCapacity: initialCapacity,
+                    emojiInstanceCount: 0
+                ))
             }
-            frameStates.append(FrameState(
-                uniformBuffer: uniformBuf,
-                bgInstanceBuffer: bgBuf,
-                bgInstanceCapacity: initialCapacity,
-                underlineInstanceBuffer: underlineBuf,
-                underlineInstanceCapacity: underlineInitialCapacity,
-                underlineInstanceCount: 0,
-                textInstanceBuffer: textBuf,
-                textInstanceCapacity: initialCapacity,
-                textInstanceCount: 0
-            ))
-        }
     }
 
     private static func enablePremultipliedAlpha(_ attachment: MTLRenderPipelineColorAttachmentDescriptor) {
@@ -307,6 +338,7 @@ final class MetalRenderer {
         if let fs = newFontSystem {
             fontSystem = fs
             glyphAtlas.reset()
+            emojiAtlas.reset()
             fontChanged = true
         }
 
@@ -411,6 +443,7 @@ final class MetalRenderer {
                                        searchLineMap: searchMap)
                 if textContentDirty {
                     glyphAtlas.evictIfNeeded(frameNumber: frameNumber, fontSystem: fontSystem)
+                    emojiAtlas.evictIfNeeded(frameNumber: frameNumber, fontSystem: fontSystem)
                 }
                 frameMetrics?.endInstanceBuild()
             }
@@ -474,6 +507,19 @@ final class MetalRenderer {
             )
         }
 
+        if frame.emojiInstanceCount > 0 {
+            encoder.setRenderPipelineState(emojiPipelineState)
+            encoder.setVertexBuffer(frame.uniformBuffer, offset: 0, index: 0)
+            encoder.setVertexBuffer(frame.emojiInstanceBuffer, offset: 0, index: 1)
+            encoder.setFragmentTexture(emojiAtlas.texture, index: 0)
+            encoder.drawPrimitives(
+                type: .triangleStrip,
+                vertexStart: 0,
+                vertexCount: 4,
+                instanceCount: frame.emojiInstanceCount
+            )
+        }
+
         encoder.endEncoding()
         frameMetrics?.endFrame()
         commandBuffer.present(drawable)
@@ -522,6 +568,16 @@ final class MetalRenderer {
                 ) {
                     state.textInstanceBuffer = buf
                     state.textInstanceCapacity = newCap
+                }
+            }
+            if state.emojiInstanceCapacity > threshold {
+                let newCap = needed * 2
+                if let buf = device.makeBuffer(
+                    length: MemoryLayout<CellTextInstance>.stride * newCap,
+                    options: .storageModeShared
+                ) {
+                    state.emojiInstanceBuffer = buf
+                    state.emojiInstanceCapacity = newCap
                 }
             }
             frameStates[i] = state
@@ -773,6 +829,7 @@ final class MetalRenderer {
 
         guard let snapshot else {
             frame.pointee.textInstanceCount = 0
+            frame.pointee.emojiInstanceCount = 0
             return
         }
 
@@ -791,11 +848,19 @@ final class MetalRenderer {
             capacity: &frame.pointee.textInstanceCapacity,
             requiredCount: count, type: CellTextInstance.self
         )
+        ensureBufferCapacity(
+            buffer: &frame.pointee.emojiInstanceBuffer,
+            capacity: &frame.pointee.emojiInstanceCapacity,
+            requiredCount: count, type: CellTextInstance.self
+        )
 
-        let ptr = frame.pointee.textInstanceBuffer.contents()
+        let textPtr = frame.pointee.textInstanceBuffer.contents()
+            .bindMemory(to: CellTextInstance.self, capacity: count)
+        let emojiPtr = frame.pointee.emojiInstanceBuffer.contents()
             .bindMemory(to: CellTextInstance.self, capacity: count)
 
-        var glyphIdx = 0
+        var textIdx = 0
+        var emojiIdx = 0
 
         let snapRows = min(rows, snapshot.rows)
         let snapCols = min(cols, snapshot.columns)
@@ -809,6 +874,22 @@ final class MetalRenderer {
                 guard cell.width.isRenderable else { continue }
                 guard cell.content.firstScalar != " " else { continue }
 
+                // Try emoji atlas first
+                if let emojiInfo = emojiAtlas.getOrRasterize(
+                    cluster: cell.content, fontSystem: fontSystem,
+                    frameNumber: frameNumber
+                ), emojiInfo.width > 0 && emojiInfo.height > 0 {
+                    emojiPtr[emojiIdx] = CellTextInstance(
+                        glyphPos: SIMD2<UInt32>(emojiInfo.atlasX, emojiInfo.atlasY),
+                        glyphSize: SIMD2<UInt32>(emojiInfo.width, emojiInfo.height),
+                        bearings: SIMD2<Int16>(emojiInfo.bearingX, emojiInfo.bearingY),
+                        gridPos: SIMD2<UInt16>(UInt16(col), UInt16(row)),
+                        color: .zero // Emoji ignores color
+                    )
+                    emojiIdx += 1
+                    continue
+                }
+
                 guard let glyphInfo = glyphAtlas.getOrRasterize(
                     character: cell.content.firstScalar ?? " ", fontSystem: fontSystem,
                     frameNumber: frameNumber
@@ -816,7 +897,7 @@ final class MetalRenderer {
 
                 guard glyphInfo.width > 0 && glyphInfo.height > 0 else { continue }
 
-                ptr[glyphIdx] = CellTextInstance(
+                textPtr[textIdx] = CellTextInstance(
                     glyphPos: SIMD2<UInt32>(glyphInfo.atlasX, glyphInfo.atlasY),
                     glyphSize: SIMD2<UInt32>(glyphInfo.width, glyphInfo.height),
                     bearings: SIMD2<Int16>(glyphInfo.bearingX, glyphInfo.bearingY),
@@ -824,10 +905,11 @@ final class MetalRenderer {
                     color: colorState.foreground(attrs: cell.attributes,
                                                  row: row, col: col, absLine: absLine)
                 )
-                glyphIdx += 1
+                textIdx += 1
             }
         }
-        frame.pointee.textInstanceCount = glyphIdx
+        frame.pointee.textInstanceCount = textIdx
+        frame.pointee.emojiInstanceCount = emojiIdx
     }
 
     /// Fast color-only patch for text instances in dirty rows.
