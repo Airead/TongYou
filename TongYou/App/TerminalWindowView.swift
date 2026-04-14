@@ -450,10 +450,10 @@ struct TerminalWindowView: View {
             closeSession(at: sessionManager.activeSessionIndex)
         case .previousSession:
             sessionManager.selectPreviousSession()
-            focusActiveTabRootPane()
+            restoreTabFocusedPane()
         case .nextSession:
             sessionManager.selectNextSession()
-            focusActiveTabRootPane()
+            restoreTabFocusedPane()
         case .toggleSidebar:
             toggleSidebar()
         // Tab actions
