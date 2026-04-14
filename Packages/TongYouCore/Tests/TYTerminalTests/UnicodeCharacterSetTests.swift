@@ -75,7 +75,7 @@ struct UnicodeCharacterSetTests {
     }
 
     @Test func emojiPresentation() {
-        // Characters with default emoji presentation
+        // SMP characters with default emoji presentation
         #expect("😀".unicodeScalars.first!.isEmojiPresentation)
         #expect("🚀".unicodeScalars.first!.isEmojiPresentation)
         #expect("🎉".unicodeScalars.first!.isEmojiPresentation)
@@ -85,5 +85,19 @@ struct UnicodeCharacterSetTests {
         #expect(!"1".unicodeScalars.first!.isEmojiPresentation)
         #expect(!"➜".unicodeScalars.first!.isEmojiPresentation)
         #expect(!"✓".unicodeScalars.first!.isEmojiPresentation)
+        // Note: ☁/☀/★ are not default emoji presentation per Unicode standard,
+        // but are treated as wide in terminalWidth for emoji font compatibility.
+        #expect(!"☁".unicodeScalars.first!.isEmojiPresentation)
+        #expect(!"☀".unicodeScalars.first!.isEmojiPresentation)
+        #expect(!"★".unicodeScalars.first!.isEmojiPresentation)
+    }
+
+    @Test func bmpEmojiWidth() {
+        // BMP emoji should have width 2, not be squashed into 1 cell
+        #expect("☁".unicodeScalars.first!.terminalWidth == 2)
+        #expect("☀".unicodeScalars.first!.terminalWidth == 2)
+        #expect("★".unicodeScalars.first!.terminalWidth == 2)
+        #expect("♠".unicodeScalars.first!.terminalWidth == 2)
+        #expect("♥".unicodeScalars.first!.terminalWidth == 2)
     }
 }

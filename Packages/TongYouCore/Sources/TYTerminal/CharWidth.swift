@@ -2,6 +2,7 @@
 ///
 /// Based on Unicode 16.0 East Asian Width property:
 /// - W (Wide) and F (Fullwidth) → 2 cells
+/// - A (Ambiguous), symbols, and emoji → 2 cells for emoji compatibility
 /// - Everything else → 1 cell
 ///
 /// Zero-width characters (combining marks, etc.) are NOT handled here;
@@ -16,12 +17,15 @@ extension Unicode.Scalar {
         return Self.isWide(v) ? 2 : 1
     }
 
-    /// Check whether a code point is Wide (W) or Fullwidth (F) per UAX #11.
+    /// Check whether a code point is Wide (W), Fullwidth (F), or should be treated as wide.
+    ///
+    /// Includes:
+    /// - W (Wide) and F (Fullwidth) per UAX #11
+    /// - A (Ambiguous) - treated as wide for better emoji compatibility
+    /// - Miscellaneous Symbols and Dingbats - commonly rendered as color emoji
+    /// - Emoji with default emoji presentation
     ///
     /// Ranges derived from Unicode 16.0 EastAsianWidth.txt.
-    /// Only W and F categories are included; Ambiguous (A) is treated as narrow.
-    /// Ranges ordered by frequency: CJK Unified Ideographs first (covers ~99% of Chinese text),
-    /// then Kana, Hangul, and less common blocks last.
     private static func isWide(_ v: UInt32) -> Bool {
         // CJK Unified Ideographs — by far the most common wide block
         if v >= 0x4E00 && v <= 0x9FFF { return true }
@@ -49,14 +53,32 @@ extension Unicode.Scalar {
         if v >= 0xFF01 && v <= 0xFF60 { return true }
         if v >= 0xFFE0 && v <= 0xFFE6 { return true }
 
-        // SMP blocks (v > 0xFFFF) — less common, check last
-        guard v > 0xFFFF else { return false }
+        // Fast path: most common BMP scripts are narrow.
+        // Only symbol/emoji blocks below need further checks.
+        if v < 0x2100 { return false }
+
+        guard let scalar = Unicode.Scalar(v) else { return false }
 
         // Emoji with default emoji presentation are wide
-        // Use Unicode standard property for accurate detection
-        if let scalar = Unicode.Scalar(v), scalar.properties.isEmojiPresentation {
+        if scalar.isEmojiPresentation {
             return true
         }
+
+        // Miscellaneous Symbols and Dingbats blocks are commonly rendered as color emoji.
+        // Treating them as wide prevents squashing when using emoji fonts.
+        if v >= 0x2600 && v <= 0x26FF { return true }
+        if v >= 0x2700 && v <= 0x27BF { return true }
+
+        // Ambiguous width characters - treated as wide for emoji compatibility
+        if scalar.isSymbol {
+            return true
+        }
+        if scalar.isBoxDrawing || scalar.isBlockElement || scalar.isLegacyComputing || scalar.isPowerline {
+            return true
+        }
+
+        // SMP blocks (v > 0xFFFF) — less common, check last
+        guard v > 0xFFFF else { return false }
 
         // Regional Indicators for flag emoji (individual indicators are narrow,
         // but pairs should be wide - handled by grapheme cluster logic)
