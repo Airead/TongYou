@@ -100,7 +100,7 @@ final class TerminalController: TerminalControlling {
     private static let defaultWorkingDirectory: String =
         ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
 
-    func start(workingDirectory: String? = nil) {
+    func start(workingDirectory: String? = nil, command: String? = nil, arguments: [String] = []) {
         let process = PTYProcess(readQueue: ptyQueue)
 
         process.onRead = { [weak self] bytes in
@@ -147,11 +147,21 @@ final class TerminalController: TerminalControlling {
         }
 
         do {
-            try process.start(
-                columns: UInt16(screen.columns),
-                rows: UInt16(screen.rows),
-                workingDirectory: workingDirectory ?? Self.defaultWorkingDirectory
-            )
+            if let command = command {
+                try process.start(
+                    command: command,
+                    arguments: arguments,
+                    columns: UInt16(screen.columns),
+                    rows: UInt16(screen.rows),
+                    workingDirectory: workingDirectory ?? Self.defaultWorkingDirectory
+                )
+            } else {
+                try process.start(
+                    columns: UInt16(screen.columns),
+                    rows: UInt16(screen.rows),
+                    workingDirectory: workingDirectory ?? Self.defaultWorkingDirectory
+                )
+            }
         } catch {
             print("Failed to start PTY: \(error)")
             return
