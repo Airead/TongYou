@@ -183,8 +183,8 @@ struct Keybinding: Equatable {
         // Tab management
         Keybinding(modifiers: .command, key: "t", action: .newTab),
         Keybinding(modifiers: .command, key: "w", action: .closePane),
-        Keybinding(modifiers: [.command, .shift], key: "left", action: .previousTab),
-        Keybinding(modifiers: [.command, .shift], key: "right", action: .nextTab),
+        Keybinding(modifiers: .command, key: "h", action: .previousTab),
+        Keybinding(modifiers: .command, key: "l", action: .nextTab),
         Keybinding(modifiers: [.command, .shift], key: "[", action: .previousTab),
         Keybinding(modifiers: [.command, .shift], key: "]", action: .nextTab),
         // Cmd+1 through Cmd+9
@@ -220,7 +220,7 @@ struct Keybinding: Equatable {
         Keybinding(modifiers: .option, key: "f", action: .toggleOrCreateFloatingPane),
         Keybinding(modifiers: .option, key: "n", action: .newFloatingPane),
         // Remote session management
-        Keybinding(modifiers: .command, key: "l", action: .listRemoteSessions),
+        Keybinding(modifiers: .command, key: "y", action: .listRemoteSessions),
         Keybinding(modifiers: [.command, .shift], key: "i", action: .newRemoteSession),
         Keybinding(modifiers: .command, key: "r", action: .showSessionPicker),
         Keybinding(modifiers: [.command, .shift], key: "k", action: .detachSession),

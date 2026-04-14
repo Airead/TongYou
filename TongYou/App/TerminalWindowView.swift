@@ -463,10 +463,13 @@ struct TerminalWindowView: View {
             closeTab(at: sessionManager.activeTabIndex)
         case .previousTab:
             sessionManager.selectPreviousTab()
+            restoreTabFocusedPane()
         case .nextTab:
             sessionManager.selectNextTab()
+            restoreTabFocusedPane()
         case .gotoTab(let n):
             sessionManager.selectTabByNumber(n)
+            restoreTabFocusedPane()
         // Pane actions
         case .splitVertical:
             splitPane(direction: .vertical)

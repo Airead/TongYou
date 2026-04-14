@@ -262,6 +262,27 @@ struct KeybindingTests {
         #expect(kb.action == .previousTab)
     }
 
+    @Test func parseCmdH() throws {
+        let kb = try Keybinding.parse("cmd+h=previous_tab")
+        #expect(kb.modifiers == .command)
+        #expect(kb.key == "h")
+        #expect(kb.action == .previousTab)
+    }
+
+    @Test func parseCmdL() throws {
+        let kb = try Keybinding.parse("cmd+l=next_tab")
+        #expect(kb.modifiers == .command)
+        #expect(kb.key == "l")
+        #expect(kb.action == .nextTab)
+    }
+
+    @Test func parseCmdY() throws {
+        let kb = try Keybinding.parse("cmd+y=list_remote_sessions")
+        #expect(kb.modifiers == .command)
+        #expect(kb.key == "y")
+        #expect(kb.action == .listRemoteSessions)
+    }
+
     @Test func parseCtrl() throws {
         let kb = try Keybinding.parse("ctrl+c=copy")
         #expect(kb.modifiers == .control)
