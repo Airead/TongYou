@@ -112,6 +112,7 @@ final class ColorEmojiAtlas {
 
     private func isEmojiScalar(_ scalar: Unicode.Scalar?) -> Bool {
         guard let scalar = scalar else { return false }
+        let v = scalar.value
 
         // Use Unicode standard's emoji presentation property for accurate detection.
         // This identifies scalars that should be rendered with emoji presentation by default.
@@ -119,17 +120,22 @@ final class ColorEmojiAtlas {
             return true
         }
 
-        // Regional indicators (flags) are emoji but may not have isEmojiPresentation = true
-        // when examined individually. They are handled via isEmojiSequence when paired.
-        let v = scalar.value
-        if v >= 0x1F1E6 && v <= 0x1F1FF {
-            return false  // Will be handled by isEmojiSequence for flag pairs
-        }
-
         // ASCII digits 0-9 and #/* can be emoji with variation selector (U+FE0F),
         // but without VS16 they should be treated as text. Let isEmojiSequence handle them.
+        // This check MUST come before isEmoji because these code points have isEmoji=true.
         if v == 0x0023 || v == 0x002A || (v >= 0x0030 && v <= 0x0039) {
             return false
+        }
+
+        // Regional indicators (flags) are handled via isEmojiSequence when paired.
+        if v >= 0x1F1E6 && v <= 0x1F1FF {
+            return false
+        }
+
+        // Characters that have an emoji variant (U+FE0F) are commonly rendered as
+        // color emoji on macOS even without the variation selector (e.g., ☁, ♠, ♥).
+        if scalar.isEmoji {
+            return true
         }
 
         return false

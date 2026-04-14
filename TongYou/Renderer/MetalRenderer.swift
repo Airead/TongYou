@@ -3,6 +3,11 @@ import QuartzCore
 import simd
 import TYTerminal
 
+@inline(__always)
+fileprivate func scaled<T: BinaryInteger>(_ value: T, by scale: Float) -> T {
+    T(Float(value) * scale)
+}
+
 /// Core Metal rendering engine.
 /// Manages device, command queue, pipeline states, triple-buffered frame rendering.
 /// Multi-pass: Pass 1 = cell backgrounds, Pass 2 = text glyphs.
@@ -865,6 +870,7 @@ final class MetalRenderer {
         let snapRows = min(rows, snapshot.rows)
         let snapCols = min(cols, snapshot.columns)
         let colorState = makeTextColorState(snapshot: snapshot, searchLineMap: searchLineMap)
+        let cellWidth = Float(fontSystem.cellSize.width)
 
         for row in 0..<snapRows {
             let absLine = snapshot.absoluteLine(forViewportRow: row)
@@ -872,17 +878,41 @@ final class MetalRenderer {
             for col in 0..<snapCols {
                 let cell = snapshot.cells[rowBase + col]
                 guard cell.width.isRenderable else { continue }
-                guard cell.content.firstScalar != " " else { continue }
+                guard cell.content.firstScalar != Unicode.Scalar(" ") else { continue }
 
                 // Try emoji atlas first
                 if let emojiInfo = emojiAtlas.getOrRasterize(
                     cluster: cell.content, fontSystem: fontSystem,
                     frameNumber: frameNumber
                 ), emojiInfo.width > 0 && emojiInfo.height > 0 {
+                    var glyphSize = SIMD2<UInt32>(emojiInfo.width, emojiInfo.height)
+                    var bearings = SIMD2<Int16>(emojiInfo.bearingX, emojiInfo.bearingY)
+
+                    // Allow 2-cell span for wide cells or when next cell is empty (Ghostty-style).
+                    var targetCells: Int = 1
+                    if cell.width == .wide {
+                        targetCells = 2
+                    } else if col + 1 < snapCols {
+                        let nextCell = snapshot.cells[rowBase + col + 1]
+                        if nextCell.content.firstScalar == Unicode.Scalar(" ") || !nextCell.width.isRenderable {
+                            targetCells = 2
+                        }
+                    }
+
+                    if targetCells > 1 {
+                        let targetWidth = cellWidth * Float(targetCells)
+                        let scale = targetWidth / Float(emojiInfo.width)
+
+                        glyphSize.x = UInt32(targetWidth)
+                        glyphSize.y = scaled(emojiInfo.height, by: scale)
+                        bearings.x = scaled(bearings.x, by: scale)
+                        bearings.y = scaled(bearings.y, by: scale)
+                    }
+
                     emojiPtr[emojiIdx] = CellTextInstance(
                         glyphPos: SIMD2<UInt32>(emojiInfo.atlasX, emojiInfo.atlasY),
-                        glyphSize: SIMD2<UInt32>(emojiInfo.width, emojiInfo.height),
-                        bearings: SIMD2<Int16>(emojiInfo.bearingX, emojiInfo.bearingY),
+                        glyphSize: glyphSize,
+                        bearings: bearings,
                         gridPos: SIMD2<UInt16>(UInt16(col), UInt16(row)),
                         color: .zero // Emoji ignores color
                     )

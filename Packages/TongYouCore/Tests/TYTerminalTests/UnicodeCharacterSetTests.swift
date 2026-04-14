@@ -93,11 +93,26 @@ struct UnicodeCharacterSetTests {
     }
 
     @Test func bmpEmojiWidth() {
-        // BMP emoji should have width 2, not be squashed into 1 cell
-        #expect("☁".unicodeScalars.first!.terminalWidth == 2)
-        #expect("☀".unicodeScalars.first!.terminalWidth == 2)
-        #expect("★".unicodeScalars.first!.terminalWidth == 2)
-        #expect("♠".unicodeScalars.first!.terminalWidth == 2)
-        #expect("♥".unicodeScalars.first!.terminalWidth == 2)
+        // Terminal width follows East Asian Width, not emoji presentation.
+        // Characters like ☁ have EAW=N so they remain 1 cell wide.
+        // The renderer handles scaling for emoji fonts separately.
+        #expect("☁".unicodeScalars.first!.terminalWidth == 1)
+        #expect("☀".unicodeScalars.first!.terminalWidth == 1)
+        #expect("♠".unicodeScalars.first!.terminalWidth == 1)
+        #expect("♥".unicodeScalars.first!.terminalWidth == 1)
+
+        // Non-emoji symbols should remain narrow.
+        #expect("➜".unicodeScalars.first!.terminalWidth == 1)
+        #expect("★".unicodeScalars.first!.terminalWidth == 1)
+        #expect("✓".unicodeScalars.first!.terminalWidth == 1)
+        #expect("✗".unicodeScalars.first!.terminalWidth == 1)
+
+        // ASCII digits and #/* have isEmoji=true but must remain narrow
+        // unless followed by a variation selector.
+        #expect("0".unicodeScalars.first!.terminalWidth == 1)
+        #expect("1".unicodeScalars.first!.terminalWidth == 1)
+        #expect("9".unicodeScalars.first!.terminalWidth == 1)
+        #expect("#".unicodeScalars.first!.terminalWidth == 1)
+        #expect("*".unicodeScalars.first!.terminalWidth == 1)
     }
 }

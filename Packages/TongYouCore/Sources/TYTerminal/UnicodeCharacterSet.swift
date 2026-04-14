@@ -104,4 +104,12 @@ extension Unicode.Scalar {
     public var isEmojiPresentation: Bool {
         self.properties.isEmojiPresentation
     }
+
+    /// Returns true if the codepoint is an emoji base character.
+    ///
+    /// These characters can be rendered as color emoji with U+FE0F (VS16).
+    /// This uses the Unicode Emoji property for accurate detection.
+    public var isEmoji: Bool {
+        self.properties.isEmoji
+    }
 }

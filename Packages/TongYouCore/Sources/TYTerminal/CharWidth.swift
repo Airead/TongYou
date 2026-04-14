@@ -53,9 +53,8 @@ extension Unicode.Scalar {
         if v >= 0xFF01 && v <= 0xFF60 { return true }
         if v >= 0xFFE0 && v <= 0xFFE6 { return true }
 
-        // Fast path: most common BMP scripts are narrow.
-        // Only symbol/emoji blocks below need further checks.
-        if v < 0x2100 { return false }
+        // SMP blocks (v > 0xFFFF) — less common, check last
+        guard v > 0xFFFF else { return false }
 
         guard let scalar = Unicode.Scalar(v) else { return false }
 
@@ -63,22 +62,6 @@ extension Unicode.Scalar {
         if scalar.isEmojiPresentation {
             return true
         }
-
-        // Miscellaneous Symbols and Dingbats blocks are commonly rendered as color emoji.
-        // Treating them as wide prevents squashing when using emoji fonts.
-        if v >= 0x2600 && v <= 0x26FF { return true }
-        if v >= 0x2700 && v <= 0x27BF { return true }
-
-        // Ambiguous width characters - treated as wide for emoji compatibility
-        if scalar.isSymbol {
-            return true
-        }
-        if scalar.isBoxDrawing || scalar.isBlockElement || scalar.isLegacyComputing || scalar.isPowerline {
-            return true
-        }
-
-        // SMP blocks (v > 0xFFFF) — less common, check last
-        guard v > 0xFFFF else { return false }
 
         // Regional Indicators for flag emoji (individual indicators are narrow,
         // but pairs should be wide - handled by grapheme cluster logic)
