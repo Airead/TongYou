@@ -2,6 +2,7 @@
 ///
 /// Based on Unicode 16.0 East Asian Width property:
 /// - W (Wide) and F (Fullwidth) → 2 cells
+/// - A (Ambiguous), symbols, and emoji → 2 cells for emoji compatibility
 /// - Everything else → 1 cell
 ///
 /// Zero-width characters (combining marks, etc.) are NOT handled here;
@@ -16,12 +17,15 @@ extension Unicode.Scalar {
         return Self.isWide(v) ? 2 : 1
     }
 
-    /// Check whether a code point is Wide (W) or Fullwidth (F) per UAX #11.
+    /// Check whether a code point is Wide (W), Fullwidth (F), or should be treated as wide.
+    ///
+    /// Includes:
+    /// - W (Wide) and F (Fullwidth) per UAX #11
+    /// - A (Ambiguous) - treated as wide for better emoji compatibility
+    /// - Miscellaneous Symbols and Dingbats - commonly rendered as color emoji
+    /// - Emoji with default emoji presentation
     ///
     /// Ranges derived from Unicode 16.0 EastAsianWidth.txt.
-    /// Only W and F categories are included; Ambiguous (A) is treated as narrow.
-    /// Ranges ordered by frequency: CJK Unified Ideographs first (covers ~99% of Chinese text),
-    /// then Kana, Hangul, and less common blocks last.
     private static func isWide(_ v: UInt32) -> Bool {
         // CJK Unified Ideographs — by far the most common wide block
         if v >= 0x4E00 && v <= 0x9FFF { return true }
@@ -52,13 +56,16 @@ extension Unicode.Scalar {
         // SMP blocks (v > 0xFFFF) — less common, check last
         guard v > 0xFFFF else { return false }
 
-        // Common wide emoji ranges
-        if v >= 0x1F300 && v <= 0x1F64F { return true }
-        if v >= 0x1F680 && v <= 0x1F6FF { return true }
-        if v >= 0x1F900 && v <= 0x1F9FF { return true }
-        if v >= 0x1FA00 && v <= 0x1FA6F { return true }
-        if v >= 0x1FA70 && v <= 0x1FAFF { return true }
-        if v >= 0x1F200 && v <= 0x1F2FF { return true }
+        guard let scalar = Unicode.Scalar(v) else { return false }
+
+        // Emoji with default emoji presentation are wide
+        if scalar.isEmojiPresentation {
+            return true
+        }
+
+        // Regional Indicators for flag emoji (individual indicators are narrow,
+        // but pairs should be wide - handled by grapheme cluster logic)
+        if v >= 0x1F1E6 && v <= 0x1F1FF { return true }
         // CJK Unified Ideographs Extension B..I and Compatibility Supplement
         if v >= 0x20000 && v <= 0x2A6DF { return true }
         if v >= 0x2A700 && v <= 0x2B73F { return true }

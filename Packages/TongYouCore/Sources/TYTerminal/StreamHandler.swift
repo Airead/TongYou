@@ -13,6 +13,7 @@ public struct StreamHandler {
     private var currentAttributes = CellAttributes.default
     private var savedCursor: SavedCursorState?
     private var lastPrintedScalar: Unicode.Scalar?
+    private var pendingString: String = ""
 
     public private(set) var currentTitle: String = ""
     private var titleStack: [String] = []
@@ -37,14 +38,15 @@ public struct StreamHandler {
     // MARK: - Public
 
     public mutating func handle(_ action: VTAction) {
+        if case .print = action {} else { flushPendingCluster() }
+
         switch action {
         case .print(let scalar):
             lastPrintedScalar = scalar
-            screen.write(scalar, attributes: currentAttributes)
+            appendScalarToCluster(scalar)
 
         case .printBatch(let count, let buffer):
             screen.writeASCIIBatch(buffer, count: count, attributes: currentAttributes)
-            // Track last printed scalar for REP command
             lastPrintedScalar = Unicode.Scalar(buffer[count - 1])
 
         case .execute(let byte):
@@ -63,8 +65,37 @@ public struct StreamHandler {
 
         case .dcsHook, .dcsPut, .dcsUnhook,
              .apcStart, .apcPut, .apcEnd:
-            break // Not handled in P3
+            break
         }
+    }
+
+    public mutating func flush() {
+        flushPendingCluster()
+    }
+
+    private mutating func appendScalarToCluster(_ scalar: Unicode.Scalar) {
+        if pendingString.isEmpty {
+            pendingString = String(scalar)
+            return
+        }
+
+        let previousCount = pendingString.count
+        pendingString.unicodeScalars.append(scalar)
+
+        if pendingString.count == previousCount {
+            return
+        } else {
+            let cluster = GraphemeCluster(scalars: Array(pendingString.dropLast().unicodeScalars))
+            screen.write(cluster, attributes: currentAttributes)
+            pendingString = String(scalar)
+        }
+    }
+
+    private mutating func flushPendingCluster() {
+        guard !pendingString.isEmpty else { return }
+        let cluster = GraphemeCluster(scalars: Array(pendingString.unicodeScalars))
+        screen.write(cluster, attributes: currentAttributes)
+        pendingString = ""
     }
 
     // MARK: - C0 Control Characters

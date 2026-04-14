@@ -76,9 +76,13 @@ public struct BinaryEncoder: Sendable {
 
     // MARK: - Terminal Types
 
-    /// Write a single Cell (15 bytes: codepoint 4B + fgColor 4B + bgColor 4B + flags 2B + width 1B).
+    /// Write a single Cell (variable size: scalarCount 1B + scalars 4B each + fgColor 4B + bgColor 4B + flags 2B + width 1B).
     public mutating func writeCell(_ cell: Cell) {
-        writeUInt32(cell.codepoint.value)
+        let scalars = cell.content.scalars
+        writeUInt8(UInt8(clamping: scalars.count))
+        for scalar in scalars {
+            writeUInt32(scalar.value)
+        }
         writeUInt32(cell.attributes.fgColor.raw)
         writeUInt32(cell.attributes.bgColor.raw)
         writeUInt16(cell.attributes.flags.rawValue)
@@ -155,8 +159,8 @@ public struct BinaryEncoder: Sendable {
 
     /// Encode a `ScreenDiff` into the buffer.
     public mutating func writeScreenDiff(_ diff: ScreenDiff) {
-        // Pre-allocate: header (4B) + dirty row indices (2B each) + cells (15B each) + cursor (6B) + scrollback (8B).
-        let cellBytes = diff.cellData.count * 15
+        // Pre-allocate: header (4B) + dirty row indices (2B each) + cells (16B each avg) + cursor (6B) + scrollback (8B).
+        let cellBytes = diff.cellData.count * 16
         let headerBytes = 4 + diff.dirtyRows.count * 2 + 6 + 8
         data.reserveCapacity(data.count + headerBytes + cellBytes)
         writeUInt16(diff.columns)
@@ -178,8 +182,8 @@ public struct BinaryEncoder: Sendable {
 
     /// Encode a `ScreenSnapshot` into the buffer.
     public mutating func writeScreenSnapshot(_ snapshot: ScreenSnapshot) {
-        // Pre-allocate: header (4B) + cells (15B each) + cursor (6B) + scrollback/viewport (8B).
-        let cellBytes = snapshot.cells.count * 15
+        // Pre-allocate: header (4B) + cells (16B each avg) + cursor (6B) + scrollback/viewport (8B).
+        let cellBytes = snapshot.cells.count * 16
         data.reserveCapacity(data.count + 4 + cellBytes + 6 + 8)
         writeUInt16(UInt16(snapshot.columns))
         writeUInt16(UInt16(snapshot.rows))

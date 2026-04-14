@@ -1,5 +1,6 @@
 import CoreText
 import Foundation
+import TYTerminal
 
 /// Font system built on CoreText.
 /// Loads a monospace font, computes integer cell metrics, and provides font fallback.
@@ -38,13 +39,18 @@ final class FontSystem {
     /// Point size used to create the font.
     let pointSize: CGFloat
 
-    /// Initialize the font system with a font name and size.
-    ///
-    /// - Parameters:
-    ///   - fontName: PostScript name or family name (e.g. "MenloBold", "JetBrains Mono").
-    ///              Falls back to system monospace font if not found.
-    ///   - pointSize: Font size in points (pre-scale).
-    ///   - scaleFactor: Backing scale factor (e.g. 2.0 for Retina).
+    private lazy var codepointResolver: CodepointResolver = {
+        var fontCollection = FontCollection()
+        fontCollection.addFont(self.ctFont, style: .regular)
+        let emojiFont = CTFontCreateWithName("Apple Color Emoji" as CFString, self.pointSize * self.scaleFactor, nil)
+        return CodepointResolver(
+            collection: fontCollection,
+            baseFont: self.ctFont,
+            emojiFont: emojiFont,
+            fontSystem: self
+        )
+    }()
+
     init(fontName: String? = nil, pointSize: CGFloat = 13.0, scaleFactor: CGFloat = 2.0) {
         self.pointSize = pointSize
         self.scaleFactor = scaleFactor
@@ -105,20 +111,16 @@ final class FontSystem {
         self.baselineFractionalOffset = baselineFromTop - CGFloat(baselineRounded)
     }
 
-    // MARK: - Font Fallback
-
-    /// Find a font that can render the given character, using CoreText fallback.
-    /// Returns the primary font if it already supports the character.
     func fontForCharacter(_ character: Unicode.Scalar) -> CTFont {
-        if glyphForCharacter(character, in: ctFont) != nil {
-            return ctFont
-        }
-        let string = String(character) as CFString
-        return CTFontCreateForString(ctFont, string, CFRange(location: 0, length: CFStringGetLength(string)))
+        let cluster = GraphemeCluster(character)
+        return codepointResolver.resolveFont(for: cluster, style: .regular)
     }
 
-    /// Get the glyph ID for a character in a specific font.
-    /// Returns nil if the font cannot render this character.
+    func font(for cluster: GraphemeCluster, attributes: CellAttributes) -> CTFont {
+        let style = FontCollection.Style.from(attributes: attributes)
+        return codepointResolver.resolveFont(for: cluster, style: style)
+    }
+
     func glyphForCharacter(_ character: Unicode.Scalar, in font: CTFont) -> CGGlyph? {
         let utf16 = Array(Character(character).utf16)
         var glyphs = [CGGlyph](repeating: 0, count: utf16.count)
@@ -127,4 +129,13 @@ final class FontSystem {
         }
         return glyphs[0]
     }
+
+    func canRender(_ cluster: GraphemeCluster, in font: CTFont) -> Bool {
+        let utf16 = Array(cluster.string.utf16)
+        guard !utf16.isEmpty else { return false }
+        var glyphs = [CGGlyph](repeating: 0, count: utf16.count)
+        return CTFontGetGlyphsForCharacters(font, utf16, &glyphs, utf16.count)
+    }
 }
+
+

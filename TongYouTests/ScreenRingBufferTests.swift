@@ -391,7 +391,7 @@ import TYTerminal
         // Scroll
         screen.newline()
         // Write a wide char on the new row
-        screen.write("中", attributes: .default)
+        screen.write(GraphemeCluster(Character("中")), attributes: .default)
         // Wide char should occupy cols 0-1
         #expect(screen.cell(at: 0, row: 1).codepoint == "中")
         #expect(screen.cell(at: 0, row: 1).width == .wide)

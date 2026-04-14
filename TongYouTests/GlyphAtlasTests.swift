@@ -181,4 +181,46 @@ struct GlyphAtlasTests {
         let recentInfo = atlas.getOrRasterize(character: "a", fontSystem: fontSystem, frameNumber: 102)
         #expect(recentInfo != nil)
     }
+
+    @Test func rasterizeByGlyphAndFont() {
+        guard let (atlas, fontSystem) = makeAtlas() else {
+            Issue.record("Metal device not available")
+            return
+        }
+        let font = fontSystem.ctFont
+        guard let glyph = fontSystem.glyphForCharacter("C", in: font) else {
+            Issue.record("Font does not support character C")
+            return
+        }
+        let info = atlas.getOrRasterize(
+            glyph: glyph, font: font, fontSystem: fontSystem
+        )
+        #expect(info != nil)
+        #expect(info!.width > 0)
+        #expect(info!.height > 0)
+    }
+
+    @Test func glyphBasedCacheHitReturnsSameInfo() {
+        guard let (atlas, fontSystem) = makeAtlas() else {
+            Issue.record("Metal device not available")
+            return
+        }
+        let font = fontSystem.ctFont
+        guard let glyph = fontSystem.glyphForCharacter("D", in: font) else {
+            Issue.record("Font does not support character D")
+            return
+        }
+        let info1 = atlas.getOrRasterize(
+            glyph: glyph, font: font, fontSystem: fontSystem
+        )
+        atlas.clearDirty()
+        let info2 = atlas.getOrRasterize(
+            glyph: glyph, font: font, fontSystem: fontSystem
+        )
+        #expect(info1 != nil)
+        #expect(info2 != nil)
+        #expect(info1!.atlasX == info2!.atlasX)
+        #expect(info1!.atlasY == info2!.atlasY)
+        #expect(atlas.isDirty == false)
+    }
 }

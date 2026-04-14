@@ -155,7 +155,11 @@ public struct ScreenSnapshot: Sendable {
             for col in startCol...endCol {
                 let c = cell(at: col, row: row)
                 guard c.width.isRenderable else { continue }
-                result.unicodeScalars.append(c.codepoint)
+                if c.content.scalarCount == 1, let scalar = c.content.firstScalar {
+                    result.unicodeScalars.append(scalar)
+                } else {
+                    result.append(c.content.string)
+                }
             }
 
             if row < e.line || sel.mode == .line {
@@ -375,9 +379,9 @@ public final class Screen {
 
     // MARK: - Write Operations
 
-    /// Write a printable character at the cursor with given attributes and advance.
-    public func write(_ scalar: Unicode.Scalar, attributes: CellAttributes) {
-        let w = Int(scalar.terminalWidth)
+    /// Write a grapheme cluster at the cursor with given attributes and advance.
+    public func write(_ cluster: GraphemeCluster, attributes: CellAttributes) {
+        let w = Int(cluster.terminalWidth)
 
         if cursorCol >= columns {
             setLineFlagForRow(cursorRow, LineFlags(wrapped: true))
@@ -388,7 +392,7 @@ public final class Screen {
         // Wide char doesn't fit on current line: leave spacer, wrap
         if w == 2 && cursorCol == columns - 1 {
             let idx = rowStart(cursorRow) + cursorCol
-            cells[idx] = Cell(codepoint: " ", attributes: .default, width: .spacer)
+            cells[idx] = Cell(content: GraphemeCluster(" "), attributes: .default, width: .spacer)
             dirtyRegion.markLine(cursorRow)
             setLineFlagForRow(cursorRow, LineFlags(wrapped: true))
             cursorCol = 0
@@ -408,19 +412,25 @@ public final class Screen {
             cleanUpWideCharAt(col: col + 1, row: cursorRow)
         }
 
-        cells[idx].codepoint = scalar
+        cells[idx].content = cluster
         cells[idx].attributes = attributes
         cells[idx].width = w == 2 ? .wide : .normal
 
         if w == 2 {
             let contIdx = idx + 1
-            cells[contIdx].codepoint = " "
+            cells[contIdx].content = GraphemeCluster(" ")
             cells[contIdx].attributes = attributes
             cells[contIdx].width = .continuation
             cursorCol = col + 2
         } else {
             cursorCol = col + 1
         }
+    }
+
+    /// Write a printable character at the cursor with given attributes and advance.
+    /// Backward compatible wrapper for single scalar writes.
+    public func write(_ scalar: Unicode.Scalar, attributes: CellAttributes) {
+        write(GraphemeCluster(scalar), attributes: attributes)
     }
 
     /// Write a printable character at the cursor with default attributes and advance.
@@ -1374,7 +1384,11 @@ public final class Screen {
                 for col in startCol...min(endCol, scrollbackColumns - 1) {
                     let cell = scrollbackCell(line: line, col: col)
                     guard cell.width.isRenderable else { continue }
-                    result.unicodeScalars.append(cell.codepoint)
+                    if cell.content.scalarCount == 1, let scalar = cell.content.firstScalar {
+                        result.unicodeScalars.append(scalar)
+                    } else {
+                        result.append(cell.content.string)
+                    }
                 }
             } else {
                 let screenRow = line - sbCount
@@ -1383,7 +1397,11 @@ public final class Screen {
                     for col in startCol...min(endCol, columns - 1) {
                         let cell = cells[base + col]
                         guard cell.width.isRenderable else { continue }
-                        result.unicodeScalars.append(cell.codepoint)
+                        if cell.content.scalarCount == 1, let scalar = cell.content.firstScalar {
+                            result.unicodeScalars.append(scalar)
+                        } else {
+                            result.append(cell.content.string)
+                        }
                     }
                 }
             }

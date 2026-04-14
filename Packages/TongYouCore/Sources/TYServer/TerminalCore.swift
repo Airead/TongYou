@@ -282,6 +282,7 @@ public final class TerminalCore: @unchecked Sendable {
         vtParser.feed(bytes) { [self] action in
             streamHandler.handle(action)
         }
+        streamHandler.flush()
         markScreenDirty()
     }
 

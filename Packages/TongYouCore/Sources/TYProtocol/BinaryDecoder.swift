@@ -128,17 +128,26 @@ public struct BinaryDecoder: Sendable {
 
     // MARK: - Terminal Types
 
-    /// Read a single Cell (15 bytes).
+    /// Read a single Cell (variable size: scalarCount 1B + scalars 4B each + fgColor 4B + bgColor 4B + flags 2B + width 1B).
     public mutating func readCell() throws -> Cell {
-        let codepoint = try readUInt32()
+        let scalarCount = Int(try readUInt8())
+        guard scalarCount <= GraphemeCluster.maxScalarCount else {
+            throw BinaryDecoderError.invalidEnumValue(type: "scalarCount", rawValue: UInt64(scalarCount))
+        }
+        var scalars: [Unicode.Scalar] = []
+        scalars.reserveCapacity(scalarCount)
+        for _ in 0..<scalarCount {
+            let value = try readUInt32()
+            guard let scalar = Unicode.Scalar(value) else {
+                throw BinaryDecoderError.invalidEnumValue(type: "Unicode.Scalar", rawValue: UInt64(value))
+            }
+            scalars.append(scalar)
+        }
         let fgRaw = try readUInt32()
         let bgRaw = try readUInt32()
         let flagsRaw = try readUInt16()
         let widthRaw = try readUInt8()
 
-        guard let scalar = Unicode.Scalar(codepoint) else {
-            throw BinaryDecoderError.invalidEnumValue(type: "Unicode.Scalar", rawValue: UInt64(codepoint))
-        }
         guard let width = CellWidth(rawValue: widthRaw) else {
             throw BinaryDecoderError.invalidEnumValue(type: "CellWidth", rawValue: UInt64(widthRaw))
         }
@@ -148,7 +157,8 @@ public struct BinaryDecoder: Sendable {
             fgColor: PackedColor(raw: fgRaw),
             bgColor: PackedColor(raw: bgRaw)
         )
-        return Cell(codepoint: scalar, attributes: attributes, width: width)
+        let content = GraphemeCluster(scalars: scalars)
+        return Cell(content: content, attributes: attributes, width: width)
     }
 
     /// Read a count-prefixed array of cells.

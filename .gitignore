@@ -15,6 +15,7 @@ DerivedData/
 *.dia
 *.swiftdeps
 *.swiftmodule
+emoji-render-output
 
 # macOS
 .DS_Store

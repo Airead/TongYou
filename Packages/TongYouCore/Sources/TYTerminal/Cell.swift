@@ -17,21 +17,45 @@ public enum CellWidth: UInt8, Equatable, Sendable {
 }
 
 /// A single character cell in the terminal grid.
-/// Uses `Unicode.Scalar` instead of `Character` to avoid heap allocation
-/// and make `[Cell]` array copies trivial (memcpy).
+/// Uses `GraphemeCluster` to support multi-scalar characters like emoji sequences
+/// while maintaining efficient inline storage for common single-scalar characters.
 public struct Cell: Equatable, Sendable {
-    public var codepoint: Unicode.Scalar
+    /// The grapheme cluster content of this cell.
+    public var content: GraphemeCluster
     public var attributes: CellAttributes
     public var width: CellWidth
 
+    /// Backward compatibility: access the first scalar of the content.
+    /// For single-scalar characters, this is equivalent to the old `codepoint`.
+    /// For multi-scalar sequences, returns the first scalar.
+    public var codepoint: Unicode.Scalar {
+        get { content.firstScalar ?? " " }
+        set { content = GraphemeCluster(newValue) }
+    }
+
     public static let empty = Cell(
-        codepoint: " ",
+        content: GraphemeCluster(" "),
         attributes: .default,
         width: .normal
     )
 
+    /// Initialize with a grapheme cluster.
+    public init(content: GraphemeCluster, attributes: CellAttributes, width: CellWidth) {
+        self.content = content
+        self.attributes = attributes
+        self.width = width
+    }
+
+    /// Initialize with a single Unicode scalar (backward compatible).
     public init(codepoint: Unicode.Scalar, attributes: CellAttributes, width: CellWidth) {
-        self.codepoint = codepoint
+        self.content = GraphemeCluster(codepoint)
+        self.attributes = attributes
+        self.width = width
+    }
+
+    /// Initialize with a Character.
+    public init(character: Character, attributes: CellAttributes, width: CellWidth) {
+        self.content = GraphemeCluster(character)
         self.attributes = attributes
         self.width = width
     }
