@@ -979,6 +979,9 @@ final class SessionManager {
         attachedRemoteSessionIDs.insert(serverSessionID)
         pendingAttachSessionIDs.insert(serverSessionID)
         rebuildAllAttachedSessionIDs()
+        if let session = sessions.first(where: { $0.source.serverSessionID == serverSessionID }) {
+            moveSessionToBottomOfAttachedGroup(sessionID: session.id)
+        }
     }
 
     /// Detach from a remote session (stop receiving screen updates).
@@ -1245,6 +1248,19 @@ final class SessionManager {
         sessionSortOrder = sessionSortOrder.filter { seen.insert($0).inserted }
     }
 
+    private func moveSessionToBottomOfAttachedGroup(sessionID: UUID) {
+        guard sessionSortOrder.contains(sessionID) else { return }
+        let otherAttachedIDs = allAttachedSessionIDs.subtracting([sessionID])
+        sessionSortOrder.removeAll { $0 == sessionID }
+        if let lastAttachedIndex = sessionSortOrder.lastIndex(where: { otherAttachedIDs.contains($0) }) {
+            sessionSortOrder.insert(sessionID, at: lastAttachedIndex + 1)
+        } else {
+            sessionSortOrder.insert(sessionID, at: 0)
+        }
+        saveSessionOrder()
+        applySessionOrder()
+    }
+
     private func applySessionOrder() {
         guard !sessionSortOrder.isEmpty else { return }
         let orderMap = Dictionary(uniqueKeysWithValues: sessionSortOrder.enumerated().map { ($1, $0) })
@@ -1377,6 +1393,7 @@ final class SessionManager {
     func attachLocalSession(sessionID: UUID) {
         attachedLocalSessionIDs.insert(sessionID)
         rebuildAllAttachedSessionIDs()
+        moveSessionToBottomOfAttachedGroup(sessionID: sessionID)
         if let session = sessions.first(where: { $0.id == sessionID }) {
             for paneID in session.allPaneIDs {
                 _ = ensureLocalController(for: paneID)
