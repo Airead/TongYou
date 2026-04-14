@@ -95,6 +95,12 @@ let package = Package(
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 
+        .testTarget(
+            name: "TYPTYTests",
+            dependencies: ["TYPTY", "TYTerminal"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+
         .executableTarget(
             name: "acs-demo",
             dependencies: ["TYTerminal"],
