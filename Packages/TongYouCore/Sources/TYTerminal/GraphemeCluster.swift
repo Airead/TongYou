@@ -84,7 +84,15 @@ public struct GraphemeCluster: Equatable, Sendable, Hashable {
     
     public var isEmojiSequence: Bool {
         if _count <= 1 { return false }
-        
+        return _checkForEmojiMarkers()
+    }
+
+    public var isEmojiContent: Bool {
+        if isEmojiSequence { return true }
+        return firstScalar?.isEmojiScalar ?? false
+    }
+
+    private func _checkForEmojiMarkers() -> Bool {
         func checkValue(_ v: UInt32) -> Bool {
             v == 0x200D ||
             v == 0xFE0E || v == 0xFE0F ||
@@ -92,7 +100,7 @@ public struct GraphemeCluster: Equatable, Sendable, Hashable {
             (v >= 0x1F1E6 && v <= 0x1F1FF) ||
             (v >= 0xE0020 && v <= 0xE007F)
         }
-        
+
         if let heap = _heapStorage {
             for v in heap {
                 if checkValue(v) { return true }

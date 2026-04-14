@@ -88,10 +88,7 @@ final class ColorEmojiAtlas {
         fontSystem: FontSystem,
         frameNumber: UInt64 = 0
     ) -> EmojiGlyphInfo? {
-        // Check if this is an emoji cluster
-        guard cluster.isEmojiSequence || isEmojiScalar(cluster.firstScalar) else {
-            return nil
-        }
+        guard cluster.isEmojiContent else { return nil }
 
         if let entry = cache[cluster] {
             // Only update LRU timestamp when stale (avoids dictionary write on every hit)
@@ -106,12 +103,6 @@ final class ColorEmojiAtlas {
         }
         cache[cluster] = EmojiGlyphEntry(info: info, lastUsedFrame: frameNumber)
         return info
-    }
-
-    // MARK: - Private: Emoji Detection
-
-    private func isEmojiScalar(_ scalar: Unicode.Scalar?) -> Bool {
-        scalar?.isEmojiScalar ?? false
     }
 
     // MARK: - Private: Rasterization

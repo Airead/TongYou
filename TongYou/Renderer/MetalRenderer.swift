@@ -833,19 +833,21 @@ final class MetalRenderer {
         var currentStart: Int? = nil
         var currentCells: [Cell] = []
         var currentAttrs: CellAttributes? = nil
+        var currentFont: CTFont? = nil
 
         func flushCurrentRun() {
-            if let start = currentStart, let attrs = currentAttrs {
+            if let start = currentStart, let attrs = currentAttrs, let font = currentFont {
                 runs.append(TextRun(
                     cells: currentCells,
                     startCol: start,
-                    font: fontSystem.ctFont,
+                    font: font,
                     attributes: attrs
                 ))
             }
             currentStart = nil
             currentCells = []
             currentAttrs = nil
+            currentFont = nil
         }
 
         for col in 0..<cols {
@@ -859,19 +861,23 @@ final class MetalRenderer {
                 continue
             }
 
-            if let attrs = currentAttrs {
-                if cell.attributes == attrs {
+            let cellFont = fontSystem.font(for: cell.content, attributes: cell.attributes)
+
+            if let attrs = currentAttrs, let font = currentFont {
+                if cell.attributes == attrs && CTFontCopyFontDescriptor(font) === CTFontCopyFontDescriptor(cellFont) {
                     currentCells.append(cell)
                 } else {
                     flushCurrentRun()
                     currentStart = col
                     currentCells = [cell]
                     currentAttrs = cell.attributes
+                    currentFont = cellFont
                 }
             } else {
                 currentStart = col
                 currentCells = [cell]
                 currentAttrs = cell.attributes
+                currentFont = cellFont
             }
         }
 
@@ -882,20 +888,18 @@ final class MetalRenderer {
     /// Flush a text segment into the text instance buffer.
     /// Returns the updated textIdx.
     private func flushTextSegment(
-        cells: [Cell], startCol: Int, row: Int, absLine: Int,
-        textPtr: UnsafeMutablePointer<CellTextInstance>, textIdx: Int,
-        colorState: TextColorState, shaper: CoreTextShaper,
+        run: TextRun,
+        row: Int,
+        absLine: Int,
+        textPtr: UnsafeMutablePointer<CellTextInstance>,
+        textIdx: Int,
+        colorState: TextColorState,
+        shaper: CoreTextShaper,
         cellWidth: Float
     ) -> Int {
-        guard !cells.isEmpty else { return textIdx }
+        guard !run.cells.isEmpty else { return textIdx }
 
-        let textRun = TextRun(
-            cells: cells,
-            startCol: startCol,
-            font: fontSystem.ctFont,
-            attributes: cells[0].attributes
-        )
-        let shapedGlyphs = shaper.shape(textRun)
+        let shapedGlyphs = shaper.shape(run)
         var idx = textIdx
 
         for glyph in shapedGlyphs {
@@ -906,14 +910,14 @@ final class MetalRenderer {
                 frameNumber: frameNumber
             ), glyphInfo.width > 0 && glyphInfo.height > 0 else { continue }
 
-            let glyphCol = startCol + glyph.cellIndex
+            let glyphCol = run.startCol + glyph.cellIndex
             textPtr[idx] = CellTextInstance(
                 glyphPos: SIMD2<UInt32>(glyphInfo.atlasX, glyphInfo.atlasY),
                 glyphSize: SIMD2<UInt32>(glyphInfo.width, glyphInfo.height),
                 bearings: SIMD2<Int16>(glyphInfo.bearingX, glyphInfo.bearingY),
                 gridPos: SIMD2<UInt16>(UInt16(glyphCol), UInt16(row)),
                 color: colorState.foreground(
-                    attrs: cells[glyph.cellIndex].attributes,
+                    attrs: run.cells[glyph.cellIndex].attributes,
                     row: row, col: glyphCol, absLine: absLine
                 ),
                 offset: SIMD2<Int16>(Int16(glyph.position.x - CGFloat(glyph.cellIndex) * CGFloat(cellWidth)), 0)
@@ -986,16 +990,20 @@ final class MetalRenderer {
 
                 for (offset, cell) in run.cells.enumerated() {
                     let col = run.startCol + offset
-                    let isEmoji = cell.content.isEmojiSequence || (cell.content.firstScalar?.isEmojiScalar ?? false)
+                    let isEmoji = cell.content.isEmojiContent
 
                     if isEmoji {
                         // Flush current text segment before handling emoji
                         if let start = textSegmentStart {
                             let end = offset
-                            let textCells = Array(run.cells[start..<end])
-                            let startCol = run.startCol + start
+                            let textRun = TextRun(
+                                cells: Array(run.cells[start..<end]),
+                                startCol: run.startCol + start,
+                                font: run.font,
+                                attributes: run.attributes
+                            )
                             textIdx = flushTextSegment(
-                                cells: textCells, startCol: startCol, row: row, absLine: absLine,
+                                run: textRun, row: row, absLine: absLine,
                                 textPtr: textPtr, textIdx: textIdx,
                                 colorState: colorState, shaper: shaper, cellWidth: cellWidth
                             )
@@ -1047,10 +1055,14 @@ final class MetalRenderer {
 
                 // Flush remaining text segment at end of run
                 if let start = textSegmentStart {
-                    let textCells = Array(run.cells[start..<run.cells.count])
-                    let startCol = run.startCol + start
+                    let textRun = TextRun(
+                        cells: Array(run.cells[start..<run.cells.count]),
+                        startCol: run.startCol + start,
+                        font: run.font,
+                        attributes: run.attributes
+                    )
                     textIdx = flushTextSegment(
-                        cells: textCells, startCol: startCol, row: row, absLine: absLine,
+                        run: textRun, row: row, absLine: absLine,
                         textPtr: textPtr, textIdx: textIdx,
                         colorState: colorState, shaper: shaper, cellWidth: cellWidth
                     )
