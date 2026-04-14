@@ -84,7 +84,7 @@ struct CellTextInstance {
     short2 bearings  [[attribute(4)]];
     ushort2 gridPos  [[attribute(5)]];
     uchar4 color     [[attribute(6)]];
-    uchar4 _pad      [[attribute(7)]];
+    short2 offset    [[attribute(7)]];
 };
 
 struct CellTextVertexOut {
@@ -107,7 +107,7 @@ vertex CellTextVertexOut cell_text_vertex(
         {glyphSize.x,  glyphSize.y}
     };
 
-    float2 glyphOrigin = cell_origin(in.gridPos, uniforms) + float2(in.bearings);
+    float2 glyphOrigin = cell_origin(in.gridPos, uniforms) + float2(in.bearings) + float2(in.offset);
     float2 pos = glyphOrigin + corners[vertex_id];
 
     float2 atlasOrigin = float2(in.glyphPos);

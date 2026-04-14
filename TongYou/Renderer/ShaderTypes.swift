@@ -24,5 +24,5 @@ struct CellTextInstance {
     var bearings: SIMD2<Int16>     // (bearingX, bearingY) in pixels  — 4 bytes
     var gridPos: SIMD2<UInt16>     // (column, row)                   — 4 bytes
     var color: SIMD4<UInt8>        // foreground RGBA (0-255)         — 4 bytes
-    var _pad: SIMD4<UInt8> = .zero // padding to 32 bytes             — 4 bytes
+    var offset: SIMD2<Int16> = .zero // (offsetX, offsetY) in pixels  — 4 bytes
 }

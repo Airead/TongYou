@@ -17,6 +17,12 @@ struct GlyphInfo {
     let bearingY: Int16
 }
 
+/// Cache key for glyph-based lookup (supports font fallback).
+struct GlyphCacheKey: Hashable, Equatable {
+    let fontID: ObjectIdentifier
+    let glyph: CGGlyph
+}
+
 /// Cache entry wrapping GlyphInfo with LRU tracking.
 struct GlyphEntry {
     var info: GlyphInfo
@@ -37,7 +43,7 @@ final class GlyphAtlas {
     private(set) var texture: MTLTexture
     private(set) var textureSize: UInt32
 
-    private var cache: [Unicode.Scalar: GlyphEntry] = [:]
+    private var cache: [GlyphCacheKey: GlyphEntry] = [:]
 
     // Shelf packing state
     private var shelfX: UInt32 = 1       // current x in active shelf (1px border)
@@ -78,42 +84,60 @@ final class GlyphAtlas {
 
     // MARK: - Glyph Lookup / Rasterization
 
-    /// Get or rasterize a glyph. Resolves the font via FontSystem fallback on cache miss.
+    /// Get or rasterize a glyph by character. Resolves the font via FontSystem fallback on cache miss.
     /// The `frameNumber` is used for LRU tracking.
     func getOrRasterize(
         character: Unicode.Scalar,
         fontSystem: FontSystem,
         frameNumber: UInt64 = 0
     ) -> GlyphInfo? {
-        if let entry = cache[character] {
+        let font = fontSystem.fontForCharacter(character)
+        guard let glyph = fontSystem.glyphForCharacter(character, in: font) else {
+            return nil
+        }
+        return getOrRasterize(
+            glyph: glyph, font: font, fontSystem: fontSystem, frameNumber: frameNumber
+        )
+    }
+
+    /// Get or rasterize a glyph by (font, glyph) pair.
+    /// The `frameNumber` is used for LRU tracking.
+    func getOrRasterize(
+        glyph: CGGlyph,
+        font: CTFont,
+        fontSystem: FontSystem,
+        frameNumber: UInt64 = 0
+    ) -> GlyphInfo? {
+        let key = cacheKey(for: glyph, font: font)
+        if let entry = cache[key] {
             // Only update LRU timestamp when stale (avoids dictionary write on every hit)
             if frameNumber &- entry.lastUsedFrame > 60 {
-                cache[character] = GlyphEntry(info: entry.info, lastUsedFrame: frameNumber)
+                cache[key] = GlyphEntry(info: entry.info, lastUsedFrame: frameNumber)
             }
             return entry.info
         }
 
-        let font = fontSystem.fontForCharacter(character)
-        guard let info = rasterizeGlyph(character: character, font: font, fontSystem: fontSystem) else {
+        guard let info = rasterizeGlyph(glyph: glyph, font: font, fontSystem: fontSystem) else {
             return nil
         }
-        cache[character] = GlyphEntry(info: info, lastUsedFrame: frameNumber)
+        cache[key] = GlyphEntry(info: info, lastUsedFrame: frameNumber)
         return info
+    }
+
+    private func cacheKey(for glyph: CGGlyph, font: CTFont) -> GlyphCacheKey {
+        return GlyphCacheKey(fontID: ObjectIdentifier(font), glyph: glyph)
     }
 
     // MARK: - Private: Rasterization
 
     private func rasterizeGlyph(
-        character: Unicode.Scalar,
+        glyph: CGGlyph,
         font: CTFont,
         fontSystem: FontSystem
     ) -> GlyphInfo? {
-        guard var glyph = fontSystem.glyphForCharacter(character, in: font) else {
-            return nil
-        }
-
+        var glyphCopy = glyph
         var boundingRect = CGRect.zero
-        CTFontGetBoundingRectsForGlyphs(font, .horizontal, &glyph, &boundingRect, 1)
+        CTFontGetBoundingRectsForGlyphs(font, .horizontal, &glyphCopy, &boundingRect, 1)
 
         if boundingRect.width < 0.5 && boundingRect.height < 0.5 {
             return GlyphInfo(atlasX: 0, atlasY: 0, width: 0, height: 0,
@@ -166,7 +190,7 @@ final class GlyphAtlas {
         let drawX = fracX - boundingRect.origin.x
         let drawY = fracY - boundingRect.origin.y
         var position = CGPoint(x: drawX, y: drawY)
-        CTFontDrawGlyphs(font, &glyph, &position, 1, context)
+        CTFontDrawGlyphs(font, &glyphCopy, &position, 1, context)
 
         let mtlRegion = MTLRegion(
             origin: MTLOrigin(x: Int(region.x), y: Int(region.y), z: 0),
@@ -291,10 +315,32 @@ final class GlyphAtlas {
         textureSize = newSize
         cache.removeAll(keepingCapacity: true)
 
-        for (scalar, entry) in activeEntries {
-            let font = fontSystem.fontForCharacter(scalar)
-            if let info = rasterizeGlyph(character: scalar, font: font, fontSystem: fontSystem) {
-                cache[scalar] = GlyphEntry(info: info, lastUsedFrame: entry.lastUsedFrame)
+        // Group entries by fontID and use fontSystem to resolve the font.
+        // Since ObjectIdentifier is used as the key, we need to map back to CTFont.
+        // We use the fontSystem's base font as a fallback; this is acceptable
+        // because compaction happens during normal operation where fonts are stable.
+        var entriesByFontID: [ObjectIdentifier: [(glyph: CGGlyph, entry: GlyphEntry)]] = [:]
+        for (key, entry) in activeEntries {
+            entriesByFontID[key.fontID, default: []].append((key.glyph, entry))
+        }
+
+        for (fontID, entries) in entriesByFontID {
+            // Try to use the primary font from fontSystem; if the identifier matches,
+            // use it. Otherwise, we skip since we can't recreate the exact font.
+            let candidateFont = fontSystem.ctFont
+            let font: CTFont
+            if ObjectIdentifier(candidateFont) == fontID {
+                font = candidateFont
+            } else {
+                // Skip fonts that no longer match the current fontSystem
+                continue
+            }
+
+            for (glyph, entry) in entries {
+                if let info = rasterizeGlyph(glyph: glyph, font: font, fontSystem: fontSystem) {
+                    let newKey = GlyphCacheKey(fontID: fontID, glyph: glyph)
+                    cache[newKey] = GlyphEntry(info: info, lastUsedFrame: entry.lastUsedFrame)
+                }
             }
         }
 

@@ -242,7 +242,7 @@ final class MetalRenderer {
         textVertexDescriptor.attributes[6].format = .uchar4
         textVertexDescriptor.attributes[6].offset = 24
         textVertexDescriptor.attributes[6].bufferIndex = 1
-        textVertexDescriptor.attributes[7].format = .uchar4
+        textVertexDescriptor.attributes[7].format = .short2
         textVertexDescriptor.attributes[7].offset = 28
         textVertexDescriptor.attributes[7].bufferIndex = 1
         textVertexDescriptor.layouts[1].stride = MemoryLayout<CellTextInstance>.stride
@@ -823,6 +823,109 @@ final class MetalRenderer {
 
     // MARK: - Private: Text Instances
 
+    /// Build text runs for a single row. Runs are sequences of consecutive
+    /// renderable, non-space cells with identical attributes.
+    func buildRuns(forRow row: Int, snapshot: ScreenSnapshot) -> [TextRun] {
+        var runs: [TextRun] = []
+        let rowBase = row * snapshot.columns
+        let cols = snapshot.columns
+
+        var currentStart: Int? = nil
+        var currentCells: [Cell] = []
+        var currentAttrs: CellAttributes? = nil
+
+        func flushCurrentRun() {
+            if let start = currentStart, let attrs = currentAttrs {
+                runs.append(TextRun(
+                    cells: currentCells,
+                    startCol: start,
+                    font: fontSystem.ctFont,
+                    attributes: attrs
+                ))
+            }
+            currentStart = nil
+            currentCells = []
+            currentAttrs = nil
+        }
+
+        for col in 0..<cols {
+            let cell = snapshot.cells[rowBase + col]
+            guard cell.width.isRenderable else {
+                flushCurrentRun()
+                continue
+            }
+            guard cell.content.firstScalar != Unicode.Scalar(" ") else {
+                flushCurrentRun()
+                continue
+            }
+
+            if let attrs = currentAttrs {
+                if cell.attributes == attrs {
+                    currentCells.append(cell)
+                } else {
+                    flushCurrentRun()
+                    currentStart = col
+                    currentCells = [cell]
+                    currentAttrs = cell.attributes
+                }
+            } else {
+                currentStart = col
+                currentCells = [cell]
+                currentAttrs = cell.attributes
+            }
+        }
+
+        flushCurrentRun()
+        return runs
+    }
+
+    /// Flush a text segment into the text instance buffer.
+    /// Returns the updated textIdx.
+    private func flushTextSegment(
+        cells: [Cell], startCol: Int, row: Int, absLine: Int,
+        textPtr: UnsafeMutablePointer<CellTextInstance>, textIdx: Int,
+        colorState: TextColorState, shaper: CoreTextShaper,
+        cellWidth: Float
+    ) -> Int {
+        guard !cells.isEmpty else { return textIdx }
+
+        let textRun = TextRun(
+            cells: cells,
+            startCol: startCol,
+            font: fontSystem.ctFont,
+            attributes: cells[0].attributes
+        )
+        let shapedGlyphs = shaper.shape(textRun)
+        var idx = textIdx
+
+        for glyph in shapedGlyphs {
+            guard let glyphInfo = glyphAtlas.getOrRasterize(
+                glyph: glyph.glyph,
+                font: glyph.font,
+                fontSystem: fontSystem,
+                frameNumber: frameNumber
+            ), glyphInfo.width > 0 && glyphInfo.height > 0 else { continue }
+
+            let glyphCol = startCol + glyph.cellIndex
+            textPtr[idx] = CellTextInstance(
+                glyphPos: SIMD2<UInt32>(glyphInfo.atlasX, glyphInfo.atlasY),
+                glyphSize: SIMD2<UInt32>(glyphInfo.width, glyphInfo.height),
+                bearings: SIMD2<Int16>(glyphInfo.bearingX, glyphInfo.bearingY),
+                gridPos: SIMD2<UInt16>(UInt16(glyphCol), UInt16(row)),
+                color: colorState.foreground(
+                    attrs: cells[glyph.cellIndex].attributes,
+                    row: row, col: glyphCol, absLine: absLine
+                ),
+                offset: SIMD2<Int16>(Int16(glyph.position.x - CGFloat(glyph.cellIndex) * CGFloat(cellWidth)), 0)
+            )
+            idx += 1
+        }
+
+        return idx
+    }
+
+
+
     private func fillTextInstanceBuffer(
         frame: UnsafeMutablePointer<FrameState>, grid: GridSize,
         snapshot: ScreenSnapshot?, dirtyRegion: DirtyRegion, contentChanged: Bool,
@@ -868,74 +971,90 @@ final class MetalRenderer {
         var emojiIdx = 0
 
         let snapRows = min(rows, snapshot.rows)
-        let snapCols = min(cols, snapshot.columns)
         let colorState = makeTextColorState(snapshot: snapshot, searchLineMap: searchLineMap)
         let cellWidth = Float(fontSystem.cellSize.width)
+        let shaper = CoreTextShaper(fontSystem: fontSystem)
 
         for row in 0..<snapRows {
             let absLine = snapshot.absoluteLine(forViewportRow: row)
             let rowBase = row * snapshot.columns
-            for col in 0..<snapCols {
-                let cell = snapshot.cells[rowBase + col]
-                guard cell.width.isRenderable else { continue }
-                guard cell.content.firstScalar != Unicode.Scalar(" ") else { continue }
+            let snapCols = min(cols, snapshot.columns)
+            let runs = buildRuns(forRow: row, snapshot: snapshot)
 
-                // Try emoji atlas first
-                if let emojiInfo = emojiAtlas.getOrRasterize(
-                    cluster: cell.content, fontSystem: fontSystem,
-                    frameNumber: frameNumber
-                ), emojiInfo.width > 0 && emojiInfo.height > 0 {
-                    var glyphSize = SIMD2<UInt32>(emojiInfo.width, emojiInfo.height)
-                    var bearings = SIMD2<Int16>(emojiInfo.bearingX, emojiInfo.bearingY)
+            for run in runs {
+                var textSegmentStart: Int? = nil
 
-                    // Allow 2-cell span for wide cells or when next cell is empty (Ghostty-style).
-                    var targetCells: Int = 1
-                    if cell.width == .wide {
-                        targetCells = 2
-                    } else if col + 1 < snapCols {
-                        let nextCell = snapshot.cells[rowBase + col + 1]
-                        if nextCell.content.firstScalar == Unicode.Scalar(" ") || !nextCell.width.isRenderable {
-                            targetCells = 2
+                for (offset, cell) in run.cells.enumerated() {
+                    let col = run.startCol + offset
+                    let isEmoji = cell.content.isEmojiSequence || (cell.content.firstScalar?.isEmojiScalar ?? false)
+
+                    if isEmoji {
+                        // Flush current text segment before handling emoji
+                        if let start = textSegmentStart {
+                            let end = offset
+                            let textCells = Array(run.cells[start..<end])
+                            let startCol = run.startCol + start
+                            textIdx = flushTextSegment(
+                                cells: textCells, startCol: startCol, row: row, absLine: absLine,
+                                textPtr: textPtr, textIdx: textIdx,
+                                colorState: colorState, shaper: shaper, cellWidth: cellWidth
+                            )
+                            textSegmentStart = nil
+                        }
+
+                        // Render emoji via ColorEmojiAtlas
+                        if let emojiInfo = emojiAtlas.getOrRasterize(
+                            cluster: cell.content, fontSystem: fontSystem,
+                            frameNumber: frameNumber
+                        ), emojiInfo.width > 0 && emojiInfo.height > 0 {
+                            var glyphSize = SIMD2<UInt32>(emojiInfo.width, emojiInfo.height)
+                            var bearings = SIMD2<Int16>(emojiInfo.bearingX, emojiInfo.bearingY)
+
+                            var targetCells: Int = 1
+                            if cell.width == .wide {
+                                targetCells = 2
+                            } else if col + 1 < snapCols {
+                                let nextCell = snapshot.cells[rowBase + col + 1]
+                                if nextCell.content.firstScalar == Unicode.Scalar(" ") || !nextCell.width.isRenderable {
+                                    targetCells = 2
+                                }
+                            }
+
+                            if targetCells > 1 {
+                                let targetWidth = cellWidth * Float(targetCells)
+                                let scale = targetWidth / Float(emojiInfo.width)
+                                glyphSize.x = UInt32(targetWidth)
+                                glyphSize.y = scaled(emojiInfo.height, by: scale)
+                                bearings.x = scaled(bearings.x, by: scale)
+                                bearings.y = scaled(bearings.y, by: scale)
+                            }
+
+                            emojiPtr[emojiIdx] = CellTextInstance(
+                                glyphPos: SIMD2<UInt32>(emojiInfo.atlasX, emojiInfo.atlasY),
+                                glyphSize: glyphSize,
+                                bearings: bearings,
+                                gridPos: SIMD2<UInt16>(UInt16(col), UInt16(row)),
+                                color: .zero
+                            )
+                            emojiIdx += 1
+                        }
+                    } else {
+                        if textSegmentStart == nil {
+                            textSegmentStart = offset
                         }
                     }
-
-                    if targetCells > 1 {
-                        let targetWidth = cellWidth * Float(targetCells)
-                        let scale = targetWidth / Float(emojiInfo.width)
-
-                        glyphSize.x = UInt32(targetWidth)
-                        glyphSize.y = scaled(emojiInfo.height, by: scale)
-                        bearings.x = scaled(bearings.x, by: scale)
-                        bearings.y = scaled(bearings.y, by: scale)
-                    }
-
-                    emojiPtr[emojiIdx] = CellTextInstance(
-                        glyphPos: SIMD2<UInt32>(emojiInfo.atlasX, emojiInfo.atlasY),
-                        glyphSize: glyphSize,
-                        bearings: bearings,
-                        gridPos: SIMD2<UInt16>(UInt16(col), UInt16(row)),
-                        color: .zero // Emoji ignores color
-                    )
-                    emojiIdx += 1
-                    continue
                 }
 
-                guard let glyphInfo = glyphAtlas.getOrRasterize(
-                    character: cell.content.firstScalar ?? " ", fontSystem: fontSystem,
-                    frameNumber: frameNumber
-                ) else { continue }
-
-                guard glyphInfo.width > 0 && glyphInfo.height > 0 else { continue }
-
-                textPtr[textIdx] = CellTextInstance(
-                    glyphPos: SIMD2<UInt32>(glyphInfo.atlasX, glyphInfo.atlasY),
-                    glyphSize: SIMD2<UInt32>(glyphInfo.width, glyphInfo.height),
-                    bearings: SIMD2<Int16>(glyphInfo.bearingX, glyphInfo.bearingY),
-                    gridPos: SIMD2<UInt16>(UInt16(col), UInt16(row)),
-                    color: colorState.foreground(attrs: cell.attributes,
-                                                 row: row, col: col, absLine: absLine)
-                )
-                textIdx += 1
+                // Flush remaining text segment at end of run
+                if let start = textSegmentStart {
+                    let textCells = Array(run.cells[start..<run.cells.count])
+                    let startCol = run.startCol + start
+                    textIdx = flushTextSegment(
+                        cells: textCells, startCol: startCol, row: row, absLine: absLine,
+                        textPtr: textPtr, textIdx: textIdx,
+                        colorState: colorState, shaper: shaper, cellWidth: cellWidth
+                    )
+                }
             }
         }
         frame.pointee.textInstanceCount = textIdx
