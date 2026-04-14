@@ -25,9 +25,8 @@ public final class SessionStore: Sendable {
         }
 
         var sessions: [PersistedSession] = []
-        for file in files where file.hasSuffix(fileExtension) {
-            let path = (directory as NSString).appendingPathComponent(file)
-            guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { continue }
+        for file in files where file.hasSuffix(fileExtension) && file != orderFileName {
+            guard let data = try? Data(contentsOf: fileURL(named: file)) else { continue }
             guard let session = try? decoder.decode(PersistedSession.self, from: data) else { continue }
             sessions.append(session)
         }
@@ -36,14 +35,28 @@ public final class SessionStore: Sendable {
 
     public func save(_ session: PersistedSession) {
         let fileName = "\(session.sessionInfo.id.uuid.uuidString)\(fileExtension)"
-        let path = (directory as NSString).appendingPathComponent(fileName)
         guard let data = try? encoder.encode(session) else { return }
-        try? data.write(to: URL(fileURLWithPath: path))
+        try? data.write(to: fileURL(named: fileName))
     }
 
     public func delete(sessionID: SessionID) {
         let fileName = "\(sessionID.uuid.uuidString)\(fileExtension)"
-        let path = (directory as NSString).appendingPathComponent(fileName)
-        try? FileManager.default.removeItem(atPath: path)
+        try? FileManager.default.removeItem(at: fileURL(named: fileName))
+    }
+
+    private var orderFileName: String { "order\(fileExtension)" }
+
+    public func saveOrder(_ order: [UUID]) {
+        guard let data = try? encoder.encode(order) else { return }
+        try? data.write(to: fileURL(named: orderFileName))
+    }
+
+    public func loadOrder() -> [UUID] {
+        guard let data = try? Data(contentsOf: fileURL(named: orderFileName)) else { return [] }
+        return (try? decoder.decode([UUID].self, from: data)) ?? []
+    }
+
+    private func fileURL(named fileName: String) -> URL {
+        URL(fileURLWithPath: (directory as NSString).appendingPathComponent(fileName))
     }
 }

@@ -64,6 +64,9 @@ struct TerminalWindowView: View {
                     },
                     onDoubleClick: { index in
                         handleSidebarDoubleClick(index)
+                    },
+                    onMoveSession: { from, to in
+                        sessionManager.moveSession(from: from, to: to)
                     }
                 )
 
@@ -449,10 +452,10 @@ struct TerminalWindowView: View {
         case .closeSession:
             closeSession(at: sessionManager.activeSessionIndex)
         case .previousSession:
-            sessionManager.selectPreviousSession()
+            sessionManager.selectPreviousSessionInVisualOrder()
             restoreTabFocusedPane()
         case .nextSession:
-            sessionManager.selectNextSession()
+            sessionManager.selectNextSessionInVisualOrder()
             restoreTabFocusedPane()
         case .toggleSidebar:
             toggleSidebar()

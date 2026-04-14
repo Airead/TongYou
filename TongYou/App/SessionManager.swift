@@ -58,12 +58,18 @@ final class SessionManager {
     private var pendingLocalSaves: [UUID: DispatchWorkItem] = [:]
     private let pendingLocalSavesLock = NSLock()
 
+    /// Sidebar session sort order persisted alongside local sessions.
+    private var sessionSortOrder: [UUID] = []
+
     init(localSessionStore: SessionStore? = nil) {
-        if let store = localSessionStore {
-            self.localSessionStore = store
+        let store: SessionStore
+        if let s = localSessionStore {
+            store = s
         } else {
-            self.localSessionStore = SessionStore(directory: ServerConfig.defaultLocalPersistenceDirectory())
+            store = SessionStore(directory: ServerConfig.defaultLocalPersistenceDirectory())
         }
+        self.localSessionStore = store
+        sessionSortOrder = store.loadOrder()
     }
 
     /// Generate the next available name with a given prefix (e.g. "LSession 1", "LSession 2").
@@ -152,8 +158,17 @@ final class SessionManager {
         return .ready
     }
 
-    var allAttachedSessionIDs: Set<UUID> {
-        attachedRemoteSessionIDs.union(attachedLocalSessionIDs)
+    private(set) var allAttachedSessionIDs: Set<UUID> = []
+
+    private func rebuildAllAttachedSessionIDs() {
+        var ids = attachedLocalSessionIDs
+        for session in sessions {
+            if let serverID = session.source.serverSessionID,
+               attachedRemoteSessionIDs.contains(serverID) {
+                ids.insert(session.id)
+            }
+        }
+        allAttachedSessionIDs = ids
     }
 
     func isSessionDetached(at index: Int) -> Bool {
@@ -180,11 +195,16 @@ final class SessionManager {
         let baseName = name ?? nextAvailableName(prefix: "LSession")
         var session = TerminalSession(name: baseName, initialWorkingDirectory: initialWorkingDirectory)
         session.name = uniqueSessionName(baseName, for: session.id)
+        let newSessionID = session.id
         sessions.append(session)
-        activeSessionIndex = sessions.count - 1
-        attachedLocalSessionIDs.insert(session.id)
-        scheduleLocalSave(sessionID: session.id)
-        return session.id
+        sessionSortOrder.append(newSessionID)
+        saveSessionOrder()
+        applySessionOrder()
+        activeSessionIndex = sessions.firstIndex(where: { $0.id == newSessionID }) ?? sessions.count - 1
+        attachedLocalSessionIDs.insert(newSessionID)
+        rebuildAllAttachedSessionIDs()
+        scheduleLocalSave(sessionID: newSessionID)
+        return newSessionID
     }
 
     /// Close a session at the given index.
@@ -207,6 +227,7 @@ final class SessionManager {
                 localControllers.removeValue(forKey: paneID)?.stop()
             }
             attachedLocalSessionIDs.remove(session.id)
+            rebuildAllAttachedSessionIDs()
             cancelPendingLocalSave(sessionID: session.id)
             localSessionStore.delete(sessionID: SessionID(session.id))
         }
@@ -223,6 +244,8 @@ final class SessionManager {
             activeSessionIndex = 0
         }
 
+        sessionSortOrder.removeAll { $0 == session.id }
+        saveSessionOrder()
         return paneIDs
     }
 
@@ -249,6 +272,50 @@ final class SessionManager {
     func selectNextSession() {
         guard sessions.count > 1 else { return }
         activeSessionIndex = (activeSessionIndex + 1) % sessions.count
+    }
+
+    private var visualSessionIndices: [Int] {
+        let attached = sessions.indices.filter { allAttachedSessionIDs.contains(sessions[$0].id) }
+        let detached = sessions.indices.filter { !allAttachedSessionIDs.contains(sessions[$0].id) }
+        return attached + detached
+    }
+
+    func selectPreviousSessionInVisualOrder() {
+        let visual = visualSessionIndices
+        guard visual.count > 1 else { return }
+        guard let pos = visual.firstIndex(of: activeSessionIndex) else { return }
+        let newPos = (pos - 1 + visual.count) % visual.count
+        activeSessionIndex = visual[newPos]
+    }
+
+    func selectNextSessionInVisualOrder() {
+        let visual = visualSessionIndices
+        guard visual.count > 1 else { return }
+        guard let pos = visual.firstIndex(of: activeSessionIndex) else { return }
+        let newPos = (pos + 1) % visual.count
+        activeSessionIndex = visual[newPos]
+    }
+
+    // MARK: - Session Reordering
+
+    func moveSession(from source: Int, to destination: Int) {
+        guard source != destination,
+              sessions.indices.contains(source),
+              sessions.indices.contains(destination) else { return }
+
+        let session = sessions.remove(at: source)
+        sessions.insert(session, at: destination)
+
+        if activeSessionIndex == source {
+            activeSessionIndex = destination
+        } else if source < activeSessionIndex && destination >= activeSessionIndex {
+            activeSessionIndex -= 1
+        } else if source > activeSessionIndex && destination <= activeSessionIndex {
+            activeSessionIndex += 1
+        }
+
+        sessionSortOrder = sessions.map(\.id)
+        saveSessionOrder()
     }
 
     // MARK: - Session Rename
@@ -841,6 +908,7 @@ final class SessionManager {
         serverTabIDs.removeAll()
         attachedRemoteSessionIDs.removeAll()
         pendingAttachSessionIDs.removeAll()
+        rebuildAllAttachedSessionIDs()
 
         if !sessions.isEmpty {
             activeSessionIndex = min(activeSessionIndex, sessions.count - 1)
@@ -910,6 +978,7 @@ final class SessionManager {
         client.attachSession(SessionID(serverSessionID))
         attachedRemoteSessionIDs.insert(serverSessionID)
         pendingAttachSessionIDs.insert(serverSessionID)
+        rebuildAllAttachedSessionIDs()
     }
 
     /// Detach from a remote session (stop receiving screen updates).
@@ -919,6 +988,7 @@ final class SessionManager {
         client.detachSession(SessionID(serverSessionID))
         attachedRemoteSessionIDs.remove(serverSessionID)
         pendingAttachSessionIDs.remove(serverSessionID)
+        rebuildAllAttachedSessionIDs()
 
         // Tear down local panes for this session but keep the session entry.
         if let sessionIndex = sessionIndex(forServerSessionID: serverSessionID) {
@@ -1014,6 +1084,7 @@ final class SessionManager {
 
         let localSessionID = sessions[index].id
         sessions.remove(at: index)
+        rebuildAllAttachedSessionIDs()
 
         if !sessions.isEmpty {
             if activeSessionIndex >= sessions.count {
@@ -1113,6 +1184,9 @@ final class SessionManager {
         )
         session.name = uniqueSessionName(info.name, for: session.id)
         sessions.append(session)
+        sessionSortOrder.append(session.id)
+        saveSessionOrder()
+        applySessionOrder()
     }
 
     /// Get or create a local TerminalPane for a server pane ID,
@@ -1157,6 +1231,34 @@ final class SessionManager {
             let session = buildLocalSession(from: persisted)
             sessions.append(session)
         }
+        let existingIDs = Set(sessionSortOrder)
+        for session in sessions where !existingIDs.contains(session.id) {
+            sessionSortOrder.append(session.id)
+        }
+        deduplicateSessionSortOrder()
+        saveSessionOrder()
+        applySessionOrder()
+    }
+
+    private func deduplicateSessionSortOrder() {
+        var seen = Set<UUID>()
+        sessionSortOrder = sessionSortOrder.filter { seen.insert($0).inserted }
+    }
+
+    private func applySessionOrder() {
+        guard !sessionSortOrder.isEmpty else { return }
+        let orderMap = Dictionary(uniqueKeysWithValues: sessionSortOrder.enumerated().map { ($1, $0) })
+        let unknownOffset = sessionSortOrder.count
+        let sorted = sessions.sorted {
+            let o0 = orderMap[$0.id] ?? unknownOffset
+            let o1 = orderMap[$1.id] ?? unknownOffset
+            return o0 < o1
+        }
+        sessions = sorted
+    }
+
+    private func saveSessionOrder() {
+        localSessionStore.saveOrder(sessionSortOrder)
     }
 
     private func buildLocalSession(from persisted: PersistedSession) -> TerminalSession {
@@ -1274,6 +1376,7 @@ final class SessionManager {
 
     func attachLocalSession(sessionID: UUID) {
         attachedLocalSessionIDs.insert(sessionID)
+        rebuildAllAttachedSessionIDs()
         if let session = sessions.first(where: { $0.id == sessionID }) {
             for paneID in session.allPaneIDs {
                 _ = ensureLocalController(for: paneID)
@@ -1283,6 +1386,7 @@ final class SessionManager {
 
     func detachLocalSession(sessionID: UUID) {
         attachedLocalSessionIDs.remove(sessionID)
+        rebuildAllAttachedSessionIDs()
     }
 
     /// Get or create a local TerminalController for a pane.

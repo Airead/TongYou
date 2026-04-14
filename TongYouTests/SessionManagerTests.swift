@@ -497,10 +497,96 @@ struct SessionManagerTests {
         #expect(mgr.controller(for: paneID) != nil)
     }
 
+    // MARK: - Session Reordering
+
+    @Test func moveSessionForward() {
+        let mgr = makeManager()
+        _ = mgr.createSession(name: "s1")
+        _ = mgr.createSession(name: "s2")
+        _ = mgr.createSession(name: "s3")
+
+        mgr.moveSession(from: 0, to: 2)
+
+        #expect(mgr.sessions[0].name == "s2")
+        #expect(mgr.sessions[1].name == "s3")
+        #expect(mgr.sessions[2].name == "s1")
+    }
+
+    @Test func moveSessionBackward() {
+        let mgr = makeManager()
+        _ = mgr.createSession(name: "s1")
+        _ = mgr.createSession(name: "s2")
+        _ = mgr.createSession(name: "s3")
+
+        mgr.moveSession(from: 2, to: 0)
+
+        #expect(mgr.sessions[0].name == "s3")
+        #expect(mgr.sessions[1].name == "s1")
+        #expect(mgr.sessions[2].name == "s2")
+    }
+
+    @Test func moveSessionUpdatesActiveIndex() {
+        let mgr = makeManager()
+        _ = mgr.createSession(name: "s1")
+        _ = mgr.createSession(name: "s2")
+        _ = mgr.createSession(name: "s3")
+
+        mgr.selectSession(at: 2)
+        mgr.moveSession(from: 2, to: 0)
+
+        #expect(mgr.activeSessionIndex == 0)
+        #expect(mgr.activeSession?.name == "s3")
+    }
+
+    // MARK: - Session Order Persistence
+
+    @Test func sessionOrderPersistsAcrossManagers() throws {
+        let tempDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: tempDir) }
+        let store = SessionStore(directory: tempDir)
+
+        let mgr1 = SessionManager(localSessionStore: store)
+        _ = mgr1.createSession(name: "s1")
+        _ = mgr1.createSession(name: "s2")
+        _ = mgr1.createSession(name: "s3")
+        mgr1.moveSession(from: 2, to: 0)
+        mgr1.flushPendingLocalSaves()
+
+        let mgr2 = SessionManager(localSessionStore: store)
+        mgr2.restoreLocalSessions()
+
+        #expect(mgr2.sessions[0].name == "s3")
+        #expect(mgr2.sessions[1].name == "s1")
+        #expect(mgr2.sessions[2].name == "s2")
+    }
+
+    @Test func sessionOrderSurvivesAfterClose() throws {
+        let tempDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: tempDir) }
+        let store = SessionStore(directory: tempDir)
+
+        let mgr = SessionManager(localSessionStore: store)
+        _ = mgr.createSession(name: "s1")
+        _ = mgr.createSession(name: "s2")
+        let id3 = mgr.createSession(name: "s3")
+        mgr.moveSession(from: 2, to: 0)
+        mgr.flushPendingLocalSaves()
+
+        mgr.closeSession(at: 0) // closes s3
+
+        let mgr2 = SessionManager(localSessionStore: store)
+        mgr2.restoreLocalSessions()
+
+        #expect(mgr2.sessions[0].name == "s1")
+        #expect(mgr2.sessions[1].name == "s2")
+        #expect(!mgr2.sessions.contains { $0.id == id3 })
+    }
+
     // MARK: - Local Session Persistence
 
     @Test func localSessionPersistenceRoundTrip() throws {
         let tempDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: tempDir) }
         let store = SessionStore(directory: tempDir)
 
         let mgr1 = SessionManager(localSessionStore: store)
@@ -519,6 +605,7 @@ struct SessionManagerTests {
 
     @Test func localSessionSplitPanePersistence() throws {
         let tempDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: tempDir) }
         let store = SessionStore(directory: tempDir)
 
         let mgr1 = SessionManager(localSessionStore: store)
@@ -534,6 +621,7 @@ struct SessionManagerTests {
 
     @Test func closeLocalSessionDeletesPersistence() throws {
         let tempDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: tempDir) }
         let store = SessionStore(directory: tempDir)
 
         let mgr = SessionManager(localSessionStore: store)
