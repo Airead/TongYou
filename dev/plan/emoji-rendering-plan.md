@@ -143,10 +143,10 @@ swift scripts/validate_grapheme_cluster.swift
 ```
 
 **成功标准**:
-- [ ] `👨‍👩‍👧‍👦` (ZWJ序列) 从7 cells → 2 cells
-- [ ] `👋🏻` (肤色修饰) 从2 cells → 2 cells
-- [ ] `🇨🇳` (国旗) 从2 cells → 2 cells
-- [ ] 普通ASCII保持1 cell不变
+- [x] `👨‍👩‍👧‍👦` (ZWJ序列) 从7 cells → 2 cells
+- [x] `👋🏻` (肤色修饰) 从2 cells → 2 cells
+- [x] `🇨🇳` (国旗) 从2 cells → 2 cells
+- [x] 普通ASCII保持1 cell不变
 
 ---
 
