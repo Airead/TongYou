@@ -94,5 +94,11 @@ let package = Package(
             dependencies: ["TYClient", "TYServer", "TYProtocol", "TYTerminal"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+
+        .executableTarget(
+            name: "acs-demo",
+            dependencies: ["TYTerminal"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
     ]
 )

@@ -55,9 +55,11 @@ public struct StreamHandler {
         case .csiDispatch(let params):
             handleCSI(params)
 
-        case .escDispatch(let final, let imCount, _):
+        case .escDispatch(let final, let imCount, let intermediates):
             if imCount == 0 {
                 handleESC(final: final)
+            } else if imCount == 1 {
+                handleESCCharset(final: final, intermediate: intermediates.0)
             }
 
         case .oscDispatch(let data):
@@ -107,6 +109,8 @@ public struct StreamHandler {
         case 0x09: screen.tab()
         case 0x0A, 0x0B, 0x0C: screen.lineFeed() // LF, VT, FF
         case 0x0D: screen.carriageReturn()
+        case 0x0E: screen.charsetState.invokeGL(.g1) // SO - Shift Out
+        case 0x0F: screen.charsetState.invokeGL(.g0) // SI - Shift In
         default: break
         }
     }
@@ -293,6 +297,24 @@ public struct StreamHandler {
         }
     }
 
+    private func handleESCCharset(final: UInt8, intermediate: UInt8) {
+        let slot: ACSCharsetMapper.Slot
+        switch intermediate {
+        case 0x28: slot = .g0 // '('
+        case 0x29: slot = .g1 // ')'
+        default: return
+        }
+
+        let set: ACSCharsetMapper.Set
+        switch final {
+        case 0x30: set = .decSpecial // '0'
+        case 0x42: set = .ascii      // 'B'
+        default: return
+        }
+
+        screen.charsetState.configure(slot: slot, set: set)
+    }
+
     // MARK: - OSC Dispatch
 
     private mutating func handleOSC(_ data: [UInt8]) {
@@ -452,7 +474,8 @@ public struct StreamHandler {
         savedCursor = SavedCursorState(
             col: screen.cursorCol,
             row: screen.cursorRow,
-            attributes: currentAttributes
+            attributes: currentAttributes,
+            charsetState: screen.charsetState
         )
     }
 
@@ -460,6 +483,7 @@ public struct StreamHandler {
         guard let saved = savedCursor else { return }
         screen.setCursorPos(row: saved.row, col: saved.col)
         currentAttributes = saved.attributes
+        screen.charsetState = saved.charsetState
     }
 
     // MARK: - Private

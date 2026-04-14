@@ -64,11 +64,13 @@ public struct SavedCursorState: Sendable {
     public let col: Int
     public let row: Int
     public let attributes: CellAttributes
+    public let charsetState: CharsetState
 
-    public init(col: Int, row: Int, attributes: CellAttributes) {
+    public init(col: Int, row: Int, attributes: CellAttributes, charsetState: CharsetState = CharsetState()) {
         self.col = col
         self.row = row
         self.attributes = attributes
+        self.charsetState = charsetState
     }
 }
 
@@ -216,6 +218,11 @@ public final class Screen {
     private var altCursorRow: Int = 0
     private var altRowBase: Int = 0
     private var altLineFlags: [LineFlags]?
+    private var altCharsetState: CharsetState?
+
+    // MARK: - Charset State
+
+    public var charsetState = CharsetState()
 
     // MARK: - Scrollback
 
@@ -381,6 +388,17 @@ public final class Screen {
 
     /// Write a grapheme cluster at the cursor with given attributes and advance.
     public func write(_ cluster: GraphemeCluster, attributes: CellAttributes) {
+        var effectiveCluster = cluster
+        if cluster.scalarCount == 1, let s = cluster.firstScalar, s.value <= 0x7E {
+            let mapped = charsetState.map(UInt8(s.value))
+            if mapped.value != s.value {
+                effectiveCluster = GraphemeCluster(mapped)
+            }
+        }
+        writeCluster(effectiveCluster, attributes: attributes)
+    }
+
+    private func writeCluster(_ cluster: GraphemeCluster, attributes: CellAttributes) {
         let w = Int(cluster.terminalWidth)
 
         if cursorCol >= columns {
@@ -430,7 +448,8 @@ public final class Screen {
     /// Write a printable character at the cursor with given attributes and advance.
     /// Backward compatible wrapper for single scalar writes.
     public func write(_ scalar: Unicode.Scalar, attributes: CellAttributes) {
-        write(GraphemeCluster(scalar), attributes: attributes)
+        let mapped: Unicode.Scalar = (scalar.value <= 0x7E) ? charsetState.map(UInt8(scalar.value)) : scalar
+        writeCluster(GraphemeCluster(mapped), attributes: attributes)
     }
 
     /// Write a printable character at the cursor with default attributes and advance.
@@ -440,6 +459,9 @@ public final class Screen {
 
     /// Batch-write single-width ASCII (0x20-0x7E). One dirtyRegion mark per line instead of per character.
     public func writeASCIIBatch(_ buffer: PrintBatchBuffer, count: Int, attributes: CellAttributes) {
+        let needsMapping = (charsetState.gl == .g0 && charsetState.g0 != .ascii) ||
+                           (charsetState.gl == .g1 && charsetState.g1 != .ascii)
+
         var i = 0
         while i < count {
             // Handle wrap from previous write
@@ -462,7 +484,8 @@ public final class Screen {
                 if cells[idx].width != .normal {
                     cleanUpWideCharAt(col: cursorCol, row: cursorRow)
                 }
-                cells[idx].codepoint = Unicode.Scalar(buffer[i])
+                let mapped = needsMapping ? charsetState.map(buffer[i]) : Unicode.Scalar(buffer[i])
+                cells[idx].codepoint = mapped
                 cells[idx].attributes = attributes
                 cells[idx].width = .normal
                 cursorCol += 1
@@ -891,6 +914,7 @@ public final class Screen {
         altLineFlags = lineFlags
         altCursorCol = cursorCol
         altCursorRow = cursorRow
+        altCharsetState = charsetState
         cells = [Cell](repeating: .empty, count: columns * rows)
         lineFlags = [LineFlags](repeating: LineFlags(), count: rows)
         rowBase = 0
@@ -912,6 +936,10 @@ public final class Screen {
         }
         cursorCol = altCursorCol
         cursorRow = altCursorRow
+        if let savedCharset = altCharsetState {
+            charsetState = savedCharset
+            altCharsetState = nil
+        }
         dirtyRegion.markFull()
     }
 
@@ -933,6 +961,8 @@ public final class Screen {
         altCursorCol = 0
         altCursorRow = 0
         altRowBase = 0
+        altCharsetState = nil
+        charsetState = CharsetState()
         resetScrollback(deallocate: false)
         dirtyRegion.markFull()
     }
