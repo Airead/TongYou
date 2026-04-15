@@ -37,10 +37,6 @@ final class SessionManager {
     /// Tracks which local sessions are currently attached (rendering).
     private(set) var attachedLocalSessionIDs: Set<UUID> = []
 
-    deinit {
-        remoteClient?.disconnect()
-    }
-
     /// Controllers for remote panes, keyed by local pane UUID.
     private var remoteControllers: [UUID: ClientTerminalController] = [:]
     /// Bidirectional mapping between server pane UUID and local pane UUID.
@@ -72,6 +68,35 @@ final class SessionManager {
         }
         self.localSessionStore = store
         sessionSortOrder = store.loadOrder()
+        MainActor.assumeIsolated {
+            SessionManagerRegistry.shared.register(self)
+        }
+    }
+
+    deinit {
+        remoteClient?.disconnect()
+        MainActor.assumeIsolated {
+            SessionManagerRegistry.shared.unregister(self)
+        }
+    }
+
+    /// Metadata describing which session and tab own a given pane.
+    struct PaneMetadata {
+        let sessionName: String
+        let tabID: UUID
+        let tabTitle: String
+    }
+
+    /// Looks up which session and tab own a given pane ID.
+    func metadata(for paneID: UUID) -> PaneMetadata? {
+        for session in sessions {
+            for tab in session.tabs {
+                if tab.hasPane(id: paneID) {
+                    return PaneMetadata(sessionName: session.name, tabID: tab.id, tabTitle: tab.title)
+                }
+            }
+        }
+        return nil
     }
 
     /// Generate the next available name with a given prefix (e.g. "LSession 1", "LSession 2").

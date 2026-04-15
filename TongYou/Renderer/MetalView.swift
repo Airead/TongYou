@@ -9,7 +9,10 @@ final class MetalView: NSView {
 
     private var metalLayer: CAMetalLayer!
     private var device: MTLDevice!
-    private var renderer: MetalRenderer?
+    private(set) var renderer: MetalRenderer?
+    var currentResourceMetrics: ResourceMetrics {
+        renderer?.currentResourceMetrics ?? ResourceMetrics()
+    }
     private var fontSystem: FontSystem?
     private var terminalController: (any TerminalControlling)?
     // nonisolated(unsafe) because deinit must invalidate without actor hop
@@ -83,6 +86,8 @@ final class MetalView: NSView {
 
         wantsLayer = true
         layerContentsRedrawPolicy = .duringViewResize
+
+        MetalViewRegistry.shared.register(self)
     }
 
     override func makeBackingLayer() -> CALayer {
@@ -830,6 +835,7 @@ final class MetalView: NSView {
         // by SessionManager (local) or the remote client (remote).
         terminalController = nil
         renderer = nil
+        MetalViewRegistry.shared.unregister(self)
     }
 
     @objc nonisolated private func displayLinkFired(_ link: CADisplayLink) {

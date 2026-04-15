@@ -12,6 +12,11 @@ struct TongYouApp: App {
         .commands {
             TongYouCommands()
         }
+
+        Window("Resource Stats", id: "resource-stats") {
+            ResourceStatsView()
+        }
+        .defaultPosition(.topTrailing)
     }
 }
 
@@ -22,6 +27,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 struct TongYouCommands: Commands {
+    @Environment(\.openWindow) private var openWindow
     @State private var isInstalling = false
     @State private var daemonRunning = false
 
@@ -47,6 +53,13 @@ struct TongYouCommands: Commands {
                     }
             }
             .disabled(!daemonRunning)
+        }
+
+        CommandGroup(after: .windowList) {
+            Button("Resource Stats") {
+                openWindow(id: "resource-stats")
+            }
+            .keyboardShortcut("r", modifiers: [.command, .option])
         }
     }
 
