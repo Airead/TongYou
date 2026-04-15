@@ -19,7 +19,8 @@ struct GlyphInfo {
 
 /// Cache key for glyph-based lookup (supports font fallback).
 struct GlyphCacheKey: Hashable, Equatable {
-    let fontID: ObjectIdentifier
+    let fontName: String
+    let fontSize: CGFloat
     let glyph: CGGlyph
 }
 
@@ -53,6 +54,21 @@ final class GlyphAtlas {
     /// Whether the atlas texture has been modified since last GPU sync.
     private(set) var isDirty = false
 
+    /// Monotonically increased on reset/grow/compact to detect stale async work.
+    private(set) var generation: UInt64 = 0
+
+    /// Incremented whenever the atlas texture content changes.
+    private(set) var modified: UInt64 = 0
+
+    /// Tracks glyphs currently being rasterized asynchronously to avoid duplicate work.
+    private var pendingRasterizationKeys: Set<GlyphCacheKey> = []
+
+    /// Background queue for CoreGraphics glyph rasterization.
+    private let rasterizationQueue = DispatchQueue(
+        label: "io.github.airead.tongyou.glyph-rasterizer",
+        qos: .userInitiated
+    )
+
     /// Number of active (non-evicted) entries.
     var activeEntryCount: Int { cache.count }
 
@@ -75,14 +91,23 @@ final class GlyphAtlas {
     /// Reset the atlas, clearing all cached glyphs. Used when font changes.
     func reset() {
         cache.removeAll(keepingCapacity: true)
+        pendingRasterizationKeys.removeAll()
         shelfX = 1
         shelfY = 1
         shelfHeight = 0
         texture = Self.createTexture(device: device, size: textureSize)
+        generation &+= 1
+        modified &+= 1
         isDirty = true
     }
 
-    // MARK: - Glyph Lookup / Rasterization
+    // MARK: - Glyph Lookup
+
+    /// Synchronous lookup only. Returns nil on cache miss without rasterizing.
+    func get(glyph: CGGlyph, font: CTFont) -> GlyphInfo? {
+        let key = cacheKey(for: glyph, font: font)
+        return cache[key]?.info
+    }
 
     /// Get or rasterize a glyph by character. Resolves the font via FontSystem fallback on cache miss.
     /// The `frameNumber` is used for LRU tracking.
@@ -100,7 +125,7 @@ final class GlyphAtlas {
         )
     }
 
-    /// Get or rasterize a glyph by (font, glyph) pair.
+    /// Get or rasterize a glyph by (font, glyph) pair synchronously.
     /// The `frameNumber` is used for LRU tracking.
     func getOrRasterize(
         glyph: CGGlyph,
@@ -124,8 +149,157 @@ final class GlyphAtlas {
         return info
     }
 
+    /// Enqueue an asynchronous rasterization for a cache-missed glyph.
+    /// The completion handler is called on the main thread after the glyph
+    /// has been drawn and uploaded to the GPU texture.
+    func enqueueRasterization(
+        glyph: CGGlyph,
+        font: CTFont,
+        fontSystem: FontSystem,
+        completion: @escaping () -> Void
+    ) {
+        let key = cacheKey(for: glyph, font: font)
+        guard pendingRasterizationKeys.insert(key).inserted else {
+            // Already pending: just call completion immediately since the previous
+            // enqueue will dirty the atlas and trigger a redraw.
+            completion()
+            return
+        }
+
+        let currentGeneration = generation
+        let baselineF = CGFloat(fontSystem.baseline) + fontSystem.baselineFractionalOffset
+        let fontName = CTFontCopyPostScriptName(font) as String
+        let fontSize = CTFontGetSize(font)
+        let colorSpace = grayscaleColorSpace
+
+        rasterizationQueue.async { [weak self] in
+            // Recreate font on background thread using name/size.
+            let bgFont = CTFontCreateWithName(fontName as CFString, fontSize, nil)
+
+            var glyphCopy = glyph
+            var boundingRect = CGRect.zero
+            CTFontGetBoundingRectsForGlyphs(bgFont, .horizontal, &glyphCopy, &boundingRect, 1)
+
+            if boundingRect.width < 0.5 && boundingRect.height < 0.5 {
+                DispatchQueue.main.async {
+                    guard let self, self.generation == currentGeneration else {
+                        completion()
+                        return
+                    }
+                    let info = GlyphInfo(atlasX: 0, atlasY: 0, width: 0, height: 0,
+                                         bearingX: 0, bearingY: 0)
+                    self.cache[key] = GlyphEntry(info: info, lastUsedFrame: 0)
+                    self.pendingRasterizationKeys.remove(key)
+                    completion()
+                }
+                return
+            }
+
+            let bearingXf = boundingRect.origin.x
+            let bearingYf = boundingRect.origin.y
+
+            let pxX = floor(bearingXf)
+            let pxY = floor(bearingYf)
+            let fracX = bearingXf - pxX
+            let fracY = bearingYf - pxY
+
+            let canvasWidth = UInt32(ceil(boundingRect.width + fracX)) + 1
+            let canvasHeight = UInt32(ceil(boundingRect.height + fracY)) + 1
+
+            guard canvasWidth > 0, canvasHeight > 0 else {
+                DispatchQueue.main.async {
+                    self?.pendingRasterizationKeys.remove(key)
+                    completion()
+                }
+                return
+            }
+
+            let bytesPerRow = Int(canvasWidth)
+            var pixelData = [UInt8](repeating: 0, count: bytesPerRow * Int(canvasHeight))
+
+            guard let context = CGContext(
+                data: &pixelData,
+                width: Int(canvasWidth),
+                height: Int(canvasHeight),
+                bitsPerComponent: 8,
+                bytesPerRow: bytesPerRow,
+                space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.none.rawValue
+            ) else {
+                DispatchQueue.main.async {
+                    self?.pendingRasterizationKeys.remove(key)
+                    completion()
+                }
+                return
+            }
+
+            context.setAllowsFontSubpixelPositioning(true)
+            context.setShouldSubpixelPositionFonts(true)
+            context.setAllowsFontSubpixelQuantization(false)
+            context.setShouldSubpixelQuantizeFonts(false)
+            context.setAllowsAntialiasing(true)
+            context.setShouldAntialias(true)
+            context.setShouldSmoothFonts(false)
+
+            context.setFillColor(CGColor(gray: 1.0, alpha: 1.0))
+
+            context.textMatrix = .identity
+            let drawX = fracX - boundingRect.origin.x
+            let drawY = fracY - boundingRect.origin.y
+            var position = CGPoint(x: drawX, y: drawY)
+            CTFontDrawGlyphs(bgFont, &glyphCopy, &position, 1, context)
+
+            let bearingYFromTop = Int16(baselineF - pxY - CGFloat(canvasHeight))
+            let info = GlyphInfo(
+                atlasX: 0, atlasY: 0,
+                width: canvasWidth,
+                height: canvasHeight,
+                bearingX: Int16(pxX),
+                bearingY: bearingYFromTop
+            )
+
+            DispatchQueue.main.async {
+                guard let self, self.generation == currentGeneration else {
+                    completion()
+                    return
+                }
+
+                guard let region = self.reserveRegion(width: canvasWidth, height: canvasHeight) else {
+                    self.pendingRasterizationKeys.remove(key)
+                    completion()
+                    return
+                }
+
+                let mtlRegion = MTLRegion(
+                    origin: MTLOrigin(x: Int(region.x), y: Int(region.y), z: 0),
+                    size: MTLSize(width: Int(canvasWidth), height: Int(canvasHeight), depth: 1)
+                )
+                self.texture.replace(region: mtlRegion, mipmapLevel: 0,
+                                    withBytes: pixelData, bytesPerRow: bytesPerRow)
+
+                let finalInfo = GlyphInfo(
+                    atlasX: region.x,
+                    atlasY: region.y,
+                    width: info.width,
+                    height: info.height,
+                    bearingX: info.bearingX,
+                    bearingY: info.bearingY
+                )
+
+                self.cache[key] = GlyphEntry(info: finalInfo, lastUsedFrame: 0)
+                self.pendingRasterizationKeys.remove(key)
+                self.modified &+= 1
+                self.isDirty = true
+
+                completion()
+            }
+        }
+    }
+
     private func cacheKey(for glyph: CGGlyph, font: CTFont) -> GlyphCacheKey {
-        return GlyphCacheKey(fontID: ObjectIdentifier(font), glyph: glyph)
+        let name = CTFontCopyPostScriptName(font) as String
+        let size = CTFontGetSize(font)
+        return GlyphCacheKey(fontName: name, fontSize: size, glyph: glyph)
     }
 
     // MARK: - Private: Rasterization
@@ -198,6 +372,7 @@ final class GlyphAtlas {
         )
         texture.replace(region: mtlRegion, mipmapLevel: 0,
                         withBytes: pixelData, bytesPerRow: bytesPerRow)
+        modified &+= 1
         isDirty = true
 
         // bearingY in top-down coords: baseline - pxY - canvasHeight
@@ -276,6 +451,8 @@ final class GlyphAtlas {
 
         texture = newTexture
         textureSize = newSize
+        generation &+= 1
+        modified &+= 1
         isDirty = true
         return true
     }
@@ -314,36 +491,24 @@ final class GlyphAtlas {
         texture = Self.createTexture(device: device, size: newSize)
         textureSize = newSize
         cache.removeAll(keepingCapacity: true)
+        pendingRasterizationKeys.removeAll()
 
-        // Group entries by fontID and use fontSystem to resolve the font.
-        // Since ObjectIdentifier is used as the key, we need to map back to CTFont.
-        // We use the fontSystem's base font as a fallback; this is acceptable
-        // because compaction happens during normal operation where fonts are stable.
-        var entriesByFontID: [ObjectIdentifier: [(glyph: CGGlyph, entry: GlyphEntry)]] = [:]
+        // Group entries by font name/size and use fontSystem to resolve the font.
+        var entriesByFont: [(glyph: CGGlyph, name: String, size: CGFloat, entry: GlyphEntry)] = []
         for (key, entry) in activeEntries {
-            entriesByFontID[key.fontID, default: []].append((key.glyph, entry))
+            entriesByFont.append((key.glyph, key.fontName, key.fontSize, entry))
         }
 
-        for (fontID, entries) in entriesByFontID {
-            // Try to use the primary font from fontSystem; if the identifier matches,
-            // use it. Otherwise, we skip since we can't recreate the exact font.
-            let candidateFont = fontSystem.ctFont
-            let font: CTFont
-            if ObjectIdentifier(candidateFont) == fontID {
-                font = candidateFont
-            } else {
-                // Skip fonts that no longer match the current fontSystem
-                continue
-            }
-
-            for (glyph, entry) in entries {
-                if let info = rasterizeGlyph(glyph: glyph, font: font, fontSystem: fontSystem) {
-                    let newKey = GlyphCacheKey(fontID: fontID, glyph: glyph)
-                    cache[newKey] = GlyphEntry(info: info, lastUsedFrame: entry.lastUsedFrame)
-                }
+        for (glyph, name, size, entry) in entriesByFont {
+            let font = CTFontCreateWithName(name as CFString, size, nil)
+            if let info = rasterizeGlyph(glyph: glyph, font: font, fontSystem: fontSystem) {
+                let newKey = GlyphCacheKey(fontName: name, fontSize: size, glyph: glyph)
+                cache[newKey] = GlyphEntry(info: info, lastUsedFrame: entry.lastUsedFrame)
             }
         }
 
+        generation &+= 1
+        modified &+= 1
         isDirty = true
     }
 
@@ -376,4 +541,3 @@ final class GlyphAtlas {
         return texture
     }
 }
-

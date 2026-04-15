@@ -73,6 +73,10 @@ final class MetalRenderer {
     /// Accumulated dirty region across setContent() calls, consumed by render().
     private(set) var pendingDirtyRegion = DirtyRegion.full
 
+    /// Callback invoked when an asynchronous atlas rasterization completes.
+    /// MetalView uses this to wake the display link for a redraw.
+    var onAsyncAtlasUpdate: (() -> Void)?
+
     /// Currently highlighted URL for underline rendering (set by MetalView on Cmd+hover).
     var highlightedURL: DetectedURL? {
         didSet {
@@ -999,12 +1003,24 @@ final class MetalRenderer {
 
         for (run, glyphs) in cached.textRuns {
             for glyph in glyphs {
-                guard let glyphInfo = glyphAtlas.getOrRasterize(
-                    glyph: glyph.glyph,
-                    font: glyph.font,
-                    fontSystem: fontSystem,
-                    frameNumber: frameNumber
-                ), glyphInfo.width > 0 && glyphInfo.height > 0 else { continue }
+                let glyphInfo: GlyphInfo
+                if let info = glyphAtlas.get(glyph: glyph.glyph, font: glyph.font) {
+                    glyphInfo = info
+                } else {
+                    glyphAtlas.enqueueRasterization(
+                        glyph: glyph.glyph,
+                        font: glyph.font,
+                        fontSystem: fontSystem
+                    ) { [weak self] in
+                        guard let self else { return }
+                        self.pendingDirtyRegion.markFull()
+                        self.instanceRebuildCounter = max(self.instanceRebuildCounter, 1)
+                        self.onAsyncAtlasUpdate?()
+                    }
+                    continue
+                }
+
+                guard glyphInfo.width > 0 && glyphInfo.height > 0 else { continue }
 
                 let glyphCol = run.startCol + glyph.cellIndex
                 rowInstances.text.append(CellTextInstance(
@@ -1023,40 +1039,54 @@ final class MetalRenderer {
 
         for (col, cluster, width) in cached.emojis {
             guard col < snapCols else { continue }
-            if let emojiInfo = emojiAtlas.getOrRasterize(
-                cluster: cluster, fontSystem: fontSystem,
-                frameNumber: frameNumber
-            ), emojiInfo.width > 0 && emojiInfo.height > 0 {
-                var glyphSize = SIMD2<UInt32>(emojiInfo.width, emojiInfo.height)
-                var bearings = SIMD2<Int16>(emojiInfo.bearingX, emojiInfo.bearingY)
 
-                var targetCells: Int = 1
-                if width == .wide {
-                    targetCells = 2
-                } else if col + 1 < snapCols {
-                    let nextCell = backingCells[rowBase + col + 1]
-                    if nextCell.content.firstScalar == Unicode.Scalar(" ") || !nextCell.width.isRenderable {
-                        targetCells = 2
-                    }
+            let emojiInfo: EmojiGlyphInfo
+            if let info = emojiAtlas.get(cluster: cluster) {
+                emojiInfo = info
+            } else {
+                emojiAtlas.enqueueRasterization(
+                    cluster: cluster,
+                    fontSystem: fontSystem
+                ) { [weak self] in
+                    guard let self else { return }
+                    self.pendingDirtyRegion.markFull()
+                    self.instanceRebuildCounter = max(self.instanceRebuildCounter, 1)
+                    self.onAsyncAtlasUpdate?()
                 }
-
-                if targetCells > 1 {
-                    let targetWidth = cellWidth * Float(targetCells)
-                    let scale = targetWidth / Float(emojiInfo.width)
-                    glyphSize.x = UInt32(targetWidth)
-                    glyphSize.y = scaled(emojiInfo.height, by: scale)
-                    bearings.x = scaled(bearings.x, by: scale)
-                    bearings.y = scaled(bearings.y, by: scale)
-                }
-
-                rowInstances.emoji.append(CellTextInstance(
-                    glyphPos: SIMD2<UInt32>(emojiInfo.atlasX, emojiInfo.atlasY),
-                    glyphSize: glyphSize,
-                    bearings: bearings,
-                    gridPos: SIMD2<UInt16>(UInt16(col), UInt16(row)),
-                    color: .zero
-                ))
+                continue
             }
+
+            guard emojiInfo.width > 0 && emojiInfo.height > 0 else { continue }
+
+            var glyphSize = SIMD2<UInt32>(emojiInfo.width, emojiInfo.height)
+            var bearings = SIMD2<Int16>(emojiInfo.bearingX, emojiInfo.bearingY)
+
+            var targetCells: Int = 1
+            if width == .wide {
+                targetCells = 2
+            } else if col + 1 < snapCols {
+                let nextCell = backingCells[rowBase + col + 1]
+                if nextCell.content.firstScalar == Unicode.Scalar(" ") || !nextCell.width.isRenderable {
+                    targetCells = 2
+                }
+            }
+
+            if targetCells > 1 {
+                let targetWidth = cellWidth * Float(targetCells)
+                let scale = targetWidth / Float(emojiInfo.width)
+                glyphSize.x = UInt32(targetWidth)
+                glyphSize.y = scaled(emojiInfo.height, by: scale)
+                bearings.x = scaled(bearings.x, by: scale)
+                bearings.y = scaled(bearings.y, by: scale)
+            }
+
+            rowInstances.emoji.append(CellTextInstance(
+                glyphPos: SIMD2<UInt32>(emojiInfo.atlasX, emojiInfo.atlasY),
+                glyphSize: glyphSize,
+                bearings: bearings,
+                gridPos: SIMD2<UInt16>(UInt16(col), UInt16(row)),
+                color: .zero
+            ))
         }
 
         return rowInstances
