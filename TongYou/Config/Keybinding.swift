@@ -48,6 +48,7 @@ struct Keybinding: Equatable {
         case showSessionPicker
         case detachSession
         case renameSession
+        case runInPlace(command: String, arguments: [String])
         // Pass through to PTY (disables the keybinding)
         case unbind
 
@@ -89,6 +90,12 @@ struct Keybinding: Equatable {
             case .showSessionPicker: "show_session_picker"
             case .detachSession: "detach_session"
             case .renameSession: "rename_session"
+            case .runInPlace(let cmd, let args):
+                if args.isEmpty {
+                    "run_in_place:\(cmd)"
+                } else {
+                    "run_in_place:\(cmd):\(args.joined(separator: ","))"
+                }
             case .unbind: "unbind"
             }
         }
@@ -117,6 +124,7 @@ struct Keybinding: Equatable {
             case .showSessionPicker: .showSessionPicker
             case .detachSession: .detachSession
             case .renameSession: .renameSession
+            case .runInPlace(let cmd, let args): .runInPlace(command: cmd, arguments: args)
             case .copy, .paste, .search, .searchNext, .searchPrevious,
                  .resetFontSize, .increaseFontSize, .decreaseFontSize,
                  .unbind:
@@ -164,6 +172,19 @@ struct Keybinding: Equatable {
                    let n = Int(rawValue.dropFirst("goto_tab:".count)),
                    (1...9).contains(n) {
                     self = .gotoTab(n)
+                    return
+                }
+                if rawValue.hasPrefix("run_in_place:") {
+                    let rest = String(rawValue.dropFirst("run_in_place:".count))
+                    let parts = rest.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+                    let command = String(parts[0])
+                    let arguments: [String]
+                    if parts.count > 1 {
+                        arguments = parts[1].split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+                    } else {
+                        arguments = []
+                    }
+                    self = .runInPlace(command: command, arguments: arguments)
                     return
                 }
                 return nil
@@ -219,6 +240,8 @@ struct Keybinding: Equatable {
         // Floating pane management
         Keybinding(modifiers: .option, key: "f", action: .toggleOrCreateFloatingPane),
         Keybinding(modifiers: .option, key: "n", action: .newFloatingPane),
+        // In-place overlay
+        Keybinding(modifiers: .option, key: "m", action: .runInPlace(command: "lazygit", arguments: [])),
         // Remote session management
         Keybinding(modifiers: .command, key: "y", action: .listRemoteSessions),
         Keybinding(modifiers: [.command, .shift], key: "i", action: .newRemoteSession),

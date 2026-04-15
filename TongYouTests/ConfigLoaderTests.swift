@@ -134,6 +134,17 @@ struct ConfigTests {
         #expect(config.keybindings[1].action == .closeTab)
     }
 
+    @Test func keybindingRunInPlaceParsing() {
+        let entries: [ConfigParser.Entry] = [
+            .init(key: "keybind", value: "alt+m=run_in_place:lazygit"),
+            .init(key: "keybind", value: "alt+g=run_in_place:git:log,--oneline"),
+        ]
+        let config = Config.from(entries: entries)
+        #expect(config.keybindings.count == 2)
+        #expect(config.keybindings[0].action == .runInPlace(command: "lazygit", arguments: []))
+        #expect(config.keybindings[1].action == .runInPlace(command: "git", arguments: ["log", "--oneline"]))
+    }
+
     @Test func noKeybindsUsesDefaults() {
         let entries: [ConfigParser.Entry] = [
             .init(key: "font-size", value: "14"),
