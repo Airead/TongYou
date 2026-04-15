@@ -39,6 +39,7 @@ final class SessionManager {
 
     deinit {
         remoteClient?.disconnect()
+        SessionManagerRegistry.shared.unregister(self)
     }
 
     /// Controllers for remote panes, keyed by local pane UUID.
@@ -72,6 +73,19 @@ final class SessionManager {
         }
         self.localSessionStore = store
         sessionSortOrder = store.loadOrder()
+        SessionManagerRegistry.shared.register(self)
+    }
+
+    /// Looks up which session and tab own a given pane ID.
+    func metadata(for paneID: UUID) -> (sessionName: String, tabID: UUID, tabTitle: String)? {
+        for session in sessions {
+            for tab in session.tabs {
+                if tab.hasPane(id: paneID) {
+                    return (session.name, tab.id, tab.title)
+                }
+            }
+        }
+        return nil
     }
 
     /// Generate the next available name with a given prefix (e.g. "LSession 1", "LSession 2").
