@@ -10,6 +10,9 @@ final class MetalView: NSView {
     private var metalLayer: CAMetalLayer!
     private var device: MTLDevice!
     private(set) var renderer: MetalRenderer?
+    var currentResourceMetrics: ResourceMetrics {
+        renderer?.currentResourceMetrics ?? ResourceMetrics()
+    }
     private var fontSystem: FontSystem?
     private var terminalController: (any TerminalControlling)?
     // nonisolated(unsafe) because deinit must invalidate without actor hop

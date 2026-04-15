@@ -14,14 +14,13 @@ struct ResourceStatsView: View {
         let id: String
         let tabID: UUID
         let title: String
-        var displayTitle: String
+        var displayTitle: String = ""
         var panes: [PaneResourceSnapshot]
 
-        init(tabID: UUID, title: String, displayTitle: String, panes: [PaneResourceSnapshot]) {
+        init(tabID: UUID, title: String, panes: [PaneResourceSnapshot]) {
             self.tabID = tabID
             self.title = title
             self.id = tabID.uuidString
-            self.displayTitle = displayTitle
             self.panes = panes
         }
     }
@@ -40,34 +39,30 @@ struct ResourceStatsView: View {
 
     private var groupedSnapshots: [SessionGroup] {
         let views = MetalViewRegistry.shared.allViews
+        let metadataLookup = SessionManagerRegistry.shared.paneMetadataLookup
         var sessionMap: [String: SessionGroup] = [:]
 
         for view in views {
-            guard let paneID = view.paneID,
-                  let metrics = view.renderer?.currentResourceMetrics else {
-                continue
-            }
+            guard let paneID = view.paneID else { continue }
+            let metrics = view.currentResourceMetrics
             let snapshot = PaneResourceSnapshot(paneID: paneID, metrics: metrics)
 
-            let metadata = SessionManagerRegistry.shared.allManagers
-                .compactMap { $0.metadata(for: paneID) }
-                .first
-
+            let metadata = metadataLookup[paneID]
             let sessionName = metadata?.sessionName ?? "Unknown Session"
             let tabID = metadata?.tabID ?? UUID()
             let tabTitle = metadata?.tabTitle ?? "Unknown Tab"
 
-            if sessionMap[sessionName] != nil {
-                if let tabIndex = sessionMap[sessionName]!.tabs.firstIndex(where: { $0.tabID == tabID }) {
-                    sessionMap[sessionName]!.tabs[tabIndex].panes.append(snapshot)
+            if let session = sessionMap[sessionName] {
+                if let tabIndex = session.tabs.firstIndex(where: { $0.tabID == tabID }) {
+                    session.tabs[tabIndex].panes.append(snapshot)
                 } else {
-                    let index = sessionMap[sessionName]!.tabs.count + 1
-                    sessionMap[sessionName]!.tabs.append(TabGroup(tabID: tabID, title: tabTitle, displayTitle: "\(index). \(tabTitle)", panes: [snapshot]))
+                    session.tabs.append(TabGroup(tabID: tabID, title: tabTitle, panes: [snapshot]))
                 }
+                sessionMap[sessionName] = session
             } else {
                 sessionMap[sessionName] = SessionGroup(
                     name: sessionName,
-                    tabs: [TabGroup(tabID: tabID, title: tabTitle, displayTitle: "1. \(tabTitle)", panes: [snapshot])]
+                    tabs: [TabGroup(tabID: tabID, title: tabTitle, panes: [snapshot])]
                 )
             }
         }
@@ -84,7 +79,7 @@ struct ResourceStatsView: View {
     private var summary: (paneCount: Int, metalBytes: UInt64, rssBytes: UInt64, physFootprintBytes: UInt64) {
         let views = MetalViewRegistry.shared.allViews
         let paneCount = views.count
-        let metalBytes = views.compactMap { $0.renderer?.currentResourceMetrics.metalAllocatedSize }.reduce(0, +)
+        let metalBytes = views.first?.currentResourceMetrics.metalAllocatedSize ?? 0
         let rssBytes = ProcessMemoryInfo.currentRSS()
         let physFootprintBytes = ProcessMemoryInfo.currentPhysFootprint()
         return (paneCount, metalBytes, rssBytes, physFootprintBytes)
@@ -282,7 +277,6 @@ struct ResourceStatsView: View {
                 config = newConfig
             }
             configLoader.load()
-            config = configLoader.config
         }
         .onDisappear {
             isWindowActive = false

@@ -1143,16 +1143,18 @@ final class MetalRenderer {
     var currentResourceMetrics: ResourceMetrics {
         let frame = frameStates[frameIndex]
 
-        // Estimated buffer bytes (all frame states)
+        func bufferSize<T>(for type: T.Type, capacity: Int) -> UInt64 {
+            UInt64(MemoryLayout<T>.stride) * UInt64(capacity)
+        }
+
         let uniformSize = UInt64(MemoryLayout<Uniforms>.stride)
-        let bgSize = UInt64(MemoryLayout<CellBgInstance>.stride) * UInt64(frame.bgInstanceCapacity)
-        let underlineSize = UInt64(MemoryLayout<CellBgInstance>.stride) * UInt64(frame.underlineInstanceCapacity)
-        let textSize = UInt64(MemoryLayout<CellTextInstance>.stride) * UInt64(frame.textInstanceCapacity)
-        let emojiSize = UInt64(MemoryLayout<CellTextInstance>.stride) * UInt64(frame.emojiInstanceCapacity)
+        let bgSize = bufferSize(for: CellBgInstance.self, capacity: frame.bgInstanceCapacity)
+        let underlineSize = bufferSize(for: CellBgInstance.self, capacity: frame.underlineInstanceCapacity)
+        let textSize = bufferSize(for: CellTextInstance.self, capacity: frame.textInstanceCapacity)
+        let emojiSize = bufferSize(for: CellTextInstance.self, capacity: frame.emojiInstanceCapacity)
         let frameBufferBytes = uniformSize + bgSize + underlineSize + textSize + emojiSize
         let totalBufferBytes = frameBufferBytes * UInt64(Self.swapChainCount)
 
-        // Estimated atlas bytes
         let glyphAtlasBytes = UInt64(glyphAtlas.textureSize) * UInt64(glyphAtlas.textureSize)
         let emojiAtlasBytes = UInt64(emojiAtlas.textureSize) * UInt64(emojiAtlas.textureSize) * 4
 
@@ -1177,9 +1179,7 @@ final class MetalRenderer {
             gridRows: UInt32(gridSize.rows),
             metalAllocatedSize: UInt64(device.currentAllocatedSize),
             estimatedBufferBytes: totalBufferBytes,
-            estimatedAtlasBytes: glyphAtlasBytes + emojiAtlasBytes,
-            processRSSBytes: ProcessMemoryInfo.currentRSS(),
-            processPhysFootprintBytes: ProcessMemoryInfo.currentPhysFootprint()
+            estimatedAtlasBytes: glyphAtlasBytes + emojiAtlasBytes
         )
     }
 }

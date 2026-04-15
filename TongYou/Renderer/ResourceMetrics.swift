@@ -33,8 +33,6 @@ struct ResourceMetrics {
     var metalAllocatedSize: UInt64 = 0
     var estimatedBufferBytes: UInt64 = 0
     var estimatedAtlasBytes: UInt64 = 0
-    var processRSSBytes: UInt64 = 0
-    var processPhysFootprintBytes: UInt64 = 0
 }
 
 /// Snapshot of a single pane's resources.

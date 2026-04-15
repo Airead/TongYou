@@ -17,7 +17,7 @@ struct ResourceMetricsTests {
         let rss1 = ProcessMemoryInfo.currentRSS()
         let rss2 = ProcessMemoryInfo.currentRSS()
         // Allow small variance due to allocation activity during test execution.
-        let diff = rss1 > rss2 ? rss1 - rss2 : rss2 - rss1
+        let diff = UInt64(abs(Int64(rss1) - Int64(rss2)))
         #expect(diff < 10_000_000)
     }
 
@@ -96,6 +96,5 @@ struct ResourceMetricsTests {
         #expect(metrics.gridColumns == 0)
         #expect(metrics.gridRows == 0)
         #expect(metrics.metalAllocatedSize > 0)
-        #expect(metrics.processRSSBytes > 0)
     }
 }
