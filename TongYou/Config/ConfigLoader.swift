@@ -220,11 +220,19 @@ final class ConfigLoader {
 
     // MARK: - Private
 
-    private func loadFromDisk() -> (Config, existingPaths: [String]) {
+    /// Load configuration from explicit URLs (for testing).
+    func load(from paths: [URL]) {
+        let (newConfig, existingPaths) = loadFromDisk(paths: paths)
+        config = newConfig
+        setupWatchers(for: existingPaths, potentialDirs: paths)
+    }
+
+    private func loadFromDisk(paths: [URL]? = nil) -> (Config, existingPaths: [String]) {
+        let urls = paths ?? ConfigLoader.configFilePaths()
         var allEntries: [ConfigParser.Entry] = []
         var existingPaths: [String] = []
 
-        for url in Self.configFilePaths() {
+        for url in urls {
             do {
                 let entries = try parser.parse(contentsOf: url)
                 allEntries.append(contentsOf: entries)
@@ -240,7 +248,7 @@ final class ConfigLoader {
 
     // MARK: - Hot Reload
 
-    private func setupWatchers(for paths: [String]) {
+    private func setupWatchers(for paths: [String], potentialDirs: [URL]? = nil) {
         // Cancel existing watchers
         for watcher in watchers {
             watcher.cancel()
@@ -259,7 +267,8 @@ final class ConfigLoader {
         // Also watch the parent directories of all potential config paths
         // so we detect file creation.
         var watchedDirs: Set<String> = []
-        for url in Self.configFilePaths() {
+        let dirs = potentialDirs ?? ConfigLoader.configFilePaths()
+        for url in dirs {
             let dir = url.deletingLastPathComponent().path
             guard !watchedDirs.contains(dir) else { continue }
             watchedDirs.insert(dir)

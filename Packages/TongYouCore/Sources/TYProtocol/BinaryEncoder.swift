@@ -182,6 +182,7 @@ public struct BinaryEncoder: Sendable {
 
     /// Encode a `ScreenSnapshot` into the buffer.
     public mutating func writeScreenSnapshot(_ snapshot: ScreenSnapshot) {
+        assert(!snapshot.isPartial, "Cannot encode a partial snapshot as screenFull")
         // Pre-allocate: header (4B) + cells (16B each avg) + cursor (6B) + scrollback/viewport (8B).
         let cellBytes = snapshot.cells.count * 16
         data.reserveCapacity(data.count + 4 + cellBytes + 6 + 8)

@@ -98,6 +98,52 @@ import TYTerminal
         #expect(a.lineRange == 1..<8)
     }
 
+    @Test func dirtyRowsReturnsNonContiguousIndices() {
+        var region = DirtyRegion.clean
+        region.markLine(3)
+        region.markLine(7)
+        #expect(region.dirtyRows == [3, 7])
+    }
+
+    @Test func isDirtyRowMatchesBitset() {
+        var region = DirtyRegion(rowCount: 10, fullRebuild: false)
+        region.markLine(2)
+        region.markLine(5)
+        #expect(region.isDirty(row: 2))
+        #expect(region.isDirty(row: 5))
+        #expect(!region.isDirty(row: 3))
+        #expect(!region.isDirty(row: 9))
+        #expect(!region.isDirty(row: -1))
+    }
+
+    @Test func isDirtyRowAfterMarkRange() {
+        var region = DirtyRegion(rowCount: 10, fullRebuild: false)
+        region.markRange(1..<4)
+        #expect(region.isDirty(row: 1))
+        #expect(region.isDirty(row: 2))
+        #expect(region.isDirty(row: 3))
+        #expect(!region.isDirty(row: 0))
+        #expect(!region.isDirty(row: 4))
+        #expect(!region.isDirty(row: 5))
+    }
+
+    @Test func fullRebuildMarksAllRowsDirty() {
+        let region = DirtyRegion.full
+        #expect(region.isDirty(row: 0))
+        #expect(region.isDirty(row: 100))
+        #expect(region.dirtyRows.isEmpty)
+    }
+
+    @Test func mergeTwoDisjointRegionsPreservesAllDirtyRows() {
+        var a = DirtyRegion(rowCount: 10, fullRebuild: false)
+        a.markLine(2)
+        var b = DirtyRegion(rowCount: 10, fullRebuild: false)
+        b.markLine(5)
+        a.merge(b)
+        #expect(a.dirtyRows == [2, 5])
+        #expect(a.lineRange == 2..<6)
+    }
+
     // MARK: - Screen dirty tracking tests
 
     @Test func initialScreenIsFull() {
@@ -165,18 +211,20 @@ import TYTerminal
         #expect(screen.dirtyRegion.fullRebuild)
     }
 
-    @Test func scrollUpMarksFull() {
+    @Test func scrollUpMarksAllRows() {
         let screen = Screen(columns: 80, rows: 24)
         _ = screen.consumeDirtyRegion()
         screen.scrollUp(count: 1)
-        #expect(screen.dirtyRegion.fullRebuild)
+        #expect(!screen.dirtyRegion.fullRebuild)
+        #expect(screen.dirtyRegion.lineRange == 0..<24)
     }
 
-    @Test func scrollDownMarksFull() {
+    @Test func scrollDownMarksAllRows() {
         let screen = Screen(columns: 80, rows: 24)
         _ = screen.consumeDirtyRegion()
         screen.scrollDown(count: 1)
-        #expect(screen.dirtyRegion.fullRebuild)
+        #expect(!screen.dirtyRegion.fullRebuild)
+        #expect(screen.dirtyRegion.lineRange == 0..<24)
     }
 
     @Test func resizeMarksFull() {
@@ -271,13 +319,14 @@ import TYTerminal
         #expect(screen.dirtyRegion.lineRange == 5..<7)
     }
 
-    @Test func lineFeedAtBottomMarksFull() {
+    @Test func lineFeedAtBottomMarksAllRows() {
         let screen = Screen(columns: 80, rows: 24)
         screen.setCursorPos(row: 23, col: 0)
         _ = screen.consumeDirtyRegion()
         screen.lineFeed()
-        // At scroll bottom, triggers scrollRegionUp → fullRebuild
-        #expect(screen.dirtyRegion.fullRebuild)
+        // At scroll bottom, triggers scrollRegionUp → marks all rows dirty
+        #expect(!screen.dirtyRegion.fullRebuild)
+        #expect(screen.dirtyRegion.lineRange == 0..<24)
     }
 
     @Test func setCursorVisibleMarksCursorRow() {

@@ -164,7 +164,15 @@ extension ScreenDiff {
         let rows: [UInt16]
         let cells: [Cell]
 
-        if let range = snapshot.dirtyRegion.lineRange {
+        if snapshot.isPartial {
+            rows = snapshot.partialRows.map { UInt16($0.row) }
+            var buf: [Cell] = []
+            buf.reserveCapacity(rows.count * snapshot.columns)
+            for (_, rowCells) in snapshot.partialRows {
+                buf.append(contentsOf: rowCells)
+            }
+            cells = buf
+        } else if let range = snapshot.dirtyRegion.lineRange {
             let lower = max(0, range.lowerBound)
             let upper = min(snapshot.rows, range.upperBound)
             rows = (lower..<upper).map { UInt16($0) }

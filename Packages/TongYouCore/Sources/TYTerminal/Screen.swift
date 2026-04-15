@@ -1,45 +1,50 @@
 import simd
 
 /// Tracks which rows changed since the last snapshot, enabling partial buffer updates.
+/// Supports non-contiguous dirty rows via a per-row bitset, aligned with Ghostty's model.
 public struct DirtyRegion: Equatable, Sendable {
-    /// Range of dirty rows (nil = all clean).
-    public var lineRange: Range<Int>?
     /// When true, the renderer must rebuild all instances (scroll, resize, etc.).
     public var fullRebuild: Bool
+    private var lineBits: [Bool]
+    /// O(1) flag tracking whether any element in lineBits is true.
+    private var anyLineDirty: Bool
 
-    public init(lineRange: Range<Int>? = nil, fullRebuild: Bool = false) {
-        self.lineRange = lineRange
+    public init(rowCount: Int = 0, fullRebuild: Bool = false) {
         self.fullRebuild = fullRebuild
+        self.lineBits = [Bool](repeating: false, count: rowCount)
+        self.anyLineDirty = false
     }
 
-    public static let clean = DirtyRegion(lineRange: nil, fullRebuild: false)
-    public static let full = DirtyRegion(lineRange: nil, fullRebuild: true)
+    public static let clean = DirtyRegion(rowCount: 0, fullRebuild: false)
+    public static let full = DirtyRegion(rowCount: 0, fullRebuild: true)
 
     /// Mark a single row as dirty.
     public mutating func markLine(_ row: Int) {
-        if fullRebuild { return }
-        if let existing = lineRange {
-            lineRange = min(existing.lowerBound, row)..<max(existing.upperBound, row + 1)
-        } else {
-            lineRange = row..<(row + 1)
+        guard !fullRebuild, row >= 0 else { return }
+        if row >= lineBits.count {
+            lineBits.append(contentsOf: [Bool](repeating: false, count: row - lineBits.count + 1))
         }
+        lineBits[row] = true
+        anyLineDirty = true
     }
 
     /// Mark a contiguous range of rows as dirty.
     public mutating func markRange(_ range: Range<Int>) {
         guard !range.isEmpty else { return }
-        if fullRebuild { return }
-        if let existing = lineRange {
-            lineRange = min(existing.lowerBound, range.lowerBound)..<max(existing.upperBound, range.upperBound)
-        } else {
-            lineRange = range
+        guard !fullRebuild else { return }
+        let maxRow = range.upperBound - 1
+        if maxRow >= lineBits.count {
+            lineBits.append(contentsOf: [Bool](repeating: false, count: maxRow - lineBits.count + 1))
         }
+        for i in range { lineBits[i] = true }
+        anyLineDirty = true
     }
 
     /// Mark full rebuild required.
     public mutating func markFull() {
         fullRebuild = true
-        lineRange = nil
+        lineBits.removeAll()
+        anyLineDirty = false
     }
 
     /// Merge another dirty region into this one.
@@ -48,14 +53,34 @@ public struct DirtyRegion: Equatable, Sendable {
             markFull()
             return
         }
-        if let otherRange = other.lineRange {
-            markRange(otherRange)
+        for (i, dirty) in other.lineBits.enumerated() where dirty {
+            markLine(i)
         }
     }
 
     /// Whether any rows are dirty or a full rebuild is needed.
     public var isDirty: Bool {
-        fullRebuild || lineRange != nil
+        fullRebuild || anyLineDirty
+    }
+
+    /// Backing compatibility: returns the merged contiguous range covering all dirty rows.
+    public var lineRange: Range<Int>? {
+        guard !fullRebuild else { return nil }
+        let indices = lineBits.enumerated().compactMap { $1 ? $0 : nil }
+        guard let first = indices.first, let last = indices.last else { return nil }
+        return first..<(last + 1)
+    }
+
+    /// All dirty row indices (non-contiguous support).
+    public var dirtyRows: [Int] {
+        guard !fullRebuild else { return [] }
+        return lineBits.enumerated().compactMap { $1 ? $0 : nil }
+    }
+
+    /// Check whether a specific row is dirty.
+    public func isDirty(row: Int) -> Bool {
+        guard !fullRebuild else { return true }
+        return row >= 0 && row < lineBits.count && lineBits[row]
     }
 }
 
@@ -86,6 +111,7 @@ public struct LineFlags: Equatable, Sendable {
 
 /// Immutable snapshot of screen state for cross-thread transfer to the renderer.
 public struct ScreenSnapshot: Sendable {
+    /// Full grid cells. Empty when `isPartial == true`.
     public let cells: [Cell]
     public let columns: Int
     public let rows: Int
@@ -102,6 +128,12 @@ public struct ScreenSnapshot: Sendable {
     public let viewportOffset: Int
     /// Dirty region since the previous snapshot.
     public let dirtyRegion: DirtyRegion
+    /// When true, only `partialRows` contain updated rows.
+    public let isPartial: Bool
+    /// Dirty row indices included in `partialRows`.
+    public let dirtyRows: [Int]
+    /// Only dirty rows copied for incremental updates.
+    public let partialRows: [(row: Int, cells: [Cell])]
 
     public init(
         cells: [Cell],
@@ -114,7 +146,10 @@ public struct ScreenSnapshot: Sendable {
         selection: Selection?,
         scrollbackCount: Int,
         viewportOffset: Int,
-        dirtyRegion: DirtyRegion
+        dirtyRegion: DirtyRegion,
+        isPartial: Bool = false,
+        dirtyRows: [Int] = [],
+        partialRows: [(row: Int, cells: [Cell])] = []
     ) {
         self.cells = cells
         self.columns = columns
@@ -127,10 +162,16 @@ public struct ScreenSnapshot: Sendable {
         self.scrollbackCount = scrollbackCount
         self.viewportOffset = viewportOffset
         self.dirtyRegion = dirtyRegion
+        self.isPartial = isPartial
+        self.dirtyRows = dirtyRows
+        self.partialRows = partialRows
     }
 
     public func cell(at col: Int, row: Int) -> Cell {
-        cells[row * columns + col]
+        if isPartial {
+            fatalError("Partial snapshot does not support random cell access; use renderer backing store.")
+        }
+        return cells[row * columns + col]
     }
 
     /// Convert a viewport row to an absolute line number.
@@ -141,6 +182,9 @@ public struct ScreenSnapshot: Sendable {
     /// Extract text from a selection over viewport-relative coordinates.
     /// Handles wide-char continuation cells and trailing-space trimming.
     public func extractText(from sel: Selection) -> String {
+        if isPartial {
+            fatalError("Partial snapshot does not support text extraction; use Screen.extractText directly.")
+        }
         let (s, e) = sel.ordered
         var result = ""
 
@@ -201,7 +245,7 @@ public final class Screen {
 
     /// Tracks which rows changed since the last snapshot.
     /// Initialized to fullRebuild so the first frame renders everything.
-    public private(set) var dirtyRegion = DirtyRegion.full
+    public private(set) var dirtyRegion = DirtyRegion(rowCount: 0, fullRebuild: true)
 
     private var cells: [Cell]
 
@@ -254,6 +298,7 @@ public final class Screen {
         self.cells = [Cell](repeating: .empty, count: self.columns * self.rows)
         self.lineFlags = [LineFlags](repeating: LineFlags(), count: self.rows)
         self.scrollBottom = self.rows - 1
+        self.dirtyRegion = DirtyRegion(rowCount: self.rows, fullRebuild: true)
     }
 
     // MARK: - Ring Buffer Helpers
@@ -330,18 +375,56 @@ public final class Screen {
     /// Return the current dirty region and reset it to clean.
     public func consumeDirtyRegion() -> DirtyRegion {
         let region = dirtyRegion
-        dirtyRegion = .clean
+        dirtyRegion = DirtyRegion(rowCount: rows, fullRebuild: false)
         return region
     }
 
-    public func snapshot(selection: Selection? = nil) -> ScreenSnapshot {
+    public func snapshot(selection: Selection? = nil, allowPartial: Bool = false) -> ScreenSnapshot {
+        let region = consumeDirtyRegion()
+
+        let canBePartial = allowPartial
+            && !region.fullRebuild
+            && region.isDirty
+            && viewportOffset == 0
+
+        if canBePartial {
+            let dirty = region.dirtyRows
+            var partialRows: [(row: Int, cells: [Cell])] = []
+            partialRows.reserveCapacity(dirty.count)
+            for row in dirty {
+                guard row >= 0 && row < rows else { continue }
+                let base = rowStart(row)
+                var rowCells: [Cell] = []
+                rowCells.reserveCapacity(columns)
+                for i in base..<(base + columns) {
+                    rowCells.append(cells[i])
+                }
+                partialRows.append((row: row, cells: rowCells))
+            }
+            return ScreenSnapshot(
+                cells: [],
+                columns: columns,
+                rows: rows,
+                cursorCol: cursorCol,
+                cursorRow: cursorRow,
+                cursorVisible: viewportOffset == 0 && cursorVisible,
+                cursorShape: cursorShape,
+                selection: selection,
+                scrollbackCount: scrollbackCount,
+                viewportOffset: viewportOffset,
+                dirtyRegion: region,
+                isPartial: true,
+                dirtyRows: dirty,
+                partialRows: partialRows
+            )
+        }
+
         let viewCells: [Cell]
         if viewportOffset == 0 {
             viewCells = buildLinearCells()
         } else {
             viewCells = buildViewportCells()
         }
-        let region = consumeDirtyRegion()
         return ScreenSnapshot(
             cells: viewCells,
             columns: columns,
@@ -748,7 +831,7 @@ public final class Screen {
             }
         }
         clearRows((scrollBottom - n + 1)..<(scrollBottom + 1))
-        dirtyRegion.markFull()
+        dirtyRegion.markRange(scrollTop..<(scrollBottom + 1))
     }
 
     /// Scroll down by `count` lines within the scroll region.
@@ -764,7 +847,7 @@ public final class Screen {
             }
         }
         clearRows(scrollTop..<(scrollTop + n))
-        dirtyRegion.markFull()
+        dirtyRegion.markRange(scrollTop..<(scrollBottom + 1))
     }
 
     /// Set scroll region (DECSTBM). Values are 0-based inclusive.
@@ -1566,7 +1649,7 @@ public final class Screen {
             }
             clearRows(scrollBottom..<(scrollBottom + 1))
         }
-        dirtyRegion.markFull()
+        dirtyRegion.markRange(scrollTop..<(scrollBottom + 1))
     }
 
     /// Scroll one line down within the scroll region.
@@ -1585,7 +1668,7 @@ public final class Screen {
             }
             clearRows(scrollTop..<(scrollTop + 1))
         }
-        dirtyRegion.markFull()
+        dirtyRegion.markRange(scrollTop..<(scrollBottom + 1))
     }
 
     /// Move cursor row, marking both old and new rows dirty if changed.

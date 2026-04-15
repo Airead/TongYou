@@ -35,19 +35,16 @@ public struct URLDetector: Sendable {
 
     private static let trailingPunctuation = CharacterSet(charactersIn: ".,;:!?)>]}")
 
-    /// Detect all URLs in the given snapshot's visible area.
-    public static func detect(in snapshot: ScreenSnapshot) -> [DetectedURL] {
+    /// Detect all URLs using a cell provider closure.
+    public static func detect(rows: Int, cols: Int, cellAt: (Int, Int) -> Cell) -> [DetectedURL] {
         var results: [DetectedURL] = []
-        let cols = snapshot.columns
-        let rows = snapshot.rows
 
         for row in 0..<rows {
-            let rowBase = row * cols
             // Build a string for this row
             var lineChars: [Character] = []
             lineChars.reserveCapacity(cols)
             for col in 0..<cols {
-                lineChars.append(Character(snapshot.cells[rowBase + col].codepoint))
+                lineChars.append(Character(cellAt(row, col).codepoint))
             }
             let line = String(lineChars)
 
@@ -71,6 +68,13 @@ public struct URLDetector: Sendable {
         }
 
         return results
+    }
+
+    /// Detect all URLs in the given snapshot's visible area.
+    /// Returns empty array for partial snapshots because `cells` is unavailable.
+    public static func detect(in snapshot: ScreenSnapshot) -> [DetectedURL] {
+        guard !snapshot.isPartial else { return [] }
+        return detect(rows: snapshot.rows, cols: snapshot.columns) { snapshot.cell(at: $1, row: $0) }
     }
 
     /// Find the URL at a specific viewport position, if any.

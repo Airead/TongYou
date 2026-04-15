@@ -687,6 +687,9 @@ final class MetalView: NSView {
             )
             fontSystem = fs
             renderer = MetalRenderer(device: device, fontSystem: fs, config: config)
+            renderer?.onAsyncAtlasUpdate = { [weak self] in
+                self?.wakeDisplayLink()
+            }
 
             configLoader.onConfigChanged = { [weak self] newConfig in
                 self?.applyConfigChange(newConfig)
@@ -941,6 +944,8 @@ final class MetalView: NSView {
         configureController(controller)
         wireDisplayCallbacks(controller)
         terminalController = controller
+        renderer?.markDirty()
+        lastRenderedContentGeneration = 0
         wakeDisplayLink()
     }
 

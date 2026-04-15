@@ -56,8 +56,26 @@ final class MetalRenderer {
 
     private(set) var currentSnapshot: ScreenSnapshot?
 
+    /// Backing store for the full grid, merged from partial snapshots.
+    private var backingCells: [Cell] = []
+    private var backingColumns: Int = 0
+    private var backingRows: Int = 0
+
+    /// CPU-side staging buffer for per-row text/emoji instances.
+    private struct RowTextInstances {
+        var text: [CellTextInstance] = []
+        var emoji: [CellTextInstance] = []
+    }
+
+    private var stagedRowInstances: [RowTextInstances] = []
+    private var shapedRowCache = ShapedRowCache()
+
     /// Accumulated dirty region across setContent() calls, consumed by render().
     private(set) var pendingDirtyRegion = DirtyRegion.full
+
+    /// Callback invoked when an asynchronous atlas rasterization completes.
+    /// MetalView uses this to wake the display link for a redraw.
+    var onAsyncAtlasUpdate: (() -> Void)?
 
     /// Currently highlighted URL for underline rendering (set by MetalView on Cmd+hover).
     var highlightedURL: DetectedURL? {
@@ -380,10 +398,17 @@ final class MetalRenderer {
 
     func resize(screen: ScreenSize) {
         guard screen != screenSize else { return }
+        let oldGrid = gridSize
         screenSize = screen
         gridSize = GridSize.calculate(screen: screen, cell: fontSystem.cellSize)
         padding = Padding.balanced(screen: screen, grid: gridSize, cell: fontSystem.cellSize)
         shrinkBuffersIfNeeded()
+        if oldGrid != gridSize {
+            backingCells.removeAll()
+            backingColumns = 0
+            backingRows = 0
+            stagedRowInstances.removeAll()
+        }
         pendingDirtyRegion.markFull()
         markAllFramesDirty()
         uniformsDirtyCounter = Self.swapChainCount
@@ -397,6 +422,24 @@ final class MetalRenderer {
         if selectionChanged {
             pendingDirtyRegion.markFull()
         }
+
+        if snapshot.isPartial {
+            assert(snapshot.columns == backingColumns && snapshot.rows == backingRows,
+                   "Partial snapshot size mismatch: expected \(backingColumns)x\(backingRows), got \(snapshot.columns)x\(snapshot.rows)")
+            for (row, cells) in snapshot.partialRows {
+                let dst = row * backingColumns
+                backingCells.replaceSubrange(dst..<(dst + backingColumns), with: cells)
+            }
+            let copiedCount = snapshot.partialRows.map { $0.cells.count }.reduce(0, +)
+            frameMetrics?.recordSnapshotCellCopyCount(copiedCount)
+        } else {
+            backingCells = snapshot.cells
+            backingColumns = snapshot.columns
+            backingRows = snapshot.rows
+            stagedRowInstances.removeAll()
+            frameMetrics?.recordSnapshotCellCopyCount(snapshot.cells.count)
+        }
+
         markAllFramesDirty()
     }
 
@@ -621,21 +664,8 @@ final class MetalRenderer {
         let ptr = frame.pointee.bgInstanceBuffer.contents()
             .bindMemory(to: CellBgInstance.self, capacity: count)
 
-        // Determine which rows to rebuild
-        let rowStart: Int
-        let rowEnd: Int
-        if dirtyRegion.fullRebuild {
-            rowStart = 0
-            rowEnd = rows
-        } else if let range = dirtyRegion.lineRange {
-            rowStart = max(0, range.lowerBound)
-            rowEnd = min(rows, range.upperBound)
-        } else {
-            return // nothing dirty
-        }
-
-        let snapRows = snapshot.map { min(rows, $0.rows) } ?? 0
-        let snapCols = snapshot.map { min(cols, $0.columns) } ?? 0
+        let snapRows = min(rows, backingRows)
+        let snapCols = min(cols, backingColumns)
         let defaultBg = colorPalette.defaultBg
         let palette = colorPalette
 
@@ -661,17 +691,18 @@ final class MetalRenderer {
         let searchMatchBg = SIMD4<UInt8>(180, 150, 40, 255)
         let searchFocusBg = SIMD4<UInt8>(220, 120, 20, 255)
 
-        for row in rowStart..<rowEnd {
+        for row in 0..<rows {
+            if !dirtyRegion.fullRebuild && !dirtyRegion.isDirty(row: row) { continue }
             var idx = row * cols
             let absLine = snapshot?.absoluteLine(forViewportRow: row)
                 ?? row
 
             let lineMatches = searchLineMap[absLine]
 
-            if row < snapRows, let snapshot {
-                let rowBase = row * snapshot.columns
+            if row < snapRows {
+                let rowBase = row * backingColumns
                 for col in 0..<snapCols {
-                    let attrs = snapshot.cells[rowBase + col].attributes
+                    let attrs = backingCells[rowBase + col].attributes
                     var (fg, bg) = palette.resolveDisplay(attrs)
 
                     if let b = selBounds, Selection.contains(ordered: b, line: absLine, col: col) {
@@ -762,8 +793,8 @@ final class MetalRenderer {
             .bindMemory(to: CellBgInstance.self, capacity: count)
 
         let fg: SIMD4<UInt8>
-        if let snapshot, url.row < snapshot.rows, clampedStart < snapshot.columns {
-            let attrs = snapshot.cells[url.row * snapshot.columns + clampedStart].attributes
+        if url.row < backingRows, clampedStart < backingColumns {
+            let attrs = backingCells[url.row * backingColumns + clampedStart].attributes
             fg = colorPalette.resolveDisplay(attrs).fg
         } else {
             fg = colorPalette.defaultFg
@@ -837,10 +868,10 @@ final class MetalRenderer {
 
     /// Build text runs for a single row. Runs are sequences of consecutive
     /// renderable, non-space cells with identical attributes.
-    func buildRuns(forRow row: Int, snapshot: ScreenSnapshot) -> [TextRun] {
+    func buildRuns(forRow row: Int) -> [TextRun] {
         var runs: [TextRun] = []
-        let rowBase = row * snapshot.columns
-        let cols = snapshot.columns
+        let rowBase = row * backingColumns
+        let cols = backingColumns
 
         var currentStart: Int? = nil
         var currentCells: [Cell] = []
@@ -863,7 +894,7 @@ final class MetalRenderer {
         }
 
         for col in 0..<cols {
-            let cell = snapshot.cells[rowBase + col]
+            let cell = backingCells[rowBase + col]
             guard cell.width.isRenderable else {
                 flushCurrentRun()
                 continue
@@ -897,47 +928,168 @@ final class MetalRenderer {
         return runs
     }
 
-    /// Flush a text segment into the text instance buffer.
-    /// Returns the updated textIdx.
-    private func flushTextSegment(
-        run: TextRun,
+    /// Build shaped runs for a single row, utilizing the row-level cache.
+    private func shapeRow(row: Int, shaper: CoreTextShaper) -> CachedShapedRow {
+        let rowBase = row * backingColumns
+        let snapCols = backingColumns
+        let rowSlice = backingCells[rowBase..<(rowBase + snapCols)]
+
+        if let cached = shapedRowCache.get(cells: rowSlice) {
+            return cached
+        }
+
+        let runs = buildRuns(forRow: row)
+        var cachedTextRuns: [(run: TextRun, glyphs: [ShapedGlyph])] = []
+        var cachedEmojis: [(col: Int, cluster: GraphemeCluster, width: CellWidth)] = []
+
+        for run in runs {
+            var textSegmentStart: Int? = nil
+
+            for (offset, cell) in run.cells.enumerated() {
+                let col = run.startCol + offset
+                let isEmoji = cell.content.isEmojiContent
+
+                if isEmoji {
+                    if let start = textSegmentStart {
+                        let end = offset
+                        let textRun = TextRun(
+                            cells: Array(run.cells[start..<end]),
+                            startCol: run.startCol + start,
+                            font: run.font,
+                            attributes: run.attributes
+                        )
+                        cachedTextRuns.append((textRun, shaper.shape(textRun)))
+                        textSegmentStart = nil
+                    }
+                    cachedEmojis.append((col, cell.content, cell.width))
+                } else {
+                    if textSegmentStart == nil {
+                        textSegmentStart = offset
+                    }
+                }
+            }
+
+            if let start = textSegmentStart {
+                let textRun = TextRun(
+                    cells: Array(run.cells[start..<run.cells.count]),
+                    startCol: run.startCol + start,
+                    font: run.font,
+                    attributes: run.attributes
+                )
+                cachedTextRuns.append((textRun, shaper.shape(textRun)))
+            }
+        }
+
+        let cached = CachedShapedRow(textRuns: cachedTextRuns, emojis: cachedEmojis)
+        shapedRowCache.set(cells: rowSlice, value: cached)
+        return cached
+    }
+
+    /// Rebuild text/emoji instances for a single row.
+    private func rebuildTextRow(
         row: Int,
-        absLine: Int,
-        textPtr: UnsafeMutablePointer<CellTextInstance>,
-        textIdx: Int,
+        cols: Int,
+        snapshot: ScreenSnapshot,
         colorState: TextColorState,
         shaper: CoreTextShaper,
         cellWidth: Float
-    ) -> Int {
-        guard !run.cells.isEmpty else { return textIdx }
+    ) -> RowTextInstances {
+        var rowInstances = RowTextInstances()
+        let absLine = snapshot.absoluteLine(forViewportRow: row)
+        let rowBase = row * backingColumns
+        let snapCols = min(cols, backingColumns)
 
-        let shapedGlyphs = shaper.shape(run)
-        var idx = textIdx
+        let cached = shapeRow(row: row, shaper: shaper)
 
-        for glyph in shapedGlyphs {
-            guard let glyphInfo = glyphAtlas.getOrRasterize(
-                glyph: glyph.glyph,
-                font: glyph.font,
-                fontSystem: fontSystem,
-                frameNumber: frameNumber
-            ), glyphInfo.width > 0 && glyphInfo.height > 0 else { continue }
+        for (run, glyphs) in cached.textRuns {
+            for glyph in glyphs {
+                let glyphInfo: GlyphInfo
+                if let info = glyphAtlas.get(glyph: glyph.glyph, font: glyph.font) {
+                    glyphInfo = info
+                } else {
+                    glyphAtlas.enqueueRasterization(
+                        glyph: glyph.glyph,
+                        font: glyph.font,
+                        fontSystem: fontSystem
+                    ) { [weak self] in
+                        guard let self else { return }
+                        self.pendingDirtyRegion.markFull()
+                        self.instanceRebuildCounter = max(self.instanceRebuildCounter, 1)
+                        self.onAsyncAtlasUpdate?()
+                    }
+                    continue
+                }
 
-            let glyphCol = run.startCol + glyph.cellIndex
-            textPtr[idx] = CellTextInstance(
-                glyphPos: SIMD2<UInt32>(glyphInfo.atlasX, glyphInfo.atlasY),
-                glyphSize: SIMD2<UInt32>(glyphInfo.width, glyphInfo.height),
-                bearings: SIMD2<Int16>(glyphInfo.bearingX, glyphInfo.bearingY),
-                gridPos: SIMD2<UInt16>(UInt16(glyphCol), UInt16(row)),
-                color: colorState.foreground(
-                    attrs: run.cells[glyph.cellIndex].attributes,
-                    row: row, col: glyphCol, absLine: absLine
-                ),
-                offset: SIMD2<Int16>(Int16(glyph.position.x - CGFloat(glyph.cellIndex) * CGFloat(cellWidth)), 0)
-            )
-            idx += 1
+                guard glyphInfo.width > 0 && glyphInfo.height > 0 else { continue }
+
+                let glyphCol = run.startCol + glyph.cellIndex
+                rowInstances.text.append(CellTextInstance(
+                    glyphPos: SIMD2<UInt32>(glyphInfo.atlasX, glyphInfo.atlasY),
+                    glyphSize: SIMD2<UInt32>(glyphInfo.width, glyphInfo.height),
+                    bearings: SIMD2<Int16>(glyphInfo.bearingX, glyphInfo.bearingY),
+                    gridPos: SIMD2<UInt16>(UInt16(glyphCol), UInt16(row)),
+                    color: colorState.foreground(
+                        attrs: run.cells[glyph.cellIndex].attributes,
+                        row: row, col: glyphCol, absLine: absLine
+                    ),
+                    offset: SIMD2<Int16>(Int16(glyph.position.x - CGFloat(glyph.cellIndex) * CGFloat(cellWidth)), 0)
+                ))
+            }
         }
 
-        return idx
+        for (col, cluster, width) in cached.emojis {
+            guard col < snapCols else { continue }
+
+            let emojiInfo: EmojiGlyphInfo
+            if let info = emojiAtlas.get(cluster: cluster) {
+                emojiInfo = info
+            } else {
+                emojiAtlas.enqueueRasterization(
+                    cluster: cluster,
+                    fontSystem: fontSystem
+                ) { [weak self] in
+                    guard let self else { return }
+                    self.pendingDirtyRegion.markFull()
+                    self.instanceRebuildCounter = max(self.instanceRebuildCounter, 1)
+                    self.onAsyncAtlasUpdate?()
+                }
+                continue
+            }
+
+            guard emojiInfo.width > 0 && emojiInfo.height > 0 else { continue }
+
+            var glyphSize = SIMD2<UInt32>(emojiInfo.width, emojiInfo.height)
+            var bearings = SIMD2<Int16>(emojiInfo.bearingX, emojiInfo.bearingY)
+
+            var targetCells: Int = 1
+            if width == .wide {
+                targetCells = 2
+            } else if col + 1 < snapCols {
+                let nextCell = backingCells[rowBase + col + 1]
+                if nextCell.content.firstScalar == Unicode.Scalar(" ") || !nextCell.width.isRenderable {
+                    targetCells = 2
+                }
+            }
+
+            if targetCells > 1 {
+                let targetWidth = cellWidth * Float(targetCells)
+                let scale = targetWidth / Float(emojiInfo.width)
+                glyphSize.x = UInt32(targetWidth)
+                glyphSize.y = scaled(emojiInfo.height, by: scale)
+                bearings.x = scaled(bearings.x, by: scale)
+                bearings.y = scaled(bearings.y, by: scale)
+            }
+
+            rowInstances.emoji.append(CellTextInstance(
+                glyphPos: SIMD2<UInt32>(emojiInfo.atlasX, emojiInfo.atlasY),
+                glyphSize: glyphSize,
+                bearings: bearings,
+                gridPos: SIMD2<UInt16>(UInt16(col), UInt16(row)),
+                color: .zero
+            ))
+        }
+
+        return rowInstances
     }
 
 
@@ -949,175 +1101,115 @@ final class MetalRenderer {
     ) {
         let cols = Int(grid.columns)
         let rows = Int(grid.rows)
-        let count = cols * rows
 
         guard let snapshot else {
             frame.pointee.textInstanceCount = 0
             frame.pointee.emojiInstanceCount = 0
+            stagedRowInstances.removeAll()
             return
         }
 
         // Fast path: content unchanged (e.g. cursor blink only) — patch colors in-place.
-        if !contentChanged, !dirtyRegion.fullRebuild, let range = dirtyRegion.lineRange,
+        if !contentChanged, !dirtyRegion.fullRebuild,
            frame.pointee.textInstanceCount > 0 {
             patchTextInstanceColors(
-                frame: frame, snapshot: snapshot, dirtyRowRange: range,
+                frame: frame, snapshot: snapshot, dirtyRegion: dirtyRegion,
                 searchLineMap: searchLineMap)
             return
         }
 
-        // Full rebuild path
-        ensureBufferCapacity(
-            buffer: &frame.pointee.textInstanceBuffer,
-            capacity: &frame.pointee.textInstanceCapacity,
-            requiredCount: count, type: CellTextInstance.self
-        )
-        ensureBufferCapacity(
-            buffer: &frame.pointee.emojiInstanceBuffer,
-            capacity: &frame.pointee.emojiInstanceCapacity,
-            requiredCount: count, type: CellTextInstance.self
-        )
+        let fullRebuild = dirtyRegion.fullRebuild
+            || stagedRowInstances.count != rows
+            || stagedRowInstances.isEmpty
 
-        let textPtr = frame.pointee.textInstanceBuffer.contents()
-            .bindMemory(to: CellTextInstance.self, capacity: count)
-        let emojiPtr = frame.pointee.emojiInstanceBuffer.contents()
-            .bindMemory(to: CellTextInstance.self, capacity: count)
-
-        var textIdx = 0
-        var emojiIdx = 0
-
-        let snapRows = min(rows, snapshot.rows)
         let colorState = makeTextColorState(snapshot: snapshot, searchLineMap: searchLineMap)
         let cellWidth = Float(fontSystem.cellSize.width)
         let shaper = CoreTextShaper(fontSystem: fontSystem)
 
-        for row in 0..<snapRows {
-            let absLine = snapshot.absoluteLine(forViewportRow: row)
-            let rowBase = row * snapshot.columns
-            let snapCols = min(cols, snapshot.columns)
-            let runs = buildRuns(forRow: row, snapshot: snapshot)
-
-            for run in runs {
-                var textSegmentStart: Int? = nil
-
-                for (offset, cell) in run.cells.enumerated() {
-                    let col = run.startCol + offset
-                    let isEmoji = cell.content.isEmojiContent
-
-                    if isEmoji {
-                        // Flush current text segment before handling emoji
-                        if let start = textSegmentStart {
-                            let end = offset
-                            let textRun = TextRun(
-                                cells: Array(run.cells[start..<end]),
-                                startCol: run.startCol + start,
-                                font: run.font,
-                                attributes: run.attributes
-                            )
-                            textIdx = flushTextSegment(
-                                run: textRun, row: row, absLine: absLine,
-                                textPtr: textPtr, textIdx: textIdx,
-                                colorState: colorState, shaper: shaper, cellWidth: cellWidth
-                            )
-                            textSegmentStart = nil
-                        }
-
-                        // Render emoji via ColorEmojiAtlas
-                        if let emojiInfo = emojiAtlas.getOrRasterize(
-                            cluster: cell.content, fontSystem: fontSystem,
-                            frameNumber: frameNumber
-                        ), emojiInfo.width > 0 && emojiInfo.height > 0 {
-                            var glyphSize = SIMD2<UInt32>(emojiInfo.width, emojiInfo.height)
-                            var bearings = SIMD2<Int16>(emojiInfo.bearingX, emojiInfo.bearingY)
-
-                            var targetCells: Int = 1
-                            if cell.width == .wide {
-                                targetCells = 2
-                            } else if col + 1 < snapCols {
-                                let nextCell = snapshot.cells[rowBase + col + 1]
-                                if nextCell.content.firstScalar == Unicode.Scalar(" ") || !nextCell.width.isRenderable {
-                                    targetCells = 2
-                                }
-                            }
-
-                            if targetCells > 1 {
-                                let targetWidth = cellWidth * Float(targetCells)
-                                let scale = targetWidth / Float(emojiInfo.width)
-                                glyphSize.x = UInt32(targetWidth)
-                                glyphSize.y = scaled(emojiInfo.height, by: scale)
-                                bearings.x = scaled(bearings.x, by: scale)
-                                bearings.y = scaled(bearings.y, by: scale)
-                            }
-
-                            emojiPtr[emojiIdx] = CellTextInstance(
-                                glyphPos: SIMD2<UInt32>(emojiInfo.atlasX, emojiInfo.atlasY),
-                                glyphSize: glyphSize,
-                                bearings: bearings,
-                                gridPos: SIMD2<UInt16>(UInt16(col), UInt16(row)),
-                                color: .zero
-                            )
-                            emojiIdx += 1
-                        }
-                    } else {
-                        if textSegmentStart == nil {
-                            textSegmentStart = offset
-                        }
-                    }
-                }
-
-                // Flush remaining text segment at end of run
-                if let start = textSegmentStart {
-                    let textRun = TextRun(
-                        cells: Array(run.cells[start..<run.cells.count]),
-                        startCol: run.startCol + start,
-                        font: run.font,
-                        attributes: run.attributes
-                    )
-                    textIdx = flushTextSegment(
-                        run: textRun, row: row, absLine: absLine,
-                        textPtr: textPtr, textIdx: textIdx,
-                        colorState: colorState, shaper: shaper, cellWidth: cellWidth
-                    )
-                }
+        if fullRebuild {
+            stagedRowInstances = (0..<rows).map { _ in RowTextInstances() }
+            for row in 0..<min(rows, backingRows) {
+                stagedRowInstances[row] = rebuildTextRow(
+                    row: row, cols: cols, snapshot: snapshot,
+                    colorState: colorState, shaper: shaper, cellWidth: cellWidth
+                )
+            }
+        } else {
+            // Partial: only rebuild dirty rows
+            for row in dirtyRegion.dirtyRows {
+                guard row >= 0 && row < rows && row < backingRows else { continue }
+                stagedRowInstances[row] = rebuildTextRow(
+                    row: row, cols: cols, snapshot: snapshot,
+                    colorState: colorState, shaper: shaper, cellWidth: cellWidth
+                )
             }
         }
+
+        // Compact staged rows into GPU buffers
+        let totalTextCount = stagedRowInstances.reduce(0) { $0 + $1.text.count }
+        let totalEmojiCount = stagedRowInstances.reduce(0) { $0 + $1.emoji.count }
+
+        ensureBufferCapacity(
+            buffer: &frame.pointee.textInstanceBuffer,
+            capacity: &frame.pointee.textInstanceCapacity,
+            requiredCount: max(1, totalTextCount), type: CellTextInstance.self
+        )
+        ensureBufferCapacity(
+            buffer: &frame.pointee.emojiInstanceBuffer,
+            capacity: &frame.pointee.emojiInstanceCapacity,
+            requiredCount: max(1, totalEmojiCount), type: CellTextInstance.self
+        )
+
+        let textPtr = frame.pointee.textInstanceBuffer.contents()
+            .bindMemory(to: CellTextInstance.self, capacity: max(1, totalTextCount))
+        let emojiPtr = frame.pointee.emojiInstanceBuffer.contents()
+            .bindMemory(to: CellTextInstance.self, capacity: max(1, totalEmojiCount))
+
+        var textIdx = 0
+        var emojiIdx = 0
+        for row in 0..<rows {
+            let rowInst = stagedRowInstances[row]
+            for inst in rowInst.text {
+                textPtr[textIdx] = inst
+                textIdx += 1
+            }
+            for inst in rowInst.emoji {
+                emojiPtr[emojiIdx] = inst
+                emojiIdx += 1
+            }
+        }
+
         frame.pointee.textInstanceCount = textIdx
         frame.pointee.emojiInstanceCount = emojiIdx
     }
 
     /// Fast color-only patch for text instances in dirty rows.
     /// Skips glyph atlas lookups — only recalculates fg color based on current
-    /// cursor blink / selection state. Instances are row-sorted from the full
-    /// rebuild, so we break early once past the dirty range.
+    /// cursor blink / selection state.
     private func patchTextInstanceColors(
         frame: UnsafeMutablePointer<FrameState>,
         snapshot: ScreenSnapshot,
-        dirtyRowRange: Range<Int>,
+        dirtyRegion: DirtyRegion,
         searchLineMap: SearchLineMap
     ) {
         let instanceCount = frame.pointee.textInstanceCount
         let ptr = frame.pointee.textInstanceBuffer.contents()
             .bindMemory(to: CellTextInstance.self, capacity: instanceCount)
 
-        let snapCols = snapshot.columns
+        let snapCols = backingColumns
         let colorState = makeTextColorState(snapshot: snapshot, searchLineMap: searchLineMap)
-        var enteredDirtyRange = false
 
         for i in 0..<instanceCount {
             let row = Int(ptr[i].gridPos.y)
-            if !dirtyRowRange.contains(row) {
-                if enteredDirtyRange { break }
-                continue
-            }
-            enteredDirtyRange = true
+            if !dirtyRegion.isDirty(row: row) { continue }
 
             let col = Int(ptr[i].gridPos.x)
             let rowBase = row * snapCols
-            guard rowBase + col < snapshot.cells.count else { continue }
+            guard rowBase + col < backingCells.count else { continue }
 
             let absLine = snapshot.absoluteLine(forViewportRow: row)
             ptr[i].color = colorState.foreground(
-                attrs: snapshot.cells[rowBase + col].attributes,
+                attrs: backingCells[rowBase + col].attributes,
                 row: row, col: col, absLine: absLine)
         }
     }
@@ -1192,7 +1284,10 @@ final class MetalRenderer {
             gridRows: UInt32(gridSize.rows),
             metalAllocatedSize: UInt64(device.currentAllocatedSize),
             estimatedBufferBytes: totalBufferBytes,
-            estimatedAtlasBytes: glyphAtlasBytes + emojiAtlasBytes
+            estimatedAtlasBytes: glyphAtlasBytes + emojiAtlasBytes,
+            snapshotCellCopyCount: frameMetrics?.snapshotCellCopyCount ?? 0,
+            shapedRowCacheHits: shapedRowCache.hits,
+            shapedRowCacheMisses: shapedRowCache.misses
         )
     }
 }

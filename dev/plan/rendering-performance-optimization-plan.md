@@ -36,28 +36,41 @@
 
 ## 阶段二：增量快照（避免深拷贝整个 grid）
 
-**目标**：消除 `Screen.snapshot()` 每帧深拷贝 `columns × rows` 个 `Cell` 的最大单一开销。
+**状态**：已实现。
+
+**目标**：彻底对齐 Ghostty 的逐行 dirty 模型，消除 `Screen.snapshot()` 每帧深拷贝整个 `grid` 的开销；让 `MetalRenderer` 只重建真正变脏的行。
 
 **涉及文件**：
 - `/Users/fanrenhao/work/TongYou/Packages/TongYouCore/Sources/TYTerminal/Screen.swift`
-- `/Users/fanrenhao/work/TongYou/Packages/TongYouCore/Sources/TYTerminal/ScreenSnapshot.swift`（若存在）
 - `/Users/fanrenhao/work/TongYou/TongYou/Renderer/MetalRenderer.swift`
+- `/Users/fanrenhao/work/TongYou/TongYou/Renderer/FrameMetrics.swift`
+- `/Users/fanrenhao/work/TongYou/TongYouTests/`
 
 **具体改动**：
-1. 修改 `Screen.swift` 的 `snapshot(selection:)`：
-   - 当 `dirtyRegion.fullRebuild == false` 时，不再调用 `buildLinearCells()` 拷贝整个网格。
-   - 仅提取 `dirtyRegion.lineRange` 内的行，构造一个只包含脏行的轻量快照。
-2. 调整 `ScreenSnapshot` 结构：
-   - 增加 `isPartial: Bool` 与 `dirtyLineRange: Range<Int>` 字段。
-   - 对于全量快照保留现有行为；对于增量快照，内部只持有脏行数组。
-3. 修改 `MetalRenderer.swift` 的 `setContent(_:)`：
-   - 当收到增量快照时，只更新对应行范围的 instance buffer，而非全量重建 `cols * rows` 实例。
+1. **升级 `DirtyRegion` 为逐行 bitset**：
+   - 将 `DirtyRegion` 从单个连续 `lineRange` 升级为按行追踪的 `[Bool]` bitset，支持不连续的多行脏行标记。
+   - 新增 `markLine(_:)`、`dirtyRows`、`isDirty(row:)` 等 API；`markRange` 内部按行设置 bit。
+2. **`ScreenSnapshot` 支持不连续脏行**：
+   - 增加 `isPartial: Bool`、`dirtyRows: [Int]` 与 `partialRows: [(row: Int, cells: [Cell])]`。
+   - `snapshot()` 在 `!fullRebuild && isDirty && viewportOffset == 0` 时，仅深拷贝真正 dirty 的行；其他情况自动回退为全量快照。
+3. **`MetalRenderer` 引入 `backingCells` + 按行重建**：
+   - 新增 `backingCells`、`backingColumns`、`backingRows`；`setContent(_:)` 收到 partial snapshot 时按行合并到 backing store。
+   - `fillBgInstanceBuffer` 逐行检查 `isDirty(row:)`，clean row 直接 `continue`。
+   - `fillTextInstanceBuffer` 采用 Ghostty `rebuildCells` 风格：保留 CPU 侧 staging buffer，只调用 `rebuildTextRow(row:)` 重建 dirty rows，其余行复用旧 instances。
+   - `resize()` 时 grid 尺寸变化自动清空 `backingCells` 并 `markFull()`。
+4. **边界处理与 Metrics**：
+   - 自动回退场景：resize、selection 变化、scrollback（`viewportOffset != 0`）、alternate screen buffer 切换均走全量路径。
+   - `FrameMetrics.snapshotCellCopyCount` 记录每帧实际拷贝的 cell 数，便于 Debug Metrics HUD 观测。
+5. **单元测试**：
+   - `DirtyRegionTests.swift`：验证逐行标记、不连续脏行、`merge`。
+   - `ScreenPartialSnapshotTests.swift`：验证 partial snapshot 构造与全量回退。
+   - `MetalRendererBackingCellsTests.swift`：验证 `setContent()` 对 `backingCells` 的增量/全量更新。
 
-**预期收益**：120×40 终端在增量场景下每帧内存拷贝从 ~200 KB 降至几 KB，CPU 和内存压力显著下降。
+**预期收益**：120×40 终端在增量场景下每帧内存拷贝从 ~200 KB 降至 `columns × dirtyRowCount`（通常几 KB），CPU 和内存压力显著下降；`buildRuns` / `CoreTextShaper.shape` 的调用次数和耗时同步下降。
 
 **参考实现**：
-- `/Users/fanrenhao/work/ghostty/src/terminal/render.zig`（增量 `RenderState` 只覆盖 dirty row，保留上帧分配）
-- `/Users/fanrenhao/work/ghostty/src/renderer/generic.zig`（`rebuildRow` 与 `Contents.clear(y)` 只操作单行）
+- `/Users/fanrenhao/work/ghostty/src/terminal/render.zig`（`RenderState.Row.dirty`、`update` 按行拷贝）
+- `/Users/fanrenhao/work/ghostty/src/renderer/generic.zig`（`rebuildCells` 遍历 `row_dirty`、跳过 clean rows、`clear(y)` + `rebuildRow`）
 
 ---
 
@@ -67,18 +80,16 @@
 
 **涉及文件**：
 - `/Users/fanrenhao/work/TongYou/Packages/TongYouCore/Sources/TYTerminal/Screen.swift`
-- `/Users/fanrenhao/work/TongYou/Packages/TongYouCore/Sources/TYTerminal/DirtyRegion.swift`（若存在）
 
 **具体改动**：
-1. 修改 `Screen.swift` 的 `scrollRegionUp()`（约第 1569 行）和 `scrollRegionDown()`（约第 1588 行）：
-   - 将 `dirtyRegion.markFull()` 替换为精确脏区标记。
-   - 例如 `scrollRegionUp` 只需标记被移出区域的最底端新暴露出的那一行（或整个滚动区域平移后的差集），而不是全屏。
-2. 若 `DirtyRegion` 当前只支持 `markFull()` 与 `lineRange`，扩展其 API：
-   - 增加 `markScrollUp(rows: Int, in region: ClosedRange<Int>)` 与 `markScrollDown(rows: Int, in region: ClosedRange<Int>)`。
-   - 内部将滚动导致的脏区转换为精确行范围。
-3. 确保 `advanceRow()`（被流式输出频繁调用）触发的滚动不再级联为 `markFull()`。
+1. 修改 `Screen.swift` 的 `scrollRegionUp()` 和 `scrollRegionDown()`：
+   - 将 `dirtyRegion.markFull()` 替换为精确逐行标记。
+   - `scrollRegionUp` 只需标记新暴露出的底端行以及发生内容变化的滚动区域内的各行；`scrollRegionDown` 同理。
+   - 利用阶段二已具备的 `dirtyRegion.markRange(_:)` 和 `markLine(_:)` 直接表达不连续或连续的脏行集合。
+2. 确保 `advanceRow()`（被流式输出频繁调用）触发的滚动不再级联为 `markFull()`。
+3. 验证 `MetalRenderer` 对不连续 dirty rows 的处理：由于阶段二已支持逐行 dirty bitset 与 `backingCells` 按行重建，本阶段无需修改渲染侧逻辑，画面应自然正确。
 
-**预期收益**：`opencode` 流式输出时几乎每帧都在滚动，此优化能让 90% 的帧从 full rebuild 降级为 partial rebuild，CPU 再降 20–30%。
+**预期收益**：`opencode` 流式输出时几乎每帧都在滚动，此优化能让 90% 的帧从 full rebuild 降级为 partial rebuild（仅 1~3 行 dirty），CPU 再降 20–30%。
 
 **参考实现**：
 - `/Users/fanrenhao/work/ghostty/src/terminal/render.zig`（`RenderState.Dirty` 的 `.partial` 与 `.full` 区分；viewport pin 变化时才是 `.full`）
@@ -100,8 +111,9 @@
    - Key 使用该行文本内容的哈希（或 `String`/`[UInt32]`）+ 字体 ID + 字号。
    - Value 存储已 shaping 的 `GlyphRun` 数组。
    - 缓存容量按屏幕行数 2–3 倍设计（例如 200 行），使用 LRU 淘汰策略。
-2. 修改 `MetalRenderer.swift` 的 `fillTextInstanceBuffer`：
-   - 在调用 `buildRuns(forRow:)` 前，先查 cache；命中则跳过 `CoreTextShaper.shape(_:)`。
+2. 修改 `MetalRenderer.swift` 的 `rebuildTextRow(row:)`（阶段二已提取的按行重建辅助函数）：
+   - 在调用 `buildRuns(forRow:)` 前，先查行级 cache；命中则跳过 `CoreTextShaper.shape(_:)`。
+   - clean rows 在 `fillTextInstanceBuffer` 阶段已被 `continue` 跳过，不会进入本函数。
 3. CoreText 对象释放优化（可选前置）：
    - 若当前在主线程同步释放大量 `CTLine`/`CTRun`，参考 Ghostty 将释放操作批量投递到独立后台线程（或延迟到帧末统一释放）。
 

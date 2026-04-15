@@ -34,6 +34,13 @@ struct ResourceMetrics {
     var metalAllocatedSize: UInt64 = 0
     var estimatedBufferBytes: UInt64 = 0
     var estimatedAtlasBytes: UInt64 = 0
+
+    // Snapshot
+    var snapshotCellCopyCount: Int = 0
+
+    // Shaping cache
+    var shapedRowCacheHits: UInt64 = 0
+    var shapedRowCacheMisses: UInt64 = 0
 }
 
 /// Snapshot of a single pane's resources.

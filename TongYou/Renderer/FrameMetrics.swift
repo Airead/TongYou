@@ -12,6 +12,8 @@ struct FrameMetrics {
     private(set) var skippedFrameCount: UInt64 = 0
     /// Total display-link frames deduplicated by unchanged content generation.
     private(set) var dedupedFrameCount: UInt64 = 0
+    /// Number of cells copied during the last snapshot (for observing incremental updates).
+    private(set) var snapshotCellCopyCount: Int = 0
 
     private var frameStart: UInt64 = 0
     private var buildStart: UInt64 = 0
@@ -45,6 +47,11 @@ struct FrameMetrics {
     /// Call when a display-link frame is deduplicated because content generation did not change.
     mutating func recordDedupedFrame() {
         dedupedFrameCount += 1
+    }
+
+    /// Record how many cells were copied in the latest snapshot.
+    mutating func recordSnapshotCellCopyCount(_ count: Int) {
+        snapshotCellCopyCount = count
     }
 
     private static let timebaseInfo: mach_timebase_info_data_t = {

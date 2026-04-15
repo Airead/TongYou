@@ -96,13 +96,15 @@ struct TerminalControllerTests {
     func suspendAndResumeAccumulatesOutput() async throws {
         let controller = TerminalController(columns: 80, rows: 24)
         var displayCallCount = 0
-        var capturedSnapshot: ScreenSnapshot?
+        var capturedRows: [Int: String] = [:]
 
         controller.onNeedsDisplay = {
             displayCallCount += 1
             DispatchQueue.main.async {
                 if let s = controller.consumeSnapshot() {
-                    capturedSnapshot = s
+                    for (row, line) in extractRows(from: s) {
+                        capturedRows[row] = line
+                    }
                 }
             }
         }
@@ -128,7 +130,7 @@ struct TerminalControllerTests {
         try await Task.sleep(for: .milliseconds(50))
         #expect(displayCallCount > callCountAfterSuspend, "Expected onNeedsDisplay immediately after resume")
 
-        let text = extractText(from: capturedSnapshot)
+        let text = capturedRows.sorted { $0.key < $1.key }.map { $0.value }.joined(separator: "\n")
         #expect(text.contains("before_suspend"), "Expected screen to contain 'before_suspend', got: \(text)")
         #expect(text.contains("during_suspend"), "Expected screen to contain 'during_suspend', got: \(text)")
 
@@ -146,18 +148,37 @@ private func waitForSemaphore(_ semaphore: DispatchSemaphore, timeout: TimeInter
     }
 }
 
+private func extractRows(from snapshot: ScreenSnapshot) -> [Int: String] {
+    if snapshot.isPartial {
+        var rows: [Int: String] = [:]
+        for (row, cells) in snapshot.partialRows {
+            var line = ""
+            for cell in cells {
+                if cell.width.isRenderable {
+                    line.append(cell.content.string)
+                }
+            }
+            rows[row] = line
+        }
+        return rows
+    } else {
+        var rows: [Int: String] = [:]
+        for row in 0..<snapshot.rows {
+            var line = ""
+            for col in 0..<snapshot.columns {
+                let cell = snapshot.cell(at: col, row: row)
+                if cell.width.isRenderable {
+                    line.append(cell.content.string)
+                }
+            }
+            rows[row] = line
+        }
+        return rows
+    }
+}
+
 private func extractText(from snapshot: ScreenSnapshot?) -> String {
     guard let snapshot = snapshot else { return "" }
-    var lines: [String] = []
-    for row in 0..<snapshot.rows {
-        var line = ""
-        for col in 0..<snapshot.columns {
-            let cell = snapshot.cell(at: col, row: row)
-            if cell.width.isRenderable {
-                line.append(cell.content.string)
-            }
-        }
-        lines.append(line)
-    }
-    return lines.joined(separator: "\n")
+    let rows = extractRows(from: snapshot)
+    return rows.sorted { $0.key < $1.key }.map { $0.value }.joined(separator: "\n")
 }

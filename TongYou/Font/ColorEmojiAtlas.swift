@@ -47,6 +47,21 @@ final class ColorEmojiAtlas {
     /// Whether the atlas texture has been modified since last GPU sync.
     private(set) var isDirty = false
 
+    /// Monotonically increased on reset/grow/compact to detect stale async work.
+    private(set) var generation: UInt64 = 0
+
+    /// Incremented whenever the atlas texture content changes.
+    private(set) var modified: UInt64 = 0
+
+    /// Tracks emojis currently being rasterized asynchronously to avoid duplicate work.
+    private var pendingRasterizationKeys: Set<GraphemeCluster> = []
+
+    /// Background queue for CoreGraphics emoji rasterization.
+    private let rasterizationQueue = DispatchQueue(
+        label: "io.github.airead.tongyou.emoji-rasterizer",
+        qos: .userInitiated
+    )
+
     /// Number of active (non-evicted) entries.
     var activeEntryCount: Int { cache.count }
 
@@ -72,16 +87,27 @@ final class ColorEmojiAtlas {
     /// Reset the atlas, clearing all cached glyphs. Used when font changes.
     func reset() {
         cache.removeAll(keepingCapacity: true)
+        pendingRasterizationKeys.removeAll()
         shelfX = 1
         shelfY = 1
         shelfHeight = 0
         texture = Self.createTexture(device: device, size: textureSize)
+        generation &+= 1
+        modified &+= 1
         isDirty = true
+    }
+
+    // MARK: - Glyph Lookup
+
+    /// Synchronous lookup only. Returns nil on cache miss without rasterizing.
+    func get(cluster: GraphemeCluster) -> EmojiGlyphInfo? {
+        guard cluster.isEmojiContent else { return nil }
+        return cache[cluster]?.info
     }
 
     // MARK: - Glyph Lookup / Rasterization
 
-    /// Get or rasterize an emoji glyph. Returns nil if the cluster is not an emoji.
+    /// Get or rasterize an emoji glyph synchronously. Returns nil if the cluster is not an emoji.
     /// The `frameNumber` is used for LRU tracking.
     func getOrRasterize(
         cluster: GraphemeCluster,
@@ -103,6 +129,184 @@ final class ColorEmojiAtlas {
         }
         cache[cluster] = EmojiGlyphEntry(info: info, lastUsedFrame: frameNumber)
         return info
+    }
+
+    /// Enqueue an asynchronous rasterization for a cache-missed emoji.
+    /// The completion handler is called on the main thread after the emoji
+    /// has been drawn and uploaded to the GPU texture.
+    func enqueueRasterization(
+        cluster: GraphemeCluster,
+        fontSystem: FontSystem,
+        completion: @escaping () -> Void
+    ) {
+        guard cluster.isEmojiContent else {
+            completion()
+            return
+        }
+
+        guard pendingRasterizationKeys.insert(cluster).inserted else {
+            completion()
+            return
+        }
+
+        let currentGeneration = generation
+        let baselineF = CGFloat(fontSystem.baseline) + fontSystem.baselineFractionalOffset
+        let emojiSize = fontSystem.pointSize * fontSystem.scaleFactor
+        let colorSpace = sRGBColorSpace
+
+        let emojiFont = getEmojiFont(size: emojiSize)
+
+        rasterizationQueue.async { [weak self] in
+            let string = cluster.string as CFString
+            var glyphs: [CGGlyph] = []
+            var positions: [CGPoint] = []
+
+            guard let attributedString = CFAttributedStringCreateMutable(kCFAllocatorDefault, 0) else {
+                DispatchQueue.main.async {
+                    self?.pendingRasterizationKeys.remove(cluster)
+                    completion()
+                }
+                return
+            }
+            CFAttributedStringReplaceString(attributedString, CFRangeMake(0, 0), string)
+            CFAttributedStringSetAttribute(attributedString, CFRangeMake(0, CFStringGetLength(string)), kCTFontAttributeName, emojiFont)
+
+            let line = CTLineCreateWithAttributedString(attributedString)
+            let runs = CTLineGetGlyphRuns(line) as! [CTRun]
+
+            for run in runs {
+                let glyphCount = CTRunGetGlyphCount(run)
+                var runGlyphs = [CGGlyph](repeating: 0, count: glyphCount)
+                var runPositions = [CGPoint](repeating: .zero, count: glyphCount)
+
+                CTRunGetGlyphs(run, CFRangeMake(0, 0), &runGlyphs)
+                CTRunGetPositions(run, CFRangeMake(0, 0), &runPositions)
+
+                glyphs.append(contentsOf: runGlyphs)
+                positions.append(contentsOf: runPositions)
+            }
+
+            guard !glyphs.isEmpty else {
+                DispatchQueue.main.async {
+                    self?.pendingRasterizationKeys.remove(cluster)
+                    completion()
+                }
+                return
+            }
+
+            // Calculate bounding box using CTRunGetImageBounds which works better for sbix fonts
+            let tempColorSpace = CGColorSpaceCreateDeviceRGB()
+            let tempContext: CGContext? = CGContext(
+                data: nil, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                space: tempColorSpace,
+                bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+            )
+
+            var totalBounds = CGRect.zero
+            for run in runs {
+                let runBounds = CTRunGetImageBounds(run, tempContext, CFRangeMake(0, 0))
+                totalBounds = totalBounds.union(runBounds)
+            }
+
+            if totalBounds.width < 0.5 && totalBounds.height < 0.5 {
+                totalBounds = CTLineGetBoundsWithOptions(line, [.useOpticalBounds])
+            }
+            if totalBounds.width < 0.5 && totalBounds.height < 0.5 {
+                totalBounds = CGRect(
+                    x: 0, y: -emojiSize * 0.2,
+                    width: emojiSize * 1.5,
+                    height: emojiSize * 1.2
+                )
+            }
+
+            let canvasWidth = UInt32(ceil(totalBounds.width)) + 2
+            let canvasHeight = UInt32(ceil(totalBounds.height)) + 2
+
+            guard canvasWidth > 0, canvasHeight > 0 else {
+                DispatchQueue.main.async {
+                    self?.pendingRasterizationKeys.remove(cluster)
+                    completion()
+                }
+                return
+            }
+
+            let bytesPerRow = Int(canvasWidth) * 4
+            var pixelData = [UInt8](repeating: 0, count: bytesPerRow * Int(canvasHeight))
+
+            guard let context = CGContext(
+                data: &pixelData,
+                width: Int(canvasWidth),
+                height: Int(canvasHeight),
+                bitsPerComponent: 8,
+                bytesPerRow: bytesPerRow,
+                space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+            ) else {
+                DispatchQueue.main.async {
+                    self?.pendingRasterizationKeys.remove(cluster)
+                    completion()
+                }
+                return
+            }
+
+            context.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0))
+            context.fill(CGRect(x: 0, y: 0, width: CGFloat(canvasWidth), height: CGFloat(canvasHeight)))
+
+            let lineOrigin = CGPoint(
+                x: -totalBounds.origin.x + 1,
+                y: -totalBounds.origin.y + 1
+            )
+            context.textMatrix = .identity
+            context.saveGState()
+            context.translateBy(x: lineOrigin.x, y: lineOrigin.y)
+            CTLineDraw(line, context)
+            context.restoreGState()
+
+            let bearingYFromTop = Int16(baselineF - totalBounds.origin.y - CGFloat(canvasHeight) + 1)
+            let info = EmojiGlyphInfo(
+                atlasX: 0, atlasY: 0,
+                width: canvasWidth,
+                height: canvasHeight,
+                bearingX: Int16(totalBounds.origin.x - 1),
+                bearingY: bearingYFromTop
+            )
+
+            DispatchQueue.main.async {
+                guard let self, self.generation == currentGeneration else {
+                    completion()
+                    return
+                }
+
+                guard let region = self.reserveRegion(width: canvasWidth, height: canvasHeight) else {
+                    self.pendingRasterizationKeys.remove(cluster)
+                    completion()
+                    return
+                }
+
+                let mtlRegion = MTLRegion(
+                    origin: MTLOrigin(x: Int(region.x), y: Int(region.y), z: 0),
+                    size: MTLSize(width: Int(canvasWidth), height: Int(canvasHeight), depth: 1)
+                )
+                self.texture.replace(region: mtlRegion, mipmapLevel: 0,
+                                    withBytes: pixelData, bytesPerRow: bytesPerRow)
+
+                let finalInfo = EmojiGlyphInfo(
+                    atlasX: region.x,
+                    atlasY: region.y,
+                    width: info.width,
+                    height: info.height,
+                    bearingX: info.bearingX,
+                    bearingY: info.bearingY
+                )
+
+                self.cache[cluster] = EmojiGlyphEntry(info: finalInfo, lastUsedFrame: 0)
+                self.pendingRasterizationKeys.remove(cluster)
+                self.modified &+= 1
+                self.isDirty = true
+
+                completion()
+            }
+        }
     }
 
     // MARK: - Private: Rasterization
@@ -146,7 +350,7 @@ final class ColorEmojiAtlas {
 
         // Create a temporary context for CTRunGetImageBounds
         let tempColorSpace = CGColorSpaceCreateDeviceRGB()
-        var tempContext: CGContext? = CGContext(
+        let tempContext: CGContext? = CGContext(
             data: nil, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
             space: tempColorSpace,
             bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
@@ -225,6 +429,7 @@ final class ColorEmojiAtlas {
         )
         texture.replace(region: mtlRegion, mipmapLevel: 0,
                        withBytes: pixelData, bytesPerRow: bytesPerRow)
+        modified &+= 1
         isDirty = true
 
         // Calculate bearing from top
@@ -312,6 +517,8 @@ final class ColorEmojiAtlas {
 
         texture = newTexture
         textureSize = newSize
+        generation &+= 1
+        modified &+= 1
         isDirty = true
         return true
     }
@@ -350,6 +557,7 @@ final class ColorEmojiAtlas {
         texture = Self.createTexture(device: device, size: newSize)
         textureSize = newSize
         cache.removeAll(keepingCapacity: true)
+        pendingRasterizationKeys.removeAll()
 
         for (cluster, entry) in activeEntries {
             if let info = rasterizeEmoji(cluster: cluster, fontSystem: fontSystem) {
@@ -357,6 +565,8 @@ final class ColorEmojiAtlas {
             }
         }
 
+        generation &+= 1
+        modified &+= 1
         isDirty = true
     }
 

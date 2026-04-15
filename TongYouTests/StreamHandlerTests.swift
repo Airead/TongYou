@@ -18,6 +18,7 @@ import TYTerminal
                 handler.handle(action)
             }
         }
+        handler.flush()
         return screen
     }
 
@@ -38,6 +39,7 @@ import TYTerminal
                 handler.handle(action)
             }
         }
+        handler.flush()
         return (screen, handler)
     }
 

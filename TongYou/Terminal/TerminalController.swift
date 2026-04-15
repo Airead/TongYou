@@ -205,13 +205,19 @@ final class TerminalController: TerminalControlling {
     func consumeSnapshot() -> ScreenSnapshot? {
         guard screenDirty else { return nil }
         let sel = selection
-        let (snapshot, gen): (ScreenSnapshot, UInt64) = ptyQueue.sync {
+        let (snapshot, gen, urls): (ScreenSnapshot, UInt64, [DetectedURL]?) = ptyQueue.sync {
             screenDirty = false
-            return (screen.snapshot(selection: sel), _contentGeneration)
+            let snap = screen.snapshot(selection: sel, allowPartial: true)
+            let urls = commandKeyHeld ? URLDetector.detect(
+                rows: screen.rows,
+                cols: screen.columns,
+                cellAt: { screen.cell(at: $1, row: $0) }
+            ) : nil
+            return (snap, _contentGeneration, urls)
         }
         // Refresh URL detection only while Command key is held and content changed.
         if commandKeyHeld, gen != lastURLGeneration {
-            detectedURLs = URLDetector.detect(in: snapshot)
+            detectedURLs = urls ?? []
             lastURLGeneration = gen
         }
         return snapshot
