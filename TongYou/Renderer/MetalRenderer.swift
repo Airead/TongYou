@@ -1137,4 +1137,48 @@ final class MetalRenderer {
             SIMD4<Float>( 0,            0,              0,  1),
         ])
     }
+
+    // MARK: - Resource Metrics
+
+    var currentResourceMetrics: ResourceMetrics {
+        let frame = frameStates[frameIndex]
+
+        // Estimated buffer bytes (all frame states)
+        let uniformSize = UInt64(MemoryLayout<Uniforms>.stride)
+        let bgSize = UInt64(MemoryLayout<CellBgInstance>.stride) * UInt64(frame.bgInstanceCapacity)
+        let underlineSize = UInt64(MemoryLayout<CellBgInstance>.stride) * UInt64(frame.underlineInstanceCapacity)
+        let textSize = UInt64(MemoryLayout<CellTextInstance>.stride) * UInt64(frame.textInstanceCapacity)
+        let emojiSize = UInt64(MemoryLayout<CellTextInstance>.stride) * UInt64(frame.emojiInstanceCapacity)
+        let frameBufferBytes = uniformSize + bgSize + underlineSize + textSize + emojiSize
+        let totalBufferBytes = frameBufferBytes * UInt64(Self.swapChainCount)
+
+        // Estimated atlas bytes
+        let glyphAtlasBytes = UInt64(glyphAtlas.textureSize) * UInt64(glyphAtlas.textureSize)
+        let emojiAtlasBytes = UInt64(emojiAtlas.textureSize) * UInt64(emojiAtlas.textureSize) * 4
+
+        return ResourceMetrics(
+            frameTimeMs: frameMetrics?.frameTimeMs ?? 0,
+            instanceBuildTimeMs: frameMetrics?.instanceBuildTimeMs ?? 0,
+            gpuSubmitCount: frameMetrics?.gpuSubmitCount ?? 0,
+            skippedFrameCount: frameMetrics?.skippedFrameCount ?? 0,
+            bgInstanceCapacity: frame.bgInstanceCapacity,
+            bgInstanceCount: instanceCount,
+            textInstanceCapacity: frame.textInstanceCapacity,
+            textInstanceCount: frame.textInstanceCount,
+            emojiInstanceCapacity: frame.emojiInstanceCapacity,
+            emojiInstanceCount: frame.emojiInstanceCount,
+            underlineInstanceCapacity: frame.underlineInstanceCapacity,
+            underlineInstanceCount: frame.underlineInstanceCount,
+            glyphAtlasSize: glyphAtlas.textureSize,
+            glyphAtlasEntries: glyphAtlas.activeEntryCount,
+            emojiAtlasSize: emojiAtlas.textureSize,
+            emojiAtlasEntries: emojiAtlas.activeEntryCount,
+            gridColumns: UInt32(gridSize.columns),
+            gridRows: UInt32(gridSize.rows),
+            metalAllocatedSize: UInt64(device.currentAllocatedSize),
+            estimatedBufferBytes: totalBufferBytes,
+            estimatedAtlasBytes: glyphAtlasBytes + emojiAtlasBytes,
+            processRSSBytes: ProcessMemoryInfo.currentRSS()
+        )
+    }
 }
