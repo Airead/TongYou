@@ -106,5 +106,11 @@ let package = Package(
             dependencies: ["TYTerminal"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+
+        .executableTarget(
+            name: "DirtyRegionValidator",
+            dependencies: ["TYTerminal"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
     ]
 )

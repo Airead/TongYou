@@ -98,6 +98,41 @@ import TYTerminal
         #expect(a.lineRange == 1..<8)
     }
 
+    @Test func dirtyRowsReturnsNonContiguousIndices() {
+        var region = DirtyRegion.clean
+        region.markLine(3)
+        region.markLine(7)
+        #expect(region.dirtyRows == [3, 7])
+    }
+
+    @Test func isDirtyRowMatchesBitset() {
+        var region = DirtyRegion(rowCount: 10, fullRebuild: false)
+        region.markLine(2)
+        region.markLine(5)
+        #expect(region.isDirty(row: 2))
+        #expect(region.isDirty(row: 5))
+        #expect(!region.isDirty(row: 3))
+        #expect(!region.isDirty(row: 9))
+        #expect(!region.isDirty(row: -1))
+    }
+
+    @Test func fullRebuildMarksAllRowsDirty() {
+        let region = DirtyRegion.full
+        #expect(region.isDirty(row: 0))
+        #expect(region.isDirty(row: 100))
+        #expect(region.dirtyRows.isEmpty)
+    }
+
+    @Test func mergeTwoDisjointRegionsPreservesAllDirtyRows() {
+        var a = DirtyRegion(rowCount: 10, fullRebuild: false)
+        a.markLine(2)
+        var b = DirtyRegion(rowCount: 10, fullRebuild: false)
+        b.markLine(5)
+        a.merge(b)
+        #expect(a.dirtyRows == [2, 5])
+        #expect(a.lineRange == 2..<6)
+    }
+
     // MARK: - Screen dirty tracking tests
 
     @Test func initialScreenIsFull() {

@@ -1,45 +1,44 @@
 import simd
 
 /// Tracks which rows changed since the last snapshot, enabling partial buffer updates.
+/// Supports non-contiguous dirty rows via a per-row bitset, aligned with Ghostty's model.
 public struct DirtyRegion: Equatable, Sendable {
-    /// Range of dirty rows (nil = all clean).
-    public var lineRange: Range<Int>?
     /// When true, the renderer must rebuild all instances (scroll, resize, etc.).
     public var fullRebuild: Bool
+    private var lineBits: [Bool]
 
-    public init(lineRange: Range<Int>? = nil, fullRebuild: Bool = false) {
-        self.lineRange = lineRange
+    public init(rowCount: Int = 0, fullRebuild: Bool = false) {
         self.fullRebuild = fullRebuild
+        self.lineBits = [Bool](repeating: false, count: rowCount)
     }
 
-    public static let clean = DirtyRegion(lineRange: nil, fullRebuild: false)
-    public static let full = DirtyRegion(lineRange: nil, fullRebuild: true)
+    public static let clean = DirtyRegion(rowCount: 0, fullRebuild: false)
+    public static let full = DirtyRegion(rowCount: 0, fullRebuild: true)
 
     /// Mark a single row as dirty.
     public mutating func markLine(_ row: Int) {
-        if fullRebuild { return }
-        if let existing = lineRange {
-            lineRange = min(existing.lowerBound, row)..<max(existing.upperBound, row + 1)
-        } else {
-            lineRange = row..<(row + 1)
+        guard !fullRebuild, row >= 0 else { return }
+        if row >= lineBits.count {
+            lineBits.append(contentsOf: [Bool](repeating: false, count: row - lineBits.count + 1))
         }
+        lineBits[row] = true
     }
 
     /// Mark a contiguous range of rows as dirty.
     public mutating func markRange(_ range: Range<Int>) {
         guard !range.isEmpty else { return }
-        if fullRebuild { return }
-        if let existing = lineRange {
-            lineRange = min(existing.lowerBound, range.lowerBound)..<max(existing.upperBound, range.upperBound)
-        } else {
-            lineRange = range
+        guard !fullRebuild else { return }
+        let maxRow = range.upperBound - 1
+        if maxRow >= lineBits.count {
+            lineBits.append(contentsOf: [Bool](repeating: false, count: maxRow - lineBits.count + 1))
         }
+        for i in range { lineBits[i] = true }
     }
 
     /// Mark full rebuild required.
     public mutating func markFull() {
         fullRebuild = true
-        lineRange = nil
+        lineBits.removeAll()
     }
 
     /// Merge another dirty region into this one.
@@ -48,14 +47,34 @@ public struct DirtyRegion: Equatable, Sendable {
             markFull()
             return
         }
-        if let otherRange = other.lineRange {
-            markRange(otherRange)
+        for (i, dirty) in other.lineBits.enumerated() where dirty {
+            markLine(i)
         }
     }
 
     /// Whether any rows are dirty or a full rebuild is needed.
     public var isDirty: Bool {
-        fullRebuild || lineRange != nil
+        fullRebuild || lineBits.contains(true)
+    }
+
+    /// Backing compatibility: returns the merged contiguous range covering all dirty rows.
+    public var lineRange: Range<Int>? {
+        guard !fullRebuild else { return nil }
+        let indices = lineBits.enumerated().compactMap { $1 ? $0 : nil }
+        guard let first = indices.first, let last = indices.last else { return nil }
+        return first..<(last + 1)
+    }
+
+    /// All dirty row indices (non-contiguous support).
+    public var dirtyRows: [Int] {
+        guard !fullRebuild else { return [] }
+        return lineBits.enumerated().compactMap { $1 ? $0 : nil }
+    }
+
+    /// Check whether a specific row is dirty.
+    public func isDirty(row: Int) -> Bool {
+        guard !fullRebuild else { return true }
+        return row >= 0 && row < lineBits.count && lineBits[row]
     }
 }
 
@@ -201,7 +220,7 @@ public final class Screen {
 
     /// Tracks which rows changed since the last snapshot.
     /// Initialized to fullRebuild so the first frame renders everything.
-    public private(set) var dirtyRegion = DirtyRegion.full
+    public private(set) var dirtyRegion = DirtyRegion(rowCount: 0, fullRebuild: true)
 
     private var cells: [Cell]
 
@@ -254,6 +273,7 @@ public final class Screen {
         self.cells = [Cell](repeating: .empty, count: self.columns * self.rows)
         self.lineFlags = [LineFlags](repeating: LineFlags(), count: self.rows)
         self.scrollBottom = self.rows - 1
+        self.dirtyRegion = DirtyRegion(rowCount: self.rows, fullRebuild: true)
     }
 
     // MARK: - Ring Buffer Helpers
@@ -330,7 +350,7 @@ public final class Screen {
     /// Return the current dirty region and reset it to clean.
     public func consumeDirtyRegion() -> DirtyRegion {
         let region = dirtyRegion
-        dirtyRegion = .clean
+        dirtyRegion = DirtyRegion(rowCount: rows, fullRebuild: false)
         return region
     }
 

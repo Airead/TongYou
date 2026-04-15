@@ -289,6 +289,8 @@ struct IntegrationTests {
         let columns = 4
         let rows = 3
         let cells = [Cell](repeating: .empty, count: columns * rows)
+        var region = DirtyRegion(rowCount: rows, fullRebuild: false)
+        region.markRange(1..<3)
         let snapshot = ScreenSnapshot(
             cells: cells,
             columns: columns,
@@ -300,7 +302,7 @@ struct IntegrationTests {
             selection: nil,
             scrollbackCount: 0,
             viewportOffset: 0,
-            dirtyRegion: DirtyRegion(lineRange: 1..<3, fullRebuild: false)
+            dirtyRegion: region
         )
 
         let diff = ScreenDiff(from: snapshot)

@@ -408,6 +408,9 @@ final class MetalRenderer {
             return
         }
 
+        // DirtyRegion validation logging - remove after testing
+        print("[RENDER] full=\(pendingDirtyRegion.fullRebuild) dirtyRows=\(pendingDirtyRegion.dirtyRows)")
+
         guard frameSemaphore.wait(timeout: .now()) == .success else {
             frameMetrics?.recordSkip()
             return
