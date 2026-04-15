@@ -473,7 +473,7 @@ private struct SentSnapshotState {
     let scrollbackCount: Int
 
     init(from snapshot: ScreenSnapshot) {
-        self.cells = snapshot.cells
+        self.cells = snapshot.isPartial ? [] : snapshot.cells
         self.cursorCol = snapshot.cursorCol
         self.cursorRow = snapshot.cursorRow
         self.cursorVisible = snapshot.cursorVisible
@@ -485,6 +485,9 @@ private struct SentSnapshotState {
     /// Check whether the snapshot represents the same visible content.
     /// Falls back to full cell comparison when the fast path doesn't apply.
     func matches(_ snapshot: ScreenSnapshot) -> Bool {
+        // Cannot deduplicate when either side is partial.
+        guard !snapshot.isPartial, !cells.isEmpty else { return false }
+
         // Scrolled-up fast path: both viewports are scrolled up and anchored
         // to the same absolute line (scrollbackCount - viewportOffset).
         // New output only appends to scrollback below the viewport, so the

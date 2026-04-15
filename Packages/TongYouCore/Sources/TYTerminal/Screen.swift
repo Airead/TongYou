@@ -105,6 +105,7 @@ public struct LineFlags: Equatable, Sendable {
 
 /// Immutable snapshot of screen state for cross-thread transfer to the renderer.
 public struct ScreenSnapshot: Sendable {
+    /// Full grid cells. Empty when `isPartial == true`.
     public let cells: [Cell]
     public let columns: Int
     public let rows: Int
@@ -121,6 +122,12 @@ public struct ScreenSnapshot: Sendable {
     public let viewportOffset: Int
     /// Dirty region since the previous snapshot.
     public let dirtyRegion: DirtyRegion
+    /// When true, only `partialRows` contain updated rows.
+    public let isPartial: Bool
+    /// Dirty row indices included in `partialRows`.
+    public let dirtyRows: [Int]
+    /// Only dirty rows copied for incremental updates.
+    public let partialRows: [(row: Int, cells: [Cell])]
 
     public init(
         cells: [Cell],
@@ -133,7 +140,10 @@ public struct ScreenSnapshot: Sendable {
         selection: Selection?,
         scrollbackCount: Int,
         viewportOffset: Int,
-        dirtyRegion: DirtyRegion
+        dirtyRegion: DirtyRegion,
+        isPartial: Bool = false,
+        dirtyRows: [Int] = [],
+        partialRows: [(row: Int, cells: [Cell])] = []
     ) {
         self.cells = cells
         self.columns = columns
@@ -146,10 +156,16 @@ public struct ScreenSnapshot: Sendable {
         self.scrollbackCount = scrollbackCount
         self.viewportOffset = viewportOffset
         self.dirtyRegion = dirtyRegion
+        self.isPartial = isPartial
+        self.dirtyRows = dirtyRows
+        self.partialRows = partialRows
     }
 
     public func cell(at col: Int, row: Int) -> Cell {
-        cells[row * columns + col]
+        if isPartial {
+            fatalError("Partial snapshot does not support random cell access; use renderer backing store.")
+        }
+        return cells[row * columns + col]
     }
 
     /// Convert a viewport row to an absolute line number.
@@ -160,6 +176,9 @@ public struct ScreenSnapshot: Sendable {
     /// Extract text from a selection over viewport-relative coordinates.
     /// Handles wide-char continuation cells and trailing-space trimming.
     public func extractText(from sel: Selection) -> String {
+        if isPartial {
+            fatalError("Partial snapshot does not support text extraction; use Screen.extractText directly.")
+        }
         let (s, e) = sel.ordered
         var result = ""
 
@@ -354,14 +373,54 @@ public final class Screen {
         return region
     }
 
-    public func snapshot(selection: Selection? = nil) -> ScreenSnapshot {
+    public func snapshot(selection: Selection? = nil, allowPartial: Bool = false) -> ScreenSnapshot {
+        let region = consumeDirtyRegion()
+
+        let canBePartial = allowPartial
+            && !region.fullRebuild
+            && region.isDirty
+            && viewportOffset == 0
+
+        if canBePartial {
+            let dirty = region.dirtyRows
+            var partialRows: [(row: Int, cells: [Cell])] = []
+            partialRows.reserveCapacity(dirty.count)
+            for row in dirty {
+                guard row >= 0 && row < rows else { continue }
+                let base = rowStart(row)
+                var rowCells: [Cell] = []
+                rowCells.reserveCapacity(columns)
+                for i in base..<(base + columns) {
+                    rowCells.append(cells[i])
+                }
+                partialRows.append((row: row, cells: rowCells))
+            }
+            print("[SNAPSHOT] isPartial=true cells.count=0 dirtyRows=\(dirty) partialRows=\(partialRows.count)")
+            return ScreenSnapshot(
+                cells: [],
+                columns: columns,
+                rows: rows,
+                cursorCol: cursorCol,
+                cursorRow: cursorRow,
+                cursorVisible: viewportOffset == 0 && cursorVisible,
+                cursorShape: cursorShape,
+                selection: selection,
+                scrollbackCount: scrollbackCount,
+                viewportOffset: viewportOffset,
+                dirtyRegion: region,
+                isPartial: true,
+                dirtyRows: dirty,
+                partialRows: partialRows
+            )
+        }
+
         let viewCells: [Cell]
         if viewportOffset == 0 {
             viewCells = buildLinearCells()
         } else {
             viewCells = buildViewportCells()
         }
-        let region = consumeDirtyRegion()
+        print("[SNAPSHOT] isPartial=false cells.count=\(viewCells.count) dirtyRows=\(region.dirtyRows)")
         return ScreenSnapshot(
             cells: viewCells,
             columns: columns,

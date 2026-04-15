@@ -114,7 +114,8 @@ struct TextRunBuildingTests {
             scrollbackCount: 0, viewportOffset: 0,
             dirtyRegion: .full
         )
-        let runs = renderer.buildRuns(forRow: 0, snapshot: snapshot)
+        renderer.setContent(snapshot)
+        let runs = renderer.buildRuns(forRow: 0)
         #expect(runs.count == 2)
         #expect(runs[0].startCol == 0)
         #expect(runs[0].cells.count == 1)
@@ -138,7 +139,8 @@ struct TextRunBuildingTests {
             scrollbackCount: 0, viewportOffset: 0,
             dirtyRegion: .full
         )
-        let runs = renderer.buildRuns(forRow: 0, snapshot: snapshot)
+        renderer.setContent(snapshot)
+        let runs = renderer.buildRuns(forRow: 0)
         #expect(runs.count == 2)
         #expect(runs[0].startCol == 0)
         #expect(runs[1].startCol == 2)
@@ -160,7 +162,8 @@ struct TextRunBuildingTests {
             scrollbackCount: 0, viewportOffset: 0,
             dirtyRegion: .full
         )
-        let runs = renderer.buildRuns(forRow: 0, snapshot: snapshot)
+        renderer.setContent(snapshot)
+        let runs = renderer.buildRuns(forRow: 0)
         // Continuation cells break runs, so we have two runs: "中" and "A".
         #expect(runs.count == 2)
         #expect(runs[0].startCol == 0)
@@ -183,7 +186,8 @@ struct TextRunBuildingTests {
             scrollbackCount: 0, viewportOffset: 0,
             dirtyRegion: .full
         )
-        let runs = renderer.buildRuns(forRow: 0, snapshot: snapshot)
+        renderer.setContent(snapshot)
+        let runs = renderer.buildRuns(forRow: 0)
         #expect(runs.count == 1)
         #expect(runs[0].cells.count == 3)
     }

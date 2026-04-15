@@ -56,6 +56,11 @@ final class MetalRenderer {
 
     private(set) var currentSnapshot: ScreenSnapshot?
 
+    /// Backing store for the full grid, merged from partial snapshots.
+    private var backingCells: [Cell] = []
+    private var backingColumns: Int = 0
+    private var backingRows: Int = 0
+
     /// Accumulated dirty region across setContent() calls, consumed by render().
     private(set) var pendingDirtyRegion = DirtyRegion.full
 
@@ -380,10 +385,16 @@ final class MetalRenderer {
 
     func resize(screen: ScreenSize) {
         guard screen != screenSize else { return }
+        let oldGrid = gridSize
         screenSize = screen
         gridSize = GridSize.calculate(screen: screen, cell: fontSystem.cellSize)
         padding = Padding.balanced(screen: screen, grid: gridSize, cell: fontSystem.cellSize)
         shrinkBuffersIfNeeded()
+        if oldGrid != gridSize {
+            backingCells.removeAll()
+            backingColumns = 0
+            backingRows = 0
+        }
         pendingDirtyRegion.markFull()
         markAllFramesDirty()
         uniformsDirtyCounter = Self.swapChainCount
@@ -397,6 +408,22 @@ final class MetalRenderer {
         if selectionChanged {
             pendingDirtyRegion.markFull()
         }
+
+        if snapshot.isPartial {
+            assert(snapshot.columns == backingColumns && snapshot.rows == backingRows,
+                   "Partial snapshot size mismatch: expected \(backingColumns)x\(backingRows), got \(snapshot.columns)x\(snapshot.rows)")
+            for (row, cells) in snapshot.partialRows {
+                let dst = row * backingColumns
+                backingCells.replaceSubrange(dst..<(dst + backingColumns), with: cells)
+            }
+            print("[RENDERER] merged partial snapshot partialRows=\(snapshot.partialRows.count) backingCells.count=\(backingCells.count)")
+        } else {
+            backingCells = snapshot.cells
+            backingColumns = snapshot.columns
+            backingRows = snapshot.rows
+            print("[RENDERER] replaced full snapshot cells.count=\(snapshot.cells.count) backingCells.count=\(backingCells.count)")
+        }
+
         markAllFramesDirty()
     }
 
@@ -637,8 +664,8 @@ final class MetalRenderer {
             return // nothing dirty
         }
 
-        let snapRows = snapshot.map { min(rows, $0.rows) } ?? 0
-        let snapCols = snapshot.map { min(cols, $0.columns) } ?? 0
+        let snapRows = min(rows, backingRows)
+        let snapCols = min(cols, backingColumns)
         let defaultBg = colorPalette.defaultBg
         let palette = colorPalette
 
@@ -671,10 +698,10 @@ final class MetalRenderer {
 
             let lineMatches = searchLineMap[absLine]
 
-            if row < snapRows, let snapshot {
-                let rowBase = row * snapshot.columns
+            if row < snapRows {
+                let rowBase = row * backingColumns
                 for col in 0..<snapCols {
-                    let attrs = snapshot.cells[rowBase + col].attributes
+                    let attrs = backingCells[rowBase + col].attributes
                     var (fg, bg) = palette.resolveDisplay(attrs)
 
                     if let b = selBounds, Selection.contains(ordered: b, line: absLine, col: col) {
@@ -765,8 +792,8 @@ final class MetalRenderer {
             .bindMemory(to: CellBgInstance.self, capacity: count)
 
         let fg: SIMD4<UInt8>
-        if let snapshot, url.row < snapshot.rows, clampedStart < snapshot.columns {
-            let attrs = snapshot.cells[url.row * snapshot.columns + clampedStart].attributes
+        if url.row < backingRows, clampedStart < backingColumns {
+            let attrs = backingCells[url.row * backingColumns + clampedStart].attributes
             fg = colorPalette.resolveDisplay(attrs).fg
         } else {
             fg = colorPalette.defaultFg
@@ -840,10 +867,10 @@ final class MetalRenderer {
 
     /// Build text runs for a single row. Runs are sequences of consecutive
     /// renderable, non-space cells with identical attributes.
-    func buildRuns(forRow row: Int, snapshot: ScreenSnapshot) -> [TextRun] {
+    func buildRuns(forRow row: Int) -> [TextRun] {
         var runs: [TextRun] = []
-        let rowBase = row * snapshot.columns
-        let cols = snapshot.columns
+        let rowBase = row * backingColumns
+        let cols = backingColumns
 
         var currentStart: Int? = nil
         var currentCells: [Cell] = []
@@ -866,7 +893,7 @@ final class MetalRenderer {
         }
 
         for col in 0..<cols {
-            let cell = snapshot.cells[rowBase + col]
+            let cell = backingCells[rowBase + col]
             guard cell.width.isRenderable else {
                 flushCurrentRun()
                 continue
@@ -989,16 +1016,16 @@ final class MetalRenderer {
         var textIdx = 0
         var emojiIdx = 0
 
-        let snapRows = min(rows, snapshot.rows)
+        let snapRows = min(rows, backingRows)
         let colorState = makeTextColorState(snapshot: snapshot, searchLineMap: searchLineMap)
         let cellWidth = Float(fontSystem.cellSize.width)
         let shaper = CoreTextShaper(fontSystem: fontSystem)
 
         for row in 0..<snapRows {
             let absLine = snapshot.absoluteLine(forViewportRow: row)
-            let rowBase = row * snapshot.columns
-            let snapCols = min(cols, snapshot.columns)
-            let runs = buildRuns(forRow: row, snapshot: snapshot)
+            let rowBase = row * backingColumns
+            let snapCols = min(cols, backingColumns)
+            let runs = buildRuns(forRow: row)
 
             for run in runs {
                 var textSegmentStart: Int? = nil
@@ -1037,7 +1064,7 @@ final class MetalRenderer {
                             if cell.width == .wide {
                                 targetCells = 2
                             } else if col + 1 < snapCols {
-                                let nextCell = snapshot.cells[rowBase + col + 1]
+                                let nextCell = backingCells[rowBase + col + 1]
                                 if nextCell.content.firstScalar == Unicode.Scalar(" ") || !nextCell.width.isRenderable {
                                     targetCells = 2
                                 }
@@ -1102,7 +1129,7 @@ final class MetalRenderer {
         let ptr = frame.pointee.textInstanceBuffer.contents()
             .bindMemory(to: CellTextInstance.self, capacity: instanceCount)
 
-        let snapCols = snapshot.columns
+        let snapCols = backingColumns
         let colorState = makeTextColorState(snapshot: snapshot, searchLineMap: searchLineMap)
         var enteredDirtyRange = false
 
@@ -1116,11 +1143,11 @@ final class MetalRenderer {
 
             let col = Int(ptr[i].gridPos.x)
             let rowBase = row * snapCols
-            guard rowBase + col < snapshot.cells.count else { continue }
+            guard rowBase + col < backingCells.count else { continue }
 
             let absLine = snapshot.absoluteLine(forViewportRow: row)
             ptr[i].color = colorState.foreground(
-                attrs: snapshot.cells[rowBase + col].attributes,
+                attrs: backingCells[rowBase + col].attributes,
                 row: row, col: col, absLine: absLine)
         }
     }
