@@ -34,6 +34,7 @@ struct ResourceMetrics {
     var estimatedBufferBytes: UInt64 = 0
     var estimatedAtlasBytes: UInt64 = 0
     var processRSSBytes: UInt64 = 0
+    var processPhysFootprintBytes: UInt64 = 0
 }
 
 /// Snapshot of a single pane's resources.
@@ -42,7 +43,7 @@ struct PaneResourceSnapshot {
     let metrics: ResourceMetrics
 }
 
-/// Reads the current process RSS via Mach task_info.
+/// Reads the current process memory info via Mach task_info.
 enum ProcessMemoryInfo {
     /// Returns the resident set size (RSS) in bytes for the current process.
     /// Returns 0 if the query fails.
@@ -59,6 +60,24 @@ enum ProcessMemoryInfo {
         }
         guard kerr == KERN_SUCCESS else { return 0 }
         return UInt64(info.resident_size)
+    }
+
+    /// Returns the physical footprint in bytes for the current process.
+    /// This value aligns closely with Activity Monitor's "Memory" column.
+    /// Returns 0 if the query fails.
+    static func currentPhysFootprint() -> UInt64 {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let kerr = withUnsafeMutablePointer(to: &info) { ptr in
+            task_info(
+                mach_task_self_,
+                task_flavor_t(TASK_VM_INFO),
+                task_info_t(OpaquePointer(ptr)),
+                &count
+            )
+        }
+        guard kerr == KERN_SUCCESS else { return 0 }
+        return UInt64(info.phys_footprint)
     }
 }
 

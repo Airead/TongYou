@@ -1178,7 +1178,8 @@ final class MetalRenderer {
             metalAllocatedSize: UInt64(device.currentAllocatedSize),
             estimatedBufferBytes: totalBufferBytes,
             estimatedAtlasBytes: glyphAtlasBytes + emojiAtlasBytes,
-            processRSSBytes: ProcessMemoryInfo.currentRSS()
+            processRSSBytes: ProcessMemoryInfo.currentRSS(),
+            processPhysFootprintBytes: ProcessMemoryInfo.currentPhysFootprint()
         )
     }
 }
