@@ -88,15 +88,15 @@ struct Config: Equatable {
         }
 
         if !customKeybindings.isEmpty {
-            var merged = Keybinding.defaults
+            var unique: [Keybinding] = []
             for custom in customKeybindings {
-                if let index = merged.firstIndex(where: { $0.modifiers == custom.modifiers && $0.key == custom.key }) {
-                    merged[index] = custom
+                if let index = unique.firstIndex(where: { $0.modifiers == custom.modifiers && $0.key == custom.key }) {
+                    unique[index] = custom
                 } else {
-                    merged.append(custom)
+                    unique.append(custom)
                 }
             }
-            config.keybindings = merged
+            config.keybindings = unique
         }
 
         return config
