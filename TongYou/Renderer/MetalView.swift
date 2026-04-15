@@ -941,6 +941,8 @@ final class MetalView: NSView {
         configureController(controller)
         wireDisplayCallbacks(controller)
         terminalController = controller
+        renderer?.markDirty()
+        lastRenderedContentGeneration = 0
         wakeDisplayLink()
     }
 
