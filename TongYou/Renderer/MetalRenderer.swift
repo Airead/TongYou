@@ -427,14 +427,12 @@ final class MetalRenderer {
             }
             let copiedCount = snapshot.partialRows.map { $0.cells.count }.reduce(0, +)
             frameMetrics?.recordSnapshotCellCopyCount(copiedCount)
-            print("[RENDERER] merged partial snapshot partialRows=\(snapshot.partialRows.count) backingCells.count=\(backingCells.count)")
         } else {
             backingCells = snapshot.cells
             backingColumns = snapshot.columns
             backingRows = snapshot.rows
             stagedRowInstances.removeAll()
             frameMetrics?.recordSnapshotCellCopyCount(snapshot.cells.count)
-            print("[RENDERER] replaced full snapshot cells.count=\(snapshot.cells.count) backingCells.count=\(backingCells.count)")
         }
 
         markAllFramesDirty()
@@ -447,9 +445,6 @@ final class MetalRenderer {
             frameMetrics?.recordSkip()
             return
         }
-
-        // DirtyRegion validation logging - remove after testing
-        print("[RENDER] full=\(pendingDirtyRegion.fullRebuild) dirtyRows=\(pendingDirtyRegion.dirtyRows)")
 
         guard frameSemaphore.wait(timeout: .now()) == .success else {
             frameMetrics?.recordSkip()

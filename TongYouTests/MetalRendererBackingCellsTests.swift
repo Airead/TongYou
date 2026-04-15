@@ -141,4 +141,69 @@ struct MetalRendererBackingCellsTests {
         #expect(runs2.count == 1)
         #expect(runs2[0].cells[2].content.string == "9")
     }
+
+    @Test func setContentPartialSnapshotUpdatesRowsThreeAndSeven() {
+        let renderer = makeRenderer()
+
+        // Full snapshot: 4 columns x 8 rows, all empty
+        let fullCells = [Cell](repeating: .empty, count: 32)
+        let fullSnapshot = ScreenSnapshot(
+            cells: fullCells,
+            columns: 4, rows: 8,
+            cursorCol: 0, cursorRow: 0,
+            cursorVisible: true, cursorShape: .block,
+            selection: nil,
+            scrollbackCount: 0, viewportOffset: 0,
+            dirtyRegion: .full
+        )
+        renderer.setContent(fullSnapshot)
+
+        // Partial update: only rows 3 and 7 change
+        let row3 = [
+            Cell(content: "A", attributes: .default, width: .normal),
+            Cell(content: "B", attributes: .default, width: .normal),
+            Cell(content: "C", attributes: .default, width: .normal),
+            Cell(content: "D", attributes: .default, width: .normal)
+        ]
+        let row7 = [
+            Cell(content: "W", attributes: .default, width: .normal),
+            Cell(content: "X", attributes: .default, width: .normal),
+            Cell(content: "Y", attributes: .default, width: .normal),
+            Cell(content: "Z", attributes: .default, width: .normal)
+        ]
+        let partialSnapshot = ScreenSnapshot(
+            cells: [],
+            columns: 4, rows: 8,
+            cursorCol: 0, cursorRow: 0,
+            cursorVisible: true, cursorShape: .block,
+            selection: nil,
+            scrollbackCount: 0, viewportOffset: 0,
+            dirtyRegion: DirtyRegion(rowCount: 8, fullRebuild: false),
+            isPartial: true,
+            dirtyRows: [3, 7],
+            partialRows: [
+                (row: 3, cells: row3),
+                (row: 7, cells: row7)
+            ]
+        )
+        renderer.setContent(partialSnapshot)
+
+        // Row 3 should reflect partial update
+        let runs3 = renderer.buildRuns(forRow: 3)
+        #expect(runs3.count == 1)
+        #expect(runs3[0].cells.map { $0.content.string } == ["A", "B", "C", "D"])
+
+        // Row 7 should reflect partial update
+        let runs7 = renderer.buildRuns(forRow: 7)
+        #expect(runs7.count == 1)
+        #expect(runs7[0].cells.map { $0.content.string } == ["W", "X", "Y", "Z"])
+
+        // Other rows should remain empty (no runs)
+        let runs0 = renderer.buildRuns(forRow: 0)
+        #expect(runs0.isEmpty)
+        let runs4 = renderer.buildRuns(forRow: 4)
+        #expect(runs4.isEmpty)
+        let runs6 = renderer.buildRuns(forRow: 6)
+        #expect(runs6.isEmpty)
+    }
 }

@@ -395,7 +395,6 @@ public final class Screen {
                 }
                 partialRows.append((row: row, cells: rowCells))
             }
-            print("[SNAPSHOT] isPartial=true cells.count=0 dirtyRows=\(dirty) partialRows=\(partialRows.count)")
             return ScreenSnapshot(
                 cells: [],
                 columns: columns,
@@ -420,7 +419,6 @@ public final class Screen {
         } else {
             viewCells = buildViewportCells()
         }
-        print("[SNAPSHOT] isPartial=false cells.count=\(viewCells.count) dirtyRows=\(region.dirtyRows)")
         return ScreenSnapshot(
             cells: viewCells,
             columns: columns,

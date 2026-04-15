@@ -116,6 +116,17 @@ import TYTerminal
         #expect(!region.isDirty(row: -1))
     }
 
+    @Test func isDirtyRowAfterMarkRange() {
+        var region = DirtyRegion(rowCount: 10, fullRebuild: false)
+        region.markRange(1..<4)
+        #expect(region.isDirty(row: 1))
+        #expect(region.isDirty(row: 2))
+        #expect(region.isDirty(row: 3))
+        #expect(!region.isDirty(row: 0))
+        #expect(!region.isDirty(row: 4))
+        #expect(!region.isDirty(row: 5))
+    }
+
     @Test func fullRebuildMarksAllRowsDirty() {
         let region = DirtyRegion.full
         #expect(region.isDirty(row: 0))
