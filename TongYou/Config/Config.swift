@@ -88,15 +88,19 @@ struct Config: Equatable {
         }
 
         if !customKeybindings.isEmpty {
-            var unique: [Keybinding] = []
+            // Custom keybindings *merge on top of* defaults so the user only has
+            // to override the shortcuts they want to change. Replacing the entire
+            // array with custom bindings would silently break every unmodified
+            // default shortcut.
+            var merged = Keybinding.defaults
             for custom in customKeybindings {
-                if let index = unique.firstIndex(where: { $0.modifiers == custom.modifiers && $0.key == custom.key }) {
-                    unique[index] = custom
+                if let index = merged.firstIndex(where: { $0.modifiers == custom.modifiers && $0.key == custom.key }) {
+                    merged[index] = custom
                 } else {
-                    unique.append(custom)
+                    merged.append(custom)
                 }
             }
-            config.keybindings = unique
+            config.keybindings = merged
         }
 
         return config

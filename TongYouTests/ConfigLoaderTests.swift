@@ -126,12 +126,22 @@ struct ConfigTests {
     @Test func keybindingsAccumulate() {
         let entries: [ConfigParser.Entry] = [
             .init(key: "keybind", value: "cmd+t=new_tab"),
-            .init(key: "keybind", value: "cmd+w=close_tab"),
+            .init(key: "keybind", value: "alt+g=list_remote_sessions"),
         ]
         let config = Config.from(entries: entries)
-        #expect(config.keybindings.count == 2)
-        #expect(config.keybindings[0].action == .newTab)
-        #expect(config.keybindings[1].action == .closeTab)
+        // Custom bindings merge on top of defaults; unmodified defaults stay intact.
+        #expect(config.keybindings.count == Keybinding.defaults.count + 1)
+        #expect(config.keybindings.first { $0.key == "t" && $0.modifiers == .command }?.action == .newTab)
+        #expect(config.keybindings.first { $0.key == "g" && $0.modifiers == .option }?.action == .listRemoteSessions)
+    }
+
+    @Test func customKeybindingsOverrideDefaults() {
+        let entries: [ConfigParser.Entry] = [
+            .init(key: "keybind", value: "cmd+t=close_tab"),
+        ]
+        let config = Config.from(entries: entries)
+        #expect(config.keybindings.count == Keybinding.defaults.count)
+        #expect(config.keybindings.first { $0.key == "t" && $0.modifiers == .command }?.action == .closeTab)
     }
 
     @Test func keybindingRunInPlaceParsing() {
@@ -140,9 +150,10 @@ struct ConfigTests {
             .init(key: "keybind", value: "alt+g=run_in_place:git:log,--oneline"),
         ]
         let config = Config.from(entries: entries)
-        #expect(config.keybindings.count == 2)
-        #expect(config.keybindings[0].action == .runInPlace(command: "lazygit", arguments: []))
-        #expect(config.keybindings[1].action == .runInPlace(command: "git", arguments: ["log", "--oneline"]))
+        // alt+m already exists in defaults; alt+g is new, so count increases by 1.
+        #expect(config.keybindings.count == Keybinding.defaults.count + 1)
+        #expect(config.keybindings.first { $0.key == "m" && $0.modifiers == .option }?.action == .runInPlace(command: "lazygit", arguments: []))
+        #expect(config.keybindings.first { $0.key == "g" && $0.modifiers == .option }?.action == .runInPlace(command: "git", arguments: ["log", "--oneline"]))
     }
 
     @Test func noKeybindsUsesDefaults() {
@@ -353,10 +364,11 @@ struct ConfigLoaderTests {
 
     @Test func loadWithNoConfigFiles() {
         let loader = ConfigLoader()
-        // When no config files exist, should fall back to defaults
-        // (We can't guarantee no config files exist on the test machine,
-        // but at minimum this shouldn't crash)
-        loader.load()
+        // Use a non-existent temp path so the test never depends on the real filesystem state.
+        let tempPath = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathComponent("config")
+        loader.load(from: [tempPath])
         #expect(loader.config.fontFamily.isEmpty == false)
     }
 
@@ -449,7 +461,7 @@ struct ConfigLoaderTests {
         #expect(config.tabWidth == 4)
         #expect(config.bell == .visual)
         #expect(config.optionAsAlt == true)
-        #expect(config.keybindings.count == 2)
+        #expect(config.keybindings.count == Keybinding.defaults.count)
         #expect(config.debugMetrics == true)
     }
 }
