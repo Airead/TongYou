@@ -132,7 +132,7 @@ struct TerminalWindowView: View {
                             focusManager: focusManager,
                             focusColor: paneFocusColor,
                             controllerForPane: { paneID in
-                                sessionManager.controller(for: paneID)
+                                sessionManager.activeController(for: paneID)
                             },
                             onTabAction: handleTabAction,
                             onTitleChanged: updateTabTitle,
@@ -147,7 +147,7 @@ struct TerminalWindowView: View {
                             focusManager: focusManager,
                             focusColor: paneFocusColor,
                             controllerForPane: { paneID in
-                                sessionManager.controller(for: paneID)
+                                sessionManager.activeController(for: paneID)
                             },
                             onTabAction: handleTabAction,
                             onTitleChanged: { paneID, title in
@@ -503,6 +503,10 @@ struct TerminalWindowView: View {
             detachActiveSession()
         case .renameSession:
             startRenamingActiveSession()
+        case .runInPlace(let command, let arguments):
+            if let paneID = focusManager.focusedPaneID {
+                sessionManager.runInPlace(at: paneID, command: command, arguments: arguments)
+            }
         }
     }
 

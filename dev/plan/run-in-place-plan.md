@@ -25,10 +25,10 @@
 让 `PTYProcess` 能够执行用户指定的命令（而不仅是默认 shell）。
 
 ### 具体改动
-1. **修改 `PTYProcess.start()`**  
-   增加重载：  
+1. **修改 `PTYProcess.start()`**
+   增加重载：
    `start(command: String, arguments: [String], columns: UInt16, rows: UInt16, ...)`
-2. **修改 `forkAndExec()`**  
+2. **修改 `forkAndExec()`**
    当提供了 `command` 时，将 `argv[0]` 设为命令名，后续追加参数；否则保持现有 shell 行为。
 
 ### 验证方式
@@ -47,8 +47,8 @@
 `TerminalController` 作为 `PTYProcess` 的封装层，能够按需启动自定义命令。
 
 ### 具体改动
-1. **修改 `TerminalController.start()`**  
-   签名改为：  
+1. **修改 `TerminalController.start()`**
+   签名改为：
    `func start(workingDirectory: String? = nil, command: String? = nil, arguments: [String] = [])`
 2. 在内部根据 `command` 决定调用 `process.start(columns:rows:workingDirectory:)` 或新的 `process.start(command:arguments:columns:rows:workingDirectory:)`。
 
@@ -215,17 +215,17 @@ UI 能实时切换 in-place 命令，退出后无缝恢复。
 处理 resize、标题更新、嵌套 overlay、异常退出等边界场景。
 
 ### 具体改动
-1. **Resize 同步到整个 Stack**  
+1. **Resize 同步到整个 Stack**
    在 `SessionManager` resize 逻辑中，找到 pane 对应的所有 overlay controller + 底层 controller，全部调用 `resize(columns:rows:cellWidth:cellHeight:)`。
-2. **标题更新**  
+2. **标题更新**
    overlay controller 的 `onTitleChanged` 需要被转发到 UI，以便用户知道当前在运行什么。当恢复底层 controller 时，恢复其标题。
-3. **嵌套支持**  
+3. **嵌套支持**
    `overlayStacks[paneID]` 是数组，天然支持多层嵌套（lazygit 里再按 alt+n 打开 fzf）。验证 `runInPlace` 在已有 overlay 的 pane 上能继续 push。
-4. **快速连击保护**  
+4. **快速连击保护**
    在 `runInPlace` 中加入防抖：若栈顶 controller 的进程刚启动、尚未稳定，忽略重复请求。
-5. **Pane 关闭时清理 Stack**  
+5. **Pane 关闭时清理 Stack**
    确保 `closePane` / `closeTab` 会遍历并 stop 所有 overlay controller。
-6. **（可选）`close_on_exit` 行为**  
+6. **（可选）`close_on_exit` 行为**
    若用户配置 `close_on_exit = true`，则 overlay 退出时不仅 pop，还连带关闭底层 pane。
 
 ### 验证方式

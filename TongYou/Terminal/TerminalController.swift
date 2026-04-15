@@ -59,6 +59,9 @@ final class TerminalController: TerminalControlling {
 
     private(set) var isSuspended: Bool = false
 
+    var columns: Int { ptyQueue.sync { screen.columns } }
+    var rows: Int { ptyQueue.sync { screen.rows } }
+
     private let ptyQueue = DispatchQueue(
         label: "io.github.airead.tongyou.pty.read",
         qos: .userInteractive
@@ -183,9 +186,8 @@ final class TerminalController: TerminalControlling {
 
     func resume() {
         isSuspended = false
-        if screenDirty {
-            onNeedsDisplay?()
-        }
+        screenDirty = true
+        onNeedsDisplay?()
     }
 
     // MARK: - Snapshot (called by display link on MainActor)

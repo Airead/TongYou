@@ -633,3 +633,95 @@ struct SessionManagerTests {
         #expect(store.loadAll().isEmpty)
     }
 }
+
+@Suite("SessionManager Overlay Stack", .serialized)
+struct SessionManagerOverlayStackTests {
+
+    private func makeManager() -> SessionManager {
+        let store = SessionStore(
+            directory: FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+                .path
+        )
+        return SessionManager(localSessionStore: store)
+    }
+
+    @Test @MainActor
+    func runInPlacePushesOverlayController() {
+        let mgr = makeManager()
+        _ = mgr.createSession()
+        let paneID = mgr.activeTab!.paneTree.firstPane.id
+        _ = mgr.ensureLocalController(for: paneID)
+
+        mgr.runInPlace(at: paneID, command: "/bin/sleep", arguments: ["10"])
+
+        let active = mgr.activeController(for: paneID)
+        #expect(active != nil)
+        #expect(active !== mgr.controller(for: paneID))
+
+        mgr.closeActiveSession()
+    }
+
+    @Test @MainActor
+    func restoreFromInPlaceResumesBaseController() {
+        let mgr = makeManager()
+        _ = mgr.createSession()
+        let paneID = mgr.activeTab!.paneTree.firstPane.id
+        let base = mgr.ensureLocalController(for: paneID)
+
+        mgr.runInPlace(at: paneID, command: "/bin/sleep", arguments: ["10"])
+
+        let overlay = mgr.activeController(for: paneID)
+        #expect(overlay !== base)
+        #expect(base.isSuspended)
+
+        overlay?.onProcessExited?()
+
+        #expect(mgr.activeController(for: paneID) === base)
+        #expect(!base.isSuspended)
+
+        base.stop()
+    }
+
+    @Test @MainActor
+    func nestedRunInPlaceStacksOverlays() {
+        let mgr = makeManager()
+        _ = mgr.createSession()
+        let paneID = mgr.activeTab!.paneTree.firstPane.id
+        let base = mgr.ensureLocalController(for: paneID)
+
+        mgr.runInPlace(at: paneID, command: "/bin/sleep", arguments: ["10"])
+        let overlay1 = mgr.activeController(for: paneID)
+        #expect(overlay1 !== base)
+
+        mgr.runInPlace(at: paneID, command: "/bin/sleep", arguments: ["10"])
+        let overlay2 = mgr.activeController(for: paneID)
+        #expect(overlay2 !== overlay1)
+        #expect(overlay1!.isSuspended)
+
+        overlay2?.onProcessExited?()
+        #expect(mgr.activeController(for: paneID) === overlay1)
+        #expect(!overlay1!.isSuspended)
+
+        overlay1?.onProcessExited?()
+        #expect(mgr.activeController(for: paneID) === base)
+        #expect(!base.isSuspended)
+
+        base.stop()
+    }
+
+    @Test @MainActor
+    func closePaneStopsAllControllers() {
+        let mgr = makeManager()
+        _ = mgr.createSession()
+        let paneID = mgr.activeTab!.paneTree.firstPane.id
+        _ = mgr.ensureLocalController(for: paneID)
+
+        mgr.runInPlace(at: paneID, command: "/bin/sleep", arguments: ["10"])
+        #expect(mgr.activeController(for: paneID) != nil)
+
+        _ = mgr.closePane(id: paneID)
+
+        #expect(mgr.activeController(for: paneID) == nil)
+    }
+}
