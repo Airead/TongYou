@@ -61,6 +61,14 @@ final class MetalRenderer {
     private var backingColumns: Int = 0
     private var backingRows: Int = 0
 
+    /// CPU-side staging buffer for per-row text/emoji instances.
+    private struct RowTextInstances {
+        var text: [CellTextInstance] = []
+        var emoji: [CellTextInstance] = []
+    }
+
+    private var stagedRowInstances: [RowTextInstances] = []
+
     /// Accumulated dirty region across setContent() calls, consumed by render().
     private(set) var pendingDirtyRegion = DirtyRegion.full
 
@@ -394,6 +402,7 @@ final class MetalRenderer {
             backingCells.removeAll()
             backingColumns = 0
             backingRows = 0
+            stagedRowInstances.removeAll()
         }
         pendingDirtyRegion.markFull()
         markAllFramesDirty()
@@ -416,11 +425,15 @@ final class MetalRenderer {
                 let dst = row * backingColumns
                 backingCells.replaceSubrange(dst..<(dst + backingColumns), with: cells)
             }
+            let copiedCount = snapshot.partialRows.map { $0.cells.count }.reduce(0, +)
+            frameMetrics?.recordSnapshotCellCopyCount(copiedCount)
             print("[RENDERER] merged partial snapshot partialRows=\(snapshot.partialRows.count) backingCells.count=\(backingCells.count)")
         } else {
             backingCells = snapshot.cells
             backingColumns = snapshot.columns
             backingRows = snapshot.rows
+            stagedRowInstances.removeAll()
+            frameMetrics?.recordSnapshotCellCopyCount(snapshot.cells.count)
             print("[RENDERER] replaced full snapshot cells.count=\(snapshot.cells.count) backingCells.count=\(backingCells.count)")
         }
 
@@ -651,19 +664,6 @@ final class MetalRenderer {
         let ptr = frame.pointee.bgInstanceBuffer.contents()
             .bindMemory(to: CellBgInstance.self, capacity: count)
 
-        // Determine which rows to rebuild
-        let rowStart: Int
-        let rowEnd: Int
-        if dirtyRegion.fullRebuild {
-            rowStart = 0
-            rowEnd = rows
-        } else if let range = dirtyRegion.lineRange {
-            rowStart = max(0, range.lowerBound)
-            rowEnd = min(rows, range.upperBound)
-        } else {
-            return // nothing dirty
-        }
-
         let snapRows = min(rows, backingRows)
         let snapCols = min(cols, backingColumns)
         let defaultBg = colorPalette.defaultBg
@@ -691,7 +691,8 @@ final class MetalRenderer {
         let searchMatchBg = SIMD4<UInt8>(180, 150, 40, 255)
         let searchFocusBg = SIMD4<UInt8>(220, 120, 20, 255)
 
-        for row in rowStart..<rowEnd {
+        for row in 0..<rows {
+            if !dirtyRegion.fullRebuild && !dirtyRegion.isDirty(row: row) { continue }
             var idx = row * cols
             let absLine = snapshot?.absoluteLine(forViewportRow: row)
                 ?? row
@@ -927,22 +928,20 @@ final class MetalRenderer {
         return runs
     }
 
-    /// Flush a text segment into the text instance buffer.
-    /// Returns the updated textIdx.
-    private func flushTextSegment(
+    /// Shape a text segment and return the generated instances.
+    private func shapeTextSegment(
         run: TextRun,
         row: Int,
         absLine: Int,
-        textPtr: UnsafeMutablePointer<CellTextInstance>,
-        textIdx: Int,
         colorState: TextColorState,
         shaper: CoreTextShaper,
         cellWidth: Float
-    ) -> Int {
-        guard !run.cells.isEmpty else { return textIdx }
+    ) -> [CellTextInstance] {
+        guard !run.cells.isEmpty else { return [] }
 
         let shapedGlyphs = shaper.shape(run)
-        var idx = textIdx
+        var instances: [CellTextInstance] = []
+        instances.reserveCapacity(shapedGlyphs.count)
 
         for glyph in shapedGlyphs {
             guard let glyphInfo = glyphAtlas.getOrRasterize(
@@ -953,7 +952,7 @@ final class MetalRenderer {
             ), glyphInfo.width > 0 && glyphInfo.height > 0 else { continue }
 
             let glyphCol = run.startCol + glyph.cellIndex
-            textPtr[idx] = CellTextInstance(
+            instances.append(CellTextInstance(
                 glyphPos: SIMD2<UInt32>(glyphInfo.atlasX, glyphInfo.atlasY),
                 glyphSize: SIMD2<UInt32>(glyphInfo.width, glyphInfo.height),
                 bearings: SIMD2<Int16>(glyphInfo.bearingX, glyphInfo.bearingY),
@@ -963,11 +962,109 @@ final class MetalRenderer {
                     row: row, col: glyphCol, absLine: absLine
                 ),
                 offset: SIMD2<Int16>(Int16(glyph.position.x - CGFloat(glyph.cellIndex) * CGFloat(cellWidth)), 0)
-            )
-            idx += 1
+            ))
         }
 
-        return idx
+        return instances
+    }
+
+    /// Rebuild text/emoji instances for a single row.
+    private func rebuildTextRow(
+        row: Int,
+        cols: Int,
+        snapshot: ScreenSnapshot,
+        colorState: TextColorState,
+        shaper: CoreTextShaper,
+        cellWidth: Float
+    ) -> RowTextInstances {
+        var rowInstances = RowTextInstances()
+        let absLine = snapshot.absoluteLine(forViewportRow: row)
+        let rowBase = row * backingColumns
+        let snapCols = min(cols, backingColumns)
+        let runs = buildRuns(forRow: row)
+
+        for run in runs {
+            var textSegmentStart: Int? = nil
+
+            for (offset, cell) in run.cells.enumerated() {
+                let col = run.startCol + offset
+                let isEmoji = cell.content.isEmojiContent
+
+                if isEmoji {
+                    // Flush current text segment before handling emoji
+                    if let start = textSegmentStart {
+                        let end = offset
+                        let textRun = TextRun(
+                            cells: Array(run.cells[start..<end]),
+                            startCol: run.startCol + start,
+                            font: run.font,
+                            attributes: run.attributes
+                        )
+                        rowInstances.text.append(contentsOf: shapeTextSegment(
+                            run: textRun, row: row, absLine: absLine,
+                            colorState: colorState, shaper: shaper, cellWidth: cellWidth
+                        ))
+                        textSegmentStart = nil
+                    }
+
+                    // Render emoji via ColorEmojiAtlas
+                    if let emojiInfo = emojiAtlas.getOrRasterize(
+                        cluster: cell.content, fontSystem: fontSystem,
+                        frameNumber: frameNumber
+                    ), emojiInfo.width > 0 && emojiInfo.height > 0 {
+                        var glyphSize = SIMD2<UInt32>(emojiInfo.width, emojiInfo.height)
+                        var bearings = SIMD2<Int16>(emojiInfo.bearingX, emojiInfo.bearingY)
+
+                        var targetCells: Int = 1
+                        if cell.width == .wide {
+                            targetCells = 2
+                        } else if col + 1 < snapCols {
+                            let nextCell = backingCells[rowBase + col + 1]
+                            if nextCell.content.firstScalar == Unicode.Scalar(" ") || !nextCell.width.isRenderable {
+                                targetCells = 2
+                            }
+                        }
+
+                        if targetCells > 1 {
+                            let targetWidth = cellWidth * Float(targetCells)
+                            let scale = targetWidth / Float(emojiInfo.width)
+                            glyphSize.x = UInt32(targetWidth)
+                            glyphSize.y = scaled(emojiInfo.height, by: scale)
+                            bearings.x = scaled(bearings.x, by: scale)
+                            bearings.y = scaled(bearings.y, by: scale)
+                        }
+
+                        rowInstances.emoji.append(CellTextInstance(
+                            glyphPos: SIMD2<UInt32>(emojiInfo.atlasX, emojiInfo.atlasY),
+                            glyphSize: glyphSize,
+                            bearings: bearings,
+                            gridPos: SIMD2<UInt16>(UInt16(col), UInt16(row)),
+                            color: .zero
+                        ))
+                    }
+                } else {
+                    if textSegmentStart == nil {
+                        textSegmentStart = offset
+                    }
+                }
+            }
+
+            // Flush remaining text segment at end of run
+            if let start = textSegmentStart {
+                let textRun = TextRun(
+                    cells: Array(run.cells[start..<run.cells.count]),
+                    startCol: run.startCol + start,
+                    font: run.font,
+                    attributes: run.attributes
+                )
+                rowInstances.text.append(contentsOf: shapeTextSegment(
+                    run: textRun, row: row, absLine: absLine,
+                    colorState: colorState, shaper: shaper, cellWidth: cellWidth
+                ))
+            }
+        }
+
+        return rowInstances
     }
 
 
@@ -979,150 +1076,95 @@ final class MetalRenderer {
     ) {
         let cols = Int(grid.columns)
         let rows = Int(grid.rows)
-        let count = cols * rows
 
         guard let snapshot else {
             frame.pointee.textInstanceCount = 0
             frame.pointee.emojiInstanceCount = 0
+            stagedRowInstances.removeAll()
             return
         }
 
         // Fast path: content unchanged (e.g. cursor blink only) — patch colors in-place.
-        if !contentChanged, !dirtyRegion.fullRebuild, let range = dirtyRegion.lineRange,
+        if !contentChanged, !dirtyRegion.fullRebuild,
            frame.pointee.textInstanceCount > 0 {
             patchTextInstanceColors(
-                frame: frame, snapshot: snapshot, dirtyRowRange: range,
+                frame: frame, snapshot: snapshot, dirtyRegion: dirtyRegion,
                 searchLineMap: searchLineMap)
             return
         }
 
-        // Full rebuild path
-        ensureBufferCapacity(
-            buffer: &frame.pointee.textInstanceBuffer,
-            capacity: &frame.pointee.textInstanceCapacity,
-            requiredCount: count, type: CellTextInstance.self
-        )
-        ensureBufferCapacity(
-            buffer: &frame.pointee.emojiInstanceBuffer,
-            capacity: &frame.pointee.emojiInstanceCapacity,
-            requiredCount: count, type: CellTextInstance.self
-        )
+        let fullRebuild = dirtyRegion.fullRebuild
+            || stagedRowInstances.count != rows
+            || stagedRowInstances.isEmpty
 
-        let textPtr = frame.pointee.textInstanceBuffer.contents()
-            .bindMemory(to: CellTextInstance.self, capacity: count)
-        let emojiPtr = frame.pointee.emojiInstanceBuffer.contents()
-            .bindMemory(to: CellTextInstance.self, capacity: count)
-
-        var textIdx = 0
-        var emojiIdx = 0
-
-        let snapRows = min(rows, backingRows)
         let colorState = makeTextColorState(snapshot: snapshot, searchLineMap: searchLineMap)
         let cellWidth = Float(fontSystem.cellSize.width)
         let shaper = CoreTextShaper(fontSystem: fontSystem)
 
-        for row in 0..<snapRows {
-            let absLine = snapshot.absoluteLine(forViewportRow: row)
-            let rowBase = row * backingColumns
-            let snapCols = min(cols, backingColumns)
-            let runs = buildRuns(forRow: row)
-
-            for run in runs {
-                var textSegmentStart: Int? = nil
-
-                for (offset, cell) in run.cells.enumerated() {
-                    let col = run.startCol + offset
-                    let isEmoji = cell.content.isEmojiContent
-
-                    if isEmoji {
-                        // Flush current text segment before handling emoji
-                        if let start = textSegmentStart {
-                            let end = offset
-                            let textRun = TextRun(
-                                cells: Array(run.cells[start..<end]),
-                                startCol: run.startCol + start,
-                                font: run.font,
-                                attributes: run.attributes
-                            )
-                            textIdx = flushTextSegment(
-                                run: textRun, row: row, absLine: absLine,
-                                textPtr: textPtr, textIdx: textIdx,
-                                colorState: colorState, shaper: shaper, cellWidth: cellWidth
-                            )
-                            textSegmentStart = nil
-                        }
-
-                        // Render emoji via ColorEmojiAtlas
-                        if let emojiInfo = emojiAtlas.getOrRasterize(
-                            cluster: cell.content, fontSystem: fontSystem,
-                            frameNumber: frameNumber
-                        ), emojiInfo.width > 0 && emojiInfo.height > 0 {
-                            var glyphSize = SIMD2<UInt32>(emojiInfo.width, emojiInfo.height)
-                            var bearings = SIMD2<Int16>(emojiInfo.bearingX, emojiInfo.bearingY)
-
-                            var targetCells: Int = 1
-                            if cell.width == .wide {
-                                targetCells = 2
-                            } else if col + 1 < snapCols {
-                                let nextCell = backingCells[rowBase + col + 1]
-                                if nextCell.content.firstScalar == Unicode.Scalar(" ") || !nextCell.width.isRenderable {
-                                    targetCells = 2
-                                }
-                            }
-
-                            if targetCells > 1 {
-                                let targetWidth = cellWidth * Float(targetCells)
-                                let scale = targetWidth / Float(emojiInfo.width)
-                                glyphSize.x = UInt32(targetWidth)
-                                glyphSize.y = scaled(emojiInfo.height, by: scale)
-                                bearings.x = scaled(bearings.x, by: scale)
-                                bearings.y = scaled(bearings.y, by: scale)
-                            }
-
-                            emojiPtr[emojiIdx] = CellTextInstance(
-                                glyphPos: SIMD2<UInt32>(emojiInfo.atlasX, emojiInfo.atlasY),
-                                glyphSize: glyphSize,
-                                bearings: bearings,
-                                gridPos: SIMD2<UInt16>(UInt16(col), UInt16(row)),
-                                color: .zero
-                            )
-                            emojiIdx += 1
-                        }
-                    } else {
-                        if textSegmentStart == nil {
-                            textSegmentStart = offset
-                        }
-                    }
-                }
-
-                // Flush remaining text segment at end of run
-                if let start = textSegmentStart {
-                    let textRun = TextRun(
-                        cells: Array(run.cells[start..<run.cells.count]),
-                        startCol: run.startCol + start,
-                        font: run.font,
-                        attributes: run.attributes
-                    )
-                    textIdx = flushTextSegment(
-                        run: textRun, row: row, absLine: absLine,
-                        textPtr: textPtr, textIdx: textIdx,
-                        colorState: colorState, shaper: shaper, cellWidth: cellWidth
-                    )
-                }
+        if fullRebuild {
+            stagedRowInstances = (0..<rows).map { _ in RowTextInstances() }
+            for row in 0..<min(rows, backingRows) {
+                stagedRowInstances[row] = rebuildTextRow(
+                    row: row, cols: cols, snapshot: snapshot,
+                    colorState: colorState, shaper: shaper, cellWidth: cellWidth
+                )
+            }
+        } else {
+            // Partial: only rebuild dirty rows
+            for row in dirtyRegion.dirtyRows {
+                guard row >= 0 && row < rows && row < backingRows else { continue }
+                stagedRowInstances[row] = rebuildTextRow(
+                    row: row, cols: cols, snapshot: snapshot,
+                    colorState: colorState, shaper: shaper, cellWidth: cellWidth
+                )
             }
         }
+
+        // Compact staged rows into GPU buffers
+        let totalTextCount = stagedRowInstances.reduce(0) { $0 + $1.text.count }
+        let totalEmojiCount = stagedRowInstances.reduce(0) { $0 + $1.emoji.count }
+
+        ensureBufferCapacity(
+            buffer: &frame.pointee.textInstanceBuffer,
+            capacity: &frame.pointee.textInstanceCapacity,
+            requiredCount: max(1, totalTextCount), type: CellTextInstance.self
+        )
+        ensureBufferCapacity(
+            buffer: &frame.pointee.emojiInstanceBuffer,
+            capacity: &frame.pointee.emojiInstanceCapacity,
+            requiredCount: max(1, totalEmojiCount), type: CellTextInstance.self
+        )
+
+        let textPtr = frame.pointee.textInstanceBuffer.contents()
+            .bindMemory(to: CellTextInstance.self, capacity: max(1, totalTextCount))
+        let emojiPtr = frame.pointee.emojiInstanceBuffer.contents()
+            .bindMemory(to: CellTextInstance.self, capacity: max(1, totalEmojiCount))
+
+        var textIdx = 0
+        var emojiIdx = 0
+        for row in 0..<rows {
+            let rowInst = stagedRowInstances[row]
+            for inst in rowInst.text {
+                textPtr[textIdx] = inst
+                textIdx += 1
+            }
+            for inst in rowInst.emoji {
+                emojiPtr[emojiIdx] = inst
+                emojiIdx += 1
+            }
+        }
+
         frame.pointee.textInstanceCount = textIdx
         frame.pointee.emojiInstanceCount = emojiIdx
     }
 
     /// Fast color-only patch for text instances in dirty rows.
     /// Skips glyph atlas lookups — only recalculates fg color based on current
-    /// cursor blink / selection state. Instances are row-sorted from the full
-    /// rebuild, so we break early once past the dirty range.
+    /// cursor blink / selection state.
     private func patchTextInstanceColors(
         frame: UnsafeMutablePointer<FrameState>,
         snapshot: ScreenSnapshot,
-        dirtyRowRange: Range<Int>,
+        dirtyRegion: DirtyRegion,
         searchLineMap: SearchLineMap
     ) {
         let instanceCount = frame.pointee.textInstanceCount
@@ -1131,15 +1173,10 @@ final class MetalRenderer {
 
         let snapCols = backingColumns
         let colorState = makeTextColorState(snapshot: snapshot, searchLineMap: searchLineMap)
-        var enteredDirtyRange = false
 
         for i in 0..<instanceCount {
             let row = Int(ptr[i].gridPos.y)
-            if !dirtyRowRange.contains(row) {
-                if enteredDirtyRange { break }
-                continue
-            }
-            enteredDirtyRange = true
+            if !dirtyRegion.isDirty(row: row) { continue }
 
             let col = Int(ptr[i].gridPos.x)
             let rowBase = row * snapCols
@@ -1222,7 +1259,8 @@ final class MetalRenderer {
             gridRows: UInt32(gridSize.rows),
             metalAllocatedSize: UInt64(device.currentAllocatedSize),
             estimatedBufferBytes: totalBufferBytes,
-            estimatedAtlasBytes: glyphAtlasBytes + emojiAtlasBytes
+            estimatedAtlasBytes: glyphAtlasBytes + emojiAtlasBytes,
+            snapshotCellCopyCount: frameMetrics?.snapshotCellCopyCount ?? 0
         )
     }
 }

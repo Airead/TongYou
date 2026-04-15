@@ -321,6 +321,8 @@ struct ResourceStatsView: View {
                 compactMetric("Atlas", ByteFormatter.string(from: metrics.estimatedAtlasBytes), fgColor)
                 Spacer(minLength: 0)
             }
+
+            compactMetric("Snapshot Cells", "\(metrics.snapshotCellCopyCount)", fgColor)
         }
     }
 
