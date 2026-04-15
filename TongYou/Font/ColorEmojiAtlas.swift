@@ -154,9 +154,9 @@ final class ColorEmojiAtlas {
         let emojiSize = fontSystem.pointSize * fontSystem.scaleFactor
         let colorSpace = sRGBColorSpace
 
-        rasterizationQueue.async { [weak self] in
-            let emojiFont = self?.getEmojiFont(size: emojiSize) ?? CTFontCreateWithName("Apple Color Emoji" as CFString, emojiSize, nil)
+        let emojiFont = getEmojiFont(size: emojiSize)
 
+        rasterizationQueue.async { [weak self] in
             let string = cluster.string as CFString
             var glyphs: [CGGlyph] = []
             var positions: [CGPoint] = []

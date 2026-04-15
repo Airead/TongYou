@@ -63,6 +63,9 @@ final class GlyphAtlas {
     /// Tracks glyphs currently being rasterized asynchronously to avoid duplicate work.
     private var pendingRasterizationKeys: Set<GlyphCacheKey> = []
 
+    /// Caches font PostScriptName per ObjectIdentifier to avoid repeated CTFontCopyPostScriptName.
+    private var fontNameCache: [ObjectIdentifier: (name: String, size: CGFloat)] = [:]
+
     /// Background queue for CoreGraphics glyph rasterization.
     private let rasterizationQueue = DispatchQueue(
         label: "io.github.airead.tongyou.glyph-rasterizer",
@@ -92,6 +95,7 @@ final class GlyphAtlas {
     func reset() {
         cache.removeAll(keepingCapacity: true)
         pendingRasterizationKeys.removeAll()
+        fontNameCache.removeAll()
         shelfX = 1
         shelfY = 1
         shelfHeight = 0
@@ -297,8 +301,16 @@ final class GlyphAtlas {
     }
 
     private func cacheKey(for glyph: CGGlyph, font: CTFont) -> GlyphCacheKey {
-        let name = CTFontCopyPostScriptName(font) as String
-        let size = CTFontGetSize(font)
+        let fontID = ObjectIdentifier(font)
+        let (name, size): (String, CGFloat)
+        if let cached = fontNameCache[fontID] {
+            (name, size) = cached
+        } else {
+            let n = CTFontCopyPostScriptName(font) as String
+            let s = CTFontGetSize(font)
+            fontNameCache[fontID] = (n, s)
+            (name, size) = (n, s)
+        }
         return GlyphCacheKey(fontName: name, fontSize: size, glyph: glyph)
     }
 

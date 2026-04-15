@@ -14,18 +14,22 @@ struct CachedShapedRow {
 /// Key is derived from the cell contents and attributes of the entire row.
 /// When the font configuration changes, the cache must be cleared by the owner.
 final class ShapedRowCache {
-    private struct Key: Hashable {
-        let value: Int
-        func hash(into hasher: inout Hasher) {
-            hasher.combine(value)
-        }
-        static func == (lhs: Key, rhs: Key) -> Bool {
-            lhs.value == rhs.value
-        }
+    private struct Entry {
+        var row: CachedShapedRow
+        var cells: [Cell]
+        var hash: Int
+        var prev: Int?
+        var next: Int?
     }
 
-    private var entries: [Key: CachedShapedRow] = [:]
-    private var accessOrder: [Key] = []
+    /// Entries indexed by slot. Slots are reused via `freeSlots`.
+    private var slots: [Entry] = []
+    private var freeSlots: [Int] = []
+    /// Maps hash → slot index for O(1) lookup.
+    private var hashToSlot: [Int: Int] = [:]
+    /// Doubly-linked list head (LRU) and tail (MRU).
+    private var head: Int?
+    private var tail: Int?
     private let capacity: Int
 
     private(set) var hits: UInt64 = 0
@@ -37,39 +41,55 @@ final class ShapedRowCache {
 
     /// Look up a cached shaping result for the given row of cells.
     func get(cells: ArraySlice<Cell>) -> CachedShapedRow? {
-        let key = Self.makeKey(cells: cells)
-        guard entries[key] != nil else {
+        let hash = Self.hashCells(cells)
+        guard let slot = hashToSlot[hash] else {
+            misses += 1
+            return nil
+        }
+        guard Array(cells) == slots[slot].cells else {
             misses += 1
             return nil
         }
         hits += 1
-        accessOrder.removeAll { $0 == key }
-        accessOrder.append(key)
-        return entries[key]
+        moveToTail(slot)
+        return slots[slot].row
     }
 
     /// Store a shaping result for the given row of cells.
     func set(cells: ArraySlice<Cell>, value: CachedShapedRow) {
-        let key = Self.makeKey(cells: cells)
-        if entries[key] == nil, entries.count >= capacity {
-            let oldest = accessOrder.removeFirst()
-            entries.removeValue(forKey: oldest)
-        } else {
-            accessOrder.removeAll { $0 == key }
+        let hash = Self.hashCells(cells)
+        let cellArray = Array(cells)
+        if let existing = hashToSlot[hash] {
+            if slots[existing].cells == cellArray {
+                slots[existing].row = value
+                moveToTail(existing)
+                return
+            }
+            // Hash collision with different cells — evict the colliding entry.
+            unlinkSlot(existing)
+            freeSlots.append(existing)
+        } else if hashToSlot.count >= capacity {
+            evictHead()
         }
-        accessOrder.append(key)
-        entries[key] = value
+        let slot = allocSlot(Entry(row: value, cells: cellArray, hash: hash))
+        hashToSlot[hash] = slot
+        appendToTail(slot)
     }
 
     /// Remove all cached entries and reset counters.
     func clear() {
-        entries.removeAll(keepingCapacity: true)
-        accessOrder.removeAll(keepingCapacity: true)
+        slots.removeAll(keepingCapacity: true)
+        freeSlots.removeAll(keepingCapacity: true)
+        hashToSlot.removeAll(keepingCapacity: true)
+        head = nil
+        tail = nil
         hits = 0
         misses = 0
     }
 
-    private static func makeKey(cells: ArraySlice<Cell>) -> Key {
+    // MARK: - Private
+
+    private static func hashCells(_ cells: ArraySlice<Cell>) -> Int {
         var hasher = Hasher()
         for cell in cells {
             hasher.combine(cell.content.string)
@@ -78,6 +98,45 @@ final class ShapedRowCache {
             hasher.combine(cell.attributes.bgColor.raw)
             hasher.combine(cell.width.rawValue)
         }
-        return Key(value: hasher.finalize())
+        return hasher.finalize()
+    }
+
+    private func allocSlot(_ entry: Entry) -> Int {
+        if let free = freeSlots.popLast() {
+            slots[free] = entry
+            return free
+        }
+        slots.append(entry)
+        return slots.count - 1
+    }
+
+    private func unlinkSlot(_ slot: Int) {
+        let prev = slots[slot].prev
+        let next = slots[slot].next
+        if let p = prev { slots[p].next = next } else { head = next }
+        if let n = next { slots[n].prev = prev } else { tail = prev }
+        slots[slot].prev = nil
+        slots[slot].next = nil
+    }
+
+    private func appendToTail(_ slot: Int) {
+        slots[slot].prev = tail
+        slots[slot].next = nil
+        if let t = tail { slots[t].next = slot }
+        tail = slot
+        if head == nil { head = slot }
+    }
+
+    private func moveToTail(_ slot: Int) {
+        guard slot != tail else { return }
+        unlinkSlot(slot)
+        appendToTail(slot)
+    }
+
+    private func evictHead() {
+        guard let h = head else { return }
+        unlinkSlot(h)
+        hashToSlot.removeValue(forKey: slots[h].hash)
+        freeSlots.append(h)
     }
 }

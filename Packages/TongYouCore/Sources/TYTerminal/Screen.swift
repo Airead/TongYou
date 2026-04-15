@@ -6,10 +6,13 @@ public struct DirtyRegion: Equatable, Sendable {
     /// When true, the renderer must rebuild all instances (scroll, resize, etc.).
     public var fullRebuild: Bool
     private var lineBits: [Bool]
+    /// O(1) flag tracking whether any element in lineBits is true.
+    private var anyLineDirty: Bool
 
     public init(rowCount: Int = 0, fullRebuild: Bool = false) {
         self.fullRebuild = fullRebuild
         self.lineBits = [Bool](repeating: false, count: rowCount)
+        self.anyLineDirty = false
     }
 
     public static let clean = DirtyRegion(rowCount: 0, fullRebuild: false)
@@ -22,6 +25,7 @@ public struct DirtyRegion: Equatable, Sendable {
             lineBits.append(contentsOf: [Bool](repeating: false, count: row - lineBits.count + 1))
         }
         lineBits[row] = true
+        anyLineDirty = true
     }
 
     /// Mark a contiguous range of rows as dirty.
@@ -33,12 +37,14 @@ public struct DirtyRegion: Equatable, Sendable {
             lineBits.append(contentsOf: [Bool](repeating: false, count: maxRow - lineBits.count + 1))
         }
         for i in range { lineBits[i] = true }
+        anyLineDirty = true
     }
 
     /// Mark full rebuild required.
     public mutating func markFull() {
         fullRebuild = true
         lineBits.removeAll()
+        anyLineDirty = false
     }
 
     /// Merge another dirty region into this one.
@@ -54,7 +60,7 @@ public struct DirtyRegion: Equatable, Sendable {
 
     /// Whether any rows are dirty or a full rebuild is needed.
     public var isDirty: Bool {
-        fullRebuild || lineBits.contains(true)
+        fullRebuild || anyLineDirty
     }
 
     /// Backing compatibility: returns the merged contiguous range covering all dirty rows.
