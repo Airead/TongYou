@@ -211,18 +211,20 @@ import TYTerminal
         #expect(screen.dirtyRegion.fullRebuild)
     }
 
-    @Test func scrollUpMarksFull() {
+    @Test func scrollUpMarksAllRows() {
         let screen = Screen(columns: 80, rows: 24)
         _ = screen.consumeDirtyRegion()
         screen.scrollUp(count: 1)
-        #expect(screen.dirtyRegion.fullRebuild)
+        #expect(!screen.dirtyRegion.fullRebuild)
+        #expect(screen.dirtyRegion.lineRange == 0..<24)
     }
 
-    @Test func scrollDownMarksFull() {
+    @Test func scrollDownMarksAllRows() {
         let screen = Screen(columns: 80, rows: 24)
         _ = screen.consumeDirtyRegion()
         screen.scrollDown(count: 1)
-        #expect(screen.dirtyRegion.fullRebuild)
+        #expect(!screen.dirtyRegion.fullRebuild)
+        #expect(screen.dirtyRegion.lineRange == 0..<24)
     }
 
     @Test func resizeMarksFull() {
@@ -317,13 +319,14 @@ import TYTerminal
         #expect(screen.dirtyRegion.lineRange == 5..<7)
     }
 
-    @Test func lineFeedAtBottomMarksFull() {
+    @Test func lineFeedAtBottomMarksAllRows() {
         let screen = Screen(columns: 80, rows: 24)
         screen.setCursorPos(row: 23, col: 0)
         _ = screen.consumeDirtyRegion()
         screen.lineFeed()
-        // At scroll bottom, triggers scrollRegionUp → fullRebuild
-        #expect(screen.dirtyRegion.fullRebuild)
+        // At scroll bottom, triggers scrollRegionUp → marks all rows dirty
+        #expect(!screen.dirtyRegion.fullRebuild)
+        #expect(screen.dirtyRegion.lineRange == 0..<24)
     }
 
     @Test func setCursorVisibleMarksCursorRow() {

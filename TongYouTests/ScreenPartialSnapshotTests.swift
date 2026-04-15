@@ -34,16 +34,18 @@ struct ScreenPartialSnapshotTests {
         #expect(row3?.cells[0].codepoint == "B")
     }
 
-    @Test func fullRebuildProducesNonPartialSnapshot() {
+    @Test func scrollUpProducesPartialSnapshotWithAllRows() {
         let screen = Screen(columns: 10, rows: 5)
+        _ = screen.consumeDirtyRegion()
         screen.write("A")
         screen.scrollUp(count: 1)
 
         let snapshot = screen.snapshot(allowPartial: true)
 
-        #expect(!snapshot.isPartial)
-        #expect(snapshot.cells.count == 50)
-        #expect(snapshot.partialRows.isEmpty)
+        #expect(snapshot.isPartial)
+        #expect(snapshot.cells.isEmpty)
+        #expect(snapshot.partialRows.count == 5)
+        #expect(snapshot.dirtyRegion.dirtyRows.sorted() == [0, 1, 2, 3, 4])
     }
 
     @Test func viewportOffsetProducesNonPartialSnapshot() {
