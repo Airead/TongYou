@@ -142,12 +142,13 @@ public final class PTYProcess {
         )
         _ = ioctl(slave, TIOCSWINSZ, &winSize)
 
-        let pid = Self.forkAndExec(
-            slaveFD: slave, masterFD: master,
-            executablePath: executablePath, arguments: arguments,
-            environment: environment,
-            workingDirectory: workingDirectory
-        )
+            let pid = Self.forkAndExec(
+                slaveFD: slave, masterFD: master,
+                executablePath: executablePath, arguments: arguments,
+                environment: environment,
+                workingDirectory: workingDirectory,
+                loginShell: arguments.isEmpty
+            )
 
         guard pid > 0 else {
             close(master)
@@ -276,12 +277,12 @@ public final class PTYProcess {
     private static func forkAndExec(
         slaveFD: Int32, masterFD: Int32,
         executablePath: String, arguments: [String] = [], environment: [String],
-        workingDirectory: String?
+        workingDirectory: String?,
+        loginShell: Bool
     ) -> pid_t {
-        let isShell = arguments.isEmpty
-        let basename = isShell
-            ? "-" + (executablePath.split(separator: "/").last.map(String.init) ?? "sh")
-            : (executablePath.split(separator: "/").last.map(String.init) ?? "")
+        let basename = loginShell
+            ? "-" + (URL(fileURLWithPath: executablePath).lastPathComponent)
+            : URL(fileURLWithPath: executablePath).lastPathComponent
 
         return executablePath.withCString { execCStr in
             basename.withCString { basenameCStr in

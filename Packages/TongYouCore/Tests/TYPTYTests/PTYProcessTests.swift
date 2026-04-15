@@ -21,13 +21,7 @@ struct PTYProcessTests {
 
         try pty.start(command: "/bin/echo", arguments: ["hello_from_pty"], columns: 80, rows: 24)
 
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            DispatchQueue.global().async {
-                let result = semaphore.wait(timeout: .now() + 5)
-                #expect(result == .success, "PTY process did not exit in time")
-                continuation.resume()
-            }
-        }
+        await waitForSemaphore(semaphore)
 
         let output = String(data: outputData, encoding: .utf8) ?? ""
         #expect(output.contains("hello_from_pty"), "Expected output to contain 'hello_from_pty', got: \(output)")
@@ -49,13 +43,7 @@ struct PTYProcessTests {
         let input = Data("echo_test\n".utf8)
         pty.write(input)
 
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            DispatchQueue.global().async {
-                let result = semaphore.wait(timeout: .now() + 5)
-                #expect(result == .success, "PTY did not produce output in time")
-                continuation.resume()
-            }
-        }
+        await waitForSemaphore(semaphore)
 
         let output = String(data: outputData, encoding: .utf8) ?? ""
         #expect(output.contains("echo_test"), "Expected echo output to contain 'echo_test', got: \(output)")
@@ -76,21 +64,24 @@ struct PTYProcessTests {
 
         try pty.start(columns: 80, rows: 24)
 
-        // Send a simple command to the shell
         let input = Data("echo shell_ok\n".utf8)
         pty.write(input)
 
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            DispatchQueue.global().async {
-                let result = semaphore.wait(timeout: .now() + 5)
-                #expect(result == .success, "Shell did not produce output in time")
-                continuation.resume()
-            }
-        }
+        await waitForSemaphore(semaphore)
 
         let output = String(data: outputData, encoding: .utf8) ?? ""
         #expect(output.contains("shell_ok"), "Expected shell output to contain 'shell_ok', got: \(output)")
 
         pty.stop()
+    }
+}
+
+private func waitForSemaphore(_ semaphore: DispatchSemaphore, timeout: TimeInterval = 5) async {
+    await withCheckedContinuation { continuation in
+        DispatchQueue.global().async {
+            let result = semaphore.wait(timeout: .now() + timeout)
+            #expect(result == .success)
+            continuation.resume()
+        }
     }
 }

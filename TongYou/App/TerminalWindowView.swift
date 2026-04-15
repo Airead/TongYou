@@ -505,7 +505,9 @@ struct TerminalWindowView: View {
             startRenamingActiveSession()
         case .runInPlace(let command, let arguments):
             if let paneID = focusManager.focusedPaneID {
-                sessionManager.runInPlace(at: paneID, command: command, arguments: arguments)
+                Task {
+                    await sessionManager.runInPlace(at: paneID, command: command, arguments: arguments)
+                }
             }
         }
     }

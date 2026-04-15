@@ -51,7 +51,6 @@ final class SessionManager {
     /// Controllers for local panes, keyed by pane UUID.
     private var localControllers: [UUID: TerminalController] = [:]
 
-    /// Overlay controller stacks for in-place command execution, keyed by pane UUID.
     private var overlayStacks: [UUID: [TerminalController]] = [:]
 
     /// Local session persistence store.
@@ -1446,75 +1445,79 @@ final class SessionManager {
 
     // MARK: - Overlay Stack
 
-    /// Returns the active controller for a pane, considering the overlay stack.
-    func activeController(for paneID: UUID) -> TerminalController? {
+    func activeController(for paneID: UUID) -> (any TerminalControlling)? {
         if let overlay = overlayStacks[paneID]?.last {
             return overlay
         }
-        if let local = localControllers[paneID] {
-            return local
+        if let controller = controller(for: paneID) {
+            return controller
         }
-        // MetalView may have created its own TerminalController without going
-        // through SessionManager. If this pane belongs to a local session,
-        // ensure a controller exists so that runInPlace works correctly.
         for session in sessions where session.source == .local {
-            if session.allPaneIDs.contains(paneID) {
+            if session.hasPane(id: paneID) {
                 return ensureLocalController(for: paneID)
             }
         }
         return nil
     }
 
-    /// Resolve a command name to an absolute path using the user's shell.
-    private func resolveCommandPath(_ command: String, workingDirectory: String?) -> String {
+    private func resolvedUserShell() -> String {
+        if let shell = ProcessInfo.processInfo.environment["SHELL"], !shell.isEmpty {
+            return shell
+        }
+        return "/bin/zsh"
+    }
+
+    private func shellEscape(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    private func resolveCommandPath(_ command: String, workingDirectory: String?) async -> String {
         guard !command.contains("/") else { return command }
-        let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.isEmpty ? nil : $0 } ?? "/bin/zsh"
+        let shell = resolvedUserShell()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: shell)
-        process.arguments = ["-l", "-c", "which \(command)"]
+        process.arguments = ["-l", "-c", "which \(shellEscape(command))"]
         if let cwd = workingDirectory {
             process.currentDirectoryURL = URL(fileURLWithPath: cwd)
         }
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-            process.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            if let path = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-               !path.isEmpty,
-               FileManager.default.fileExists(atPath: path) {
-                return path
+        return await withCheckedContinuation { continuation in
+            process.terminationHandler = { _ in
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                if let path = String(data: data, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                   !path.isEmpty {
+                    continuation.resume(returning: path)
+                } else {
+                    continuation.resume(returning: command)
+                }
             }
-        } catch {
-            // Fall back to original command name
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(returning: command)
+            }
         }
-        return command
     }
 
-    /// Wrap a command and its arguments in the user's login shell so that
-    /// shell profile/rc files are sourced and the target command inherits
-    /// the same environment variables a new pane would have.
     private func wrapCommandInLoginShell(_ command: String, arguments: [String]) -> (command: String, arguments: [String]) {
-        let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.isEmpty ? nil : $0 } ?? "/bin/zsh"
+        let shell = resolvedUserShell()
         let parts = [command] + arguments
-        let escaped = parts.map { arg in
-            "'" + arg.replacingOccurrences(of: "'", with: "'\\''") + "'"
-        }.joined(separator: " ")
+        let escaped = parts.map(shellEscape).joined(separator: " ")
         return (shell, ["-l", "-c", "exec \(escaped)"])
     }
 
-    /// Push a new in-place command onto the overlay stack for a pane.
-    func runInPlace(at paneID: UUID, command: String, arguments: [String] = []) {
-        guard let active = activeController(for: paneID) else { return }
+    func runInPlace(at paneID: UUID, command: String, arguments: [String] = []) async {
+        guard let active = activeController(for: paneID) as? TerminalController else { return }
         active.suspend()
 
-        let resolvedCommand = resolveCommandPath(command, workingDirectory: active.currentWorkingDirectory)
+        let resolvedCommand = await resolveCommandPath(command, workingDirectory: active.currentWorkingDirectory)
         let wrapped = wrapCommandInLoginShell(resolvedCommand, arguments: arguments)
 
-        let controller = TerminalController(columns: active.columns, rows: active.rows)
+        let dims = active.dimensions
+        let controller = TerminalController(columns: dims.columns, rows: dims.rows)
         controller.start(workingDirectory: active.currentWorkingDirectory, command: wrapped.command, arguments: wrapped.arguments)
 
         controller.onProcessExited = { [weak self] in
@@ -1524,7 +1527,6 @@ final class SessionManager {
         overlayStacks[paneID, default: []].append(controller)
     }
 
-    /// Pop the top overlay controller and resume the previous one.
     func restoreFromInPlace(at paneID: UUID) {
         guard var stack = overlayStacks[paneID], !stack.isEmpty else { return }
         stack.removeLast().stop()
@@ -1533,10 +1535,11 @@ final class SessionManager {
         } else {
             overlayStacks.removeValue(forKey: paneID)
         }
-        activeController(for: paneID)?.resume()
+        if let active = activeController(for: paneID) as? TerminalController {
+            active.resume()
+        }
     }
 
-    /// Stop all controllers for a pane, including the overlay stack and base controller.
     private func stopAllControllers(for paneID: UUID) {
         overlayStacks.removeValue(forKey: paneID)?.forEach { $0.stop() }
         localControllers.removeValue(forKey: paneID)?.stop()

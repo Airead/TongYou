@@ -689,7 +689,18 @@ final class MetalView: NSView {
         setupTerminalControllerIfNeeded()
     }
 
-    private func wireControllerCallbacks(_ controller: any TerminalControlling) {
+    private func configureController(_ controller: any TerminalControlling) {
+        if let grid = renderer?.gridSize, grid.columns > 0, grid.rows > 0 {
+            controller.resize(
+                columns: Int(grid.columns),
+                rows: Int(grid.rows),
+                cellWidth: 0, cellHeight: 0
+            )
+        }
+        controller.applyConfig(configLoader.config)
+    }
+
+    private func wireDisplayCallbacks(_ controller: any TerminalControlling) {
         controller.onNeedsDisplay = { [weak self] in
             if Thread.isMainThread {
                 self?.wakeDisplayLink()
@@ -697,12 +708,16 @@ final class MetalView: NSView {
                 DispatchQueue.main.async { self?.wakeDisplayLink() }
             }
         }
+        controller.onTitleChanged = { [weak self] title in
+            self?.onTitleChanged?(title)
+        }
+    }
+
+    private func wireControllerCallbacks(_ controller: any TerminalControlling) {
+        wireDisplayCallbacks(controller)
         controller.onProcessExited = { [weak self] in
             guard let self, let paneID = self.paneID else { return }
             self.onTabAction?(.paneExited(paneID))
-        }
-        controller.onTitleChanged = { [weak self] title in
-            self?.onTitleChanged?(title)
         }
     }
 
@@ -888,12 +903,7 @@ final class MetalView: NSView {
 
         let controller: any TerminalControlling
         if let external = externalController {
-            external.resize(
-                columns: Int(grid.columns),
-                rows: Int(grid.rows),
-                cellWidth: 0, cellHeight: 0
-            )
-            external.applyConfig(configLoader.config)
+            configureController(external)
             controller = external
         } else {
             let config = configLoader.config
@@ -909,33 +919,13 @@ final class MetalView: NSView {
         terminalController = controller
     }
 
-    /// Bind a new controller (used when the overlay stack changes active controller).
     func bindController(_ controller: any TerminalControlling) {
         terminalController?.onNeedsDisplay = nil
         terminalController?.onProcessExited = nil
         terminalController?.onTitleChanged = nil
 
-        if let grid = renderer?.gridSize, grid.columns > 0, grid.rows > 0 {
-            controller.resize(
-                columns: Int(grid.columns),
-                rows: Int(grid.rows),
-                cellWidth: 0, cellHeight: 0
-            )
-        }
-        controller.applyConfig(configLoader.config)
-
-        // Only wire display-related callbacks here.
-        // onProcessExited is managed by SessionManager (overlay stack restore).
-        controller.onNeedsDisplay = { [weak self] in
-            if Thread.isMainThread {
-                self?.wakeDisplayLink()
-            } else {
-                DispatchQueue.main.async { self?.wakeDisplayLink() }
-            }
-        }
-        controller.onTitleChanged = { [weak self] title in
-            self?.onTitleChanged?(title)
-        }
+        configureController(controller)
+        wireDisplayCallbacks(controller)
         terminalController = controller
         wakeDisplayLink()
     }

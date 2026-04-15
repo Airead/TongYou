@@ -59,8 +59,9 @@ final class TerminalController: TerminalControlling {
 
     private(set) var isSuspended: Bool = false
 
-    var columns: Int { ptyQueue.sync { screen.columns } }
-    var rows: Int { ptyQueue.sync { screen.rows } }
+    var dimensions: (columns: Int, rows: Int) {
+        ptyQueue.sync { (screen.columns, screen.rows) }
+    }
 
     private let ptyQueue = DispatchQueue(
         label: "io.github.airead.tongyou.pty.read",

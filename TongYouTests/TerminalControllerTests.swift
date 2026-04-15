@@ -18,13 +18,7 @@ struct TerminalControllerTests {
 
         controller.start(command: "/bin/echo", arguments: ["controller_hello"])
 
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            DispatchQueue.global().async {
-                let result = semaphore.wait(timeout: .now() + 5)
-                #expect(result == .success, "Process did not exit in time")
-                continuation.resume()
-            }
-        }
+        await waitForSemaphore(semaphore)
 
         // Give a moment for the final bytes to be processed
         try await Task.sleep(for: .milliseconds(100))
@@ -59,13 +53,7 @@ struct TerminalControllerTests {
         controller.start(command: "/bin/cat")
         controller.sendText("cat_echo\n")
 
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            DispatchQueue.global().async {
-                let result = semaphore.wait(timeout: .now() + 5)
-                #expect(result == .success, "Did not receive echoed output in time")
-                continuation.resume()
-            }
-        }
+        await waitForSemaphore(semaphore)
 
         let text = extractText(from: capturedSnapshot)
         #expect(text.contains("cat_echo"), "Expected screen to contain 'cat_echo', got: \(text)")
@@ -95,13 +83,7 @@ struct TerminalControllerTests {
         controller.start()
         controller.sendText("echo shell_works\n")
 
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            DispatchQueue.global().async {
-                let result = semaphore.wait(timeout: .now() + 5)
-                #expect(result == .success, "Did not receive shell output in time")
-                continuation.resume()
-            }
-        }
+        await waitForSemaphore(semaphore)
 
         let text = extractText(from: capturedSnapshot)
         #expect(text.contains("shell_works"), "Expected screen to contain 'shell_works', got: \(text)")
@@ -151,6 +133,16 @@ struct TerminalControllerTests {
         #expect(text.contains("during_suspend"), "Expected screen to contain 'during_suspend', got: \(text)")
 
         controller.stop()
+    }
+}
+
+private func waitForSemaphore(_ semaphore: DispatchSemaphore, timeout: TimeInterval = 5) async {
+    await withCheckedContinuation { continuation in
+        DispatchQueue.global().async {
+            let result = semaphore.wait(timeout: .now() + timeout)
+            #expect(result == .success)
+            continuation.resume()
+        }
     }
 }
 

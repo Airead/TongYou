@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Writes shell integration scripts to disk and sets environment variables
 /// so the child shell automatically sources them.
@@ -11,6 +12,8 @@ import Foundation
 ///    c. Sources TongYou's integration script
 /// 3. Set `ZDOTDIR` to `<supportDir>/zsh/` so zsh picks up the wrapper
 public enum ShellIntegrationInjector {
+
+    private static let didInjectLock = OSAllocatedUnfairLock(initialState: Set<String>())
 
     public static let defaultSupportDir: String = {
         let base = FileManager.default.urls(
@@ -26,18 +29,26 @@ public enum ShellIntegrationInjector {
         let integrationPath = dir + "/shell-integration.zsh"
         let zdotdirPath = dir + "/zsh"
 
-        do {
-            try ensureDirectory(zdotdirPath)
-            try ShellIntegration.zsh.write(
-                toFile: integrationPath, atomically: true, encoding: .utf8
-            )
-            try writeZshenvWrapper(
-                to: zdotdirPath + "/.zshenv",
-                originalZdotdir: env["ZDOTDIR"],
-                integrationScript: integrationPath
-            )
-        } catch {
-            return
+        let alreadyInjected = didInjectLock.withLock { set in
+            set.insert(dir).inserted == false
+        }
+
+        if !alreadyInjected {
+            do {
+                try ensureDirectory(zdotdirPath)
+                try ShellIntegration.zsh.write(
+                    toFile: integrationPath, atomically: true, encoding: .utf8
+                )
+                try writeZshenvWrapper(
+                    to: zdotdirPath + "/.zshenv",
+                    originalZdotdir: env["ZDOTDIR"],
+                    integrationScript: integrationPath
+                )
+            } catch {
+                // Reset on failure so the next attempt will retry.
+                didInjectLock.withLock { _ = $0.remove(dir) }
+                return
+            }
         }
 
         env["TONGYOU_ORIG_ZDOTDIR"] = env["ZDOTDIR"] ?? ""

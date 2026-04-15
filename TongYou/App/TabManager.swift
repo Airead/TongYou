@@ -32,7 +32,6 @@ enum TabAction {
     case showSessionPicker
     case detachSession
     case renameSession
-    // In-place overlay (temporary for manual testing)
     case runInPlace(command: String, arguments: [String])
 }
 
