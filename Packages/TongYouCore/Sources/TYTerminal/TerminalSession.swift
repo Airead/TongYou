@@ -44,6 +44,11 @@ public struct TerminalSession: Identifiable, Sendable {
         tabs.flatMap(\.allPaneIDsIncludingFloating)
     }
 
+    /// Whether this session contains a pane with the given ID.
+    public func hasPane(id: UUID) -> Bool {
+        tabs.contains(where: { $0.hasPane(id: id) })
+    }
+
     public init(name: String = "Session", initialWorkingDirectory: String? = nil, source: SessionSource = .local) {
         self.id = UUID()
         self.name = name

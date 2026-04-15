@@ -32,6 +32,8 @@ enum TabAction {
     case showSessionPicker
     case detachSession
     case renameSession
+    case runInPlace(command: String, arguments: [String])
+    case runCommand(command: String, arguments: [String])
 }
 
 /// Manages the list of terminal tabs and the active tab index.
@@ -333,7 +335,7 @@ final class TabManager {
              .focusPane, .paneExited,
              .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane,
              .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession,
-             .renameSession:
+             .renameSession, .runInPlace, .runCommand:
             // Pane/remote actions are handled by TerminalWindowView, not TabManager.
             return false
         }

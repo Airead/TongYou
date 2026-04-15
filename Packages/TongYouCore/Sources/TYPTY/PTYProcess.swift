@@ -64,6 +64,37 @@ public final class PTYProcess {
 
     /// Open a PTY, fork a child shell process, and start reading.
     public func start(columns: UInt16, rows: UInt16, cellWidth: UInt16 = 0, cellHeight: UInt16 = 0, workingDirectory: String? = nil) throws {
+        let shellPath = Self.resolveShell()
+        let env = Self.buildEnvironment(shellPath: shellPath)
+        try start(
+            executablePath: shellPath,
+            arguments: [],
+            environment: env,
+            columns: columns,
+            rows: rows,
+            cellWidth: cellWidth,
+            cellHeight: cellHeight,
+            workingDirectory: workingDirectory
+        )
+    }
+
+    /// Open a PTY, fork a child process running the given command, and start reading.
+    public func start(command: String, arguments: [String] = [], columns: UInt16, rows: UInt16, cellWidth: UInt16 = 0, cellHeight: UInt16 = 0, workingDirectory: String? = nil) throws {
+        let shellPath = Self.resolveShell()
+        let env = Self.buildEnvironment(shellPath: shellPath)
+        try start(
+            executablePath: command,
+            arguments: arguments,
+            environment: env,
+            columns: columns,
+            rows: rows,
+            cellWidth: cellWidth,
+            cellHeight: cellHeight,
+            workingDirectory: workingDirectory
+        )
+    }
+
+    private func start(executablePath: String, arguments: [String], environment: [String], columns: UInt16, rows: UInt16, cellWidth: UInt16 = 0, cellHeight: UInt16 = 0, workingDirectory: String? = nil) throws {
         var master: Int32 = -1
         var slave: Int32 = -1
 
@@ -111,14 +142,13 @@ public final class PTYProcess {
         )
         _ = ioctl(slave, TIOCSWINSZ, &winSize)
 
-        let shellPath = Self.resolveShell()
-        let env = Self.buildEnvironment(shellPath: shellPath)
-
-        let pid = Self.forkAndExec(
-            slaveFD: slave, masterFD: master,
-            shellPath: shellPath, environment: env,
-            workingDirectory: workingDirectory
-        )
+            let pid = Self.forkAndExec(
+                slaveFD: slave, masterFD: master,
+                executablePath: executablePath, arguments: arguments,
+                environment: environment,
+                workingDirectory: workingDirectory,
+                loginShell: arguments.isEmpty
+            )
 
         guard pid > 0 else {
             close(master)
@@ -246,27 +276,40 @@ public final class PTYProcess {
 
     private static func forkAndExec(
         slaveFD: Int32, masterFD: Int32,
-        shellPath: String, environment: [String],
-        workingDirectory: String?
+        executablePath: String, arguments: [String] = [], environment: [String],
+        workingDirectory: String?,
+        loginShell: Bool
     ) -> pid_t {
-        let basename = "-" + (shellPath.split(separator: "/").last.map(String.init) ?? "sh")
+        let basename = loginShell
+            ? "-" + (URL(fileURLWithPath: executablePath).lastPathComponent)
+            : URL(fileURLWithPath: executablePath).lastPathComponent
 
-        return shellPath.withCString { shellCStr in
+        return executablePath.withCString { execCStr in
             basename.withCString { basenameCStr in
                 var argv: [UnsafeMutablePointer<CChar>?] = [
-                    UnsafeMutablePointer(mutating: basenameCStr),
-                    nil
+                    UnsafeMutablePointer(mutating: basenameCStr)
                 ]
+                for arg in arguments {
+                    argv.append(strdup(arg))
+                }
+                argv.append(nil)
+                defer {
+                    // Don't free basenameCStr (it's a borrowed pointer), but free duplicated argument strings
+                    for i in 1..<(argv.count - 1) {
+                        free(argv[i])
+                    }
+                }
+
                 var envpStorage = environment.map { strdup($0) as UnsafeMutablePointer<CChar>? }
                 envpStorage.append(nil)
                 defer { envpStorage.compactMap({ $0 }).forEach { free($0) } }
 
                 if let cwd = workingDirectory {
                     return cwd.withCString { cwdCStr in
-                        pty_fork_exec(slaveFD, masterFD, shellCStr, &argv, &envpStorage, cwdCStr)
+                        pty_fork_exec(slaveFD, masterFD, execCStr, &argv, &envpStorage, cwdCStr)
                     }
                 } else {
-                    return pty_fork_exec(slaveFD, masterFD, shellCStr, &argv, &envpStorage, nil)
+                    return pty_fork_exec(slaveFD, masterFD, execCStr, &argv, &envpStorage, nil)
                 }
             }
         }

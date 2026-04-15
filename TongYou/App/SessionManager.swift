@@ -51,6 +51,8 @@ final class SessionManager {
     /// Controllers for local panes, keyed by pane UUID.
     private var localControllers: [UUID: TerminalController] = [:]
 
+    private var overlayStacks: [UUID: [TerminalController]] = [:]
+
     /// Local session persistence store.
     private let localSessionStore: SessionStore
 
@@ -224,7 +226,7 @@ final class SessionManager {
         // Clean up local controllers and persistence if this is a local session.
         if session.source == .local {
             for paneID in paneIDs {
-                localControllers.removeValue(forKey: paneID)?.stop()
+                stopAllControllers(for: paneID)
             }
             attachedLocalSessionIDs.remove(session.id)
             rebuildAllAttachedSessionIDs()
@@ -389,7 +391,7 @@ final class SessionManager {
 
         let removedPaneIDs = sessions[activeSessionIndex].tabs[index].allPaneIDsIncludingFloating
         for paneID in removedPaneIDs {
-            localControllers.removeValue(forKey: paneID)?.stop()
+            stopAllControllers(for: paneID)
         }
 
         sessions[activeSessionIndex].tabs.remove(at: index)
@@ -569,7 +571,7 @@ final class SessionManager {
         for i in sessions[activeSessionIndex].tabs.indices {
             guard sessions[activeSessionIndex].tabs[i].paneTree.contains(paneID: paneID)
             else { continue }
-            localControllers.removeValue(forKey: paneID)?.stop()
+            stopAllControllers(for: paneID)
             if let newTree = sessions[activeSessionIndex].tabs[i].paneTree.removePane(id: paneID) {
                 sessions[activeSessionIndex].tabs[i].paneTree = newTree
                 scheduleLocalSave(sessionID: session.id)
@@ -693,7 +695,7 @@ final class SessionManager {
                     where: { $0.pane.id == paneID })
                 {
                     sessions[s].tabs[t].floatingPanes.remove(at: idx)
-                    localControllers.removeValue(forKey: paneID)?.stop()
+                    stopAllControllers(for: paneID)
                     if sessions[s].source == .local {
                         scheduleLocalSave(sessionID: sessions[s].id)
                     }
@@ -838,7 +840,7 @@ final class SessionManager {
              .focusPane, .paneExited,
              .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane,
              .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession,
-             .renameSession:
+             .renameSession, .runInPlace(_, _), .runCommand(_, _):
             // Pane/remote actions are handled by TerminalWindowView.
             return false
         }
@@ -1439,6 +1441,125 @@ final class SessionManager {
             }
         }
         return nil
+    }
+
+    // MARK: - Overlay Stack
+
+    func activeController(for paneID: UUID) -> (any TerminalControlling)? {
+        if let overlay = overlayStacks[paneID]?.last {
+            return overlay
+        }
+        if let controller = controller(for: paneID) {
+            return controller
+        }
+        for session in sessions where session.source == .local {
+            if session.hasPane(id: paneID) {
+                return ensureLocalController(for: paneID)
+            }
+        }
+        return nil
+    }
+
+    private func resolvedUserShell() -> String {
+        if let shell = ProcessInfo.processInfo.environment["SHELL"], !shell.isEmpty {
+            return shell
+        }
+        return "/bin/zsh"
+    }
+
+    private func shellEscape(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    private func resolveCommandPath(_ command: String, workingDirectory: String?) async -> String {
+        let command = (command as NSString).expandingTildeInPath
+        guard !command.contains("/") else { return command }
+        let shell = resolvedUserShell()
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: shell)
+        process.arguments = ["-l", "-c", "which \(shellEscape(command))"]
+        if let cwd = workingDirectory {
+            process.currentDirectoryURL = URL(fileURLWithPath: cwd)
+        }
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        return await withCheckedContinuation { continuation in
+            process.terminationHandler = { _ in
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                if let path = String(data: data, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                   !path.isEmpty {
+                    continuation.resume(returning: path)
+                } else {
+                    continuation.resume(returning: command)
+                }
+            }
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(returning: command)
+            }
+        }
+    }
+
+    private func wrapCommandInLoginShell(_ command: String, arguments: [String]) -> (command: String, arguments: [String]) {
+        let shell = resolvedUserShell()
+        let parts = [command] + arguments
+        let escaped = parts.map(shellEscape).joined(separator: " ")
+        return (shell, ["-l", "-c", "exec \(escaped)"])
+    }
+
+    func runInPlace(at paneID: UUID, command: String, arguments: [String] = []) async {
+        guard let active = activeController(for: paneID) as? TerminalController else { return }
+        active.suspend()
+
+        let resolvedCommand = await resolveCommandPath(command, workingDirectory: active.currentWorkingDirectory)
+        let wrapped = wrapCommandInLoginShell(resolvedCommand, arguments: arguments)
+
+        let dims = active.dimensions
+        let controller = TerminalController(columns: dims.columns, rows: dims.rows)
+        controller.start(workingDirectory: active.currentWorkingDirectory, command: wrapped.command, arguments: wrapped.arguments)
+
+        controller.onProcessExited = { [weak self] in
+            self?.restoreFromInPlace(at: paneID)
+        }
+
+        overlayStacks[paneID, default: []].append(controller)
+    }
+
+    func runCommand(at paneID: UUID, command: String, arguments: [String] = []) async {
+        guard let active = activeController(for: paneID) as? TerminalController else { return }
+        let resolvedCommand = await resolveCommandPath(command, workingDirectory: active.currentWorkingDirectory)
+        let wrapped = wrapCommandInLoginShell(resolvedCommand, arguments: arguments)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: wrapped.command)
+        process.arguments = wrapped.arguments
+        if let cwd = active.currentWorkingDirectory {
+            process.currentDirectoryURL = URL(fileURLWithPath: cwd)
+        }
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
+    }
+
+    func restoreFromInPlace(at paneID: UUID) {
+        guard var stack = overlayStacks[paneID], !stack.isEmpty else { return }
+        stack.removeLast().stop()
+        if !stack.isEmpty {
+            overlayStacks[paneID] = stack
+        } else {
+            overlayStacks.removeValue(forKey: paneID)
+        }
+        if let active = activeController(for: paneID) as? TerminalController {
+            active.resume()
+        }
+    }
+
+    private func stopAllControllers(for paneID: UUID) {
+        overlayStacks.removeValue(forKey: paneID)?.forEach { $0.stop() }
+        localControllers.removeValue(forKey: paneID)?.stop()
     }
 
     /// Look up a controller for any pane (local or remote).

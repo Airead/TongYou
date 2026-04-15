@@ -38,6 +38,12 @@ struct TerminalPaneContainerView: NSViewRepresentable {
         nsView.onTabAction = onTabAction
         nsView.onTitleChanged = onTitleChanged
         nsView.onFocused = onFocused
+        if nsView.externalController !== externalController {
+            nsView.externalController = externalController
+            if let external = externalController {
+                nsView.bindController(external)
+            }
+        }
     }
 
     static func dismantleNSView(_ nsView: MetalView, coordinator: ()) {

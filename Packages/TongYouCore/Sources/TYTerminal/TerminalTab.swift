@@ -20,6 +20,11 @@ public struct TerminalTab: Identifiable, Sendable {
         paneTree.allPaneIDs + floatingPanes.map(\.pane.id)
     }
 
+    /// Whether this tab contains a pane with the given ID.
+    public func hasPane(id: UUID) -> Bool {
+        paneTree.contains(paneID: id) || floatingPanes.contains(where: { $0.pane.id == id })
+    }
+
     public init(title: String = "shell", initialWorkingDirectory: String? = nil) {
         self.id = UUID()
         self.title = title

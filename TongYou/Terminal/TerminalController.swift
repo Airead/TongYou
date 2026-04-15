@@ -57,6 +57,12 @@ final class TerminalController: TerminalControlling {
     /// Called on the main thread when the window title changes (OSC 0/2).
     var onTitleChanged: ((String) -> Void)?
 
+    private(set) var isSuspended: Bool = false
+
+    var dimensions: (columns: Int, rows: Int) {
+        ptyQueue.sync { (screen.columns, screen.rows) }
+    }
+
     private let ptyQueue = DispatchQueue(
         label: "io.github.airead.tongyou.pty.read",
         qos: .userInteractive
@@ -100,7 +106,7 @@ final class TerminalController: TerminalControlling {
     private static let defaultWorkingDirectory: String =
         ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
 
-    func start(workingDirectory: String? = nil) {
+    func start(workingDirectory: String? = nil, command: String? = nil, arguments: [String] = []) {
         let process = PTYProcess(readQueue: ptyQueue)
 
         process.onRead = { [weak self] bytes in
@@ -147,11 +153,21 @@ final class TerminalController: TerminalControlling {
         }
 
         do {
-            try process.start(
-                columns: UInt16(screen.columns),
-                rows: UInt16(screen.rows),
-                workingDirectory: workingDirectory ?? Self.defaultWorkingDirectory
-            )
+            if let command = command {
+                try process.start(
+                    command: command,
+                    arguments: arguments,
+                    columns: UInt16(screen.columns),
+                    rows: UInt16(screen.rows),
+                    workingDirectory: workingDirectory ?? Self.defaultWorkingDirectory
+                )
+            } else {
+                try process.start(
+                    columns: UInt16(screen.columns),
+                    rows: UInt16(screen.rows),
+                    workingDirectory: workingDirectory ?? Self.defaultWorkingDirectory
+                )
+            }
         } catch {
             print("Failed to start PTY: \(error)")
             return
@@ -163,6 +179,16 @@ final class TerminalController: TerminalControlling {
     func stop() {
         ptyProcess?.stop()
         ptyProcess = nil
+    }
+
+    func suspend() {
+        isSuspended = true
+    }
+
+    func resume() {
+        isSuspended = false
+        screenDirty = true
+        onNeedsDisplay?()
     }
 
     // MARK: - Snapshot (called by display link on MainActor)
@@ -525,7 +551,7 @@ final class TerminalController: TerminalControlling {
     private func markScreenDirty() {
         let wasDirty = screenDirty
         screenDirty = true
-        if !wasDirty {
+        if !wasDirty && !isSuspended {
             onNeedsDisplay?()
         }
     }
