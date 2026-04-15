@@ -14,6 +14,7 @@
 - **全局聚合**：读取所有活跃 pane 的数据做汇总和分项展示
 - **低开销**：0.5 秒刷新周期，避免主线程压力
 - **弱引用解耦**：通过全局注册表避免复杂的窗口到 View 的传递链
+- **渐进实现**：每一阶段都能编译运行、人工验证结果
 
 ## 数据结构
 
@@ -62,55 +63,45 @@ struct ResourceMetrics {
 
 ## 分阶段实现
 
-### Phase 1: 数据层基础
+### Phase 1: 数据层基础（已完成）
 
 **文件**：`TongYou/Renderer/ResourceMetrics.swift`
 
-- [ ] 定义 `ResourceMetrics` 结构体
-- [ ] 实现 `ProcessMemoryInfo` 辅助类，通过 Mach API 读取进程 RSS
-- [ ] 添加字节格式化工具（`ByteCountFormatter` 风格）用于 UI 展示
+- [x] 定义 `ResourceMetrics` 结构体
+- [x] 实现 `ProcessMemoryInfo` 辅助类，通过 Mach API 读取进程 RSS
+- [x] 添加字节格式化工具（`ByteCountFormatter` 风格）用于 UI 展示
 
 **文件**：`TongYou/Renderer/MetalViewRegistry.swift`
 
-- [ ] 创建 `MetalViewRegistry` 单例（或全局 actor 隔离对象）
-- [ ] 使用 `NSHashTable<MetalView>.weakObjects()` 存储活跃视图引用
-- [ ] 在 `MetalView.commonInit()` 中注册，`deinit` / `tearDown()` 中移除
-
-**验收标准**：
-- 创建 3 个 pane 后 `registry.count == 3`
-- 关闭 tab 后对应引用自动释放
-
-### Phase 2: 渲染器暴露数据
+- [x] 创建 `MetalViewRegistry` 单例（MainActor 隔离）
+- [x] 使用 `NSHashTable<MetalView>.weakObjects()` 存储活跃视图引用
+- [x] 在 `MetalView.commonInit()` 中注册，`tearDown()` 中移除
 
 **文件**：`TongYou/Renderer/MetalRenderer.swift`
 
-- [ ] 新增 `currentResourceMetrics: ResourceMetrics` 计算属性
-- [ ] 汇总当前活跃 `FrameState` 的 buffer capacity / count
-- [ ] 读取 `glyphAtlas.textureSize`、`emojiAtlas.textureSize` 和 `activeEntryCount`
-- [ ] 读取 `gridSize`
-- [ ] 调用 `device.currentAllocatedSize` 获取 Metal 总分配
-- [ ] 计算估算内存（buffer 总大小 + atlas 大小）
+- [x] 新增 `currentResourceMetrics: ResourceMetrics` 计算属性
+- [x] 汇总当前活跃 `FrameState` 的 buffer capacity / count
+- [x] 读取 `glyphAtlas.textureSize`、`emojiAtlas.textureSize` 和 `activeEntryCount`
+- [x] 读取 `gridSize`
+- [x] 调用 `device.currentAllocatedSize` 获取 Metal 总分配
+- [x] 计算估算内存（buffer 总大小 + atlas 大小）
 
 **文件**：`TongYou/Renderer/MetalView.swift`
 
-- [ ] 将 `private var renderer: MetalRenderer?` 改为 `private(set)` 只读暴露
-- [ ] 确保 `renderer` 的访问在主线程安全
+- [x] 将 `private var renderer: MetalRenderer?` 改为 `private(set)` 只读暴露
 
 **验收标准**：
-- 每个 pane 的 `renderer.currentResourceMetrics` 返回合理非零值
-- `metalAllocatedSize` 随窗口放大而增长
+- `make test` 通过
+- `ProcessMemoryInfo.currentRSS()` 返回非零值
+- 创建 3 个 pane 后 `registry.activeCount == 3`，关闭后自动释放
 
-### Phase 3: UI 窗口
+---
 
-**文件**：`TongYou/App/ResourceStatsView.swift`
+### Phase 2: 窗口与菜单 + 空窗口驱动
 
-- [ ] 使用 `TimelineView(.animation(minimumInterval: 0.5, paused: false))` 驱动刷新
-- [ ] 通过 `MetalViewRegistry` 读取所有 pane，为每个 pane 生成 `PaneResourceSnapshot`
-- [ ] 顶部展示聚合摘要：总 pane 数、Metal 总分配、进程 RSS
-- [ ] 下方 `List` 按 pane 分组，每个 pane 用 `DisclosureGroup` 展开/折叠
-- [ ] 分组内用 `Form` / `LabeledContent` 展示 Performance / Buffers / Atlas / Grid / Memory
+**目标**：先让独立窗口能弹出来，并验证 0.5s 刷新在跑。
 
-**文件**：`TongYou/TongYouApp.swift`
+**文件**：`TongYou/App/TongYouApp.swift`
 
 - [ ] 在 `@main` 的 `Scene` 中添加：
   ```swift
@@ -120,30 +111,90 @@ struct ResourceMetrics {
   .defaultPosition(.topTrailing)
   ```
 
-**文件**：`TongYou/TongYouApp.swift`（Commands 部分）
+**文件**：`TongYou/App/TongYouCommands.swift`
 
-- [ ] 在 `TongYouCommands` 的 `.windowMenu` 组中添加按钮
-- [ ] 通过 `NotificationCenter` 或 `openWindow` 环境值打开窗口（视 SwiftUI 可用 API 而定）
+- [ ] 在 `.windowMenu` 组中添加按钮，通过 `openWindow(id: "resource-stats")` 打开窗口
+- [ ] 绑定快捷键（如 `⌘⌥R`）
+
+**文件**：`TongYou/App/ResourceStatsView.swift`
+
+- [ ] 使用 `TimelineView(.animation(minimumInterval: 0.5, paused: false))` 驱动刷新
+- [ ] 临时 UI：只显示一行文字，如 `"Active panes: \(MetalViewRegistry.shared.activeCount)"`
 
 **验收标准**：
-- 菜单 `Window → Resource Stats` 可打开独立窗口
-- 窗口内容每 0.5 秒刷新
-- 关闭 pane 后列表项自动消失
+- 菜单 `Window → Resource Stats` 或快捷键能打开独立窗口
+- 文字数字随新开/关闭 pane 实时变化
+- 无编译警告或并发隔离错误
 
-### Phase 4: 测试
+---
+
+### Phase 3: 聚合摘要 UI
+
+**目标**：在窗口顶部展示全局汇总数据，暂不需要单个 pane 详情。
+
+**文件**：`TongYou/App/ResourceStatsView.swift`
+
+- [ ] 读取 `MetalViewRegistry.shared.allViews` 的 `renderer?.currentResourceMetrics`
+- [ ] 聚合计算：
+  - 总 pane 数
+  - 所有 pane 的 `metalAllocatedSize` 之和
+  - 进程 RSS（取一次即可，全局相同）
+- [ ] 用 `VStack` + `LabeledContent` 或 `Form` 展示聚合摘要
+
+**验收标准**：
+- 打开多个 pane 后，"Metal Memory" 数字上升；关闭 pane 后下降
+- RSS 值与 Activity Monitor 数量级一致
+- 刷新过程中 UI 不卡顿
+
+---
+
+### Phase 4: Pane 详情列表
+
+**目标**：把每个 pane 的完整 metrics 按 pane 分组展开显示。
+
+**文件**：`TongYou/App/ResourceStatsView.swift`
+
+- [ ] 下方用 `List` 遍历所有 pane，每项用 `DisclosureGroup`
+- [ ] 默认展开第一个 pane，其余折叠
+- [ ] 展开内容按区块展示：
+  - **Performance**：`frameTimeMs`、`instanceBuildTimeMs`、`gpuSubmitCount`、`skippedFrameCount`
+  - **Buffers**：各类 capacity / count
+  - **Atlas**：`glyphAtlasSize` + entries、`emojiAtlasSize` + entries
+  - **Grid**：`gridColumns` × `gridRows`
+  - **Memory**：`metalAllocatedSize`、`estimatedBufferBytes`、`estimatedAtlasBytes`
+- [ ] 所有字节值使用 `ByteFormatter.string(from:)`
+
+**验收标准**：
+- 能看到每个 pane 的 grid 尺寸、buffer capacity、atlas 条目数
+- 调整终端窗口大小后，grid 数字实时变化
+- 关闭 pane 后列表项自动消失（弱引用自然释放）
+
+---
+
+### Phase 5: 生命周期与刷新优化
+
+**目标**：优化性能与边界情况，确保长期运行稳定。
+
+**文件**：`TongYou/App/ResourceStatsView.swift`
+
+- [ ] 视图不可见或窗口关闭时停止 `TimelineView` 刷新（`paused: !windowIsVisible`）
+- [ ] 0 pane 时显示友好空状态（如 "No active panes"）
+- [ ] 验证 `MetalViewRegistry` 无残留引用（开闭多个 tab 后 `activeCount` 归 0）
+- [ ] 窗口只打开一次（`openWindow(id:)` 行为确认）
 
 **文件**：`TongYouTests/ResourceMetricsTests.swift`
 
-- [ ] 测试 `ProcessMemoryInfo` 返回非零且稳定的 RSS 值
-- [ ] 测试 `ResourceMetrics` 的格式化输出（如 `estimatedBufferBytes` 计算正确）
-- [ ] 测试 `MetalViewRegistry` 的注册/移除逻辑
-- [ ] 测试 `MetalRenderer.currentResourceMetrics` 默认值（使用现有测试用的 mock device 或跳过真机）
+- [ ] 补充 `MetalRenderer.currentResourceMetrics` 在空闲态的默认值测试
+- [ ] 补充 `ByteFormatter` 边界测试（0 字节、极大值）
 
 **验收标准**：
-- 所有新测试通过
-- 整体测试覆盖率不下降
+- Resource Stats 窗口长期打开（>5 分钟）不造成 CPU 占用上升
+- `make test` 全绿
+- 关闭所有 pane 后空状态显示正确
 
-### Phase 5: 代码审查与收尾
+---
+
+### Phase 6: 代码审查与收尾
 
 - [ ] 确保所有 CPU-side 尺寸使用整数类型（符合项目约定）
 - [ ] 检查 `MainActor` 隔离：UI 读取和 registry 操作在主线程
@@ -196,7 +247,11 @@ struct ResourceMetrics {
 - `TongYou/Renderer/MetalRenderer.swift`
 - `TongYou/Renderer/MetalView.swift`
 - `TongYou/Renderer/FrameMetrics.swift`
+- `TongYou/Renderer/ResourceMetrics.swift`
+- `TongYou/Renderer/MetalViewRegistry.swift`
 - `TongYou/Font/GlyphAtlas.swift`
 - `TongYou/Font/ColorEmojiAtlas.swift`
 - `TongYou/App/TerminalWindowView.swift`
-- `TongYou/TongYouApp.swift`
+- `TongYou/App/TongYouApp.swift`
+- `TongYou/App/TongYouCommands.swift`
+- `TongYouTests/ResourceMetricsTests.swift`
