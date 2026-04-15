@@ -840,7 +840,7 @@ final class SessionManager {
              .focusPane, .paneExited,
              .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane,
              .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession,
-             .renameSession, .runInPlace(_, _):
+             .renameSession, .runInPlace(_, _), .runCommand(_, _):
             // Pane/remote actions are handled by TerminalWindowView.
             return false
         }
@@ -1472,6 +1472,7 @@ final class SessionManager {
     }
 
     private func resolveCommandPath(_ command: String, workingDirectory: String?) async -> String {
+        let command = (command as NSString).expandingTildeInPath
         guard !command.contains("/") else { return command }
         let shell = resolvedUserShell()
         let process = Process()
@@ -1525,6 +1526,22 @@ final class SessionManager {
         }
 
         overlayStacks[paneID, default: []].append(controller)
+    }
+
+    func runCommand(at paneID: UUID, command: String, arguments: [String] = []) async {
+        guard let active = activeController(for: paneID) as? TerminalController else { return }
+        let resolvedCommand = await resolveCommandPath(command, workingDirectory: active.currentWorkingDirectory)
+        let wrapped = wrapCommandInLoginShell(resolvedCommand, arguments: arguments)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: wrapped.command)
+        process.arguments = wrapped.arguments
+        if let cwd = active.currentWorkingDirectory {
+            process.currentDirectoryURL = URL(fileURLWithPath: cwd)
+        }
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
     }
 
     func restoreFromInPlace(at paneID: UUID) {

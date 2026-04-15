@@ -509,6 +509,12 @@ struct TerminalWindowView: View {
                     await sessionManager.runInPlace(at: paneID, command: command, arguments: arguments)
                 }
             }
+        case .runCommand(let command, let arguments):
+            if let paneID = focusManager.focusedPaneID {
+                Task {
+                    await sessionManager.runCommand(at: paneID, command: command, arguments: arguments)
+                }
+            }
         }
     }
 

@@ -49,6 +49,7 @@ struct Keybinding: Equatable {
         case detachSession
         case renameSession
         case runInPlace(command: String, arguments: [String])
+        case runCommand(command: String, arguments: [String])
         // Pass through to PTY (disables the keybinding)
         case unbind
 
@@ -91,13 +92,35 @@ struct Keybinding: Equatable {
             case .detachSession: "detach_session"
             case .renameSession: "rename_session"
             case .runInPlace(let cmd, let args):
-                if args.isEmpty {
-                    "run_in_place:\(cmd)"
-                } else {
-                    "run_in_place:\(cmd):\(args.joined(separator: ","))"
-                }
+                Self.formatPrefixedAction(prefix: "run_in_place", command: cmd, arguments: args)
+            case .runCommand(let cmd, let args):
+                Self.formatPrefixedAction(prefix: "run_command", command: cmd, arguments: args)
             case .unbind: "unbind"
             }
+        }
+
+        // MARK: - Helpers
+
+        private static func formatPrefixedAction(prefix: String, command: String, arguments: [String]) -> String {
+            if arguments.isEmpty {
+                return "\(prefix):\(command)"
+            } else {
+                return "\(prefix):\(command):\(arguments.joined(separator: ","))"
+            }
+        }
+
+        private static func parsePrefixedAction(rawValue: String, prefix: String) -> (command: String, arguments: [String])? {
+            guard rawValue.hasPrefix("\(prefix):") else { return nil }
+            let rest = String(rawValue.dropFirst("\(prefix):".count))
+            let parts = rest.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+            let command = String(parts[0])
+            let arguments: [String]
+            if parts.count > 1 {
+                arguments = parts[1].split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+            } else {
+                arguments = []
+            }
+            return (command, arguments)
         }
 
         /// Map to TabAction for actions that pass straight through to the window.
@@ -125,6 +148,7 @@ struct Keybinding: Equatable {
             case .detachSession: .detachSession
             case .renameSession: .renameSession
             case .runInPlace(let cmd, let args): .runInPlace(command: cmd, arguments: args)
+            case .runCommand(let cmd, let args): .runCommand(command: cmd, arguments: args)
             case .copy, .paste, .search, .searchNext, .searchPrevious,
                  .resetFontSize, .increaseFontSize, .decreaseFontSize,
                  .unbind:
@@ -174,17 +198,12 @@ struct Keybinding: Equatable {
                     self = .gotoTab(n)
                     return
                 }
-                if rawValue.hasPrefix("run_in_place:") {
-                    let rest = String(rawValue.dropFirst("run_in_place:".count))
-                    let parts = rest.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
-                    let command = String(parts[0])
-                    let arguments: [String]
-                    if parts.count > 1 {
-                        arguments = parts[1].split(separator: ",", omittingEmptySubsequences: false).map(String.init)
-                    } else {
-                        arguments = []
-                    }
-                    self = .runInPlace(command: command, arguments: arguments)
+                if let parsed = Self.parsePrefixedAction(rawValue: rawValue, prefix: "run_in_place") {
+                    self = .runInPlace(command: parsed.command, arguments: parsed.arguments)
+                    return
+                }
+                if let parsed = Self.parsePrefixedAction(rawValue: rawValue, prefix: "run_command") {
+                    self = .runCommand(command: parsed.command, arguments: parsed.arguments)
                     return
                 }
                 return nil
