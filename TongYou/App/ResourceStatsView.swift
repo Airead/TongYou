@@ -8,6 +8,7 @@ struct ResourceStatsView: View {
     @State private var expandedSessionIDs: Set<String> = []
     @State private var expandedTabIDs: Set<String> = []
     @State private var expandedPaneIDs: Set<UUID> = []
+    @State private var isWindowActive = true
 
     private final class TabGroup: Identifiable {
         let id: String
@@ -105,7 +106,7 @@ struct ResourceStatsView: View {
             bgColor
                 .ignoresSafeArea()
 
-            TimelineView(.animation(minimumInterval: 0.5, paused: false)) { _ in
+            TimelineView(.animation(minimumInterval: 0.5, paused: !isWindowActive)) { _ in
                 List {
                     Section {
                         HStack(spacing: 12) {
@@ -276,11 +277,21 @@ struct ResourceStatsView: View {
         }
         .foregroundStyle(fgColor)
         .onAppear {
+            isWindowActive = true
             configLoader.onConfigChanged = { newConfig in
                 config = newConfig
             }
             configLoader.load()
             config = configLoader.config
+        }
+        .onDisappear {
+            isWindowActive = false
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didHideNotification)) { _ in
+            isWindowActive = false
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didUnhideNotification)) { _ in
+            isWindowActive = true
         }
     }
 

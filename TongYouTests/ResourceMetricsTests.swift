@@ -29,6 +29,18 @@ struct ResourceMetricsTests {
         #expect(ByteFormatter.string(from: 1_073_741_824).contains("GB"))
     }
 
+    @Test("ByteFormatter handles boundary values")
+    func byteFormatterBoundaries() {
+        let zero = ByteFormatter.string(from: 0)
+        #expect(zero.contains("0") || zero.contains("Zero") || zero.contains("zero"))
+
+        let oneByte = ByteFormatter.string(from: 1)
+        #expect(oneByte.lowercased().contains("byte"))
+
+        let large = ByteFormatter.string(from: 1_000_000_000_000)
+        #expect(large.contains("TB") || large.contains("GB"))
+    }
+
     @Test("ResourceMetrics estimatedBufferBytes calculation")
     func estimatedBufferBytesCalculation() {
         let uniformSize = UInt64(MemoryLayout<Uniforms>.stride)
