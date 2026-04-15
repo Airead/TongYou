@@ -20,7 +20,9 @@ final class ClientTerminalController: TerminalControlling {
     private(set) var detectedURLs: [DetectedURL] = []
     private var commandKeyHeld = false
     private var lastURLGeneration: UInt64 = 0
-    private var contentGeneration: UInt64 = 0
+    private var _contentGeneration: UInt64 = 0
+
+    var contentGeneration: UInt64 { _contentGeneration }
 
     private(set) var windowTitle: String = ""
     private(set) var runningCommand: String?
@@ -276,7 +278,7 @@ final class ClientTerminalController: TerminalControlling {
 
     /// Called by the session manager when screen content is updated from the server.
     func handleScreenUpdated() {
-        contentGeneration &+= 1
+        _contentGeneration &+= 1
         onNeedsDisplay?()
     }
 

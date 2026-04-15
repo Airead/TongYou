@@ -39,7 +39,16 @@ final class TerminalController: TerminalControlling {
     /// Detected URLs in the current visible area (populated on demand when Cmd key is held).
     private(set) var detectedURLs: [DetectedURL] = []
     /// Track whether content changed to refresh URL detection while Cmd is held.
-    nonisolated(unsafe) private var contentGeneration: UInt64 = 0
+    nonisolated(unsafe) private var _contentGeneration: UInt64 = 0
+    /// Monotonically-increasing generation counter for snapshot deduplication.
+    var contentGeneration: UInt64 {
+        ptyQueue.sync { _contentGeneration }
+    }
+
+    /// Debounce work item for coalescing rapid display-link wakeups.
+    nonisolated(unsafe) private var displayLinkDebounceWork: DispatchWorkItem?
+    /// Frame coalescing window (~8 ms for 120 Hz).
+    private static let displayLinkInterval: TimeInterval = 8.0 / 1000.0
     private var lastURLGeneration: UInt64 = 0
     /// Whether the Command key is currently held — drives on-demand URL detection.
     private var commandKeyHeld = false
@@ -187,8 +196,7 @@ final class TerminalController: TerminalControlling {
 
     func resume() {
         isSuspended = false
-        screenDirty = true
-        onNeedsDisplay?()
+        markScreenDirty()
     }
 
     // MARK: - Snapshot (called by display link on MainActor)
@@ -199,7 +207,7 @@ final class TerminalController: TerminalControlling {
         let sel = selection
         let (snapshot, gen): (ScreenSnapshot, UInt64) = ptyQueue.sync {
             screenDirty = false
-            return (screen.snapshot(selection: sel), contentGeneration)
+            return (screen.snapshot(selection: sel), _contentGeneration)
         }
         // Refresh URL detection only while Command key is held and content changed.
         if commandKeyHeld, gen != lastURLGeneration {
@@ -345,7 +353,7 @@ final class TerminalController: TerminalControlling {
         if held {
             let sel = selection
             let (snapshot, gen): (ScreenSnapshot, UInt64) = ptyQueue.sync {
-                (screen.snapshot(selection: sel), contentGeneration)
+                (screen.snapshot(selection: sel), _contentGeneration)
             }
             detectedURLs = URLDetector.detect(in: snapshot)
             lastURLGeneration = gen
@@ -542,7 +550,6 @@ final class TerminalController: TerminalControlling {
             streamHandler.handle(action)
         }
         streamHandler.flush()
-        contentGeneration &+= 1
         markScreenDirty()
     }
 
@@ -551,9 +558,26 @@ final class TerminalController: TerminalControlling {
     private func markScreenDirty() {
         let wasDirty = screenDirty
         screenDirty = true
-        if !wasDirty && !isSuspended {
-            onNeedsDisplay?()
+        _contentGeneration &+= 1
+        guard !isSuspended else { return }
+
+        // Coalesce rapid dirty marks into a single display-link wakeup.
+        // If a wakeup is already scheduled, do not reschedule to avoid
+        // pushing the render indefinitely while the user is scrolling.
+        guard displayLinkDebounceWork == nil else { return }
+
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.displayLinkDebounceWork = nil
+            if self.screenDirty {
+                self.onNeedsDisplay?()
+            }
         }
+        displayLinkDebounceWork = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.displayLinkInterval,
+            execute: work
+        )
     }
 
     // MARK: - Title Debounce

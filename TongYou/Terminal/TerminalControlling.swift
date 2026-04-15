@@ -12,6 +12,9 @@ protocol TerminalControlling: AnyObject {
     /// Returns a snapshot if screen content changed since the last call. Nil if idle.
     func consumeSnapshot() -> ScreenSnapshot?
 
+    /// Monotonically-increasing generation counter for snapshot deduplication.
+    var contentGeneration: UInt64 { get }
+
     // MARK: - Keyboard & Text Input
 
     func handleKeyDown(_ event: NSEvent)

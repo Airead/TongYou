@@ -295,7 +295,7 @@ struct ResourceStatsView: View {
                 compactMetric("Frame", String(format: "%.2f ms", metrics.frameTimeMs), fgColor)
                 compactMetric("Build", String(format: "%.2f ms", metrics.instanceBuildTimeMs), fgColor)
                 compactMetric("GPU", "\(metrics.gpuSubmitCount)", fgColor)
-                compactMetric("Skip", "\(metrics.skippedFrameCount)", fgColor)
+                compactMetric("Dedup", "\(metrics.dedupedFrameCount)", fgColor)
                 Spacer(minLength: 0)
             }
 

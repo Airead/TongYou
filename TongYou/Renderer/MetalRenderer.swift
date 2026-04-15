@@ -132,11 +132,18 @@ final class MetalRenderer {
         textContentDirtyCounter = Self.swapChainCount
     }
 
-    /// Whether the renderer has pending work (dirty buffers or uniforms to update).
-    var needsRender: Bool { instanceRebuildCounter > 0 || uniformsDirtyCounter > 0 }
+    /// Whether the renderer has pending work (dirty buffers, uniforms, or region to update).
+    var needsRender: Bool {
+        instanceRebuildCounter > 0 || uniformsDirtyCounter > 0 || pendingDirtyRegion.isDirty
+    }
 
     func clearPendingDirtyRegionForTesting() {
         pendingDirtyRegion = .clean
+    }
+
+    /// Record a deduplicated frame for metrics when content generation did not change.
+    func recordDedupedFrame() {
+        frameMetrics?.recordDedupedFrame()
     }
 
     private struct FrameState {
@@ -396,6 +403,11 @@ final class MetalRenderer {
     // MARK: - Render
 
     func render(in layer: CAMetalLayer) {
+        guard needsRender else {
+            frameMetrics?.recordSkip()
+            return
+        }
+
         guard frameSemaphore.wait(timeout: .now()) == .success else {
             frameMetrics?.recordSkip()
             return
@@ -1163,6 +1175,7 @@ final class MetalRenderer {
             instanceBuildTimeMs: frameMetrics?.instanceBuildTimeMs ?? 0,
             gpuSubmitCount: frameMetrics?.gpuSubmitCount ?? 0,
             skippedFrameCount: frameMetrics?.skippedFrameCount ?? 0,
+            dedupedFrameCount: frameMetrics?.dedupedFrameCount ?? 0,
             bgInstanceCapacity: frame.bgInstanceCapacity,
             bgInstanceCount: instanceCount,
             textInstanceCapacity: frame.textInstanceCapacity,

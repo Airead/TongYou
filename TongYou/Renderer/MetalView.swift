@@ -40,6 +40,8 @@ final class MetalView: NSView {
     private var dragLastCol: Int = 0
     /// Last known unclamped drag row (for auto-scroll timer updates).
     private var dragLastUnclampedRow: Int = 0
+    /// Last consumed content generation for display-link deduplication.
+    private var lastRenderedContentGeneration: UInt64 = 0
 
     /// The pane ID this MetalView belongs to (set by TerminalPaneContainerView).
     var paneID: UUID?
@@ -841,7 +843,13 @@ final class MetalView: NSView {
     @objc nonisolated private func displayLinkFired(_ link: CADisplayLink) {
         MainActor.assumeIsolated {
             if let snapshot = self.terminalController?.consumeSnapshot() {
-                self.renderer?.setContent(snapshot)
+                let gen = self.terminalController?.contentGeneration ?? 0
+                if gen != self.lastRenderedContentGeneration {
+                    self.lastRenderedContentGeneration = gen
+                    self.renderer?.setContent(snapshot)
+                } else {
+                    self.renderer?.recordDedupedFrame()
+                }
             }
             guard let renderer = self.renderer, renderer.needsRender else {
                 link.isPaused = true

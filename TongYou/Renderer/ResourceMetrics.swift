@@ -8,6 +8,7 @@ struct ResourceMetrics {
     var instanceBuildTimeMs: Double = 0
     var gpuSubmitCount: UInt64 = 0
     var skippedFrameCount: UInt64 = 0
+    var dedupedFrameCount: UInt64 = 0
 
     // Buffers (current frame state)
     var bgInstanceCapacity: Int = 0

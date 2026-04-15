@@ -10,6 +10,8 @@ struct FrameMetrics {
     private(set) var gpuSubmitCount: UInt64 = 0
     /// Total frames skipped (semaphore timeout or no drawable).
     private(set) var skippedFrameCount: UInt64 = 0
+    /// Total display-link frames deduplicated by unchanged content generation.
+    private(set) var dedupedFrameCount: UInt64 = 0
 
     private var frameStart: UInt64 = 0
     private var buildStart: UInt64 = 0
@@ -38,6 +40,11 @@ struct FrameMetrics {
     /// Call when a frame is skipped (semaphore timeout, no drawable, etc.).
     mutating func recordSkip() {
         skippedFrameCount += 1
+    }
+
+    /// Call when a display-link frame is deduplicated because content generation did not change.
+    mutating func recordDedupedFrame() {
+        dedupedFrameCount += 1
     }
 
     private static let timebaseInfo: mach_timebase_info_data_t = {
