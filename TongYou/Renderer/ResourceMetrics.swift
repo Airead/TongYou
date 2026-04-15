@@ -37,6 +37,10 @@ struct ResourceMetrics {
 
     // Snapshot
     var snapshotCellCopyCount: Int = 0
+
+    // Shaping cache
+    var shapedRowCacheHits: UInt64 = 0
+    var shapedRowCacheMisses: UInt64 = 0
 }
 
 /// Snapshot of a single pane's resources.
