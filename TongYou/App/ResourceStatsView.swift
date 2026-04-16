@@ -331,7 +331,12 @@ struct ResourceStatsView: View {
                 Spacer(minLength: 0)
             }
 
-            compactMetric("Snapshot Cells", "\(metrics.snapshotCellCopyCount)", fgColor)
+            HStack(spacing: 12) {
+                compactMetric("Snapshot Cells", "\(metrics.snapshotCellCopyCount)", fgColor)
+                compactMetric("Rebuilt Rows", "\(metrics.rebuiltRowCount)/\(metrics.totalRowCount)", fgColor)
+                compactMetric("Pending Dirty", "\(metrics.pendingDirtyRows)", fgColor)
+                Spacer(minLength: 0)
+            }
         }
     }
 

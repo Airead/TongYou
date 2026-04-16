@@ -511,6 +511,8 @@ final class MetalRenderer {
 
         withUnsafeMutablePointer(to: &frameStates[frameIndex]) { frame in
             if rebuildInstances {
+                let rebuiltRows = dirtyRegion.fullRebuild ? Int(gridSize.rows) : dirtyRegion.dirtyRows.count
+                frameMetrics?.recordRebuiltRowCount(rebuiltRows)
                 frameMetrics?.beginInstanceBuild()
                 let snapshot = currentSnapshot
                 let searchMap = buildSearchLineMap()
@@ -1278,6 +1280,9 @@ final class MetalRenderer {
             estimatedBufferBytes: totalBufferBytes,
             estimatedAtlasBytes: glyphAtlasBytes + emojiAtlasBytes,
             snapshotCellCopyCount: frameMetrics?.snapshotCellCopyCount ?? 0,
+            rebuiltRowCount: frameMetrics?.rebuiltRowCount ?? 0,
+            pendingDirtyRows: frameStateDirtyRegions.reduce(0) { $0 + $1.dirtyRows.count },
+            totalRowCount: Int(gridSize.rows),
             shapedRowCacheHits: shapedRowCache.hits,
             shapedRowCacheMisses: shapedRowCache.misses
         )
