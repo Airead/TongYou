@@ -293,6 +293,9 @@ public final class Screen {
     /// Viewport offset: 0 = showing latest content (bottom), >0 = scrolled up.
     public private(set) var viewportOffset: Int = 0
 
+    /// Reusable buffer for snapshot linearization. Avoids per-frame malloc.
+    private var linearBuffer: [Cell] = []
+
     private let tabWidth: Int
 
     public init(columns: Int, rows: Int, maxScrollback: Int = 10000, tabWidth: Int = 8) {
@@ -315,8 +318,19 @@ public final class Screen {
 
     /// Build a contiguous cells array by unwrapping the ring buffer.
     /// Returns the array directly (COW) when rowBase == 0.
+    /// When rowBase != 0, writes into a reusable linearBuffer to avoid per-frame allocation.
     private func buildLinearCells() -> [Cell] {
-        Self.linearize(cells, rowBase: rowBase, cols: columns, rowCount: rows)
+        guard rowBase != 0 else { return cells }
+        let count = columns * rows
+        if linearBuffer.count != count {
+            linearBuffer = [Cell](repeating: .empty, count: count)
+        }
+        for row in 0..<rows {
+            let src = ((rowBase + row) % rows) * columns
+            let dst = row * columns
+            linearBuffer[dst..<(dst + columns)] = cells[src..<(src + columns)]
+        }
+        return linearBuffer
     }
 
     /// Clear logical rows in the given range, filling with .empty cells.
@@ -446,8 +460,14 @@ public final class Screen {
     }
 
     /// Build the cell array for a scrolled-up viewport.
+    /// Writes into the reusable linearBuffer to avoid per-frame allocation.
     private func buildViewportCells() -> [Cell] {
-        var result = [Cell](repeating: .empty, count: columns * rows)
+        let count = columns * rows
+        if linearBuffer.count != count {
+            linearBuffer = [Cell](repeating: .empty, count: count)
+        } else {
+            for i in 0..<count { linearBuffer[i] = .empty }
+        }
         let sbCount = scrollbackCount
 
         for viewRow in 0..<rows {
@@ -458,18 +478,18 @@ public final class Screen {
                 let srcBase = scrollbackPhysicalRow(absLine) * scrollbackColumns
                 let dst = viewRow * columns
                 let copyCols = min(columns, scrollbackColumns)
-                result[dst..<(dst + copyCols)] = scrollbackBuffer![srcBase..<(srcBase + copyCols)]
+                linearBuffer[dst..<(dst + copyCols)] = scrollbackBuffer![srcBase..<(srcBase + copyCols)]
             } else {
                 // From active screen — use ring buffer mapping
                 let screenRow = absLine - sbCount
                 if screenRow < rows {
                     let src = rowStart(screenRow)
                     let dst = viewRow * columns
-                    result[dst..<(dst + columns)] = cells[src..<(src + columns)]
+                    linearBuffer[dst..<(dst + columns)] = cells[src..<(src + columns)]
                 }
             }
         }
-        return result
+        return linearBuffer
     }
 
     // MARK: - Write Operations

@@ -446,15 +446,22 @@ final class MetalRenderer {
             let copiedCount = snapshot.partialRows.map { $0.cells.count }.reduce(0, +)
             frameMetrics?.recordSnapshotCellCopyCount(copiedCount)
         } else {
-            backingCells = snapshot.cells
-            backingColumns = snapshot.columns
-            backingRows = snapshot.rows
+            let count = snapshot.cells.count
+            if backingColumns == snapshot.columns && backingRows == snapshot.rows
+                && backingCells.count == count {
+                // Same grid size: overwrite in-place to avoid malloc churn.
+                backingCells.replaceSubrange(0..<count, with: snapshot.cells)
+            } else {
+                backingCells = snapshot.cells
+                backingColumns = snapshot.columns
+                backingRows = snapshot.rows
+            }
             for i in frameStates.indices {
                 frameStates[i].stagedRowInstances.removeAll()
                 frameStates[i].textRowOffsets.removeAll()
                 frameStates[i].emojiRowOffsets.removeAll()
             }
-            frameMetrics?.recordSnapshotCellCopyCount(snapshot.cells.count)
+            frameMetrics?.recordSnapshotCellCopyCount(count)
         }
 
         if pendingDirtyRegion.fullRebuild {
