@@ -22,6 +22,22 @@ make install        # Install to /Applications
 make test           # Run tests
 ```
 
+## Configuration
+
+TongYou uses a `key = value` config file with hot-reload.
+
+**Config load order** (later overrides earlier):
+
+1. `~/.config/tongyou/config`
+2. `~/Library/Application Support/io.github.airead.tongyou/config`
+3. Files included via `config-file = ?path`
+
+On first run, if no config file exists, TongYou generates a default one at `~/.config/tongyou/config` from the bundled template.
+
+**Default config template**: [TongYou/Config/DefaultConfig.txt](TongYou/Config/DefaultConfig.txt)
+
+Use **Cmd + ,** (Preferences) to open the default config in TextEdit.
+
 ## License
 
 MIT
