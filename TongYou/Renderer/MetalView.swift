@@ -52,6 +52,9 @@ final class MetalView: NSView {
     /// Callback for keybinding actions (forwarded to SessionManager via TerminalWindowView).
     var onTabAction: ((TabAction) -> Void)?
 
+    /// Called on any keyboard or mouse interaction to indicate the pane is active.
+    var onUserInteraction: (() -> Void)?
+
     /// Callback when the window title changes (from OSC 0/2).
     var onTitleChanged: ((String) -> Void)?
 
@@ -145,6 +148,7 @@ final class MetalView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
+        onUserInteraction?()
         // Check keybindings first for Option+key combinations that
         // performKeyEquivalent may not intercept (macOS routes these
         // through keyDown rather than performKeyEquivalent).
@@ -398,6 +402,7 @@ final class MetalView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        onUserInteraction?()
         onFocused?()
         let inMouseMode = isMouseTrackingActive
         let forceSelection = isAltForcingSelection(event)
@@ -438,6 +443,7 @@ final class MetalView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        onUserInteraction?()
         stopDragAutoScrollTimer()
         if isMouseTrackingActive && !isAltForcingSelection(event) {
             sendMouseEvent(event, action: .release, button: .left)
@@ -478,6 +484,7 @@ final class MetalView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        onUserInteraction?()
         if isMouseTrackingActive && !isAltForcingSelection(event) {
             sendMouseEvent(event, action: .motion, button: .left)
         } else {
