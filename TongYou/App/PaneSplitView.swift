@@ -13,6 +13,7 @@ struct PaneSplitView: View {
     let onTabAction: (TabAction) -> Void
     let onTitleChanged: (String) -> Void
     let onNodeChanged: (PaneNode) -> Void
+    let onUserInteraction: ((UUID) -> Void)?
 
     var body: some View {
         switch node {
@@ -31,7 +32,8 @@ struct PaneSplitView: View {
                 controllerForPane: controllerForPane,
                 onTabAction: onTabAction,
                 onTitleChanged: onTitleChanged,
-                onNodeChanged: onNodeChanged
+                onNodeChanged: onNodeChanged,
+                onUserInteraction: onUserInteraction
             )
         }
     }
@@ -48,6 +50,9 @@ struct PaneSplitView: View {
             onTitleChanged: onTitleChanged,
             onFocused: {
                 focusManager.focusPane(id: pane.id)
+            },
+            onUserInteraction: {
+                onUserInteraction?(pane.id)
             }
         )
         .id(pane.id)
@@ -79,6 +84,7 @@ private struct SplitContainerView: View {
     let onTabAction: (TabAction) -> Void
     let onTitleChanged: (String) -> Void
     let onNodeChanged: (PaneNode) -> Void
+    let onUserInteraction: ((UUID) -> Void)?
 
     /// Local ratio used during drag. Nil when not dragging (uses modelRatio).
     @State private var liveRatio: CGFloat?
@@ -149,7 +155,8 @@ private struct SplitContainerView: View {
             onTitleChanged: onTitleChanged,
             onNodeChanged: { newFirst in
                 onNodeChanged(.split(direction: direction, ratio: effectiveRatio, first: newFirst, second: second))
-            }
+            },
+            onUserInteraction: onUserInteraction
         )
     }
 
@@ -164,7 +171,8 @@ private struct SplitContainerView: View {
             onTitleChanged: onTitleChanged,
             onNodeChanged: { newSecond in
                 onNodeChanged(.split(direction: direction, ratio: effectiveRatio, first: first, second: newSecond))
-            }
+            },
+            onUserInteraction: onUserInteraction
         )
     }
 }

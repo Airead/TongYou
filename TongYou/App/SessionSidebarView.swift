@@ -12,6 +12,7 @@ struct SessionSidebarView: View {
     let sessions: [TerminalSession]
     let activeSessionIndex: Int
     let attachedSessionIDs: Set<UUID>
+    let sessionUnreadCounts: [UUID: Int]
     let themeForeground: RGBColor
     let themeBackground: RGBColor
     let onSelect: (Int) -> Void
@@ -116,15 +117,19 @@ struct SessionSidebarView: View {
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            Text("\(session.tabCount)")
-                .font(.system(size: 10))
-                .foregroundStyle(fgColor.opacity(0.3))
-                .padding(.horizontal, 4)
-                .padding(.vertical, 1)
-                .background(
-                    Capsule()
-                        .fill(fgColor.opacity(0.08))
-                )
+            if let count = sessionUnreadCounts[session.id], count > 0 {
+                UnreadBadge(count: count)
+            } else {
+                Text("\(session.tabCount)")
+                    .font(.system(size: 10))
+                    .foregroundStyle(fgColor.opacity(0.3))
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(
+                        Capsule()
+                            .fill(fgColor.opacity(0.08))
+                    )
+            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)

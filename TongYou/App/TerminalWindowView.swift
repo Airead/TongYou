@@ -32,6 +32,8 @@ struct TerminalWindowView: View {
     /// "Modifying state during view update" warnings.
     @State private var viewStore = MetalViewStore()
 
+    @State private var notificationStore = NotificationStore.shared
+
     /// Loads config to derive the window background color.
     /// Each MetalView also has its own ConfigLoader for rendering.
     @State private var configLoader = ConfigLoader()
@@ -43,6 +45,7 @@ struct TerminalWindowView: View {
                     sessions: sessionManager.sessions,
                     activeSessionIndex: sessionManager.activeSessionIndex,
                     attachedSessionIDs: sessionManager.allAttachedSessionIDs,
+                    sessionUnreadCounts: notificationStore.unreadCountBySessionID,
                     themeForeground: configLoader.config.foreground,
                     themeBackground: configLoader.config.background,
                     onSelect: { index in
@@ -79,6 +82,7 @@ struct TerminalWindowView: View {
                     TabBarView(
                         tabs: sessionManager.tabs,
                         activeTabIndex: sessionManager.activeTabIndex,
+                        tabUnreadCounts: notificationStore.unreadCountByTabID,
                         onSelect: { index in
                             switchToTab(at: index)
                         },
@@ -119,63 +123,8 @@ struct TerminalWindowView: View {
                     )
                     .id(sessionManager.activeSession?.id)
                 } else if let activeTab = sessionManager.activeTab {
-                    let updateTabTitle: (String) -> Void = { title in
-                        sessionManager.updateTitle(title, for: activeTab.id)
-                    }
-
-                    let paneFocusColor: Color = {
-                        if sessionManager.activeSession?.source.isRemote == true {
-                            return .blue
-                        } else if sessionManager.activeSession?.isAnonymous == true {
-                            return .gray
-                        } else {
-                            return .green
-                        }
-                    }()
-
-                    ZStack {
-                        PaneSplitView(
-                            node: activeTab.paneTree,
-                            viewStore: viewStore,
-                            focusManager: focusManager,
-                            focusColor: paneFocusColor,
-                            controllerForPane: { paneID in
-                                sessionManager.activeController(for: paneID)
-                            },
-                            onTabAction: handleTabAction,
-                            onTitleChanged: updateTabTitle,
-                            onNodeChanged: { newTree in
-                                sessionManager.updateActivePaneTree(newTree)
-                            }
-                        )
-
-                        FloatingPaneOverlay(
-                            floatingPanes: activeTab.floatingPanes,
-                            viewStore: viewStore,
-                            focusManager: focusManager,
-                            focusColor: paneFocusColor,
-                            controllerForPane: { paneID in
-                                sessionManager.activeController(for: paneID)
-                            },
-                            onTabAction: handleTabAction,
-                            onTitleChanged: { paneID, title in
-                                sessionManager.updateFloatingPaneTitle(paneID: paneID, title: title)
-                            },
-                            onFrameChanged: { paneID, frame in
-                                sessionManager.updateFloatingPaneFrame(paneID: paneID, frame: frame)
-                            },
-                            onBringToFront: { paneID in
-                                sessionManager.bringFloatingPaneToFront(paneID: paneID)
-                            },
-                            onClose: { paneID in
-                                closeFloatingPane(id: paneID)
-                            },
-                            onTogglePin: { paneID in
-                                sessionManager.toggleFloatingPanePin(paneID: paneID)
-                            }
-                        )
-                    }
-                    .id(activeTab.id)
+                    paneContent(for: activeTab)
+                        .id(activeTab.id)
                 }
             }
         }
@@ -246,6 +195,22 @@ struct TerminalWindowView: View {
             sessionManager.updateFloatingPanesVisibilityForFocus(focusedPaneID: newID)
             if let paneID = newID {
                 sessionManager.notifyPaneFocused(paneID)
+                notificationStore.markRead(paneID: paneID)
+            }
+            for (paneID, view) in viewStore.allViews {
+                let shouldShow = notificationStore.unreadPaneIDs.contains(paneID) && paneID != newID
+                view.setNotificationRing(visible: shouldShow)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            if let paneID = focusManager.focusedPaneID {
+                notificationStore.markRead(paneID: paneID)
+            }
+        }
+        .onChange(of: notificationStore.unreadPaneIDs) { _, newIDs in
+            for (paneID, view) in viewStore.allViews {
+                let shouldShow = newIDs.contains(paneID) && paneID != focusManager.focusedPaneID
+                view.setNotificationRing(visible: shouldShow)
             }
         }
     }
@@ -288,6 +253,71 @@ struct TerminalWindowView: View {
         }
     }
 
+    @ViewBuilder
+    private func paneContent(for activeTab: TerminalTab) -> some View {
+        let paneFocusColor: Color = {
+            if sessionManager.activeSession?.source.isRemote == true {
+                return .blue
+            } else if sessionManager.activeSession?.isAnonymous == true {
+                return .gray
+            } else {
+                return .green
+            }
+        }()
+        let updateTabTitle: (String) -> Void = { title in
+            sessionManager.updateTitle(title, for: activeTab.id)
+        }
+
+        ZStack {
+            PaneSplitView(
+                node: activeTab.paneTree,
+                viewStore: viewStore,
+                focusManager: focusManager,
+                focusColor: paneFocusColor,
+                controllerForPane: { paneID in
+                    sessionManager.activeController(for: paneID)
+                },
+                onTabAction: handleTabAction,
+                onTitleChanged: updateTabTitle,
+                onNodeChanged: { newTree in
+                    sessionManager.updateActivePaneTree(newTree)
+                },
+                onUserInteraction: { paneID in
+                    notificationStore.markRead(paneID: paneID)
+                }
+            )
+
+            FloatingPaneOverlay(
+                floatingPanes: activeTab.floatingPanes,
+                viewStore: viewStore,
+                focusManager: focusManager,
+                focusColor: paneFocusColor,
+                controllerForPane: { paneID in
+                    sessionManager.activeController(for: paneID)
+                },
+                onTabAction: handleTabAction,
+                onTitleChanged: { paneID, title in
+                    sessionManager.updateFloatingPaneTitle(paneID: paneID, title: title)
+                },
+                onFrameChanged: { paneID, frame in
+                    sessionManager.updateFloatingPaneFrame(paneID: paneID, frame: frame)
+                },
+                onBringToFront: { paneID in
+                    sessionManager.bringFloatingPaneToFront(paneID: paneID)
+                },
+                onClose: { paneID in
+                    closeFloatingPane(id: paneID)
+                },
+                onTogglePin: { paneID in
+                    sessionManager.toggleFloatingPanePin(paneID: paneID)
+                },
+                onUserInteraction: { paneID in
+                    notificationStore.markRead(paneID: paneID)
+                }
+            )
+        }
+    }
+
     // MARK: - Session Operations
 
     private func createNewSession() {
@@ -302,6 +332,10 @@ struct TerminalWindowView: View {
             ? sessionManager.sessions[index].isAnonymous
             : false
         let wasOnlyAttached = sessionManager.allAttachedSessionIDs.count == 1
+
+        if sessionManager.sessions.indices.contains(index) {
+            notificationStore.clearAll(forSessionID: sessionManager.sessions[index].id)
+        }
 
         let paneIDs = sessionManager.closeSession(at: index)
         for paneID in paneIDs {
@@ -367,6 +401,7 @@ struct TerminalWindowView: View {
         }
 
         let tab = sessionManager.tabs[index]
+        notificationStore.clearAll(forTabID: tab.id)
 
         // Tear down all MetalViews in this tab's pane tree and floating panes.
         for paneID in tab.allPaneIDsIncludingFloating {
@@ -414,10 +449,12 @@ struct TerminalWindowView: View {
 
         // Remote session: just send to server; layoutUpdate handles the rest.
         if sessionManager.activeSession?.source.isRemote == true {
+            notificationStore.clearAll(forPaneID: paneID)
             sessionManager.closePane(id: paneID)
             return
         }
 
+        notificationStore.clearAll(forPaneID: paneID)
         viewStore.tearDown(for: paneID)
         focusManager.removeFromHistory(id: paneID)
 
@@ -470,6 +507,7 @@ struct TerminalWindowView: View {
     }
 
     private func closeFloatingPane(id paneID: UUID) {
+        notificationStore.clearAll(forPaneID: paneID)
         viewStore.tearDown(for: paneID)
         focusManager.removeFromHistory(id: paneID)
         sessionManager.closeFloatingPane(paneID: paneID)
@@ -551,6 +589,18 @@ struct TerminalWindowView: View {
                 Task {
                     await sessionManager.runCommand(at: paneID, command: command, arguments: arguments)
                 }
+            }
+        case .paneNotification(let paneID, let title, let body):
+            guard let (sessionID, tabID) = sessionManager.paneOwnerIDs(paneID: paneID) else { break }
+            notificationStore.add(
+                sessionID: sessionID,
+                tabID: tabID,
+                paneID: paneID,
+                title: title,
+                body: body
+            )
+            if paneID == focusManager.focusedPaneID {
+                viewStore.view(for: paneID)?.flashNotificationRing()
             }
         }
     }
@@ -900,6 +950,8 @@ private class ConfiguratorView: NSView {
 /// do not trigger "Modifying state during view update" warnings.
 final class MetalViewStore {
     private var views: [UUID: MetalView] = [:]
+
+    var allViews: [UUID: MetalView] { views }
 
     func view(for paneID: UUID) -> MetalView? {
         views[paneID]

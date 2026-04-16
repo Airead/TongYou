@@ -31,6 +31,7 @@ final class ClientTerminalController: TerminalControlling {
     var onNeedsDisplay: (() -> Void)?
     var onProcessExited: (() -> Void)?
     var onTitleChanged: ((String) -> Void)?
+    var onPaneNotification: ((String, String) -> Void)?
 
     init(
         remoteClient: RemoteSessionClient,

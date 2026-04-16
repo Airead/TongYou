@@ -81,6 +81,7 @@ protocol TerminalControlling: AnyObject {
     var onNeedsDisplay: (() -> Void)? { get set }
     var onProcessExited: (() -> Void)? { get set }
     var onTitleChanged: ((String) -> Void)? { get set }
+    var onPaneNotification: ((String, String) -> Void)? { get set }
 }
 
 /// Control characters unsafe to paste — could trigger shell signals or control sequences.

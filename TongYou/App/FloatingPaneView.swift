@@ -17,6 +17,7 @@ struct FloatingPaneView: View {
     let onBringToFront: (UUID) -> Void
     let onClose: (UUID) -> Void
     let onTogglePin: (UUID) -> Void
+    let onUserInteraction: ((UUID) -> Void)?
 
     private static let titleBarHeight: CGFloat = 24
     private static let resizeHandleSize: CGFloat = 6
@@ -110,7 +111,8 @@ struct FloatingPaneView: View {
             externalController: controllerForPane(floatingPane.pane.id),
             onTabAction: onTabAction,
             onTitleChanged: onTitleChanged,
-            onFocused: { bringToFrontAndFocus() }
+            onFocused: { bringToFrontAndFocus() },
+            onUserInteraction: { onUserInteraction?(floatingPane.pane.id) }
         )
         .id(floatingPane.pane.id)
     }

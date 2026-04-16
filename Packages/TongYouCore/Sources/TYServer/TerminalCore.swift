@@ -46,6 +46,8 @@ public final class TerminalCore: @unchecked Sendable {
 
     /// Called when the running command changes (shell integration OSC 7727).
     var onRunningCommandChanged: ((String?) -> Void)?
+    /// Called when a pane notification sequence is received (OSC 9 / 777 / 1337).
+    var onPaneNotification: ((String, String) -> Void)?
 
     // MARK: - Init
 
@@ -125,6 +127,9 @@ public final class TerminalCore: @unchecked Sendable {
         }
         streamHandler.onRunningCommandChanged = { [weak self] cmd in
             self?.onRunningCommandChanged?(cmd)
+        }
+        streamHandler.onPaneNotification = { [weak self] title, body in
+            self?.onPaneNotification?(title, body)
         }
 
         try process.start(

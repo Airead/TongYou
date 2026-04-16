@@ -99,6 +99,18 @@ final class SessionManager {
         return nil
     }
 
+    /// Returns the session ID and tab ID that own a given pane ID.
+    func paneOwnerIDs(paneID: UUID) -> (sessionID: UUID, tabID: UUID)? {
+        for session in sessions {
+            for tab in session.tabs {
+                if tab.hasPane(id: paneID) {
+                    return (session.id, tab.id)
+                }
+            }
+        }
+        return nil
+    }
+
     /// Generate the next available name with a given prefix (e.g. "LSession 1", "LSession 2").
     private func nextAvailableName(prefix: String) -> String {
         let existingNames = Set(sessions.map(\.name))
@@ -890,7 +902,8 @@ final class SessionManager {
              .focusPane, .paneExited,
              .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane,
              .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession,
-             .renameSession, .runInPlace(_, _), .runCommand(_, _):
+             .renameSession, .runInPlace(_, _), .runCommand(_, _),
+             .paneNotification:
             // Pane/remote actions are handled by TerminalWindowView.
             return false
         }

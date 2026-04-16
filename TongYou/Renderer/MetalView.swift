@@ -46,8 +46,16 @@ final class MetalView: NSView {
     /// The pane ID this MetalView belongs to (set by TerminalPaneContainerView).
     var paneID: UUID?
 
+    /// Blue notification ring overlay (sublayer of the CAMetalLayer).
+    private let notificationRingLayer = CAShapeLayer()
+    /// Guards against overlapping flash animations from rapid notifications.
+    private var isFlashing = false
+
     /// Callback for keybinding actions (forwarded to SessionManager via TerminalWindowView).
     var onTabAction: ((TabAction) -> Void)?
+
+    /// Called on any keyboard or mouse interaction to indicate the pane is active.
+    var onUserInteraction: (() -> Void)?
 
     /// Callback when the window title changes (from OSC 0/2).
     var onTitleChanged: ((String) -> Void)?
@@ -90,6 +98,12 @@ final class MetalView: NSView {
         layerContentsRedrawPolicy = .duringViewResize
 
         MetalViewRegistry.shared.register(self)
+
+        notificationRingLayer.fillColor = nil
+        notificationRingLayer.strokeColor = NSColor.systemBlue.cgColor
+        notificationRingLayer.lineWidth = 2
+        notificationRingLayer.opacity = 0
+        layer?.addSublayer(notificationRingLayer)
     }
 
     override func makeBackingLayer() -> CALayer {
@@ -136,6 +150,7 @@ final class MetalView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
+        onUserInteraction?()
         // Check keybindings first for Option+key combinations that
         // performKeyEquivalent may not intercept (macOS routes these
         // through keyDown rather than performKeyEquivalent).
@@ -389,6 +404,7 @@ final class MetalView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        onUserInteraction?()
         onFocused?()
         let inMouseMode = isMouseTrackingActive
         let forceSelection = isAltForcingSelection(event)
@@ -741,6 +757,10 @@ final class MetalView: NSView {
             guard let self, let paneID = self.paneID else { return }
             self.onTabAction?(.paneExited(paneID))
         }
+        controller.onPaneNotification = { [weak self] title, body in
+            guard let self, let paneID = self.paneID else { return }
+            self.onTabAction?(.paneNotification(paneID, title, body))
+        }
     }
 
     private func applyConfigChange(_ config: Config) {
@@ -890,7 +910,51 @@ final class MetalView: NSView {
         MainActor.assumeIsolated {
             super.setFrameSize(newSize)
             self.updateDrawableSize()
+            self.updateNotificationRingPath()
         }
+    }
+
+    func setNotificationRing(visible: Bool) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        notificationRingLayer.opacity = visible ? 1 : 0
+        CATransaction.commit()
+    }
+
+    private func updateNotificationRingPath() {
+        let inset: CGFloat = 2
+        let radius: CGFloat = 6
+        let rect = bounds.insetBy(dx: inset, dy: inset)
+        let path = CGPath(
+            roundedRect: rect,
+            cornerWidth: radius,
+            cornerHeight: radius,
+            transform: nil
+        )
+        notificationRingLayer.path = path
+    }
+
+    func flashNotificationRing() {
+        guard !isFlashing else { return }
+        isFlashing = true
+
+        let flashLayer = CALayer()
+        flashLayer.frame = bounds
+        flashLayer.backgroundColor = NSColor.systemBlue.cgColor
+        flashLayer.opacity = 0
+        layer?.addSublayer(flashLayer)
+
+        let animation = CAKeyframeAnimation(keyPath: "opacity")
+        animation.values = [0, 0.6, 0, 0.6, 0]
+        animation.duration = 0.9
+        animation.isRemovedOnCompletion = true
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { [weak self, weak flashLayer] in
+            flashLayer?.removeFromSuperlayer()
+            self?.isFlashing = false
+        }
+        flashLayer.add(animation, forKey: "flash")
+        CATransaction.commit()
     }
 
     private func updateLayerBackground(_ bg: RGBColor) {

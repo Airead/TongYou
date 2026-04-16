@@ -258,6 +258,28 @@ import TYTerminal
         }
     }
 
+    @Test func osc9() {
+        let actions = parseString("\u{1B}]9;Build Failed;Check logs\u{07}")
+        #expect(actions.count == 1)
+        if case .oscDispatch(let data) = actions[0] {
+            let str = String(bytes: data, encoding: .utf8)
+            #expect(str == "9;Build Failed;Check logs")
+        } else {
+            Issue.record("Expected .oscDispatch, got \(actions[0])")
+        }
+    }
+
+    @Test func osc777() {
+        let actions = parseString("\u{1B}]777;notify;Build;All green\u{07}")
+        #expect(actions.count == 1)
+        if case .oscDispatch(let data) = actions[0] {
+            let str = String(bytes: data, encoding: .utf8)
+            #expect(str == "777;notify;Build;All green")
+        } else {
+            Issue.record("Expected .oscDispatch, got \(actions[0])")
+        }
+    }
+
     // MARK: - Mixed Sequences
 
     @Test func textWithEscapeSequences() {

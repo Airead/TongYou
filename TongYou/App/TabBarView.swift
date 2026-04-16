@@ -8,6 +8,7 @@ struct TabBarView: View {
 
     let tabs: [TerminalTab]
     let activeTabIndex: Int
+    let tabUnreadCounts: [UUID: Int]
     let onSelect: (Int) -> Void
     let onClose: (Int) -> Void
     let onNew: () -> Void
@@ -61,6 +62,10 @@ struct TabBarView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .foregroundStyle(isActive ? .primary : .secondary)
+
+            if let count = tabUnreadCounts[tab.id], count > 0 {
+                UnreadBadge(count: count)
+            }
 
             Button {
                 onClose(index)

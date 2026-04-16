@@ -17,6 +17,7 @@ private final class MockMouseController: TerminalControlling {
     var onNeedsDisplay: (() -> Void)?
     var onProcessExited: (() -> Void)?
     var onTitleChanged: ((String) -> Void)?
+    var onPaneNotification: ((String, String) -> Void)?
 
     struct Call {
         var name: String

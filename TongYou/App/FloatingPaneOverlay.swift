@@ -17,6 +17,7 @@ struct FloatingPaneOverlay: View {
     let onBringToFront: (UUID) -> Void
     let onClose: (UUID) -> Void
     let onTogglePin: (UUID) -> Void
+    let onUserInteraction: ((UUID) -> Void)?
 
     private var visiblePanes: [FloatingPane] {
         floatingPanes
@@ -47,7 +48,8 @@ struct FloatingPaneOverlay: View {
                         onFrameChanged: onFrameChanged,
                         onBringToFront: onBringToFront,
                         onClose: onClose,
-                        onTogglePin: onTogglePin
+                        onTogglePin: onTogglePin,
+                        onUserInteraction: onUserInteraction
                     )
                 }
             }

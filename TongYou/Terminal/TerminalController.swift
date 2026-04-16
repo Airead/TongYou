@@ -63,6 +63,8 @@ final class TerminalController: TerminalControlling {
 
     /// Called on the main thread when the window title changes (OSC 0/2).
     var onTitleChanged: ((String) -> Void)?
+    /// Called on the main thread when a pane notification sequence is received (OSC 9 / 777 / 1337).
+    nonisolated(unsafe) var onPaneNotification: ((String, String) -> Void)?
 
     private(set) var isSuspended: Bool = false
 
@@ -157,6 +159,11 @@ final class TerminalController: TerminalControlling {
         }
         streamHandler.onRunningCommandChanged = { [weak self] cmd in
             self?.runningCommand = cmd
+        }
+        streamHandler.onPaneNotification = { [weak self] title, body in
+            DispatchQueue.main.async { [weak self] in
+                self?.onPaneNotification?(title, body)
+            }
         }
 
         do {

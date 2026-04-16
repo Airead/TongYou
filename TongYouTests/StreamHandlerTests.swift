@@ -342,6 +342,74 @@ import TYTerminal
         #expect(feedOSC52("\u{1B}]52;c;\u{07}") == nil)
     }
 
+    // MARK: - OSC 9 / 777 / 1337 (Pane Notifications)
+
+    private func feedOSCPaneNotification(_ input: String) -> (title: String?, body: String?) {
+        var title: String?
+        var body: String?
+        _ = processWithHandler(input) { handler in
+            handler.onPaneNotification = { t, b in
+                title = t
+                body = b
+            }
+        }
+        return (title, body)
+    }
+
+    @Test func osc9TitleAndBody() {
+        let result = feedOSCPaneNotification("\u{1B}]9;Build Failed;Check logs\u{07}")
+        #expect(result.title == "Build Failed")
+        #expect(result.body == "Check logs")
+    }
+
+    @Test func osc9TitleOnly() {
+        let result = feedOSCPaneNotification("\u{1B}]9;Done\u{07}")
+        #expect(result.title == "Done")
+        #expect(result.body == "Done")
+    }
+
+    @Test func osc9WithST() {
+        let result = feedOSCPaneNotification("\u{1B}]9;Hello;World\u{1B}\\")
+        #expect(result.title == "Hello")
+        #expect(result.body == "World")
+    }
+
+    @Test func osc777Notify() {
+        let result = feedOSCPaneNotification("\u{1B}]777;notify;Build;All green\u{07}")
+        #expect(result.title == "Build")
+        #expect(result.body == "All green")
+    }
+
+    @Test func osc777NotifyMissingBody() {
+        let result = feedOSCPaneNotification("\u{1B}]777;notify;Deploying\u{07}")
+        #expect(result.title == "Deploying")
+        #expect(result.body == "Deploying")
+    }
+
+    @Test func osc777NonNotifyIgnored() {
+        let result = feedOSCPaneNotification("\u{1B}]777;foo;bar\u{07}")
+        #expect(result.title == nil)
+        #expect(result.body == nil)
+    }
+
+    @Test func osc1337Notification() {
+        let result = feedOSCPaneNotification("\u{1B}]1337;Notify=Tests;Passed\u{07}")
+        #expect(result.title == "Tests")
+        #expect(result.body == "Passed")
+    }
+
+    @Test func osc1337NotificationTitleOnly() {
+        let result = feedOSCPaneNotification("\u{1B}]1337;Notify=Done\u{07}")
+        #expect(result.title == "Done")
+        #expect(result.body == "Done")
+    }
+
+    @Test func osc1337NonNotifyIgnored() {
+        let result = feedOSCPaneNotification("\u{1B}]1337;SetMark\u{07}")
+        #expect(result.title == nil)
+        #expect(result.body == nil)
+    }
+
     // MARK: - Title Test Helpers
 
     /// Feed multiple escape sequences through a fresh parser+handler, returning
