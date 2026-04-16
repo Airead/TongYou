@@ -57,7 +57,7 @@ final class ColorEmojiAtlas {
     /// Apple Color Emoji font at different sizes
     private var emojiFontCache: [CGFloat: CTFont] = [:]
 
-    init(device: MTLDevice, initialSize: UInt32 = 512, maxTextureSize: UInt32 = 4096) {
+    init(device: MTLDevice, initialSize: UInt32 = 512, maxTextureSize: UInt32 = 2048) {
         self.device = device
         self.maxTextureSize = maxTextureSize
         self.textureSize = initialSize
