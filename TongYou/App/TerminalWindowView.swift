@@ -127,7 +127,7 @@ struct TerminalWindowView: View {
                         if sessionManager.activeSession?.source.isRemote == true {
                             return .blue
                         } else if sessionManager.activeSession?.isAnonymous == true {
-                            return .cyan
+                            return .gray
                         } else {
                             return .green
                         }

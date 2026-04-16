@@ -934,12 +934,18 @@ final class MetalView: NSView {
     }
 
     func bindController(_ controller: any TerminalControlling) {
-        terminalController?.onNeedsDisplay = nil
         terminalController?.onProcessExited = nil
+        terminalController?.onNeedsDisplay = nil
         terminalController?.onTitleChanged = nil
 
         configureController(controller)
         wireDisplayCallbacks(controller)
+        if controller.onProcessExited == nil {
+            controller.onProcessExited = { [weak self] in
+                guard let self, let paneID = self.paneID else { return }
+                self.onTabAction?(.paneExited(paneID))
+            }
+        }
         terminalController = controller
         renderer?.markDirty()
         lastRenderedContentGeneration = 0
