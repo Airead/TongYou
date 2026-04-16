@@ -286,7 +286,12 @@ struct TerminalWindowView: View {
         focusActiveTabRootPane()
     }
 
-    private func closeSession(at index: Int) {
+    private func closeSession(at index: Int, pickNext: Bool = false) {
+        let wasAnonymous = sessionManager.sessions.indices.contains(index)
+            ? sessionManager.sessions[index].isAnonymous
+            : false
+        let wasOnlyAttached = sessionManager.allAttachedSessionIDs.count == 1
+
         let paneIDs = sessionManager.closeSession(at: index)
         for paneID in paneIDs {
             viewStore.tearDown(for: paneID)
@@ -295,8 +300,26 @@ struct TerminalWindowView: View {
 
         if sessionManager.sessions.isEmpty {
             NSApp.keyWindow?.close()
+            return
+        }
+
+        if pickNext {
+            if wasAnonymous && wasOnlyAttached {
+                NSApp.keyWindow?.close()
+                return
+            }
+            pickNextSession()
+        }
+
+        focusActiveTabRootPane()
+    }
+
+    /// Select the first attached session, or fall back to the first session overall.
+    private func pickNextSession() {
+        if let attachedIndex = sessionManager.sessions.firstIndex(where: { sessionManager.allAttachedSessionIDs.contains($0.id) }) {
+            sessionManager.selectSession(at: attachedIndex)
         } else {
-            focusActiveTabRootPane()
+            sessionManager.selectSession(at: 0)
         }
     }
 
@@ -348,7 +371,7 @@ struct TerminalWindowView: View {
         sessionManager.closeTab(at: index)
 
         if sessionManager.tabCount == 0 {
-            closeSession(at: sessionManager.activeSessionIndex)
+            closeSession(at: sessionManager.activeSessionIndex, pickNext: true)
         } else {
             focusActiveTabRootPane()
         }
@@ -396,8 +419,7 @@ struct TerminalWindowView: View {
         if let siblingID = sessionManager.closePane(id: paneID) {
             focusNextPane(fallback: siblingID)
         } else if sessionManager.tabCount == 0 {
-            // Last pane in last tab — close the session.
-            closeSession(at: sessionManager.activeSessionIndex)
+            closeSession(at: sessionManager.activeSessionIndex, pickNext: true)
         } else if let activeTab = sessionManager.activeTab {
             focusManager.focusPane(id: activeTab.paneTree.firstPane.id)
         }
@@ -647,7 +669,9 @@ struct TerminalWindowView: View {
                 }
             }
         }
+        pickNextSession()
         suppressAutoSidebar = false
+        focusActiveTabRootPane()
     }
 
     /// Detach the currently active session (Shift+Cmd+K).
