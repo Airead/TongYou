@@ -573,6 +573,9 @@ struct TerminalWindowView: View {
                 title: title,
                 body: body
             )
+            if paneID == focusManager.focusedPaneID {
+                viewStore.view(for: paneID)?.flashNotificationRing()
+            }
         }
     }
 

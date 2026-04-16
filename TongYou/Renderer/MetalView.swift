@@ -927,6 +927,25 @@ final class MetalView: NSView {
         notificationRingLayer.path = path
     }
 
+    func flashNotificationRing() {
+        let flashLayer = CALayer()
+        flashLayer.frame = bounds
+        flashLayer.backgroundColor = NSColor.systemBlue.cgColor
+        flashLayer.opacity = 0
+        layer?.addSublayer(flashLayer)
+
+        let animation = CAKeyframeAnimation(keyPath: "opacity")
+        animation.values = [0, 0.6, 0, 0.6, 0]
+        animation.duration = 0.9
+        animation.isRemovedOnCompletion = true
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { [weak flashLayer] in
+            flashLayer?.removeFromSuperlayer()
+        }
+        flashLayer.add(animation, forKey: "flash")
+        CATransaction.commit()
+    }
+
     private func updateLayerBackground(_ bg: RGBColor) {
         metalLayer.backgroundColor = CGColor(
             srgbRed: CGFloat(bg.r) / 255.0,
