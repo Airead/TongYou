@@ -82,6 +82,41 @@ struct GraphemeClusterTests {
         #expect(GraphemeCluster(Character("A")).terminalWidth == 1)
     }
 
+    @Test func threeScalarHeapFallback() {
+        // 👨‍🔬 = U+1F468 U+200D U+1F52C (3 scalars, exceeds inlineCapacity=2)
+        let scientist = GraphemeCluster(Character("👨‍🔬"))
+        #expect(scientist.scalarCount == 3)
+        #expect(scientist.isEmojiSequence)
+        #expect(scientist.firstScalar == Unicode.Scalar(0x1F468))
+        #expect(scientist.string == "👨‍🔬")
+        #expect(scientist.terminalWidth == 2)
+
+        // Round-trip: Character → GraphemeCluster → string → Character → GraphemeCluster
+        let roundTripped = GraphemeCluster(Character(scientist.string))
+        #expect(roundTripped == scientist)
+        #expect(roundTripped.hashValue == scientist.hashValue)
+    }
+
+    @Test func fourScalarHeapFallback() {
+        // 👨‍👩‍👦 = U+1F468 U+200D U+1F469 U+200D U+1F466 — actually 5 scalars
+        // Use a 4-scalar sequence: 🏳️‍🌈 is flag + VS16 + ZWJ + rainbow = 4 scalars
+        let scalars: [Unicode.Scalar] = [
+            Unicode.Scalar(0x1F3F3)!,  // white flag
+            Unicode.Scalar(0xFE0F)!,   // VS16
+            Unicode.Scalar(0x200D)!,   // ZWJ
+            Unicode.Scalar(0x1F308)!,  // rainbow
+        ]
+        let cluster = GraphemeCluster(scalars: scalars)
+        #expect(cluster.scalarCount == 4)
+        #expect(cluster.isEmojiSequence)
+        #expect(cluster.firstScalar == Unicode.Scalar(0x1F3F3))
+
+        // Equality with identical construction
+        let cluster2 = GraphemeCluster(scalars: scalars)
+        #expect(cluster == cluster2)
+        #expect(cluster.hashValue == cluster2.hashValue)
+    }
+
     @Test func stringRoundTrip() {
         let clusters = [
             GraphemeCluster(Character("👨‍👩‍👧‍👦")),
