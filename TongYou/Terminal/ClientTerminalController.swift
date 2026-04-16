@@ -274,6 +274,10 @@ final class ClientTerminalController: TerminalControlling {
         remoteClient.removeReplica(for: paneID)
     }
 
+    func forceFullRedraw() {
+        // Remote rendering is driven by server snapshots; no-op locally.
+    }
+
     // MARK: - Server Update Callbacks
 
     /// Called by the session manager when screen content is updated from the server.

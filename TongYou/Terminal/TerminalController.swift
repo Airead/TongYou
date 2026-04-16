@@ -588,6 +588,13 @@ final class TerminalController: TerminalControlling {
 
     // MARK: - Title Debounce
 
+    func forceFullRedraw() {
+        ptyQueue.async { [weak self] in
+            self?.screen.forceFullRedraw()
+            self?.markScreenDirty()
+        }
+    }
+
     /// Debounce interval for coalescing rapid title changes (seconds).
     private static let titleDebounceInterval: TimeInterval = 0.075
 

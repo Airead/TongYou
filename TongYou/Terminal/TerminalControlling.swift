@@ -74,6 +74,7 @@ protocol TerminalControlling: AnyObject {
     // MARK: - Lifecycle
 
     func stop()
+    func forceFullRedraw()
 
     // MARK: - Callbacks
 

@@ -632,6 +632,83 @@ struct SessionManagerTests {
         _ = mgr.closeActiveSession()
         #expect(store.loadAll().isEmpty)
     }
+
+    // MARK: - Anonymous Session
+
+    @Test func createAnonymousSessionHasDraftName() {
+        let mgr = makeManager()
+        let id = mgr.createAnonymousSession()
+        #expect(mgr.sessionCount == 1)
+        #expect(mgr.activeSession?.id == id)
+        #expect(mgr.activeSession?.name == "Draft")
+        #expect(mgr.activeSession?.isAnonymous == true)
+    }
+
+    @Test func anonymousSessionIsNotPersisted() throws {
+        let tempDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: tempDir) }
+        let store = SessionStore(directory: tempDir)
+
+        let mgr = SessionManager(localSessionStore: store)
+        _ = mgr.createAnonymousSession()
+        mgr.flushPendingLocalSaves()
+
+        #expect(store.loadAll().isEmpty)
+    }
+
+    @Test func anonymousSessionNotInSortOrder() throws {
+        let tempDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: tempDir) }
+        let store = SessionStore(directory: tempDir)
+
+        let mgr = SessionManager(localSessionStore: store)
+        let id1 = mgr.createSession(name: "s1")
+        let id2 = mgr.createAnonymousSession()
+        let id3 = mgr.createSession(name: "s2")
+        mgr.flushPendingLocalSaves()
+
+        let anonymousIndex = mgr.sessions.firstIndex(where: { $0.id == id2 })!
+        mgr.closeSession(at: anonymousIndex) // close anonymous
+
+        let mgr2 = SessionManager(localSessionStore: store)
+        mgr2.restoreLocalSessions()
+        mgr2.flushPendingLocalSaves()
+
+        #expect(mgr2.sessionCount == 2)
+        #expect(mgr2.sessions.contains { $0.id == id1 })
+        #expect(mgr2.sessions.contains { $0.id == id3 })
+        #expect(!mgr2.sessions.contains { $0.id == id2 })
+    }
+
+    @Test func anonymousSessionTabOperationsDoNotPersist() throws {
+        let tempDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: tempDir) }
+        let store = SessionStore(directory: tempDir)
+
+        let mgr = SessionManager(localSessionStore: store)
+        _ = mgr.createAnonymousSession()
+        _ = mgr.createTab(title: "tab2")
+        mgr.splitPane(id: mgr.activeTab!.paneTree.firstPane.id, direction: .vertical, newPane: TerminalPane())
+        mgr.flushPendingLocalSaves()
+
+        #expect(store.loadAll().isEmpty)
+    }
+
+    @Test func closingAnonymousSessionDoesNotAffectPersistence() throws {
+        let tempDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: tempDir) }
+        let store = SessionStore(directory: tempDir)
+
+        let mgr = SessionManager(localSessionStore: store)
+        _ = mgr.createSession(name: "persisted")
+        _ = mgr.createAnonymousSession()
+        mgr.flushPendingLocalSaves()
+
+        #expect(store.loadAll().count == 1)
+
+        mgr.closeSession(at: 1) // close anonymous
+        #expect(store.loadAll().count == 1)
+    }
 }
 
 @Suite("SessionManager Overlay Stack", .serialized)
