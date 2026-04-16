@@ -54,6 +54,12 @@ final class ColorEmojiAtlas {
 
     private let maxTextureSize: UInt32
 
+    /// Global frame counter for LRU tracking across all renderers sharing this atlas.
+    private(set) var frameNumber: UInt64 = 0
+
+    /// Guards against redundant eviction when multiple renderers share this atlas.
+    private var lastEvictionFrame: UInt64 = 0
+
     /// Apple Color Emoji font at different sizes
     private var emojiFontCache: [CGFloat: CTFont] = [:]
 
@@ -81,12 +87,15 @@ final class ColorEmojiAtlas {
 
     // MARK: - Glyph Lookup / Rasterization
 
+    /// Advance the internal frame counter. Call once per render frame.
+    func advanceFrame() {
+        frameNumber &+= 1
+    }
+
     /// Get or rasterize an emoji glyph. Returns nil if the cluster is not an emoji.
-    /// The `frameNumber` is used for LRU tracking.
     func getOrRasterize(
         cluster: GraphemeCluster,
-        fontSystem: FontSystem,
-        frameNumber: UInt64 = 0
+        fontSystem: FontSystem
     ) -> EmojiGlyphInfo? {
         guard cluster.isEmojiContent else { return nil }
 
@@ -320,8 +329,9 @@ final class ColorEmojiAtlas {
 
     /// Check atlas utilization and evict stale entries if needed.
     /// Call once per frame after all glyphs have been looked up.
-    func evictIfNeeded(frameNumber: UInt64, fontSystem: FontSystem) {
-        guard cache.count > 0 else { return }
+    func evictIfNeeded(fontSystem: FontSystem) {
+        guard cache.count > 0, frameNumber > lastEvictionFrame else { return }
+        lastEvictionFrame = frameNumber
         // Utilization = used shelf area / total texture area
         let usedArea = Double(shelfY + shelfHeight) * Double(textureSize)
         let totalArea = Double(textureSize) * Double(textureSize)
@@ -335,11 +345,11 @@ final class ColorEmojiAtlas {
         }
 
         // Always compact after eviction to reclaim atlas space
-        compact(fontSystem: fontSystem, frameNumber: frameNumber)
+        compact(fontSystem: fontSystem)
     }
 
     /// Rebuild the atlas from scratch with only active cache entries.
-    private func compact(fontSystem: FontSystem, frameNumber: UInt64) {
+    private func compact(fontSystem: FontSystem) {
         let activeEntries = cache
 
         shelfX = 1

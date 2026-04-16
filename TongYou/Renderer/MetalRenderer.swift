@@ -27,8 +27,8 @@ final class MetalRenderer {
     private let emojiPipelineState: MTLRenderPipelineState
 
     private var fontSystem: FontSystem
-    private(set) var glyphAtlas: GlyphAtlas
-    private(set) var emojiAtlas: ColorEmojiAtlas
+    let glyphAtlas: GlyphAtlas
+    let emojiAtlas: ColorEmojiAtlas
     private var colorPalette: ColorPalette
 
     // Triple buffering (semaphore paces CPU vs GPU, not thread synchronization)
@@ -49,7 +49,6 @@ final class MetalRenderer {
     // Set by setContent/markDirty/resize; untouched by markCursorDirty.
     // Decrements each rendered frame; while >0, atlas eviction runs after instance build.
     private(set) var textContentDirtyCounter = swapChainCount
-    private var frameNumber: UInt64 = 0
 
     /// Per-frame performance metrics (nil when `debug-metrics` config is disabled).
     private(set) var frameMetrics: FrameMetrics?
@@ -188,11 +187,12 @@ final class MetalRenderer {
         var emojiRowOffsets: [Int] = []
     }
 
-    init(device: MTLDevice, fontSystem: FontSystem, config: Config = .default) {
+    init(device: MTLDevice, fontSystem: FontSystem, config: Config = .default,
+         glyphAtlas: GlyphAtlas? = nil, emojiAtlas: ColorEmojiAtlas? = nil) {
         self.device = device
         self.fontSystem = fontSystem
-        self.glyphAtlas = GlyphAtlas(device: device)
-        self.emojiAtlas = ColorEmojiAtlas(device: device)
+        self.glyphAtlas = glyphAtlas ?? GlyphAtlas(device: device)
+        self.emojiAtlas = emojiAtlas ?? ColorEmojiAtlas(device: device)
 
         (self.clearColor, self.colorPalette) = Self.buildColors(from: config)
         self.frameMetrics = config.debugMetrics ? FrameMetrics() : nil
@@ -489,7 +489,8 @@ final class MetalRenderer {
         }
 
         frameMetrics?.beginFrame()
-        frameNumber &+= 1
+        glyphAtlas.advanceFrame()
+        emojiAtlas.advanceFrame()
         frameIndex = (frameIndex + 1) % Self.swapChainCount
 
         let currentInstanceCount = instanceCount
@@ -543,8 +544,8 @@ final class MetalRenderer {
                 fillTextInstanceBuffer(frame: frame, grid: currentGrid, snapshot: snapshot,
                                        dirtyRegion: dirtyRegion, searchLineMap: searchMap)
                 if textContentDirty {
-                    glyphAtlas.evictIfNeeded(frameNumber: frameNumber, fontSystem: fontSystem)
-                    emojiAtlas.evictIfNeeded(frameNumber: frameNumber, fontSystem: fontSystem)
+                    glyphAtlas.evictIfNeeded(fontSystem: fontSystem)
+                    emojiAtlas.evictIfNeeded(fontSystem: fontSystem)
                 }
                 frameMetrics?.endInstanceBuild()
             }
@@ -1047,8 +1048,7 @@ final class MetalRenderer {
                 guard let glyphInfo = glyphAtlas.getOrRasterize(
                     glyph: glyph.glyph,
                     font: glyph.font,
-                    fontSystem: fontSystem,
-                    frameNumber: frameNumber
+                    fontSystem: fontSystem
                 ), glyphInfo.width > 0 && glyphInfo.height > 0 else { continue }
 
                 let glyphCol = run.startCol + glyph.cellIndex
@@ -1069,8 +1069,7 @@ final class MetalRenderer {
         for (col, cluster, width) in cached.emojis {
             guard col < snapCols else { continue }
             if let emojiInfo = emojiAtlas.getOrRasterize(
-                cluster: cluster, fontSystem: fontSystem,
-                frameNumber: frameNumber
+                cluster: cluster, fontSystem: fontSystem
             ), emojiInfo.width > 0 && emojiInfo.height > 0 {
                 var glyphSize = SIMD2<UInt32>(emojiInfo.width, emojiInfo.height)
                 var bearings = SIMD2<Int16>(emojiInfo.bearingX, emojiInfo.bearingY)

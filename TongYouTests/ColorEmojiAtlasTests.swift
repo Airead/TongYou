@@ -165,12 +165,14 @@ struct ColorEmojiAtlasTests {
         let cluster = GraphemeCluster(Character("🎯"))
 
         // First access at frame 1
-        _ = atlas.getOrRasterize(cluster: cluster, fontSystem: fontSystem, frameNumber: 1)
+        atlas.advanceFrame()
+        _ = atlas.getOrRasterize(cluster: cluster, fontSystem: fontSystem)
         let countAfterFirst = atlas.activeEntryCount
         #expect(countAfterFirst == 1)
 
-        // Second access at frame 10 — should still be 1 entry (cache hit)
-        _ = atlas.getOrRasterize(cluster: cluster, fontSystem: fontSystem, frameNumber: 10)
+        // Advance several frames, access again — should still be 1 entry (cache hit)
+        for _ in 0..<9 { atlas.advanceFrame() }
+        _ = atlas.getOrRasterize(cluster: cluster, fontSystem: fontSystem)
         #expect(atlas.activeEntryCount == 1)
     }
 
@@ -220,12 +222,14 @@ struct ColorEmojiAtlasTests {
             "🤐", "🥴", "🤢", "🤮", "🤧", "😷", "🤒", "🤕", "🤑", "🤠",
         ].map { GraphemeCluster(Character($0)) }
 
-        for (i, cluster) in emojis.enumerated() {
-            _ = atlas.getOrRasterize(cluster: cluster, fontSystem: fontSystem, frameNumber: UInt64(i))
+        for cluster in emojis {
+            atlas.advanceFrame()
+            _ = atlas.getOrRasterize(cluster: cluster, fontSystem: fontSystem)
         }
 
         let countBefore = atlas.activeEntryCount
-        atlas.evictIfNeeded(frameNumber: UInt64(emojis.count), fontSystem: fontSystem)
+        atlas.advanceFrame()
+        atlas.evictIfNeeded(fontSystem: fontSystem)
         let countAfter = atlas.activeEntryCount
 
         // Some entries should have been evicted

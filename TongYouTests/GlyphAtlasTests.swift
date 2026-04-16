@@ -121,12 +121,14 @@ struct GlyphAtlasTests {
             return
         }
         // First access at frame 1
-        _ = atlas.getOrRasterize(character: "A", fontSystem: fontSystem, frameNumber: 1)
+        atlas.advanceFrame()
+        _ = atlas.getOrRasterize(character: "A", fontSystem: fontSystem)
         let countAfterFirst = atlas.activeEntryCount
         #expect(countAfterFirst == 1)
 
-        // Second access at frame 10 — should still be 1 entry (cache hit)
-        _ = atlas.getOrRasterize(character: "A", fontSystem: fontSystem, frameNumber: 10)
+        // Advance several frames, access again — should still be 1 entry (cache hit)
+        for _ in 0..<9 { atlas.advanceFrame() }
+        _ = atlas.getOrRasterize(character: "A", fontSystem: fontSystem)
         #expect(atlas.activeEntryCount == 1)
     }
 
@@ -142,12 +144,14 @@ struct GlyphAtlasTests {
         for v: UInt32 in 0x4E00..<0x4E00 + 200 {
             if let s = Unicode.Scalar(v) { chars.append(s) }
         }
-        for (i, ch) in chars.enumerated() {
-            _ = atlas.getOrRasterize(character: ch, fontSystem: fontSystem, frameNumber: UInt64(i))
+        for ch in chars {
+            atlas.advanceFrame()
+            _ = atlas.getOrRasterize(character: ch, fontSystem: fontSystem)
         }
         let countBefore = atlas.activeEntryCount
 
-        atlas.evictIfNeeded(frameNumber: UInt64(chars.count), fontSystem: fontSystem)
+        atlas.advanceFrame()
+        atlas.evictIfNeeded(fontSystem: fontSystem)
         let countAfter = atlas.activeEntryCount
 
         // Some entries should have been evicted
@@ -160,25 +164,29 @@ struct GlyphAtlasTests {
             return
         }
 
-        // Old CJK glyphs at frame 0
+        // Old CJK glyphs at early frames
         var oldChars: [Unicode.Scalar] = []
         for v: UInt32 in 0x4E00..<0x4E00 + 150 {
             if let s = Unicode.Scalar(v) { oldChars.append(s) }
         }
-        // Recent ASCII glyphs at frame 100
+        // Recent ASCII glyphs at later frames
         let newChars: [Unicode.Scalar] = Array("abcdefghij").map { $0.unicodeScalars.first! }
 
         for ch in oldChars {
-            _ = atlas.getOrRasterize(character: ch, fontSystem: fontSystem, frameNumber: 0)
+            _ = atlas.getOrRasterize(character: ch, fontSystem: fontSystem)
         }
+        // Jump ahead 100 frames so recent chars have much higher frameNumber
+        for _ in 0..<100 { atlas.advanceFrame() }
         for ch in newChars {
-            _ = atlas.getOrRasterize(character: ch, fontSystem: fontSystem, frameNumber: 100)
+            _ = atlas.getOrRasterize(character: ch, fontSystem: fontSystem)
         }
 
-        atlas.evictIfNeeded(frameNumber: 101, fontSystem: fontSystem)
+        atlas.advanceFrame()
+        atlas.evictIfNeeded(fontSystem: fontSystem)
 
         // Recent ASCII glyphs should survive eviction
-        let recentInfo = atlas.getOrRasterize(character: "a", fontSystem: fontSystem, frameNumber: 102)
+        atlas.advanceFrame()
+        let recentInfo = atlas.getOrRasterize(character: "a", fontSystem: fontSystem)
         #expect(recentInfo != nil)
     }
 

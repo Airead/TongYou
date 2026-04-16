@@ -695,7 +695,9 @@ final class MetalView: NSView {
                 scaleFactor: scale
             )
             fontSystem = fs
-            renderer = MetalRenderer(device: device, fontSystem: fs, config: config)
+            let shared = SharedAtlasProvider.shared
+            renderer = MetalRenderer(device: device, fontSystem: fs, config: config,
+                                     glyphAtlas: shared.glyphAtlas, emojiAtlas: shared.emojiAtlas)
 
             configLoader.onConfigChanged = { [weak self] newConfig in
                 self?.applyConfigChange(newConfig)
