@@ -37,6 +37,9 @@ struct ResourceMetrics {
 
     // Snapshot
     var snapshotCellCopyCount: Int = 0
+    var rebuiltRowCount: Int = 0
+    var pendingDirtyRows: Int = 0
+    var totalRowCount: Int = 0
 
     // Shaping cache
     var shapedRowCacheHits: UInt64 = 0

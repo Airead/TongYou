@@ -16,8 +16,8 @@ struct CachedShapedRow {
 final class ShapedRowCache {
     private struct Entry {
         var row: CachedShapedRow
-        var cells: [Cell]
         var hash: Int
+        var digest: Int
         var prev: Int?
         var next: Int?
     }
@@ -46,7 +46,8 @@ final class ShapedRowCache {
             misses += 1
             return nil
         }
-        guard Array(cells) == slots[slot].cells else {
+        let digest = Self.digestCells(cells)
+        guard slots[slot].digest == digest else {
             misses += 1
             return nil
         }
@@ -58,9 +59,9 @@ final class ShapedRowCache {
     /// Store a shaping result for the given row of cells.
     func set(cells: ArraySlice<Cell>, value: CachedShapedRow) {
         let hash = Self.hashCells(cells)
-        let cellArray = Array(cells)
+        let digest = Self.digestCells(cells)
         if let existing = hashToSlot[hash] {
-            if slots[existing].cells == cellArray {
+            if slots[existing].digest == digest {
                 slots[existing].row = value
                 moveToTail(existing)
                 return
@@ -71,7 +72,7 @@ final class ShapedRowCache {
         } else if hashToSlot.count >= capacity {
             evictHead()
         }
-        let slot = allocSlot(Entry(row: value, cells: cellArray, hash: hash))
+        let slot = allocSlot(Entry(row: value, hash: hash, digest: digest))
         hashToSlot[hash] = slot
         appendToTail(slot)
     }
@@ -92,13 +93,26 @@ final class ShapedRowCache {
     private static func hashCells(_ cells: ArraySlice<Cell>) -> Int {
         var hasher = Hasher()
         for cell in cells {
-            hasher.combine(cell.content.string)
+            hasher.combine(cell.content)
             hasher.combine(cell.attributes.flags.rawValue)
             hasher.combine(cell.attributes.fgColor.raw)
             hasher.combine(cell.attributes.bgColor.raw)
             hasher.combine(cell.width.rawValue)
         }
         return hasher.finalize()
+    }
+
+    /// Secondary fast digest for verifying hash hits without storing the full cell array.
+    private static func digestCells(_ cells: ArraySlice<Cell>) -> Int {
+        var digest = 0
+        for cell in cells {
+            digest ^= cell.content.hashValue
+            digest = digest &* 31 &+ Int(cell.attributes.flags.rawValue)
+            digest = digest &* 31 &+ Int(cell.attributes.fgColor.raw)
+            digest = digest &* 31 &+ Int(cell.attributes.bgColor.raw)
+            digest = digest &* 31 &+ Int(cell.width.rawValue)
+        }
+        return digest
     }
 
     private func allocSlot(_ entry: Entry) -> Int {

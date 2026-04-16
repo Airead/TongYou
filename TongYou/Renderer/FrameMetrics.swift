@@ -14,6 +14,8 @@ struct FrameMetrics {
     private(set) var dedupedFrameCount: UInt64 = 0
     /// Number of cells copied during the last snapshot (for observing incremental updates).
     private(set) var snapshotCellCopyCount: Int = 0
+    /// Number of rows whose instance buffers were rebuilt in the last frame.
+    private(set) var rebuiltRowCount: Int = 0
 
     private var frameStart: UInt64 = 0
     private var buildStart: UInt64 = 0
@@ -52,6 +54,11 @@ struct FrameMetrics {
     /// Record how many cells were copied in the latest snapshot.
     mutating func recordSnapshotCellCopyCount(_ count: Int) {
         snapshotCellCopyCount = count
+    }
+
+    /// Record how many rows were rebuilt during the last frame.
+    mutating func recordRebuiltRowCount(_ count: Int) {
+        rebuiltRowCount = count
     }
 
     private static let timebaseInfo: mach_timebase_info_data_t = {

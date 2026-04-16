@@ -45,9 +45,9 @@ final class MetalRenderer {
     // These counters start at swapChainCount and decrement once per frame until 0.
     private var instanceRebuildCounter = swapChainCount
     private var uniformsDirtyCounter = swapChainCount
-    // Tracks whether text content (glyphs) changed vs cursor-blink-only.
-    // Set to swapChainCount by setContent/markDirty/resize; untouched by markCursorDirty.
-    // When 0, fillTextInstanceBuffer can use a fast color-only patch instead of full rebuild.
+    // Tracks whether text content (glyphs) changed to trigger atlas eviction.
+    // Set by setContent/markDirty/resize; untouched by markCursorDirty.
+    // Decrements each rendered frame; while >0, atlas eviction runs after instance build.
     private(set) var textContentDirtyCounter = swapChainCount
     private var frameNumber: UInt64 = 0
 
@@ -67,11 +67,14 @@ final class MetalRenderer {
         var emoji: [CellTextInstance] = []
     }
 
-    private var stagedRowInstances: [RowTextInstances] = []
     private var shapedRowCache = ShapedRowCache()
 
     /// Accumulated dirty region across setContent() calls, consumed by render().
     private(set) var pendingDirtyRegion = DirtyRegion.full
+
+    /// Per-frame-state dirty region tracking which rows each swap-chain buffer
+    /// still needs to rebuild. Enables partial updates without forcing 3 full rebuilds.
+    private var frameStateDirtyRegions: [DirtyRegion] = Array(repeating: .full, count: swapChainCount)
 
     /// Currently highlighted URL for underline rendering (set by MetalView on Cmd+hover).
     var highlightedURL: DetectedURL? {
@@ -144,6 +147,9 @@ final class MetalRenderer {
     private func markAllFramesDirty() {
         instanceRebuildCounter = Self.swapChainCount
         textContentDirtyCounter = Self.swapChainCount
+        for i in frameStateDirtyRegions.indices {
+            frameStateDirtyRegions[i] = .full
+        }
     }
 
     /// Whether the renderer has pending work (dirty buffers, uniforms, or region to update).
@@ -173,6 +179,13 @@ final class MetalRenderer {
         var emojiInstanceBuffer: MTLBuffer
         var emojiInstanceCapacity: Int
         var emojiInstanceCount: Int
+        /// Per-frame staging for text/emoji instances. Enables partial updates
+        /// without interfering with other swap-chain frames.
+        var stagedRowInstances: [RowTextInstances] = []
+        /// Offsets for each row within this frame's text/emoji buffers.
+        /// Used by partial updates to patch in-place without a full compact.
+        var textRowOffsets: [Int] = []
+        var emojiRowOffsets: [Int] = []
     }
 
     init(device: MTLDevice, fontSystem: FontSystem, config: Config = .default) {
@@ -403,7 +416,11 @@ final class MetalRenderer {
             backingCells.removeAll()
             backingColumns = 0
             backingRows = 0
-            stagedRowInstances.removeAll()
+            for i in frameStates.indices {
+                frameStates[i].stagedRowInstances.removeAll()
+                frameStates[i].textRowOffsets.removeAll()
+                frameStates[i].emojiRowOffsets.removeAll()
+            }
         }
         pendingDirtyRegion.markFull()
         markAllFramesDirty()
@@ -432,11 +449,23 @@ final class MetalRenderer {
             backingCells = snapshot.cells
             backingColumns = snapshot.columns
             backingRows = snapshot.rows
-            stagedRowInstances.removeAll()
+            for i in frameStates.indices {
+                frameStates[i].stagedRowInstances.removeAll()
+                frameStates[i].textRowOffsets.removeAll()
+                frameStates[i].emojiRowOffsets.removeAll()
+            }
             frameMetrics?.recordSnapshotCellCopyCount(snapshot.cells.count)
         }
 
-        markAllFramesDirty()
+        if pendingDirtyRegion.fullRebuild {
+            markAllFramesDirty()
+        } else {
+            instanceRebuildCounter = 1
+            textContentDirtyCounter = 1
+            for i in frameStateDirtyRegions.indices {
+                frameStateDirtyRegions[i].merge(snapshot.dirtyRegion)
+            }
+        }
     }
 
     // MARK: - Render
@@ -469,8 +498,8 @@ final class MetalRenderer {
             return
         }
 
-        let rebuildInstances = instanceRebuildCounter > 0
-        if rebuildInstances { instanceRebuildCounter -= 1 }
+        let rebuildInstances = instanceRebuildCounter > 0 || frameStateDirtyRegions[frameIndex].isDirty
+        if instanceRebuildCounter > 0 { instanceRebuildCounter -= 1 }
         let updateUnis = uniformsDirtyCounter > 0
         if updateUnis { uniformsDirtyCounter -= 1 }
         let textContentDirty = textContentDirtyCounter > 0
@@ -481,13 +510,23 @@ final class MetalRenderer {
         let currentPadding = padding
 
         let currentHighlightedURL = highlightedURL
-        let dirtyRegion = pendingDirtyRegion
-        if instanceRebuildCounter == 0 {
-            pendingDirtyRegion = .clean
+        var dirtyRegion: DirtyRegion
+        if rebuildInstances {
+            dirtyRegion = pendingDirtyRegion
+            dirtyRegion.merge(frameStateDirtyRegions[frameIndex])
+            frameStateDirtyRegions[frameIndex] = .clean
+            if instanceRebuildCounter == 0 {
+                pendingDirtyRegion = .clean
+            }
+        } else {
+            dirtyRegion = frameStateDirtyRegions[frameIndex]
+            frameStateDirtyRegions[frameIndex] = .clean
         }
 
         withUnsafeMutablePointer(to: &frameStates[frameIndex]) { frame in
             if rebuildInstances {
+                let rebuiltRows = dirtyRegion.fullRebuild ? Int(gridSize.rows) : dirtyRegion.dirtyRows.count
+                frameMetrics?.recordRebuiltRowCount(rebuiltRows)
                 frameMetrics?.beginInstanceBuild()
                 let snapshot = currentSnapshot
                 let searchMap = buildSearchLineMap()
@@ -495,8 +534,7 @@ final class MetalRenderer {
                                      dirtyRegion: dirtyRegion, searchLineMap: searchMap)
                 fillUnderlineInstanceBuffer(frame: frame, grid: currentGrid, snapshot: snapshot, url: currentHighlightedURL)
                 fillTextInstanceBuffer(frame: frame, grid: currentGrid, snapshot: snapshot,
-                                       dirtyRegion: dirtyRegion, contentChanged: textContentDirty,
-                                       searchLineMap: searchMap)
+                                       dirtyRegion: dirtyRegion, searchLineMap: searchMap)
                 if textContentDirty {
                     glyphAtlas.evictIfNeeded(frameNumber: frameNumber, fontSystem: fontSystem)
                     emojiAtlas.evictIfNeeded(frameNumber: frameNumber, fontSystem: fontSystem)
@@ -1066,7 +1104,7 @@ final class MetalRenderer {
 
     private func fillTextInstanceBuffer(
         frame: UnsafeMutablePointer<FrameState>, grid: GridSize,
-        snapshot: ScreenSnapshot?, dirtyRegion: DirtyRegion, contentChanged: Bool,
+        snapshot: ScreenSnapshot?, dirtyRegion: DirtyRegion,
         searchLineMap: SearchLineMap
     ) {
         let cols = Int(grid.columns)
@@ -1075,12 +1113,14 @@ final class MetalRenderer {
         guard let snapshot else {
             frame.pointee.textInstanceCount = 0
             frame.pointee.emojiInstanceCount = 0
-            stagedRowInstances.removeAll()
+            frame.pointee.stagedRowInstances.removeAll()
+            frame.pointee.textRowOffsets.removeAll()
+            frame.pointee.emojiRowOffsets.removeAll()
             return
         }
 
-        // Fast path: content unchanged (e.g. cursor blink only) — patch colors in-place.
-        if !contentChanged, !dirtyRegion.fullRebuild,
+        // Fast path: no dirty rows need text rebuilding — patch colors in-place.
+        if !dirtyRegion.fullRebuild && !dirtyRegion.isDirty &&
            frame.pointee.textInstanceCount > 0 {
             patchTextInstanceColors(
                 frame: frame, snapshot: snapshot, dirtyRegion: dirtyRegion,
@@ -1089,35 +1129,66 @@ final class MetalRenderer {
         }
 
         let fullRebuild = dirtyRegion.fullRebuild
-            || stagedRowInstances.count != rows
-            || stagedRowInstances.isEmpty
+            || frame.pointee.stagedRowInstances.count != rows
+            || frame.pointee.stagedRowInstances.isEmpty
 
         let colorState = makeTextColorState(snapshot: snapshot, searchLineMap: searchLineMap)
         let cellWidth = Float(fontSystem.cellSize.width)
         let shaper = CoreTextShaper(fontSystem: fontSystem)
 
         if fullRebuild {
-            stagedRowInstances = (0..<rows).map { _ in RowTextInstances() }
+            frame.pointee.stagedRowInstances = (0..<rows).map { _ in RowTextInstances() }
             for row in 0..<min(rows, backingRows) {
-                stagedRowInstances[row] = rebuildTextRow(
+                frame.pointee.stagedRowInstances[row] = rebuildTextRow(
                     row: row, cols: cols, snapshot: snapshot,
                     colorState: colorState, shaper: shaper, cellWidth: cellWidth
                 )
             }
         } else {
             // Partial: only rebuild dirty rows
+            var countsChanged = false
             for row in dirtyRegion.dirtyRows {
                 guard row >= 0 && row < rows && row < backingRows else { continue }
-                stagedRowInstances[row] = rebuildTextRow(
+                let oldTextCount = frame.pointee.stagedRowInstances[row].text.count
+                let oldEmojiCount = frame.pointee.stagedRowInstances[row].emoji.count
+                frame.pointee.stagedRowInstances[row] = rebuildTextRow(
                     row: row, cols: cols, snapshot: snapshot,
                     colorState: colorState, shaper: shaper, cellWidth: cellWidth
                 )
+                if frame.pointee.stagedRowInstances[row].text.count != oldTextCount ||
+                    frame.pointee.stagedRowInstances[row].emoji.count != oldEmojiCount {
+                    countsChanged = true
+                }
+            }
+
+            // Fast path: instance counts unchanged and this frame has a valid offset map.
+            if !countsChanged,
+               frame.pointee.textRowOffsets.count == rows,
+               frame.pointee.emojiRowOffsets.count == rows,
+               frame.pointee.textInstanceCapacity > 0,
+               frame.pointee.emojiInstanceCapacity > 0 {
+                let textPtr = frame.pointee.textInstanceBuffer.contents()
+                    .bindMemory(to: CellTextInstance.self, capacity: frame.pointee.textInstanceCapacity)
+                let emojiPtr = frame.pointee.emojiInstanceBuffer.contents()
+                    .bindMemory(to: CellTextInstance.self, capacity: frame.pointee.emojiInstanceCapacity)
+                for row in dirtyRegion.dirtyRows {
+                    guard row >= 0 && row < rows else { continue }
+                    let tOff = frame.pointee.textRowOffsets[row]
+                    for (i, inst) in frame.pointee.stagedRowInstances[row].text.enumerated() {
+                        textPtr[tOff + i] = inst
+                    }
+                    let eOff = frame.pointee.emojiRowOffsets[row]
+                    for (i, inst) in frame.pointee.stagedRowInstances[row].emoji.enumerated() {
+                        emojiPtr[eOff + i] = inst
+                    }
+                }
+                return
             }
         }
 
-        // Compact staged rows into GPU buffers
-        let totalTextCount = stagedRowInstances.reduce(0) { $0 + $1.text.count }
-        let totalEmojiCount = stagedRowInstances.reduce(0) { $0 + $1.emoji.count }
+        // Full compact: rebuild GPU buffers and record per-row offsets for this frame.
+        let totalTextCount = frame.pointee.stagedRowInstances.reduce(0) { $0 + $1.text.count }
+        let totalEmojiCount = frame.pointee.stagedRowInstances.reduce(0) { $0 + $1.emoji.count }
 
         ensureBufferCapacity(
             buffer: &frame.pointee.textInstanceBuffer,
@@ -1135,10 +1206,16 @@ final class MetalRenderer {
         let emojiPtr = frame.pointee.emojiInstanceBuffer.contents()
             .bindMemory(to: CellTextInstance.self, capacity: max(1, totalEmojiCount))
 
+        var textOffsets: [Int] = []
+        textOffsets.reserveCapacity(rows)
+        var emojiOffsets: [Int] = []
+        emojiOffsets.reserveCapacity(rows)
         var textIdx = 0
         var emojiIdx = 0
         for row in 0..<rows {
-            let rowInst = stagedRowInstances[row]
+            textOffsets.append(textIdx)
+            emojiOffsets.append(emojiIdx)
+            let rowInst = frame.pointee.stagedRowInstances[row]
             for inst in rowInst.text {
                 textPtr[textIdx] = inst
                 textIdx += 1
@@ -1148,6 +1225,8 @@ final class MetalRenderer {
                 emojiIdx += 1
             }
         }
+        frame.pointee.textRowOffsets = textOffsets
+        frame.pointee.emojiRowOffsets = emojiOffsets
 
         frame.pointee.textInstanceCount = textIdx
         frame.pointee.emojiInstanceCount = emojiIdx
@@ -1256,6 +1335,9 @@ final class MetalRenderer {
             estimatedBufferBytes: totalBufferBytes,
             estimatedAtlasBytes: glyphAtlasBytes + emojiAtlasBytes,
             snapshotCellCopyCount: frameMetrics?.snapshotCellCopyCount ?? 0,
+            rebuiltRowCount: frameMetrics?.rebuiltRowCount ?? 0,
+            pendingDirtyRows: frameStateDirtyRegions.reduce(0) { $0 + $1.dirtyRows.count },
+            totalRowCount: Int(gridSize.rows),
             shapedRowCacheHits: shapedRowCache.hits,
             shapedRowCacheMisses: shapedRowCache.misses
         )
