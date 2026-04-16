@@ -1594,6 +1594,7 @@ final class SessionManager {
         }
         if let active = activeController(for: paneID) as? TerminalController {
             active.resume()
+            active.forceFullRedraw()
         }
     }
 
