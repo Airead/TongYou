@@ -279,7 +279,11 @@ final class MetalView: NSView {
             searchBar?.activate()
             return
         }
-        let bar = SearchBarView(frame: .zero)
+        let bar = SearchBarView(
+            frame: .zero,
+            themeBackground: configLoader.config.background.nsColor,
+            themeForeground: configLoader.config.foreground.nsColor
+        )
         bar.translatesAutoresizingMaskIntoConstraints = false
         addSubview(bar)
 

@@ -18,17 +18,39 @@ final class SearchBarView: NSView {
     private let prevButton: NSButton
     private let nextButton: NSButton
     private let closeButton: NSButton
-    private let containerView: NSVisualEffectView
+    private let separator: NSView
+    private let containerView: NSView
+    private let themeBackground: NSColor
+    private let themeForeground: NSColor
 
     static let barHeight: CGFloat = 32
 
     override init(frame frameRect: NSRect) {
+        let defaultBackground = NSColor.windowBackgroundColor
+        let defaultForeground = NSColor.labelColor
         searchField = NSTextField()
         matchLabel = NSTextField(labelWithString: "")
         prevButton = NSButton()
         nextButton = NSButton()
         closeButton = NSButton()
-        containerView = NSVisualEffectView()
+        separator = NSView()
+        containerView = NSView()
+        themeBackground = defaultBackground
+        themeForeground = defaultForeground
+        super.init(frame: frameRect)
+        setupViews()
+    }
+
+    init(frame frameRect: NSRect, themeBackground: NSColor, themeForeground: NSColor) {
+        searchField = NSTextField()
+        matchLabel = NSTextField(labelWithString: "")
+        prevButton = NSButton()
+        nextButton = NSButton()
+        closeButton = NSButton()
+        separator = NSView()
+        containerView = NSView()
+        self.themeBackground = themeBackground
+        self.themeForeground = themeForeground
         super.init(frame: frameRect)
         setupViews()
     }
@@ -39,22 +61,26 @@ final class SearchBarView: NSView {
 
     private func setupViews() {
         // Background
-        containerView.material = .hudWindow
-        containerView.blendingMode = .behindWindow
-        containerView.state = .active
         containerView.wantsLayer = true
         containerView.layer?.cornerRadius = 6
+        containerView.layer?.backgroundColor = themeBackground.withAlphaComponent(0.9).cgColor
+        containerView.layer?.borderColor = themeForeground.withAlphaComponent(0.2).cgColor
+        containerView.layer?.borderWidth = 1
         containerView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(containerView)
 
         // Search field
         searchField.placeholderString = "Search..."
         searchField.font = .systemFont(ofSize: 13)
+        searchField.textColor = themeForeground
+        searchField.backgroundColor = themeBackground.withAlphaComponent(0.6)
+        searchField.drawsBackground = true
+        searchField.wantsLayer = true
+        searchField.layer?.cornerRadius = 4
         searchField.isEditable = true
         searchField.isSelectable = true
-        searchField.isBordered = true
-        searchField.isBezeled = true
-        searchField.bezelStyle = .roundedBezel
+        searchField.isBordered = false
+        searchField.isBezeled = false
         searchField.focusRingType = .none
         searchField.delegate = self
         searchField.translatesAutoresizingMaskIntoConstraints = false
@@ -62,7 +88,7 @@ final class SearchBarView: NSView {
 
         // Match count label
         matchLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-        matchLabel.textColor = .secondaryLabelColor
+        matchLabel.textColor = themeForeground.withAlphaComponent(0.7)
         matchLabel.alignment = .center
         matchLabel.translatesAutoresizingMaskIntoConstraints = false
         containerView.addSubview(matchLabel)
@@ -71,6 +97,7 @@ final class SearchBarView: NSView {
         prevButton.image = NSImage(systemSymbolName: "chevron.up", accessibilityDescription: "Previous")
         prevButton.bezelStyle = .inline
         prevButton.isBordered = false
+        prevButton.contentTintColor = themeForeground
         prevButton.target = self
         prevButton.action = #selector(previousClicked)
         prevButton.translatesAutoresizingMaskIntoConstraints = false
@@ -80,6 +107,7 @@ final class SearchBarView: NSView {
         nextButton.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: "Next")
         nextButton.bezelStyle = .inline
         nextButton.isBordered = false
+        nextButton.contentTintColor = themeForeground
         nextButton.target = self
         nextButton.action = #selector(nextClicked)
         nextButton.translatesAutoresizingMaskIntoConstraints = false
@@ -89,10 +117,17 @@ final class SearchBarView: NSView {
         closeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close")
         closeButton.bezelStyle = .inline
         closeButton.isBordered = false
+        closeButton.contentTintColor = themeForeground
         closeButton.target = self
         closeButton.action = #selector(closeClicked)
         closeButton.translatesAutoresizingMaskIntoConstraints = false
         containerView.addSubview(closeButton)
+
+        // Separator between match count and buttons
+        separator.wantsLayer = true
+        separator.layer?.backgroundColor = themeForeground.withAlphaComponent(0.15).cgColor
+        separator.translatesAutoresizingMaskIntoConstraints = false
+        containerView.addSubview(separator)
 
         // Layout
         NSLayoutConstraint.activate([
@@ -108,7 +143,12 @@ final class SearchBarView: NSView {
             matchLabel.centerYAnchor.constraint(equalTo: containerView.centerYAnchor),
             matchLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 50),
 
-            prevButton.leadingAnchor.constraint(equalTo: matchLabel.trailingAnchor, constant: 4),
+            separator.leadingAnchor.constraint(equalTo: matchLabel.trailingAnchor, constant: 6),
+            separator.centerYAnchor.constraint(equalTo: containerView.centerYAnchor),
+            separator.widthAnchor.constraint(equalToConstant: 1),
+            separator.heightAnchor.constraint(equalToConstant: 16),
+
+            prevButton.leadingAnchor.constraint(equalTo: separator.trailingAnchor, constant: 6),
             prevButton.centerYAnchor.constraint(equalTo: containerView.centerYAnchor),
 
             nextButton.leadingAnchor.constraint(equalTo: prevButton.trailingAnchor, constant: 2),

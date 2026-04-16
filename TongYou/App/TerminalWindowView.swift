@@ -191,7 +191,9 @@ struct TerminalWindowView: View {
                         },
                         onDismiss: {
                             showingSessionPicker = false
-                        }
+                        },
+                        themeForeground: configLoader.config.foreground,
+                        themeBackground: configLoader.config.background
                     )
                 }
             }

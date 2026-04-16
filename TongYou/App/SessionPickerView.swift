@@ -9,9 +9,29 @@ struct SessionPickerView: View {
     let attachedSessionIDs: Set<UUID>
     let onSelect: (Int) -> Void
     let onDismiss: () -> Void
+    let themeForeground: RGBColor
+    let themeBackground: RGBColor
 
     @State private var searchText: String = ""
     @State private var selectedIndex: Int = 0
+
+    init(
+        sessions: [TerminalSession],
+        activeSessionIndex: Int,
+        attachedSessionIDs: Set<UUID>,
+        onSelect: @escaping (Int) -> Void,
+        onDismiss: @escaping () -> Void,
+        themeForeground: RGBColor = Config.default.foreground,
+        themeBackground: RGBColor = Config.default.background
+    ) {
+        self.sessions = sessions
+        self.activeSessionIndex = activeSessionIndex
+        self.attachedSessionIDs = attachedSessionIDs
+        self.onSelect = onSelect
+        self.onDismiss = onDismiss
+        self.themeForeground = themeForeground
+        self.themeBackground = themeBackground
+    }
 
     private var filteredSessions: [(offset: Int, element: TerminalSession)] {
         let indexed = Array(sessions.enumerated())
@@ -23,15 +43,19 @@ struct SessionPickerView: View {
     }
 
     var body: some View {
+        let fgColor = Color(nsColor: themeForeground.nsColor)
+        let bgColor = Color(nsColor: themeBackground.nsColor)
+
         VStack(spacing: 0) {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(fgColor.opacity(0.6))
                     .font(.system(size: 12))
                 SearchTextField(
                     text: $searchText,
                     placeholder: "Search sessions...",
-                    onSubmit: { confirmSelection() }
+                    onSubmit: { confirmSelection() },
+                    textColor: themeForeground.nsColor
                 )
                 .frame(maxWidth: .infinity, minHeight: 16)
             }
@@ -39,10 +63,11 @@ struct SessionPickerView: View {
             .padding(.vertical, 8)
 
             Divider()
+                .overlay(fgColor.opacity(0.15))
 
             if filteredSessions.isEmpty {
                 Text("No sessions")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(fgColor.opacity(0.6))
                     .font(.system(size: 12))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 16)
@@ -51,7 +76,7 @@ struct SessionPickerView: View {
                     ScrollView {
                         LazyVStack(spacing: 0) {
                             ForEach(Array(filteredSessions.enumerated()), id: \.element.element.id) { pickerIndex, item in
-                                pickerRow(item.element, originalIndex: item.offset, pickerIndex: pickerIndex)
+                                pickerRow(item.element, originalIndex: item.offset, pickerIndex: pickerIndex, fgColor: fgColor)
                                     .id(item.element.id)
                             }
                         }
@@ -67,7 +92,13 @@ struct SessionPickerView: View {
             }
         }
         .frame(width: 400)
-        .overlayPanelStyle()
+        .background(bgColor.opacity(0.9))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(fgColor.opacity(0.15), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.3), radius: 12, y: 4)
         .onChange(of: searchText) { _, _ in
             selectedIndex = 0
         }
@@ -86,18 +117,19 @@ struct SessionPickerView: View {
     }
 
     @ViewBuilder
-    private func pickerRow(_ session: TerminalSession, originalIndex: Int, pickerIndex: Int) -> some View {
+    private func pickerRow(_ session: TerminalSession, originalIndex: Int, pickerIndex: Int, fgColor: Color) -> some View {
         let isSelected = pickerIndex == selectedIndex
         let isCurrent = originalIndex == activeSessionIndex
         let isRemote = session.source.isRemote
         let isAttached = attachedSessionIDs.contains(session.id)
 
         HStack(spacing: 8) {
-            sessionIcon(isRemote: isRemote, isAttached: isAttached)
+            sessionIcon(isRemote: isRemote, isAttached: isAttached, fgColor: fgColor)
 
             Text(session.name)
                 .font(.system(size: 12))
                 .lineLimit(1)
+                .foregroundStyle(fgColor)
 
             Spacer()
 
@@ -114,12 +146,12 @@ struct SessionPickerView: View {
             } else if isRemote && !isAttached {
                 Text("detached")
                     .font(.system(size: 10))
-                    .foregroundStyle(.gray)
+                    .foregroundStyle(fgColor.opacity(0.5))
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(
                         Capsule()
-                            .fill(Color.gray.opacity(0.12))
+                            .fill(fgColor.opacity(0.12))
                     )
             }
         }
@@ -127,7 +159,7 @@ struct SessionPickerView: View {
         .padding(.vertical, 5)
         .background(
             RoundedRectangle(cornerRadius: 4)
-                .fill(isSelected ? Color.accentColor.opacity(0.2) : Color.clear)
+                .fill(isSelected ? fgColor.opacity(0.2) : Color.clear)
         )
         .contentShape(Rectangle())
         .onTapGesture {
@@ -141,11 +173,11 @@ struct SessionPickerView: View {
         }
     }
 
-    private func sessionIcon(isRemote: Bool, isAttached: Bool) -> some View {
+    private func sessionIcon(isRemote: Bool, isAttached: Bool, fgColor: Color) -> some View {
         let name = isRemote
             ? (isAttached ? "rectangle.connected.to.line.below" : "rectangle.dashed")
             : "terminal"
-        let color: Color = isRemote ? (isAttached ? .blue : .gray) : .secondary
+        let color: Color = isRemote ? (isAttached ? .blue : fgColor.opacity(0.4)) : fgColor.opacity(0.6)
         return Image(systemName: name)
             .font(.system(size: 11))
             .foregroundStyle(color)
@@ -173,6 +205,7 @@ private struct SearchTextField: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
     let onSubmit: () -> Void
+    let textColor: NSColor
 
     func makeNSView(context: Context) -> NSTextField {
         let field = ActivatingTextField()
@@ -181,6 +214,7 @@ private struct SearchTextField: NSViewRepresentable {
         field.backgroundColor = .clear
         field.focusRingType = .none
         field.font = .systemFont(ofSize: 13)
+        field.textColor = textColor
         field.placeholderString = placeholder
         field.stringValue = text
         field.delegate = context.coordinator
