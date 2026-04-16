@@ -65,4 +65,72 @@ struct ScreenTests {
         #expect(screen.cell(at: 0, row: 1).width == .wide)
         #expect(screen.cell(at: 1, row: 1).width == .continuation)
     }
+
+    // MARK: - Scrollback segmented growth
+
+    @Test func scrollbackGrowsIncrementally() {
+        // maxScrollback=100, initialScrollbackRows=1024 → initial cap should be 100 (< 1024)
+        let screen = Screen(columns: 10, rows: 2, maxScrollback: 100)
+        // Fill up: writing enough lines to push into scrollback.
+        // Each newline when cursor is at bottom pushes top row into scrollback.
+        for i in 0..<100 {
+            let ch = Character(UnicodeScalar(UInt32(0x41 + (i % 26)))!)
+            screen.write(GraphemeCluster(ch), attributes: .default)
+            screen.newline()
+        }
+        #expect(screen.scrollbackCount == 100)
+        // Verify content is readable (oldest line should be 'A')
+        #expect(screen.scrollbackCell(line: 0, col: 0).codepoint == "A")
+    }
+
+    @Test func scrollbackGrowsThroughMultipleSegments() {
+        // Use maxScrollback=3000 so we cross several doubling boundaries
+        // (1024 → 2048 → 3000).
+        let cols = 10
+        let screen = Screen(columns: cols, rows: 2, maxScrollback: 3000)
+        for i in 0..<3000 {
+            let ch = Character(UnicodeScalar(UInt32(0x41 + (i % 26)))!)
+            screen.write(GraphemeCluster(ch), attributes: .default)
+            screen.newline()
+        }
+        #expect(screen.scrollbackCount == 3000)
+        // First scrollback line should be 'A'
+        #expect(screen.scrollbackCell(line: 0, col: 0).codepoint == "A")
+        // Last scrollback line
+        let lastIdx = 2999
+        let expectedCP = UnicodeScalar(UInt32(0x41 + (lastIdx % 26)))!
+        #expect(screen.scrollbackCell(line: lastIdx, col: 0).codepoint == Unicode.Scalar(expectedCP))
+    }
+
+    @Test func scrollbackRingOverwriteAfterFull() {
+        // Small maxScrollback to test ring overwrite after segmented growth completes.
+        let screen = Screen(columns: 5, rows: 2, maxScrollback: 10)
+        // Write 15 lines — first 5 should be evicted by ring overwrite.
+        for i in 0..<15 {
+            let ch = Character(UnicodeScalar(UInt32(0x41 + i))!)
+            screen.write(GraphemeCluster(ch), attributes: .default)
+            screen.newline()
+        }
+        #expect(screen.scrollbackCount == 10)
+        // Oldest visible line should be the 6th character written ('F', i=5)
+        #expect(screen.scrollbackCell(line: 0, col: 0).codepoint == "F")
+        // Newest visible line should be the 15th character ('O', i=14)
+        #expect(screen.scrollbackCell(line: 9, col: 0).codepoint == "O")
+    }
+
+    @Test func scrollbackPreservesContentAcrossGrowth() {
+        // Verify that data written before a growth event is still accessible after growth.
+        let screen = Screen(columns: 5, rows: 2, maxScrollback: 2000)
+        // Write exactly 1024 lines (fills initial segment), then 1 more to trigger growth.
+        for i in 0..<1025 {
+            let ch = Character(UnicodeScalar(UInt32(0x41 + (i % 26)))!)
+            screen.write(GraphemeCluster(ch), attributes: .default)
+            screen.newline()
+        }
+        #expect(screen.scrollbackCount == 1025)
+        // Check first and last entries survived the growth.
+        #expect(screen.scrollbackCell(line: 0, col: 0).codepoint == "A")
+        let lastCP = UnicodeScalar(UInt32(0x41 + (1024 % 26)))!
+        #expect(screen.scrollbackCell(line: 1024, col: 0).codepoint == Unicode.Scalar(lastCP))
+    }
 }

@@ -276,10 +276,15 @@ public final class Screen {
     // MARK: - Scrollback
 
     /// Flat ring buffer for scrollback lines. Lazily allocated on first scroll.
-    /// Layout: scrollbackColumns cells per row, up to maxScrollback rows.
+    /// Layout: scrollbackColumns cells per row, up to scrollbackCapacity rows.
+    /// The buffer grows in segments (1024 → 2048 → … → maxScrollback) to avoid
+    /// a large up-front allocation when scrollback usage is light.
     private var scrollbackBuffer: [Cell]?
     /// Column width of the scrollback buffer (set when buffer is allocated).
     private var scrollbackColumns: Int = 0
+    /// Current allocated row capacity of the scrollback buffer.
+    /// Grows in powers of two up to maxScrollback.
+    private var scrollbackCapacity: Int = 0
     /// Index of the oldest valid line in the scrollback ring buffer.
     private var scrollbackStart: Int = 0
     /// Per-row wrap flags for scrollback, ring-buffered in sync with scrollbackBuffer.
@@ -1329,11 +1334,14 @@ public final class Screen {
         }
         let activeRowCount = min(totalRows - sbRowCount, newRows)
 
-        // Build new scrollback
+        // Build new scrollback with segmented capacity
         let newSBCount = min(sbRowCount, maxScrollback)
         if newSBCount > 0 {
-            var newSB = [Cell](repeating: .empty, count: newCols * maxScrollback)
-            var newSBFlags = [LineFlags](repeating: LineFlags(), count: maxScrollback)
+            // Allocate just enough capacity, rounded up to the next segment boundary.
+            var newSBCap = min(Self.initialScrollbackRows, maxScrollback)
+            while newSBCap < newSBCount { newSBCap = min(newSBCap * 2, maxScrollback) }
+            var newSB = [Cell](repeating: .empty, count: newCols * newSBCap)
+            var newSBFlags = [LineFlags](repeating: LineFlags(), count: newSBCap)
             let sbStart = sbRowCount - newSBCount  // skip oldest if over maxScrollback
             for i in 0..<newSBCount {
                 let srcRow = sbStart + i
@@ -1345,6 +1353,7 @@ public final class Screen {
             scrollbackBuffer = newSB
             scrollbackLineFlags = newSBFlags
             scrollbackColumns = newCols
+            scrollbackCapacity = newSBCap
             scrollbackStart = 0
             scrollbackCount = newSBCount
         } else {
@@ -1437,7 +1446,7 @@ public final class Screen {
 
     /// Map a logical scrollback index to the physical row in the ring buffer.
     @inline(__always) private func scrollbackPhysicalRow(_ logicalIndex: Int) -> Int {
-        (scrollbackStart + logicalIndex) % maxScrollback
+        (scrollbackStart + logicalIndex) % scrollbackCapacity
     }
 
     /// Reset scrollback state. Pass `deallocate: true` when the buffer
@@ -1447,28 +1456,68 @@ public final class Screen {
             scrollbackBuffer = nil
             scrollbackLineFlags = nil
             scrollbackColumns = 0
+            scrollbackCapacity = 0
         }
         scrollbackStart = 0
         scrollbackCount = 0
         viewportOffset = 0
     }
 
+    /// Initial scrollback allocation in rows. Grows by doubling up to maxScrollback.
+    private static let initialScrollbackRows = 1024
+
+    /// Double the scrollback buffer capacity (up to maxScrollback).
+    /// Linearizes the ring buffer so that scrollbackStart resets to 0.
+    private func growScrollbackBuffer() {
+        let oldCap = scrollbackCapacity
+        let newCap = min(oldCap * 2, maxScrollback)
+        let cols = scrollbackColumns
+
+        var newBuf = [Cell](repeating: .empty, count: cols * newCap)
+        var newFlags = [LineFlags](repeating: LineFlags(), count: newCap)
+
+        // Two-pass bulk copy: [scrollbackStart..oldCap) then [0..scrollbackStart).
+        let firstRun = min(scrollbackCount, oldCap - scrollbackStart)
+        let firstCells = firstRun * cols
+        let srcStart = scrollbackStart * cols
+        newBuf[0..<firstCells] = scrollbackBuffer![srcStart..<(srcStart + firstCells)]
+        newFlags[0..<firstRun] = scrollbackLineFlags![scrollbackStart..<(scrollbackStart + firstRun)]
+
+        let secondRun = scrollbackCount - firstRun
+        if secondRun > 0 {
+            let secondCells = secondRun * cols
+            newBuf[firstCells..<(firstCells + secondCells)] = scrollbackBuffer![0..<secondCells]
+            newFlags[firstRun..<(firstRun + secondRun)] = scrollbackLineFlags![0..<secondRun]
+        }
+
+        scrollbackBuffer = newBuf
+        scrollbackLineFlags = newFlags
+        scrollbackCapacity = newCap
+        scrollbackStart = 0
+    }
+
     /// Append the current top screen row to the flat scrollback ring buffer.
-    /// Zero steady-state allocation: copies directly into a pre-allocated slot.
+    /// Zero steady-state allocation once the buffer reaches its final capacity.
     private func appendScrollbackLine() {
+        guard maxScrollback > 0 else { return }
         if scrollbackBuffer == nil {
-            scrollbackBuffer = [Cell](repeating: .empty, count: columns * maxScrollback)
+            let cap = min(Self.initialScrollbackRows, maxScrollback)
+            scrollbackBuffer = [Cell](repeating: .empty, count: columns * cap)
             scrollbackColumns = columns
-            scrollbackLineFlags = [LineFlags](repeating: LineFlags(), count: maxScrollback)
+            scrollbackCapacity = cap
+            scrollbackLineFlags = [LineFlags](repeating: LineFlags(), count: cap)
+        } else if scrollbackCount == scrollbackCapacity && scrollbackCapacity < maxScrollback {
+            growScrollbackBuffer()
         }
         let topBase = rowStart(0)
         let slotIndex: Int
-        if scrollbackCount < maxScrollback {
+        if scrollbackCount < scrollbackCapacity {
             slotIndex = scrollbackCount
             scrollbackCount += 1
         } else {
+            // Ring buffer is full at final capacity — overwrite oldest slot.
             slotIndex = scrollbackPhysicalRow(0)
-            scrollbackStart = (scrollbackStart + 1) % maxScrollback
+            scrollbackStart = (scrollbackStart + 1) % scrollbackCapacity
         }
         let dst = slotIndex * scrollbackColumns
         scrollbackBuffer![dst..<(dst + scrollbackColumns)] = cells[topBase..<(topBase + columns)]
