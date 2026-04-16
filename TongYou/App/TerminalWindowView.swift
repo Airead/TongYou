@@ -223,9 +223,14 @@ struct TerminalWindowView: View {
         .background(WindowConfigurator(
             backgroundColor: windowBackgroundColor,
             title: windowTitle,
-            onWindowClose: { [sessionManager] in
+            onWindowClose: { [sessionManager, configLoader] in
                 sessionManager.disconnectFromTYD()
                 sessionManager.flushPendingLocalSaves()
+                // Break retain cycles to allow full deallocation.
+                configLoader.onConfigChanged = nil
+                sessionManager.onRemoteDetached = nil
+                sessionManager.onRemoteSessionEmpty = nil
+                sessionManager.onRemoteLayoutChanged = nil
             }
         ))
         .onAppear {
@@ -709,7 +714,8 @@ struct TerminalWindowView: View {
             }
         }
 
-        sessionManager.onRemoteSessionEmpty = { [viewStore, focusManager, sessionManager] sessionID, removedPaneIDs in
+        sessionManager.onRemoteSessionEmpty = { [viewStore, focusManager, weak sessionManager] sessionID, removedPaneIDs in
+            guard let sessionManager else { return }
             for paneID in removedPaneIDs {
                 viewStore.tearDown(for: paneID)
                 focusManager.removeFromHistory(id: paneID)
@@ -728,7 +734,8 @@ struct TerminalWindowView: View {
             }
         }
 
-        sessionManager.onRemoteLayoutChanged = { [viewStore, focusManager, sessionManager] sessionID, removedPaneIDs, addedPaneIDs in
+        sessionManager.onRemoteLayoutChanged = { [viewStore, focusManager, weak sessionManager] sessionID, removedPaneIDs, addedPaneIDs in
+            guard let sessionManager else { return }
             // Tear down MetalViews for removed panes.
             for paneID in removedPaneIDs {
                 viewStore.tearDown(for: paneID)
