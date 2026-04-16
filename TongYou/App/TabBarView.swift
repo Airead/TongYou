@@ -64,15 +64,7 @@ struct TabBarView: View {
                 .foregroundStyle(isActive ? .primary : .secondary)
 
             if let count = tabUnreadCounts[tab.id], count > 0 {
-                Text(Self.badgeText(for: count))
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
-                    .background(
-                        Capsule()
-                            .fill(Color(nsColor: .systemBlue))
-                    )
+                UnreadBadge(count: count)
             }
 
             Button {
@@ -97,12 +89,6 @@ struct TabBarView: View {
         .onTapGesture {
             onSelect(index)
         }
-    }
-}
-
-extension TabBarView {
-    static func badgeText(for count: Int) -> String {
-        count > 9 ? "9+" : "\(count)"
     }
 }
 

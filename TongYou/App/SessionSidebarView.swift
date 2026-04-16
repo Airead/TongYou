@@ -118,15 +118,7 @@ struct SessionSidebarView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if let count = sessionUnreadCounts[session.id], count > 0 {
-                Text(Self.badgeText(for: count))
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
-                    .background(
-                        Capsule()
-                            .fill(Color(nsColor: .systemBlue))
-                    )
+                UnreadBadge(count: count)
             } else {
                 Text("\(session.tabCount)")
                     .font(.system(size: 10))
@@ -199,12 +191,6 @@ struct SessionSidebarView: View {
                 attachedSessionIDs: attachedSessionIDs,
                 onMove: onMoveSession
             ))
-    }
-}
-
-extension SessionSidebarView {
-    static func badgeText(for count: Int) -> String {
-        count > 9 ? "9+" : "\(count)"
     }
 }
 

@@ -1,15 +1,17 @@
 import Testing
 @testable import TongYou
 
-@Suite("TabBarView")
-struct TabBarViewTests {
+@Suite("NotificationStore Badge Text")
+struct BadgeTextTests {
 
     @Test func badgeTextForSmallCount() {
-        #expect(TabBarView.badgeText(for: 3) == "3")
+        #expect(NotificationStore.badgeText(for: 2) == "2")
+        #expect(NotificationStore.badgeText(for: 3) == "3")
     }
 
     @Test func badgeTextCapsAtNinePlus() {
-        #expect(TabBarView.badgeText(for: 10) == "9+")
-        #expect(TabBarView.badgeText(for: 99) == "9+")
+        #expect(NotificationStore.badgeText(for: 10) == "9+")
+        #expect(NotificationStore.badgeText(for: 99) == "9+")
+        #expect(NotificationStore.badgeText(for: 100) == "9+")
     }
 }

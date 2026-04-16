@@ -48,6 +48,8 @@ final class MetalView: NSView {
 
     /// Blue notification ring overlay (sublayer of the CAMetalLayer).
     private let notificationRingLayer = CAShapeLayer()
+    /// Guards against overlapping flash animations from rapid notifications.
+    private var isFlashing = false
 
     /// Callback for keybinding actions (forwarded to SessionManager via TerminalWindowView).
     var onTabAction: ((TabAction) -> Void)?
@@ -443,7 +445,6 @@ final class MetalView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
-        onUserInteraction?()
         stopDragAutoScrollTimer()
         if isMouseTrackingActive && !isAltForcingSelection(event) {
             sendMouseEvent(event, action: .release, button: .left)
@@ -484,7 +485,6 @@ final class MetalView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        onUserInteraction?()
         if isMouseTrackingActive && !isAltForcingSelection(event) {
             sendMouseEvent(event, action: .motion, button: .left)
         } else {
@@ -935,6 +935,9 @@ final class MetalView: NSView {
     }
 
     func flashNotificationRing() {
+        guard !isFlashing else { return }
+        isFlashing = true
+
         let flashLayer = CALayer()
         flashLayer.frame = bounds
         flashLayer.backgroundColor = NSColor.systemBlue.cgColor
@@ -946,8 +949,9 @@ final class MetalView: NSView {
         animation.duration = 0.9
         animation.isRemovedOnCompletion = true
         CATransaction.begin()
-        CATransaction.setCompletionBlock { [weak flashLayer] in
+        CATransaction.setCompletionBlock { [weak self, weak flashLayer] in
             flashLayer?.removeFromSuperlayer()
+            self?.isFlashing = false
         }
         flashLayer.add(animation, forKey: "flash")
         CATransaction.commit()
