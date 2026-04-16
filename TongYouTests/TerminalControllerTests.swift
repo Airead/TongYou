@@ -136,6 +136,28 @@ struct TerminalControllerTests {
 
         controller.stop()
     }
+
+    @Test
+    @MainActor
+    func paneNotificationBridgeFires() async throws {
+        let controller = TerminalController(columns: 80, rows: 24)
+        let semaphore = DispatchSemaphore(value: 0)
+        var captured: (title: String, body: String)?
+
+        controller.onPaneNotification = { title, body in
+            captured = (title, body)
+            semaphore.signal()
+        }
+
+        controller.start(command: "/bin/bash", arguments: ["-c", "printf '\\e]9;Build;Done\\a'"])
+
+        await waitForSemaphore(semaphore)
+
+        #expect(captured?.title == "Build")
+        #expect(captured?.body == "Done")
+
+        controller.stop()
+    }
 }
 
 private func waitForSemaphore(_ semaphore: DispatchSemaphore, timeout: TimeInterval = 5) async {

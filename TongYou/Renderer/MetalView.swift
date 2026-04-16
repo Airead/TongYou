@@ -741,6 +741,10 @@ final class MetalView: NSView {
             guard let self, let paneID = self.paneID else { return }
             self.onTabAction?(.paneExited(paneID))
         }
+        controller.onPaneNotification = { [weak self] title, body in
+            guard let self, let paneID = self.paneID else { return }
+            self.onTabAction?(.paneNotification(paneID, title, body))
+        }
     }
 
     private func applyConfigChange(_ config: Config) {

@@ -552,8 +552,9 @@ struct TerminalWindowView: View {
                     await sessionManager.runCommand(at: paneID, command: command, arguments: arguments)
                 }
             }
-        case .paneNotification(_, _, _):
+        case .paneNotification(let paneID, let title, let body):
             // Phase 1 placeholder; Phase 3+ will wire notification store and UI.
+            _ = (paneID, title, body)
             break
         }
     }

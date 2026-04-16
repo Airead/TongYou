@@ -30,6 +30,8 @@ public struct StreamHandler {
     public var onClipboardSet: ((String) -> Void)?
     /// Callback: shell integration reported the running command (nil = shell prompt).
     public var onRunningCommandChanged: ((String?) -> Void)?
+    /// Callback: pane notification triggered by OSC 9 / 777 / 1337 (title, body).
+    public var onPaneNotification: ((String, String) -> Void)?
 
     public init(screen: Screen) {
         self.screen = screen
@@ -337,6 +339,12 @@ public struct StreamHandler {
             handleOSC52(stringData)
         case 7727:
             handleOSC7727(stringData)
+        case 9:
+            handleOSC9(stringData)
+        case 777:
+            handleOSC777(stringData)
+        case 1337:
+            handleOSC1337(stringData)
         default:
             break
         }
@@ -386,6 +394,48 @@ public struct StreamHandler {
         } else if str == "shell-prompt" {
             onRunningCommandChanged?(nil)
         }
+    }
+
+    // MARK: - OSC 9 (Notification)
+
+    private func handleOSC9(_ data: ArraySlice<UInt8>) {
+        guard let str = String(bytes: data, encoding: .utf8), !str.isEmpty else { return }
+        let (title, body) = splitNotification(str)
+        onPaneNotification?(title, body)
+    }
+
+    // MARK: - OSC 777 (Notification)
+
+    private func handleOSC777(_ data: ArraySlice<UInt8>) {
+        guard let str = String(bytes: data, encoding: .utf8), !str.isEmpty else { return }
+        let parts = str.split(separator: ";", maxSplits: 2, omittingEmptySubsequences: false)
+        guard parts.count >= 2, parts[0] == "notify" else { return }
+        let title = String(parts[1])
+        let body = parts.count >= 3 ? String(parts[2]) : title
+        onPaneNotification?(title, body)
+    }
+
+    // MARK: - OSC 1337 (iTerm2 Notification)
+
+    private func handleOSC1337(_ data: ArraySlice<UInt8>) {
+        guard let str = String(bytes: data, encoding: .utf8), !str.isEmpty else { return }
+        let prefix = "Notify="
+        guard str.hasPrefix(prefix) else { return }
+        let remainder = String(str.dropFirst(prefix.count))
+        let (title, body) = splitNotification(remainder)
+        onPaneNotification?(title, body)
+    }
+
+    // MARK: - Notification Helpers
+
+    /// Split "title;body" into (title, body). If no separator, body = title.
+    private func splitNotification(_ str: String) -> (String, String) {
+        if let idx = str.firstIndex(of: ";") {
+            let title = String(str[..<idx])
+            let body = String(str[str.index(after: idx)...])
+            return (title, body)
+        }
+        return (str, str)
     }
 
     // MARK: - Window Manipulation (CSI t)
