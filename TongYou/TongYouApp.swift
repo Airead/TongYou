@@ -32,6 +32,13 @@ struct TongYouCommands: Commands {
     @State private var daemonRunning = false
 
     var body: some Commands {
+        CommandGroup(replacing: .appSettings) {
+            Button("Preferences...") {
+                ConfigLoader.openDefaultConfigFile()
+            }
+            .keyboardShortcut(",", modifiers: .command)
+        }
+
         CommandGroup(after: .appSettings) {
             Button(CLIInstaller.isInstalled
                    ? "Uninstall Command Line Tool..."

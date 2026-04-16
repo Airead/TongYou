@@ -327,9 +327,29 @@ struct Keybinding: Equatable {
             if eventMods == binding.modifiers && eventKey == binding.key {
                 return binding.action
             }
+            // Fallback: when Shift is held, charactersIgnoringModifiers returns
+            // the shifted symbol (e.g. "{" for "["). Allow matching against the
+            // unshifted base character so configs like cmd+shift+[=... work.
+            if eventMods == binding.modifiers,
+               eventMods.contains(.shift),
+               let baseKey = Self.shiftedToBase[eventKey],
+               baseKey == binding.key {
+                return binding.action
+            }
         }
         return nil
     }
+
+    /// Maps common shifted ASCII symbols back to their base key characters.
+    /// This allows bindings like `cmd+shift+[` to match even though
+    /// `charactersIgnoringModifiers` returns `{` when Shift is active.
+    private static let shiftedToBase: [String: String] = [
+        "{": "[", "}": "]", "|": "\\", ":": ";", "\"": "'",
+        "<": ",", ">": ".", "?": "/", "~": "`", "!": "1",
+        "@": "2", "#": "3", "$": "4", "%": "5", "^": "6",
+        "&": "7", "*": "8", "(": "9", ")": "0", "_": "-",
+        "+": "=",
+    ]
 }
 
 // MARK: - ModifierFlags Equatable for matching

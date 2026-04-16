@@ -44,10 +44,10 @@ struct Config: Equatable {
 
     // MARK: - Keybindings
 
-    var keybindings: [Keybinding] = Keybinding.defaults
+    var keybindings: [Keybinding] = []
 
     /// Programs that automatically receive non-Cmd keybindings when in foreground.
-    var autoPassthroughPrograms: Set<String> = ["zellij"]
+    var autoPassthroughPrograms: Set<String> = []
 
     // MARK: - Debug
 
@@ -87,21 +87,9 @@ struct Config: Equatable {
             config.applyTheme(theme, excluding: explicitColorKeys)
         }
 
-        if !customKeybindings.isEmpty {
-            // Custom keybindings *merge on top of* defaults so the user only has
-            // to override the shortcuts they want to change. Replacing the entire
-            // array with custom bindings would silently break every unmodified
-            // default shortcut.
-            var merged = Keybinding.defaults
-            for custom in customKeybindings {
-                if let index = merged.firstIndex(where: { $0.modifiers == custom.modifiers && $0.key == custom.key }) {
-                    merged[index] = custom
-                } else {
-                    merged.append(custom)
-                }
-            }
-            config.keybindings = merged
-        }
+        // Keybindings are defined entirely by the config file.
+        // If the file contains no keybind entries, no shortcuts are registered.
+        config.keybindings = customKeybindings
 
         return config
     }

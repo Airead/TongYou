@@ -129,8 +129,8 @@ struct ConfigTests {
             .init(key: "keybind", value: "alt+g=list_remote_sessions"),
         ]
         let config = Config.from(entries: entries)
-        // Custom bindings merge on top of defaults; unmodified defaults stay intact.
-        #expect(config.keybindings.count == Keybinding.defaults.count + 1)
+        // Keybindings are defined solely by the config file.
+        #expect(config.keybindings.count == 2)
         #expect(config.keybindings.first { $0.key == "t" && $0.modifiers == .command }?.action == .newTab)
         #expect(config.keybindings.first { $0.key == "g" && $0.modifiers == .option }?.action == .listRemoteSessions)
     }
@@ -140,7 +140,7 @@ struct ConfigTests {
             .init(key: "keybind", value: "cmd+t=close_tab"),
         ]
         let config = Config.from(entries: entries)
-        #expect(config.keybindings.count == Keybinding.defaults.count)
+        #expect(config.keybindings.count == 1)
         #expect(config.keybindings.first { $0.key == "t" && $0.modifiers == .command }?.action == .closeTab)
     }
 
@@ -150,18 +150,17 @@ struct ConfigTests {
             .init(key: "keybind", value: "alt+g=run_in_place:git:log,--oneline"),
         ]
         let config = Config.from(entries: entries)
-        // alt+m already exists in defaults; alt+g is new, so count increases by 1.
-        #expect(config.keybindings.count == Keybinding.defaults.count + 1)
+        #expect(config.keybindings.count == 2)
         #expect(config.keybindings.first { $0.key == "m" && $0.modifiers == .option }?.action == .runInPlace(command: "lazygit", arguments: []))
         #expect(config.keybindings.first { $0.key == "g" && $0.modifiers == .option }?.action == .runInPlace(command: "git", arguments: ["log", "--oneline"]))
     }
 
-    @Test func noKeybindsUsesDefaults() {
+    @Test func noKeybindsResultsInEmptyBindings() {
         let entries: [ConfigParser.Entry] = [
             .init(key: "font-size", value: "14"),
         ]
         let config = Config.from(entries: entries)
-        #expect(config.keybindings == Keybinding.defaults)
+        #expect(config.keybindings.isEmpty)
     }
 
     @Test func invalidFontSizeRange() {
@@ -246,8 +245,8 @@ struct AutoPassthroughProgramsTests {
         #expect(config.autoPassthroughPrograms.isEmpty)
     }
 
-    @Test func defaultIncludesZellij() {
-        #expect(Config.default.autoPassthroughPrograms == ["zellij"])
+    @Test func defaultHasNoPassthroughPrograms() {
+        #expect(Config.default.autoPassthroughPrograms.isEmpty)
     }
 
     @Test func singleProgram() {
@@ -335,6 +334,24 @@ struct KeybindingTests {
         #expect(kb.action.tabAction != nil)
     }
 
+    @Test func matchShiftedBracketSymbols() throws {
+        // charactersIgnoringModifiers returns "{" for cmd+shift+[, but the config uses "[".
+        let event = NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [.command, .shift],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "{",
+            charactersIgnoringModifiers: "{",
+            isARepeat: false,
+            keyCode: 33
+        )!
+        let binding = try Keybinding.parse("cmd+shift+[=previous_tab")
+        #expect(Keybinding.match(event: event, in: [binding]) == .previousTab)
+    }
+
     @Test func invalidAction() {
         #expect(throws: ConfigError.self) {
             try Keybinding.parse("cmd+t=nonexistent_action")
@@ -372,21 +389,13 @@ struct ConfigLoaderTests {
         #expect(loader.config.fontFamily.isEmpty == false)
     }
 
-    @Test func generatedDefaultConfigIsValidAndAllCommented() throws {
+    @Test func generatedDefaultConfigIsValid() throws {
         let content = ConfigLoader.generateDefaultConfig()
 
         // Should not be empty
         #expect(!content.isEmpty)
 
-        // Every non-blank line should be a comment
-        for line in content.components(separatedBy: .newlines) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.isEmpty { continue }
-            #expect(trimmed.hasPrefix("#"),
-                    "Non-comment line found in default config: '\(trimmed)'")
-        }
-
-        // Parsing the file should produce zero entries (all commented out)
+        // Parsing the file should produce all default entries.
         let dir = NSTemporaryDirectory() + "tongyou-test-\(UUID().uuidString)/"
         try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(atPath: dir) }
@@ -395,7 +404,18 @@ struct ConfigLoaderTests {
         try content.write(to: url, atomically: true, encoding: .utf8)
 
         let entries = try ConfigParser().parse(contentsOf: url)
-        #expect(entries.isEmpty, "Default config should have no active entries")
+        #expect(!entries.isEmpty, "Default config should produce active entries")
+
+        // Spot-check a few expected defaults
+        let keybinds = entries.filter { $0.key == "keybind" }.map { $0.value }
+        #expect(keybinds.contains("cmd+t=new_tab"))
+        #expect(keybinds.contains("cmd+d=split_vertical"))
+
+        let fontFamily = entries.first { $0.key == "font-family" }?.value
+        #expect(fontFamily == "Menlo")
+
+        let theme = entries.first { $0.key == "theme" }?.value
+        #expect(theme == "iterm2-dark-background")
     }
 
     @Test func generatedConfigDocumentsAllKeys() {
@@ -413,6 +433,17 @@ struct ConfigLoaderTests {
             #expect(content.contains(key),
                     "Default config should document '\(key)'")
         }
+    }
+
+    @Test func ensureDefaultConfigExistsCreatesFile() throws {
+        let dir = NSTemporaryDirectory() + "tongyou-test-\(UUID().uuidString)/"
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let url = URL(fileURLWithPath: dir + "config")
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+        ConfigLoader.ensureDefaultConfigExists(at: url)
+        #expect(FileManager.default.fileExists(atPath: url.path))
+        let content = try String(contentsOf: url, encoding: .utf8)
+        #expect(content == ConfigLoader.generateDefaultConfig())
     }
 
     @Test func fullIntegrationParse() throws {
@@ -461,7 +492,7 @@ struct ConfigLoaderTests {
         #expect(config.tabWidth == 4)
         #expect(config.bell == .visual)
         #expect(config.optionAsAlt == true)
-        #expect(config.keybindings.count == Keybinding.defaults.count)
+        #expect(config.keybindings.count == 2)
         #expect(config.debugMetrics == true)
     }
 }

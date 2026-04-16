@@ -1,0 +1,184 @@
+# TongYou Configuration
+#
+# This file is the single source of truth for system defaults.
+# Modify values here to customize your terminal.
+#
+# Config file locations (loaded in order, later overrides earlier):
+#   1. ~/.config/tongyou/config
+#   2. ~/Library/Application Support/io.github.airead.tongyou/config
+#
+# Syntax:
+#   key = value       Set an option
+#   key =             Reset to default (empty value)
+#   # comment         Comment (must be on its own line)
+#   config-file = ?path   Include another file (? = optional)
+
+# ── Font ─────────────────────────────────────────────────────────
+# Font family name. Use the PostScript name or family name.
+font-family = Menlo
+
+# Font size in points. Valid range: 1-200.
+font-size = 14
+
+# ── Theme ────────────────────────────────────────────────────────
+# Built-in theme name. Provides base colors that can be overridden
+# by explicit color settings below.
+# Available themes:
+#   iterm2-dark-background, iterm2-default, iterm2-light-background,
+#   iterm2-pastel-dark-background, iterm2-smoooooth,
+#   iterm2-solarized-dark, iterm2-solarized-light,
+#   iterm2-tango-dark, iterm2-tango-light
+theme = iterm2-dark-background
+
+# ── Colors ───────────────────────────────────────────────────────
+# Background and foreground colors (6-digit hex, with or without # prefix).
+# Uncomment to override the theme colors.
+# background = 1e1e26
+# foreground = dcdcdc
+
+# Optional cursor and selection colors (hex).
+# cursor-color = e5e5e5
+# cursor-text = 000000
+# selection-background = c1deff
+# selection-foreground = 000000
+
+# Override individual palette colors (0-255).
+# Standard colors: 0-7, bright colors: 8-15,
+# 216-color cube: 16-231, grayscale ramp: 232-255.
+# palette-0 = 000000
+# palette-1 = cd3131
+# palette-2 = 0dbc79
+# palette-3 = e5e510
+# palette-4 = 2472c8
+# palette-5 = bc3fbc
+# palette-6 = 11a8cd
+# palette-7 = e5e5e5
+# palette-8 = 666666
+# palette-9 = f14c4c
+# palette-10 = 23d18b
+# palette-11 = f5f543
+# palette-12 = 3b8eea
+# palette-13 = d670d6
+# palette-14 = 29b8db
+# palette-15 = ffffff
+
+# ── Cursor ───────────────────────────────────────────────────────
+# Cursor shape. Available values: block, underline, bar
+cursor-style = block
+
+# Enable cursor blinking.
+cursor-blink = false
+
+# ── Behavior ─────────────────────────────────────────────────────
+# Treat Option key as Alt (sends ESC prefix).
+option-as-alt = true
+
+# Maximum number of scrollback lines to keep.
+scrollback-limit = 10000
+
+# Tab stop width in columns. Valid range: 1-32.
+tab-width = 8
+
+# Bell mode. Available values: audible, visual, none
+bell = audible
+
+# ── Tab Bar ──────────────────────────────────────────────────────
+# Tab bar visibility. Available values: auto, always, never
+tab-bar = auto
+
+# ── Keybindings ──────────────────────────────────────────────────
+# Format: keybind = modifiers+key=action
+# Modifiers: cmd, shift, ctrl, alt, opt, option, control, super
+# Custom keybindings merge on top of defaults; unmodified defaults
+# remain intact.
+#
+# Available actions:
+#   new_session, close_session, previous_session, next_session, toggle_sidebar,
+#   new_tab, close_tab, previous_tab, next_tab, goto_tab:1..9,
+#   copy, paste, search, search_next, search_previous,
+#   reset_font_size, increase_font_size, decrease_font_size,
+#   split_vertical, split_horizontal, close_pane,
+#   focus_pane_left, focus_pane_right, focus_pane_up, focus_pane_down,
+#   new_floating_pane, toggle_or_create_floating_pane,
+#   list_remote_sessions, new_remote_session, show_session_picker,
+#   detach_session, rename_session,
+#   run_in_place:command, run_in_place:command:arg1,arg2,
+#   run_command:command, run_command:command:arg1,arg2,
+#   unbind
+
+# Session management
+keybind = cmd+i=new_session
+keybind = cmd+up=previous_session
+keybind = cmd+k=previous_session
+keybind = cmd+down=next_session
+keybind = cmd+j=next_session
+keybind = cmd+b=toggle_sidebar
+
+# Tab management
+keybind = cmd+t=new_tab
+keybind = cmd+w=close_pane
+keybind = cmd+h=previous_tab
+keybind = cmd+l=next_tab
+keybind = cmd+shift+[=previous_tab
+keybind = cmd+shift+]=next_tab
+keybind = cmd+1=goto_tab:1
+keybind = cmd+2=goto_tab:2
+keybind = cmd+3=goto_tab:3
+keybind = cmd+4=goto_tab:4
+keybind = cmd+5=goto_tab:5
+keybind = cmd+6=goto_tab:6
+keybind = cmd+7=goto_tab:7
+keybind = cmd+8=goto_tab:8
+keybind = cmd+9=goto_tab:9
+
+# Clipboard
+keybind = cmd+c=copy
+keybind = cmd+v=paste
+
+# Search
+keybind = cmd+f=search
+keybind = cmd+g=search_next
+keybind = cmd+shift+g=search_previous
+
+# Font size
+keybind = cmd+0=reset_font_size
+keybind = cmd++=increase_font_size
+keybind = cmd+-=decrease_font_size
+
+# Pane management
+keybind = cmd+d=split_vertical
+keybind = cmd+shift+d=split_horizontal
+keybind = cmd+shift+w=close_tab
+keybind = cmd+alt+left=focus_pane_left
+keybind = cmd+alt+right=focus_pane_right
+keybind = cmd+alt+up=focus_pane_up
+keybind = cmd+alt+down=focus_pane_down
+
+# Floating pane management
+keybind = alt+f=toggle_or_create_floating_pane
+keybind = alt+n=new_floating_pane
+
+# In-place overlay
+keybind = alt+m=run_in_place:lazygit
+
+# Remote session management
+keybind = cmd+y=list_remote_sessions
+keybind = cmd+shift+i=new_remote_session
+keybind = cmd+r=show_session_picker
+keybind = cmd+shift+k=detach_session
+keybind = cmd+shift+r=rename_session
+
+# ── Auto Passthrough ─────────────────────────────────────────────
+# Comma-separated list of program names that automatically receive
+# non-Cmd keybindings when in the foreground.
+auto-passthrough-programs = zellij
+
+# ── File Include ─────────────────────────────────────────────────
+# Include another config file. Prefix path with ? to make it optional
+# (no error if the file doesn't exist). Relative paths are resolved
+# against this file's directory.
+config-file = ?local.config
+
+# ── Debug ────────────────────────────────────────────────────────
+# Show frame time metrics overlay.
+debug-metrics = false

@@ -84,119 +84,21 @@ final class ConfigLoader {
 
     /// Generate a commented-out sample config listing all available options.
     static func generateDefaultConfig() -> String {
-        return """
-        # TongYou Configuration
-        #
-        # This file was auto-generated with all options commented out.
-        # Uncomment and modify lines to customize your terminal.
-        #
-        # Config file locations (loaded in order, later overrides earlier):
-        #   1. ~/.config/tongyou/config
-        #   2. ~/Library/Application Support/io.github.airead.tongyou/config
-        #
-        # Syntax:
-        #   key = value       Set an option
-        #   key =             Reset to default (empty value)
-        #   # comment         Comment (must be on its own line)
-        #   config-file = ?path   Include another file (? = optional)
+        // 1. Production: load from the app bundle.
+        if let bundleURL = Bundle.main.url(forResource: "DefaultConfig", withExtension: "txt") {
+            if let content = try? String(contentsOf: bundleURL, encoding: .utf8) {
+                return content
+            }
+        }
 
-        # ── Font ─────────────────────────────────────────────────────────
-        # Font family name. Use the PostScript name or family name.
-        # font-family = Menlo
+        // 2. Development / tests: load from the source directory adjacent to this file.
+        let sourceFile = URL(fileURLWithPath: #file)
+        let devURL = sourceFile.deletingLastPathComponent().appendingPathComponent("DefaultConfig.txt")
+        if let content = try? String(contentsOf: devURL, encoding: .utf8) {
+            return content
+        }
 
-        # Font size in points.
-        # font-size = 14
-
-        # ── Theme ────────────────────────────────────────────────────────
-        # Use a built-in theme. Explicit color settings below override theme colors.
-        # Available themes:
-        #   iterm2-dark-background, iterm2-default, iterm2-light-background,
-        #   iterm2-pastel-dark-background, iterm2-smoooooth,
-        #   iterm2-solarized-dark, iterm2-solarized-light,
-        #   iterm2-tango-dark, iterm2-tango-light
-        # theme = iterm2-dark-background
-
-        # ── Colors ───────────────────────────────────────────────────────
-        # Background and foreground colors (6-digit hex, with or without # prefix).
-        # background = 1e1e26
-        # foreground = dcdcdc
-        # cursor-color = e5e5e5
-        # cursor-text = 000000
-        # selection-background = c1deff
-        # selection-foreground = 000000
-
-        # Override individual palette colors (0-255).
-        # Standard colors: 0-7, bright colors: 8-15,
-        # 216-color cube: 16-231, grayscale ramp: 232-255.
-        # palette-0 = 000000
-        # palette-1 = cd3131
-        # palette-2 = 0dbc79
-        # palette-3 = e5e510
-        # palette-4 = 2472c8
-        # palette-5 = bc3fbc
-        # palette-6 = 11a8cd
-        # palette-7 = e5e5e5
-        # palette-8 = 666666
-        # palette-9 = f14c4c
-        # palette-10 = 23d18b
-        # palette-11 = f5f543
-        # palette-12 = 3b8eea
-        # palette-13 = d670d6
-        # palette-14 = 29b8db
-        # palette-15 = ffffff
-
-        # ── Cursor ───────────────────────────────────────────────────────
-        # Cursor shape: block, underline, bar
-        # cursor-style = block
-
-        # Enable cursor blinking.
-        # cursor-blink = false
-
-        # ── Behavior ─────────────────────────────────────────────────────
-        # Treat Option key as Alt (sends ESC prefix).
-        # option-as-alt = true
-
-        # Maximum number of scrollback lines to keep.
-        # scrollback-limit = 10000
-
-        # Tab stop width in columns.
-        # tab-width = 8
-
-        # Bell mode: audible, visual, none
-        # bell = audible
-
-        # ── Keybindings ──────────────────────────────────────────────────
-        # Format: keybind = modifiers+key=action
-        # Modifiers: cmd, shift, ctrl, alt (combinable with +)
-        # Setting any keybind replaces ALL defaults. To keep defaults,
-        # list them explicitly.
-        #
-        # Available actions:
-        #   new_tab, close_tab, previous_tab, next_tab,
-        #   copy, paste, search,
-        #   reset_font_size, increase_font_size, decrease_font_size
-        #
-        # keybind = cmd+t=new_tab
-        # keybind = cmd+w=close_tab
-        # keybind = cmd+shift+left=previous_tab
-        # keybind = cmd+shift+right=next_tab
-        # keybind = cmd+c=copy
-        # keybind = cmd+v=paste
-        # keybind = cmd+f=search
-        # keybind = cmd+0=reset_font_size
-        # keybind = cmd++=increase_font_size
-        # keybind = cmd+-=decrease_font_size
-
-        # ── File Include ─────────────────────────────────────────────────
-        # Include another config file. Prefix path with ? to make it optional
-        # (no error if the file doesn't exist). Relative paths are resolved
-        # against this file's directory.
-        # config-file = ?local.config
-
-        # ── Debug ────────────────────────────────────────────────────────
-        # Show frame time metrics overlay.
-        # debug-metrics = false
-        """
+        fatalError("DefaultConfig.txt is missing from the bundle and source directory.")
     }
 
     /// Write the default sample config to the XDG config path if no config files exist.
@@ -207,15 +109,30 @@ final class ConfigLoader {
 
         // Use the first path (XDG)
         guard let target = paths.first else { return }
-        let dir = target.deletingLastPathComponent()
+        Self.ensureDefaultConfigExists(at: target)
+    }
 
-        do {
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            try Self.generateDefaultConfig().write(to: target, atomically: true, encoding: .utf8)
-            print("[config] generated default config at \(target.path)")
-        } catch {
-            print("[config] warning: could not generate default config: \(error)")
+    /// Ensure the default config file exists at the given URL, generating it if needed.
+    static func ensureDefaultConfigExists(at url: URL) {
+        if !FileManager.default.fileExists(atPath: url.path) {
+            let dir = url.deletingLastPathComponent()
+            do {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                try generateDefaultConfig().write(to: url, atomically: true, encoding: .utf8)
+                print("[config] generated default config at \(url.path)")
+            } catch {
+                print("[config] warning: could not generate default config: \(error)")
+            }
         }
+    }
+
+    /// Open the default config file with TextEdit, generating it if needed.
+    static func openDefaultConfigFile() {
+        let paths = configFilePaths()
+        guard let target = paths.first else { return }
+        ensureDefaultConfigExists(at: target)
+        guard let textEditURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.TextEdit") else { return }
+        NSWorkspace.shared.open([target], withApplicationAt: textEditURL, configuration: NSWorkspace.OpenConfiguration())
     }
 
     // MARK: - Private
