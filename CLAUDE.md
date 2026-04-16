@@ -58,6 +58,10 @@ struct MyTests { ... }
 
 Note: `--no-parallel` only controls process-level parallelism (how many test runner processes are spawned), NOT Swift Testing's internal concurrency. The `.serialized` trait is the only way to serialize tests within a process.
 
+## SwiftUI Identity
+
+- **Never use array indices as `ForEach` `.id()` when the collection can be filtered or reordered.** Using a plain index (`0, 1, 2…`) causes SwiftUI to reuse views by position rather than by model object. When the underlying data changes (e.g. filtering a search result), the UI can end up displaying stale content even though the data is correct. Always use a stable, unique model identifier such as `session.id` for both the `ForEach` `id` parameter and any `ScrollViewReader.scrollTo` calls.
+
 ## Actor Pitfalls
 
 - `deinit` is nonisolated. Accessing actor-isolated stored properties from `deinit` will deadlock. Use `nonisolated(unsafe)` for properties that must be read/cancelled in `deinit` (e.g. `DispatchSource`, `Task`).
