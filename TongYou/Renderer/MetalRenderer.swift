@@ -45,9 +45,9 @@ final class MetalRenderer {
     // These counters start at swapChainCount and decrement once per frame until 0.
     private var instanceRebuildCounter = swapChainCount
     private var uniformsDirtyCounter = swapChainCount
-    // Tracks whether text content (glyphs) changed vs cursor-blink-only.
-    // Set to swapChainCount by setContent/markDirty/resize; untouched by markCursorDirty.
-    // When 0, fillTextInstanceBuffer can use a fast color-only patch instead of full rebuild.
+    // Tracks whether text content (glyphs) changed to trigger atlas eviction.
+    // Set by setContent/markDirty/resize; untouched by markCursorDirty.
+    // Decrements each rendered frame; while >0, atlas eviction runs after instance build.
     private(set) var textContentDirtyCounter = swapChainCount
     private var frameNumber: UInt64 = 0
 
@@ -72,6 +72,10 @@ final class MetalRenderer {
 
     /// Accumulated dirty region across setContent() calls, consumed by render().
     private(set) var pendingDirtyRegion = DirtyRegion.full
+
+    /// Per-frame-state dirty region tracking which rows each swap-chain buffer
+    /// still needs to rebuild. Enables partial updates without forcing 3 full rebuilds.
+    private var frameStateDirtyRegions: [DirtyRegion] = Array(repeating: .full, count: swapChainCount)
 
     /// Currently highlighted URL for underline rendering (set by MetalView on Cmd+hover).
     var highlightedURL: DetectedURL? {
@@ -144,6 +148,9 @@ final class MetalRenderer {
     private func markAllFramesDirty() {
         instanceRebuildCounter = Self.swapChainCount
         textContentDirtyCounter = Self.swapChainCount
+        for i in frameStateDirtyRegions.indices {
+            frameStateDirtyRegions[i] = .full
+        }
     }
 
     /// Whether the renderer has pending work (dirty buffers, uniforms, or region to update).
@@ -436,7 +443,15 @@ final class MetalRenderer {
             frameMetrics?.recordSnapshotCellCopyCount(snapshot.cells.count)
         }
 
-        markAllFramesDirty()
+        if pendingDirtyRegion.fullRebuild {
+            markAllFramesDirty()
+        } else {
+            instanceRebuildCounter = 1
+            textContentDirtyCounter = 1
+            for i in frameStateDirtyRegions.indices {
+                frameStateDirtyRegions[i].merge(snapshot.dirtyRegion)
+            }
+        }
     }
 
     // MARK: - Render
@@ -481,9 +496,17 @@ final class MetalRenderer {
         let currentPadding = padding
 
         let currentHighlightedURL = highlightedURL
-        let dirtyRegion = pendingDirtyRegion
-        if instanceRebuildCounter == 0 {
-            pendingDirtyRegion = .clean
+        var dirtyRegion: DirtyRegion
+        if rebuildInstances {
+            dirtyRegion = pendingDirtyRegion
+            dirtyRegion.merge(frameStateDirtyRegions[frameIndex])
+            frameStateDirtyRegions[frameIndex] = .clean
+            if instanceRebuildCounter == 0 {
+                pendingDirtyRegion = .clean
+            }
+        } else {
+            dirtyRegion = frameStateDirtyRegions[frameIndex]
+            frameStateDirtyRegions[frameIndex] = .clean
         }
 
         withUnsafeMutablePointer(to: &frameStates[frameIndex]) { frame in
@@ -495,8 +518,7 @@ final class MetalRenderer {
                                      dirtyRegion: dirtyRegion, searchLineMap: searchMap)
                 fillUnderlineInstanceBuffer(frame: frame, grid: currentGrid, snapshot: snapshot, url: currentHighlightedURL)
                 fillTextInstanceBuffer(frame: frame, grid: currentGrid, snapshot: snapshot,
-                                       dirtyRegion: dirtyRegion, contentChanged: textContentDirty,
-                                       searchLineMap: searchMap)
+                                       dirtyRegion: dirtyRegion, searchLineMap: searchMap)
                 if textContentDirty {
                     glyphAtlas.evictIfNeeded(frameNumber: frameNumber, fontSystem: fontSystem)
                     emojiAtlas.evictIfNeeded(frameNumber: frameNumber, fontSystem: fontSystem)
@@ -1066,7 +1088,7 @@ final class MetalRenderer {
 
     private func fillTextInstanceBuffer(
         frame: UnsafeMutablePointer<FrameState>, grid: GridSize,
-        snapshot: ScreenSnapshot?, dirtyRegion: DirtyRegion, contentChanged: Bool,
+        snapshot: ScreenSnapshot?, dirtyRegion: DirtyRegion,
         searchLineMap: SearchLineMap
     ) {
         let cols = Int(grid.columns)
@@ -1079,8 +1101,8 @@ final class MetalRenderer {
             return
         }
 
-        // Fast path: content unchanged (e.g. cursor blink only) — patch colors in-place.
-        if !contentChanged, !dirtyRegion.fullRebuild,
+        // Fast path: no dirty rows need text rebuilding — patch colors in-place.
+        if !dirtyRegion.fullRebuild && !dirtyRegion.isDirty &&
            frame.pointee.textInstanceCount > 0 {
             patchTextInstanceColors(
                 frame: frame, snapshot: snapshot, dirtyRegion: dirtyRegion,
