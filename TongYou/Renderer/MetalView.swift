@@ -367,6 +367,12 @@ final class MetalView: NSView {
     /// Currently hovered URL (Cmd held + mouse over URL).
     private var hoveredURL: DetectedURL?
 
+    /// Returns true when the Option (Alt) key is held, forcing local text
+    /// selection even if the terminal program has enabled mouse tracking.
+    private func isAltForcingSelection(_ event: NSEvent) -> Bool {
+        event.modifierFlags.contains(.option)
+    }
+
     override func flagsChanged(with event: NSEvent) {
         let cmdHeld = event.modifierFlags.contains(.command)
         terminalController?.setCommandKeyHeld(cmdHeld)
@@ -381,6 +387,7 @@ final class MetalView: NSView {
     override func mouseDown(with event: NSEvent) {
         onFocused?()
         let inMouseMode = isMouseTrackingActive
+        let forceSelection = isAltForcingSelection(event)
 
         // Cmd+Click: open URL
         if event.modifierFlags.contains(.command) {
@@ -391,7 +398,7 @@ final class MetalView: NSView {
             }
         }
 
-        if inMouseMode {
+        if inMouseMode && !forceSelection {
             sendMouseEvent(event, action: .press, button: .left)
             return
         }
@@ -419,7 +426,7 @@ final class MetalView: NSView {
 
     override func mouseUp(with event: NSEvent) {
         stopDragAutoScrollTimer()
-        if isMouseTrackingActive {
+        if isMouseTrackingActive && !isAltForcingSelection(event) {
             sendMouseEvent(event, action: .release, button: .left)
         }
     }
@@ -458,7 +465,7 @@ final class MetalView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        if isMouseTrackingActive {
+        if isMouseTrackingActive && !isAltForcingSelection(event) {
             sendMouseEvent(event, action: .motion, button: .left)
         } else {
             let (col, unclampedRow) = gridPosition(for: event, clampRow: false)
