@@ -45,6 +45,7 @@ struct TerminalWindowView: View {
                     sessions: sessionManager.sessions,
                     activeSessionIndex: sessionManager.activeSessionIndex,
                     attachedSessionIDs: sessionManager.allAttachedSessionIDs,
+                    sessionUnreadCounts: notificationStore.unreadCountBySessionID,
                     themeForeground: configLoader.config.foreground,
                     themeBackground: configLoader.config.background,
                     onSelect: { index in
@@ -81,6 +82,7 @@ struct TerminalWindowView: View {
                     TabBarView(
                         tabs: sessionManager.tabs,
                         activeTabIndex: sessionManager.activeTabIndex,
+                        tabUnreadCounts: notificationStore.unreadCountByTabID,
                         onSelect: { index in
                             switchToTab(at: index)
                         },

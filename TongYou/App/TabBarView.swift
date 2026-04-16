@@ -8,6 +8,7 @@ struct TabBarView: View {
 
     let tabs: [TerminalTab]
     let activeTabIndex: Int
+    let tabUnreadCounts: [UUID: Int]
     let onSelect: (Int) -> Void
     let onClose: (Int) -> Void
     let onNew: () -> Void
@@ -62,6 +63,18 @@ struct TabBarView: View {
                 .truncationMode(.tail)
                 .foregroundStyle(isActive ? .primary : .secondary)
 
+            if let count = tabUnreadCounts[tab.id], count > 0 {
+                Text(Self.badgeText(for: count))
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(
+                        Capsule()
+                            .fill(Color(nsColor: .systemBlue))
+                    )
+            }
+
             Button {
                 onClose(index)
             } label: {
@@ -84,6 +97,12 @@ struct TabBarView: View {
         .onTapGesture {
             onSelect(index)
         }
+    }
+}
+
+extension TabBarView {
+    static func badgeText(for count: Int) -> String {
+        count > 9 ? "9+" : "\(count)"
     }
 }
 

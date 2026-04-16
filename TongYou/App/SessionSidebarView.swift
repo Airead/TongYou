@@ -12,6 +12,7 @@ struct SessionSidebarView: View {
     let sessions: [TerminalSession]
     let activeSessionIndex: Int
     let attachedSessionIDs: Set<UUID>
+    let sessionUnreadCounts: [UUID: Int]
     let themeForeground: RGBColor
     let themeBackground: RGBColor
     let onSelect: (Int) -> Void
@@ -116,15 +117,27 @@ struct SessionSidebarView: View {
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            Text("\(session.tabCount)")
-                .font(.system(size: 10))
-                .foregroundStyle(fgColor.opacity(0.3))
-                .padding(.horizontal, 4)
-                .padding(.vertical, 1)
-                .background(
-                    Capsule()
-                        .fill(fgColor.opacity(0.08))
-                )
+            if let count = sessionUnreadCounts[session.id], count > 0 {
+                Text(Self.badgeText(for: count))
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(
+                        Capsule()
+                            .fill(Color(nsColor: .systemBlue))
+                    )
+            } else {
+                Text("\(session.tabCount)")
+                    .font(.system(size: 10))
+                    .foregroundStyle(fgColor.opacity(0.3))
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(
+                        Capsule()
+                            .fill(fgColor.opacity(0.08))
+                    )
+            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
@@ -186,6 +199,12 @@ struct SessionSidebarView: View {
                 attachedSessionIDs: attachedSessionIDs,
                 onMove: onMoveSession
             ))
+    }
+}
+
+extension SessionSidebarView {
+    static func badgeText(for count: Int) -> String {
+        count > 9 ? "9+" : "\(count)"
     }
 }
 
