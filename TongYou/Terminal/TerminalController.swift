@@ -47,8 +47,6 @@ final class TerminalController: TerminalControlling {
 
     /// Debounce work item for coalescing rapid display-link wakeups.
     nonisolated(unsafe) private var displayLinkDebounceWork: DispatchWorkItem?
-    /// Frame coalescing window (~8 ms for 120 Hz).
-    private static let displayLinkInterval: TimeInterval = 8.0 / 1000.0
     private var lastURLGeneration: UInt64 = 0
     /// Whether the Command key is currently held — drives on-demand URL detection.
     private var commandKeyHeld = false
@@ -580,10 +578,7 @@ final class TerminalController: TerminalControlling {
             }
         }
         displayLinkDebounceWork = work
-        DispatchQueue.main.asyncAfter(
-            deadline: .now() + Self.displayLinkInterval,
-            execute: work
-        )
+        DispatchQueue.main.async(execute: work)
     }
 
     // MARK: - Title Debounce
