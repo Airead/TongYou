@@ -1130,16 +1130,61 @@ final class MetalRenderer {
             }
         } else {
             // Partial: only rebuild dirty rows
+            var needsFullCompact = false
             for row in dirtyRegion.dirtyRows {
                 guard row >= 0 && row < rows && row < backingRows else { continue }
+                let oldTextCount = stagedRowInstances[row].text.count
+                let oldEmojiCount = stagedRowInstances[row].emoji.count
                 stagedRowInstances[row] = rebuildTextRow(
                     row: row, cols: cols, snapshot: snapshot,
                     colorState: colorState, shaper: shaper, cellWidth: cellWidth
                 )
+                if stagedRowInstances[row].text.count != oldTextCount ||
+                    stagedRowInstances[row].emoji.count != oldEmojiCount {
+                    needsFullCompact = true
+                }
+            }
+
+            // Fast path: if dirty rows kept the same instance counts, patch in-place.
+            if !needsFullCompact,
+               frame.pointee.textInstanceCapacity > 0,
+               frame.pointee.emojiInstanceCapacity > 0 {
+                let textPtr = frame.pointee.textInstanceBuffer.contents()
+                    .bindMemory(to: CellTextInstance.self, capacity: frame.pointee.textInstanceCapacity)
+                let emojiPtr = frame.pointee.emojiInstanceBuffer.contents()
+                    .bindMemory(to: CellTextInstance.self, capacity: frame.pointee.emojiInstanceCapacity)
+
+                var textOffsets: [Int] = []
+                textOffsets.reserveCapacity(rows)
+                var offset = 0
+                for r in 0..<rows {
+                    textOffsets.append(offset)
+                    offset += stagedRowInstances[r].text.count
+                }
+                var emojiOffsets: [Int] = []
+                emojiOffsets.reserveCapacity(rows)
+                offset = 0
+                for r in 0..<rows {
+                    emojiOffsets.append(offset)
+                    offset += stagedRowInstances[r].emoji.count
+                }
+
+                for row in dirtyRegion.dirtyRows {
+                    guard row >= 0 && row < rows else { continue }
+                    let tOff = textOffsets[row]
+                    for (i, inst) in stagedRowInstances[row].text.enumerated() {
+                        textPtr[tOff + i] = inst
+                    }
+                    let eOff = emojiOffsets[row]
+                    for (i, inst) in stagedRowInstances[row].emoji.enumerated() {
+                        emojiPtr[eOff + i] = inst
+                    }
+                }
+                return
             }
         }
 
-        // Compact staged rows into GPU buffers
+        // Compact staged rows into GPU buffers (full compact path)
         let totalTextCount = stagedRowInstances.reduce(0) { $0 + $1.text.count }
         let totalEmojiCount = stagedRowInstances.reduce(0) { $0 + $1.emoji.count }
 
