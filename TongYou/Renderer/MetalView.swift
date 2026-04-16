@@ -636,7 +636,9 @@ final class MetalView: NSView {
                 self.setupIfNeeded()
                 self.startDisplayLink()
                 self.observeWindowActivation()
-                self.window?.makeFirstResponder(self)
+                if self.searchBar == nil {
+                    self.window?.makeFirstResponder(self)
+                }
                 if wasAlreadySetUp {
                     // Re-inserted after tab switch — force full redraw.
                     // setupIfNeeded already called updateDrawableSize above.

@@ -261,12 +261,16 @@ struct TerminalWindowView: View {
         return baseTitle
     }
 
-    private var shouldShowSidebar: Bool {
-        switch sidebarVisibility {
-        case .auto: sessionManager.sessionCount > 1 && !suppressAutoSidebar
+    internal static func shouldShowSidebar(visibility: SidebarVisibility, sessionCount: Int, suppressAutoSidebar: Bool) -> Bool {
+        switch visibility {
+        case .auto: sessionCount > 1 && !suppressAutoSidebar
         case .always: true
         case .never: false
         }
+    }
+
+    private var shouldShowSidebar: Bool {
+        Self.shouldShowSidebar(visibility: sidebarVisibility, sessionCount: sessionManager.sessionCount, suppressAutoSidebar: suppressAutoSidebar)
     }
 
     private var shouldShowTabBar: Bool {
@@ -330,15 +334,9 @@ struct TerminalWindowView: View {
     }
 
     private func toggleSidebar() {
+        let currentlyVisible = shouldShowSidebar
         suppressAutoSidebar = false
-        switch sidebarVisibility {
-        case .auto:
-            sidebarVisibility = sessionManager.sessionCount > 1 ? .never : .always
-        case .always:
-            sidebarVisibility = .never
-        case .never:
-            sidebarVisibility = .always
-        }
+        sidebarVisibility = currentlyVisible ? .never : .always
     }
 
     // MARK: - Tab Operations

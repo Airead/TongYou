@@ -84,7 +84,12 @@ struct SessionPickerView: View {
             return .handled
         }
         .onAppear {
-            isSearchFocused = true
+            // Defer focus to the next runloop tick so the overlay’s
+            // underlying NSResponder chain is fully established before
+            // AppKit evaluates first-responder eligibility.
+            DispatchQueue.main.async {
+                isSearchFocused = true
+            }
         }
     }
 

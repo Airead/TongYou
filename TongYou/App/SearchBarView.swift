@@ -50,6 +50,8 @@ final class SearchBarView: NSView {
         // Search field
         searchField.placeholderString = "Search..."
         searchField.font = .systemFont(ofSize: 13)
+        searchField.isEditable = true
+        searchField.isSelectable = true
         searchField.isBordered = true
         searchField.isBezeled = true
         searchField.bezelStyle = .roundedBezel
@@ -120,8 +122,13 @@ final class SearchBarView: NSView {
 
     /// Focus the search field and select all text.
     func activate() {
-        window?.makeFirstResponder(searchField)
-        searchField.selectText(nil)
+        // Defer to the next runloop tick so the view hierarchy and layout
+        // are fully established before AppKit evaluates first-responder eligibility.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.window?.makeFirstResponder(self.searchField)
+            self.searchField.selectText(nil)
+        }
     }
 
     /// Update the match count display.
