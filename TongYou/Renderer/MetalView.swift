@@ -46,6 +46,9 @@ final class MetalView: NSView {
     /// The pane ID this MetalView belongs to (set by TerminalPaneContainerView).
     var paneID: UUID?
 
+    /// Blue notification ring overlay (sublayer of the CAMetalLayer).
+    private let notificationRingLayer = CAShapeLayer()
+
     /// Callback for keybinding actions (forwarded to SessionManager via TerminalWindowView).
     var onTabAction: ((TabAction) -> Void)?
 
@@ -90,6 +93,12 @@ final class MetalView: NSView {
         layerContentsRedrawPolicy = .duringViewResize
 
         MetalViewRegistry.shared.register(self)
+
+        notificationRingLayer.fillColor = nil
+        notificationRingLayer.strokeColor = NSColor.systemBlue.cgColor
+        notificationRingLayer.lineWidth = 2
+        notificationRingLayer.opacity = 0
+        layer?.addSublayer(notificationRingLayer)
     }
 
     override func makeBackingLayer() -> CALayer {
@@ -894,7 +903,28 @@ final class MetalView: NSView {
         MainActor.assumeIsolated {
             super.setFrameSize(newSize)
             self.updateDrawableSize()
+            self.updateNotificationRingPath()
         }
+    }
+
+    func setNotificationRing(visible: Bool) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        notificationRingLayer.opacity = visible ? 1 : 0
+        CATransaction.commit()
+    }
+
+    private func updateNotificationRingPath() {
+        let inset: CGFloat = 2
+        let radius: CGFloat = 6
+        let rect = bounds.insetBy(dx: inset, dy: inset)
+        let path = CGPath(
+            roundedRect: rect,
+            cornerWidth: radius,
+            cornerHeight: radius,
+            transform: nil
+        )
+        notificationRingLayer.path = path
     }
 
     private func updateLayerBackground(_ bg: RGBColor) {

@@ -32,6 +32,8 @@ struct TerminalWindowView: View {
     /// "Modifying state during view update" warnings.
     @State private var viewStore = MetalViewStore()
 
+    @State private var notificationStore = NotificationStore.shared
+
     /// Loads config to derive the window background color.
     /// Each MetalView also has its own ConfigLoader for rendering.
     @State private var configLoader = ConfigLoader()
@@ -246,6 +248,16 @@ struct TerminalWindowView: View {
             sessionManager.updateFloatingPanesVisibilityForFocus(focusedPaneID: newID)
             if let paneID = newID {
                 sessionManager.notifyPaneFocused(paneID)
+            }
+            for (paneID, view) in viewStore.allViews {
+                let shouldShow = notificationStore.unreadPaneIDs.contains(paneID) && paneID != newID
+                view.setNotificationRing(visible: shouldShow)
+            }
+        }
+        .onChange(of: notificationStore.unreadPaneIDs) { _, newIDs in
+            for (paneID, view) in viewStore.allViews {
+                let shouldShow = newIDs.contains(paneID) && paneID != focusManager.focusedPaneID
+                view.setNotificationRing(visible: shouldShow)
             }
         }
     }
@@ -553,9 +565,14 @@ struct TerminalWindowView: View {
                 }
             }
         case .paneNotification(let paneID, let title, let body):
-            // Phase 1 placeholder; Phase 3+ will wire notification store and UI.
-            _ = (paneID, title, body)
-            break
+            guard let (sessionID, tabID) = sessionManager.paneOwnerIDs(paneID: paneID) else { break }
+            notificationStore.add(
+                sessionID: sessionID,
+                tabID: tabID,
+                paneID: paneID,
+                title: title,
+                body: body
+            )
         }
     }
 
@@ -904,6 +921,8 @@ private class ConfiguratorView: NSView {
 /// do not trigger "Modifying state during view update" warnings.
 final class MetalViewStore {
     private var views: [UUID: MetalView] = [:]
+
+    var allViews: [UUID: MetalView] { views }
 
     func view(for paneID: UUID) -> MetalView? {
         views[paneID]
