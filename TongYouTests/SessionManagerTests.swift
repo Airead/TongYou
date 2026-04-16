@@ -644,6 +644,40 @@ struct SessionManagerTests {
         #expect(mgr.activeSession?.isAnonymous == true)
     }
 
+    @Test func renamingAnonymousSessionMakesItPersistent() throws {
+        let tempDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: tempDir) }
+        let store = SessionStore(directory: tempDir)
+
+        let mgr = SessionManager(localSessionStore: store)
+        let id = mgr.createAnonymousSession()
+        mgr.renameSession(at: 0, to: "persistent")
+        #expect(mgr.sessions.first { $0.id == id }?.isAnonymous == false)
+        #expect(mgr.sessions.first { $0.id == id }?.name == "persistent")
+        mgr.flushPendingLocalSaves()
+
+        let mgr2 = SessionManager(localSessionStore: store)
+        mgr2.restoreLocalSessions()
+        #expect(mgr2.sessionCount == 1)
+        #expect(mgr2.sessions[0].name == "persistent")
+        #expect(mgr2.sessions[0].id == id)
+    }
+
+    @Test func renamingAnonymousSessionPreservesActiveIndex() throws {
+        let tempDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: tempDir) }
+        let store = SessionStore(directory: tempDir)
+
+        let mgr = SessionManager(localSessionStore: store)
+        let id1 = mgr.createSession(name: "s1")
+        let id2 = mgr.createAnonymousSession()
+        mgr.selectSession(at: 0)
+
+        mgr.renameSession(at: 1, to: "s2")
+        #expect(mgr.activeSession?.id == id1)
+        #expect(mgr.sessions.contains { $0.id == id2 && $0.name == "s2" && !$0.isAnonymous })
+    }
+
     @Test func anonymousSessionIsNotPersisted() throws {
         let tempDir = makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: tempDir) }

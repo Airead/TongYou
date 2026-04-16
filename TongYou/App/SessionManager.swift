@@ -358,16 +358,32 @@ final class SessionManager {
 
     func renameSession(at index: Int, to name: String) {
         guard sessions.indices.contains(index) else { return }
+        let sessionID = sessions[index].id
         let oldName = sessions[index].name
-        sessions[index].name = uniqueSessionName(name, for: sessions[index].id, excludingIndex: index)
+        let wasAnonymous = sessions[index].isAnonymous
+        let isLocal = sessions[index].source == .local
+        sessions[index].name = uniqueSessionName(name, for: sessionID, excludingIndex: index)
         guard sessions[index].name != oldName else { return }
+
+        if wasAnonymous {
+            sessions[index].isAnonymous = false
+        }
 
         if let serverSessionID = sessions[index].source.serverSessionID {
             remoteClient?.renameSession(SessionID(serverSessionID), name: sessions[index].name)
         }
 
-        if sessions[index].source == .local {
-            scheduleLocalSaveIfNeeded(sessionID: sessions[index].id)
+        if isLocal {
+            if wasAnonymous {
+                sessionSortOrder.append(sessionID)
+                saveSessionOrder()
+                let previousActiveID = activeSession?.id
+                applySessionOrder()
+                if let previousActiveID {
+                    activeSessionIndex = sessions.firstIndex(where: { $0.id == previousActiveID }) ?? activeSessionIndex
+                }
+            }
+            scheduleLocalSaveIfNeeded(sessionID: sessionID)
         }
     }
 
