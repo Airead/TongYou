@@ -60,7 +60,7 @@ final class GlyphAtlas {
 
     private let maxTextureSize: UInt32
 
-    init(device: MTLDevice, initialSize: UInt32 = 1024, maxTextureSize: UInt32 = 8192) {
+    init(device: MTLDevice, initialSize: UInt32 = 1024, maxTextureSize: UInt32 = 4096) {
         self.device = device
         self.maxTextureSize = maxTextureSize
         self.textureSize = initialSize
