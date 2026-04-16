@@ -12,7 +12,6 @@ struct SessionPickerView: View {
 
     @State private var searchText: String = ""
     @State private var selectedIndex: Int = 0
-    @FocusState private var isSearchFocused: Bool
 
     private var filteredSessions: [(offset: Int, element: TerminalSession)] {
         let indexed = Array(sessions.enumerated())
@@ -29,13 +28,12 @@ struct SessionPickerView: View {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
                     .font(.system(size: 12))
-                TextField("Search sessions...", text: $searchText)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 13))
-                    .focused($isSearchFocused)
-                    .onSubmit {
-                        confirmSelection()
-                    }
+                SearchTextField(
+                    text: $searchText,
+                    placeholder: "Search sessions...",
+                    onSubmit: { confirmSelection() }
+                )
+                .frame(maxWidth: .infinity, minHeight: 16)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
@@ -54,14 +52,16 @@ struct SessionPickerView: View {
                         LazyVStack(spacing: 0) {
                             ForEach(Array(filteredSessions.enumerated()), id: \.element.element.id) { pickerIndex, item in
                                 pickerRow(item.element, originalIndex: item.offset, pickerIndex: pickerIndex)
-                                    .id(pickerIndex)
+                                    .id(item.element.id)
                             }
                         }
                         .padding(.vertical, 4)
                     }
                     .frame(maxHeight: 240)
                     .onChange(of: selectedIndex) { _, newValue in
-                        proxy.scrollTo(newValue, anchor: .center)
+                        if filteredSessions.indices.contains(newValue) {
+                            proxy.scrollTo(filteredSessions[newValue].element.id, anchor: .center)
+                        }
                     }
                 }
             }
@@ -82,9 +82,6 @@ struct SessionPickerView: View {
         .onKeyPress(.escape) {
             onDismiss()
             return .handled
-        }
-        .onAppear {
-            isSearchFocused = true
         }
     }
 
@@ -166,5 +163,97 @@ struct SessionPickerView: View {
         let originalIndex = filteredSessions[selectedIndex].offset
         onSelect(originalIndex)
         onDismiss()
+    }
+}
+
+// MARK: - SearchTextField
+
+/// AppKit-backed search field that reports live text changes, including IME composition.
+private struct SearchTextField: NSViewRepresentable {
+    @Binding var text: String
+    let placeholder: String
+    let onSubmit: () -> Void
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = ActivatingTextField()
+        field.isBordered = false
+        field.isBezeled = false
+        field.backgroundColor = .clear
+        field.focusRingType = .none
+        field.font = .systemFont(ofSize: 13)
+        field.placeholderString = placeholder
+        field.stringValue = text
+        field.delegate = context.coordinator
+
+        // Capture live edits (including IME marked text) via the field editor.
+        NotificationCenter.default.addObserver(
+            context.coordinator,
+            selector: #selector(Coordinator.textDidChange(_:)),
+            name: NSText.didChangeNotification,
+            object: nil
+        )
+
+        field.onDidMoveToWindow = { [weak field] in
+            guard let field, field.window != nil else { return }
+            // Defer so AppKit finishes establishing the responder chain.
+            DispatchQueue.main.async {
+                field.window?.makeFirstResponder(field)
+            }
+        }
+
+        return field
+    }
+
+    func updateNSView(_ nsView: NSTextField, context: Context) {
+        if nsView.stringValue != text {
+            nsView.stringValue = text
+        }
+        nsView.placeholderString = placeholder
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text, onSubmit: onSubmit)
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        @Binding var text: String
+        let onSubmit: () -> Void
+
+        init(text: Binding<String>, onSubmit: @escaping () -> Void) {
+            self._text = text
+            self.onSubmit = onSubmit
+        }
+
+        @objc func textDidChange(_ notification: Notification) {
+            guard let textView = notification.object as? NSText else { return }
+            let newValue = String(textView.string)
+            if newValue != text {
+                text = newValue
+            }
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                onSubmit()
+                return true
+            }
+            if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+                // Escape is handled by the view's onKeyPress(.escape).
+                return false
+            }
+            return false
+        }
+    }
+}
+
+/// NSTextField subclass that triggers a callback when it is added to a window.
+private final class ActivatingTextField: NSTextField {
+    var onDidMoveToWindow: (() -> Void)?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil {
+            onDidMoveToWindow?()
+        }
     }
 }

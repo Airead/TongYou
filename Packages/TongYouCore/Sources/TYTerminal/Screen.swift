@@ -247,6 +247,11 @@ public final class Screen {
     /// Initialized to fullRebuild so the first frame renders everything.
     public private(set) var dirtyRegion = DirtyRegion(rowCount: 0, fullRebuild: true)
 
+    /// Mark the entire screen as dirty so the next snapshot is a full rebuild.
+    public func forceFullRedraw() {
+        dirtyRegion.markFull()
+    }
+
     private var cells: [Cell]
 
     /// Ring buffer base: logical row 0 maps to physical row `rowBase`.

@@ -218,20 +218,27 @@ final class SessionManager {
     // MARK: - Session Lifecycle
 
     @discardableResult
-    func createSession(name: String? = nil, initialWorkingDirectory: String? = nil) -> UUID {
+    func createSession(name: String? = nil, initialWorkingDirectory: String? = nil, isAnonymous: Bool = false) -> UUID {
         let baseName = name ?? nextAvailableName(prefix: "LSession")
-        var session = TerminalSession(name: baseName, initialWorkingDirectory: initialWorkingDirectory)
+        var session = TerminalSession(name: baseName, initialWorkingDirectory: initialWorkingDirectory, isAnonymous: isAnonymous)
         session.name = uniqueSessionName(baseName, for: session.id)
         let newSessionID = session.id
         sessions.append(session)
-        sessionSortOrder.append(newSessionID)
-        saveSessionOrder()
-        applySessionOrder()
+        if !isAnonymous {
+            sessionSortOrder.append(newSessionID)
+            saveSessionOrder()
+            applySessionOrder()
+            scheduleLocalSaveIfNeeded(sessionID: newSessionID)
+        }
         activeSessionIndex = sessions.firstIndex(where: { $0.id == newSessionID }) ?? sessions.count - 1
         attachedLocalSessionIDs.insert(newSessionID)
         rebuildAllAttachedSessionIDs()
-        scheduleLocalSave(sessionID: newSessionID)
         return newSessionID
+    }
+
+    @discardableResult
+    func createAnonymousSession(initialWorkingDirectory: String? = nil) -> UUID {
+        return createSession(name: "Draft", initialWorkingDirectory: initialWorkingDirectory, isAnonymous: true)
     }
 
     /// Close a session at the given index.
@@ -256,7 +263,9 @@ final class SessionManager {
             attachedLocalSessionIDs.remove(session.id)
             rebuildAllAttachedSessionIDs()
             cancelPendingLocalSave(sessionID: session.id)
-            localSessionStore.delete(sessionID: SessionID(session.id))
+            if !session.isAnonymous {
+                localSessionStore.delete(sessionID: SessionID(session.id))
+            }
         }
 
         sessions.remove(at: index)
@@ -358,7 +367,7 @@ final class SessionManager {
         }
 
         if sessions[index].source == .local {
-            scheduleLocalSave(sessionID: sessions[index].id)
+            scheduleLocalSaveIfNeeded(sessionID: sessions[index].id)
         }
     }
 
@@ -391,7 +400,7 @@ final class SessionManager {
                 _ = ensureLocalController(for: paneID)
             }
         }
-        scheduleLocalSave(sessionID: session.id)
+        scheduleLocalSaveIfNeeded(sessionID: session.id)
         return tab.id
     }
 
@@ -430,7 +439,7 @@ final class SessionManager {
             sessions[activeSessionIndex].activeTabIndex -= 1
         }
 
-        scheduleLocalSave(sessionID: session.id)
+        scheduleLocalSaveIfNeeded(sessionID: session.id)
         return true
     }
 
@@ -450,7 +459,7 @@ final class SessionManager {
         sessions[activeSessionIndex].activeTabIndex = clamped
         notifyServerTabSelected(clamped)
         if sessions[activeSessionIndex].source == .local {
-            scheduleLocalSave(sessionID: sessions[activeSessionIndex].id)
+            scheduleLocalSaveIfNeeded(sessionID: sessions[activeSessionIndex].id)
         }
     }
 
@@ -496,7 +505,7 @@ final class SessionManager {
         }
 
         if sessions[activeSessionIndex].source == .local {
-            scheduleLocalSave(sessionID: sessions[activeSessionIndex].id)
+            scheduleLocalSaveIfNeeded(sessionID: sessions[activeSessionIndex].id)
         }
     }
 
@@ -535,7 +544,7 @@ final class SessionManager {
         }
 
         if isLocal {
-            scheduleLocalSave(sessionID: sessionID)
+            scheduleLocalSaveIfNeeded(sessionID: sessionID)
         }
     }
 
@@ -567,7 +576,7 @@ final class SessionManager {
                 if attachedLocalSessionIDs.contains(session.id) {
                     _ = ensureLocalController(for: newPane.id)
                 }
-                scheduleLocalSave(sessionID: session.id)
+                scheduleLocalSaveIfNeeded(sessionID: session.id)
                 return true
             }
         }
@@ -599,7 +608,7 @@ final class SessionManager {
             stopAllControllers(for: paneID)
             if let newTree = sessions[activeSessionIndex].tabs[i].paneTree.removePane(id: paneID) {
                 sessions[activeSessionIndex].tabs[i].paneTree = newTree
-                scheduleLocalSave(sessionID: session.id)
+                scheduleLocalSaveIfNeeded(sessionID: session.id)
                 return newTree.firstPane.id
             } else {
                 closeTab(at: i)
@@ -616,7 +625,7 @@ final class SessionManager {
         guard sessions[activeSessionIndex].tabs.indices.contains(tabIdx) else { return }
         sessions[activeSessionIndex].tabs[tabIdx].paneTree = newTree
         if sessions[activeSessionIndex].source == .local {
-            scheduleLocalSave(sessionID: sessions[activeSessionIndex].id)
+            scheduleLocalSaveIfNeeded(sessionID: sessions[activeSessionIndex].id)
         }
     }
 
@@ -668,7 +677,7 @@ final class SessionManager {
         if attachedLocalSessionIDs.contains(session.id) {
             _ = ensureLocalController(for: pane.id)
         }
-        scheduleLocalSave(sessionID: session.id)
+        scheduleLocalSaveIfNeeded(sessionID: session.id)
         return pane.id
     }
 
@@ -722,7 +731,7 @@ final class SessionManager {
                     sessions[s].tabs[t].floatingPanes.remove(at: idx)
                     stopAllControllers(for: paneID)
                     if sessions[s].source == .local {
-                        scheduleLocalSave(sessionID: sessions[s].id)
+                        scheduleLocalSaveIfNeeded(sessionID: sessions[s].id)
                     }
                     return true
                 }
@@ -750,7 +759,7 @@ final class SessionManager {
         guard activeFloatingPanes[idx].zIndex < maxZ else { return }
         activeFloatingPanes[idx].zIndex = maxZ + 1
         if activeSession?.source == .local {
-            scheduleLocalSave(sessionID: activeSession!.id)
+            scheduleLocalSaveIfNeeded(sessionID: activeSession!.id)
         }
     }
 
@@ -770,7 +779,7 @@ final class SessionManager {
         activeFloatingPanes[idx].frame = frame
         activeFloatingPanes[idx].clampFrame()
         if activeSession?.source == .local {
-            scheduleLocalSave(sessionID: activeSession!.id)
+            scheduleLocalSaveIfNeeded(sessionID: activeSession!.id)
         }
     }
 
@@ -783,7 +792,7 @@ final class SessionManager {
             }
         }
         if changed, activeSession?.source == .local {
-            scheduleLocalSave(sessionID: activeSession!.id)
+            scheduleLocalSaveIfNeeded(sessionID: activeSession!.id)
         }
     }
 
@@ -800,7 +809,7 @@ final class SessionManager {
         guard let idx = activeFloatingPaneIndex(for: paneID) else { return }
         activeFloatingPanes[idx].isPinned.toggle()
         if activeSession?.source == .local {
-            scheduleLocalSave(sessionID: activeSession!.id)
+            scheduleLocalSaveIfNeeded(sessionID: activeSession!.id)
         }
     }
 
@@ -809,7 +818,7 @@ final class SessionManager {
         guard activeFloatingPanes[idx].title != title else { return }
         activeFloatingPanes[idx].title = title
         if activeSession?.source == .local {
-            scheduleLocalSave(sessionID: activeSession!.id)
+            scheduleLocalSaveIfNeeded(sessionID: activeSession!.id)
         }
     }
 
@@ -1361,6 +1370,11 @@ final class SessionManager {
         }
     }
 
+    private func scheduleLocalSaveIfNeeded(sessionID: UUID) {
+        guard let session = sessions.first(where: { $0.id == sessionID }), !session.isAnonymous else { return }
+        scheduleLocalSave(sessionID: sessionID)
+    }
+
     private func scheduleLocalSave(sessionID: UUID) {
         pendingLocalSavesLock.lock()
         pendingLocalSaves[sessionID]?.cancel()
@@ -1391,7 +1405,7 @@ final class SessionManager {
     }
 
     private func flushLocalSave(sessionID: UUID) {
-        guard let session = sessions.first(where: { $0.id == sessionID && $0.source == .local }) else {
+        guard let session = sessions.first(where: { $0.id == sessionID && $0.source == .local && !$0.isAnonymous }) else {
             localSessionStore.delete(sessionID: SessionID(sessionID))
             return
         }
@@ -1423,7 +1437,8 @@ final class SessionManager {
         moveSessionToBottomOfAttachedGroup(sessionID: sessionID)
         if let session = sessions.first(where: { $0.id == sessionID }) {
             for paneID in session.allPaneIDs {
-                _ = ensureLocalController(for: paneID)
+                let controller = ensureLocalController(for: paneID)
+                controller.forceFullRedraw()
             }
         }
     }
@@ -1579,6 +1594,7 @@ final class SessionManager {
         }
         if let active = activeController(for: paneID) as? TerminalController {
             active.resume()
+            active.forceFullRedraw()
         }
     }
 

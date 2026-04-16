@@ -23,6 +23,7 @@ struct TerminalWindowView: View {
     @State private var focusManager = FocusManager()
     @State private var windowBackgroundColor: NSColor = .black
     @State private var sidebarVisibility: SidebarVisibility = .auto
+    @State private var suppressAutoSidebar = true
     @State private var showingSessionPicker = false
     @State private var renamingSessionIndex: Int?
 
@@ -122,8 +123,15 @@ struct TerminalWindowView: View {
                         sessionManager.updateTitle(title, for: activeTab.id)
                     }
 
-                    let isRemoteSession = sessionManager.activeSession?.source.isRemote == true
-                    let paneFocusColor: Color = isRemoteSession ? .blue : .green
+                    let paneFocusColor: Color = {
+                        if sessionManager.activeSession?.source.isRemote == true {
+                            return .blue
+                        } else if sessionManager.activeSession?.isAnonymous == true {
+                            return .gray
+                        } else {
+                            return .green
+                        }
+                    }()
 
                     ZStack {
                         PaneSplitView(
@@ -222,9 +230,7 @@ struct TerminalWindowView: View {
         ))
         .onAppear {
             sessionManager.restoreLocalSessions()
-            if sessionManager.sessions.isEmpty {
-                sessionManager.createSession()
-            }
+            sessionManager.createAnonymousSession()
             focusActiveTabRootPane()
             loadWindowBackground()
             wireRemoteLayoutCallback()
@@ -248,18 +254,23 @@ struct TerminalWindowView: View {
         }
 
         if sessionManager.sessionCount > 1,
-           let sessionName = sessionManager.activeSession?.name {
+           let sessionName = sessionManager.activeSession?.name,
+           !(sessionManager.activeSession?.isAnonymous ?? false) {
             return "\(sessionName) — \(baseTitle)"
         }
         return baseTitle
     }
 
-    private var shouldShowSidebar: Bool {
-        switch sidebarVisibility {
-        case .auto: sessionManager.sessionCount > 1
+    internal static func shouldShowSidebar(visibility: SidebarVisibility, sessionCount: Int, suppressAutoSidebar: Bool) -> Bool {
+        switch visibility {
+        case .auto: sessionCount > 1 && !suppressAutoSidebar
         case .always: true
         case .never: false
         }
+    }
+
+    private var shouldShowSidebar: Bool {
+        Self.shouldShowSidebar(visibility: sidebarVisibility, sessionCount: sessionManager.sessionCount, suppressAutoSidebar: suppressAutoSidebar)
     }
 
     private var shouldShowTabBar: Bool {
@@ -275,10 +286,16 @@ struct TerminalWindowView: View {
     private func createNewSession() {
         let cwd: String? = focusedPaneCWD
         sessionManager.createSession(initialWorkingDirectory: cwd)
+        suppressAutoSidebar = false
         focusActiveTabRootPane()
     }
 
-    private func closeSession(at index: Int) {
+    private func closeSession(at index: Int, pickNext: Bool = false) {
+        let wasAnonymous = sessionManager.sessions.indices.contains(index)
+            ? sessionManager.sessions[index].isAnonymous
+            : false
+        let wasOnlyAttached = sessionManager.allAttachedSessionIDs.count == 1
+
         let paneIDs = sessionManager.closeSession(at: index)
         for paneID in paneIDs {
             viewStore.tearDown(for: paneID)
@@ -287,25 +304,39 @@ struct TerminalWindowView: View {
 
         if sessionManager.sessions.isEmpty {
             NSApp.keyWindow?.close()
+            return
+        }
+
+        if pickNext {
+            if wasAnonymous && wasOnlyAttached {
+                NSApp.keyWindow?.close()
+                return
+            }
+            pickNextSession()
+        }
+
+        focusActiveTabRootPane()
+    }
+
+    /// Select the first attached session, or fall back to the first session overall.
+    private func pickNextSession() {
+        if let attachedIndex = sessionManager.sessions.firstIndex(where: { sessionManager.allAttachedSessionIDs.contains($0.id) }) {
+            sessionManager.selectSession(at: attachedIndex)
         } else {
-            focusActiveTabRootPane()
+            sessionManager.selectSession(at: 0)
         }
     }
 
     private func switchToSession(at index: Int) {
         sessionManager.selectSession(at: index)
+        suppressAutoSidebar = false
         restoreTabFocusedPane()
     }
 
     private func toggleSidebar() {
-        switch sidebarVisibility {
-        case .auto:
-            sidebarVisibility = sessionManager.sessionCount > 1 ? .never : .always
-        case .always:
-            sidebarVisibility = .never
-        case .never:
-            sidebarVisibility = .always
-        }
+        let currentlyVisible = shouldShowSidebar
+        suppressAutoSidebar = false
+        sidebarVisibility = currentlyVisible ? .never : .always
     }
 
     // MARK: - Tab Operations
@@ -338,7 +369,7 @@ struct TerminalWindowView: View {
         sessionManager.closeTab(at: index)
 
         if sessionManager.tabCount == 0 {
-            closeSession(at: sessionManager.activeSessionIndex)
+            closeSession(at: sessionManager.activeSessionIndex, pickNext: true)
         } else {
             focusActiveTabRootPane()
         }
@@ -386,8 +417,7 @@ struct TerminalWindowView: View {
         if let siblingID = sessionManager.closePane(id: paneID) {
             focusNextPane(fallback: siblingID)
         } else if sessionManager.tabCount == 0 {
-            // Last pane in last tab — close the session.
-            closeSession(at: sessionManager.activeSessionIndex)
+            closeSession(at: sessionManager.activeSessionIndex, pickNext: true)
         } else if let activeTab = sessionManager.activeTab {
             focusManager.focusPane(id: activeTab.paneTree.firstPane.id)
         }
@@ -590,6 +620,7 @@ struct TerminalWindowView: View {
     // MARK: - Remote Session
 
     private func showSessionPicker() {
+        suppressAutoSidebar = false
         showingSessionPicker = true
     }
 
@@ -604,6 +635,7 @@ struct TerminalWindowView: View {
     }
 
     private func ensureSidebarVisible() {
+        suppressAutoSidebar = false
         if sidebarVisibility == .never {
             sidebarVisibility = .auto
         }
@@ -635,15 +667,20 @@ struct TerminalWindowView: View {
                 }
             }
         }
+        pickNextSession()
+        suppressAutoSidebar = false
+        focusActiveTabRootPane()
     }
 
     /// Detach the currently active session (Shift+Cmd+K).
     private func detachActiveSession() {
+        suppressAutoSidebar = false
         detachSessionAtIndex(sessionManager.activeSessionIndex)
     }
 
     private func startRenamingActiveSession() {
         guard sessionManager.activeSession != nil else { return }
+        suppressAutoSidebar = false
         startRenamingSession(at: sessionManager.activeSessionIndex)
     }
 
@@ -658,6 +695,7 @@ struct TerminalWindowView: View {
     /// Double-click on a sidebar session: attach if it's detached.
     private func handleSidebarDoubleClick(_ index: Int) {
         guard sessionManager.isSessionDetached(at: index) else { return }
+        suppressAutoSidebar = false
         attachSessionAtIndex(index)
     }
 

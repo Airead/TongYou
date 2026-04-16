@@ -30,6 +30,9 @@ public struct TerminalSession: Identifiable, Sendable {
     /// Whether this session is local or backed by a remote tongyou server.
     public var source: SessionSource
 
+    /// Whether this session is anonymous and should not be persisted.
+    public var isAnonymous: Bool
+
     /// The currently active tab, if any.
     public var activeTab: TerminalTab? {
         guard tabs.indices.contains(activeTabIndex) else { return nil }
@@ -49,29 +52,32 @@ public struct TerminalSession: Identifiable, Sendable {
         tabs.contains(where: { $0.hasPane(id: id) })
     }
 
-    public init(name: String = "Session", initialWorkingDirectory: String? = nil, source: SessionSource = .local) {
+    public init(name: String = "Session", initialWorkingDirectory: String? = nil, source: SessionSource = .local, isAnonymous: Bool = false) {
         self.id = UUID()
         self.name = name
         self.source = source
+        self.isAnonymous = isAnonymous
         let tab = TerminalTab(initialWorkingDirectory: initialWorkingDirectory)
         self.tabs = [tab]
     }
 
     /// Create a local session with a specific ID (used for restoration from persistence).
-    public init(id: UUID, name: String, tabs: [TerminalTab], activeTabIndex: Int = 0, source: SessionSource = .local) {
+    public init(id: UUID, name: String, tabs: [TerminalTab], activeTabIndex: Int = 0, source: SessionSource = .local, isAnonymous: Bool = false) {
         self.id = id
         self.name = name
         self.source = source
         self.tabs = tabs.isEmpty ? [TerminalTab()] : tabs
         self.activeTabIndex = activeTabIndex
+        self.isAnonymous = isAnonymous
     }
 
     /// Create a remote session from server-provided info.
     /// Uses the server's session UUID as the local session ID for 1:1 mapping.
-    public init(remoteSessionID: UUID, name: String, tabs: [TerminalTab]) {
+    public init(remoteSessionID: UUID, name: String, tabs: [TerminalTab], isAnonymous: Bool = false) {
         self.id = remoteSessionID
         self.name = name
         self.source = .remote(serverSessionID: remoteSessionID)
         self.tabs = tabs.isEmpty ? [TerminalTab()] : tabs
+        self.isAnonymous = isAnonymous
     }
 }
