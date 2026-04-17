@@ -17,6 +17,8 @@ final class ClientTerminalController: TerminalControlling {
     private let screenReplica: ScreenReplica
 
     private(set) var selection: Selection?
+    /// Cached last successful replica snapshot for selection-only updates.
+    private var lastReplicaSnapshot: ScreenSnapshot?
     private(set) var detectedURLs: [DetectedURL] = []
     private var commandKeyHeld = false
     private var lastURLGeneration: UInt64 = 0
@@ -48,15 +50,25 @@ final class ClientTerminalController: TerminalControlling {
 
     func consumeSnapshot() -> ScreenSnapshot? {
         let sel = selection
-        guard let snapshot = screenReplica.consumeSnapshot(selection: sel) else { return nil }
-
-        if commandKeyHeld {
-            let gen = contentGeneration
-            if gen != lastURLGeneration {
-                detectedURLs = URLDetector.detect(in: snapshot)
-                lastURLGeneration = gen
+        if let snapshot = screenReplica.consumeSnapshot(selection: sel) {
+            lastReplicaSnapshot = snapshot
+            if commandKeyHeld {
+                let gen = contentGeneration
+                if gen != lastURLGeneration {
+                    detectedURLs = URLDetector.detect(in: snapshot)
+                    lastURLGeneration = gen
+                }
             }
+            return snapshot
         }
+        // Replica screen content unchanged, but controller state (e.g. selection) changed.
+        // Reuse the last snapshot with updated selection to avoid lost updates
+        // when server layoutUpdate consumes the dirty flag before selection renders.
+        guard var snapshot = lastReplicaSnapshot,
+              snapshot.selection != sel else { return nil }
+        snapshot.selection = sel
+        lastReplicaSnapshot = snapshot
+        _contentGeneration &+= 1
         return snapshot
     }
 

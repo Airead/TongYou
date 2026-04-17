@@ -56,9 +56,6 @@ struct FloatingPaneView: View {
         )
         .shadow(color: .black.opacity(0.5), radius: 8, x: 0, y: 4)
         .position(x: frame.midX, y: frame.midY)
-        .onTapGesture {
-            bringToFrontAndFocus()
-        }
         .onChange(of: floatingPane.frame) { _, _ in
             // Model caught up from server — drop local override.
             if dragStartFrame == nil {
@@ -232,6 +229,7 @@ struct FloatingPaneView: View {
     // MARK: - Helpers
 
     private func bringToFrontAndFocus() {
+        guard !isFocused else { return }
         onBringToFront(floatingPane.pane.id)
         focusManager.focusPane(id: floatingPane.pane.id)
     }
