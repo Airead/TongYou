@@ -320,6 +320,12 @@ final class TerminalController: TerminalControlling {
         return true
     }
 
+    func clearSelection() {
+        guard selection != nil else { return }
+        selection = nil
+        handleScreenDirty()
+    }
+
     // MARK: - URL Actions
 
     /// Notify that Command key state changed. When pressed, triggers immediate URL detection;

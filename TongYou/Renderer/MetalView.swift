@@ -37,6 +37,8 @@ final class MetalView: NSView {
     // nonisolated(unsafe) because deinit must invalidate without actor hop
     nonisolated(unsafe) private var dragAutoScrollTimer: Timer?
     /// Last known drag column (for auto-scroll timer updates).
+    private var pendingDragOrigin: (col: Int, row: Int, pixelLocation: NSPoint)?
+    private static let dragThresholdSquared: CGFloat = 9  // 3 pixels
     private var dragLastCol: Int = 0
     /// Last known unclamped drag row (for auto-scroll timer updates).
     private var dragLastUnclampedRow: Int = 0
@@ -455,19 +457,28 @@ final class MetalView: NSView {
 
         switch clickCount {
         case 2:
+            pendingDragOrigin = nil
             terminalController?.startSelection(col: col, row: row, mode: .word)
         case 3:
+            pendingDragOrigin = nil
             terminalController?.startSelection(col: col, row: row, mode: .line)
             clickCount = 0
         default:
-            terminalController?.startSelection(col: col, row: row, mode: .character)
+            // Single click: clear existing selection, defer selection creation to drag
+            terminalController?.clearSelection()
+            pendingDragOrigin = (col: col, row: row, pixelLocation: event.locationInWindow)
         }
     }
 
     override func mouseUp(with event: NSEvent) {
         stopDragAutoScrollTimer()
+        pendingDragOrigin = nil
         if isMouseTrackingActive && !isAltForcingSelection(event) {
             sendMouseEvent(event, action: .release, button: .left)
+        }
+        // Auto-copy selection to clipboard on mouse up
+        if let sel = terminalController?.selection, sel.start != sel.end {
+            terminalController?.copySelection()
         }
     }
 
@@ -508,6 +519,17 @@ final class MetalView: NSView {
         if isMouseTrackingActive && !isAltForcingSelection(event) {
             sendMouseEvent(event, action: .motion, button: .left)
         } else {
+            // Start selection on first drag if deferred from single click
+            if let origin = pendingDragOrigin {
+                let loc = event.locationInWindow
+                let dx = loc.x - origin.pixelLocation.x
+                let dy = loc.y - origin.pixelLocation.y
+                guard dx * dx + dy * dy >= Self.dragThresholdSquared else { return }
+                terminalController?.startSelection(
+                    col: origin.col, row: origin.row, mode: .character)
+                pendingDragOrigin = nil
+            }
+
             let (col, unclampedRow) = gridPosition(for: event, clampRow: false)
             let visibleRows = Int(renderer?.gridSize.rows ?? 1)
 

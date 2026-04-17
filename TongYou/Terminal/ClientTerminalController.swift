@@ -184,6 +184,14 @@ final class ClientTerminalController: TerminalControlling {
         return true
     }
 
+    func clearSelection() {
+        guard selection != nil else { return }
+        selection = nil
+        _contentGeneration &+= 1
+        screenReplica.markDirty()
+        onNeedsDisplay?()
+    }
+
     // MARK: - URL Detection
 
     func setCommandKeyHeld(_ held: Bool) {
