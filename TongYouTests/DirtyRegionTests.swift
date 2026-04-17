@@ -319,14 +319,16 @@ import TYTerminal
         #expect(screen.dirtyRegion.lineRange == 5..<7)
     }
 
-    @Test func lineFeedAtBottomMarksAllRows() {
+    @Test func lineFeedAtBottomMarksScrollDelta() {
         let screen = Screen(columns: 80, rows: 24)
         screen.setCursorPos(row: 23, col: 0)
         _ = screen.consumeDirtyRegion()
         screen.lineFeed()
-        // At scroll bottom, triggers scrollRegionUp → marks all rows dirty
+        // At scroll bottom, triggers scrollRegionUp → markScroll records delta
+        // and only marks the shifted cursor row (22) and newly revealed bottom row (23).
         #expect(!screen.dirtyRegion.fullRebuild)
-        #expect(screen.dirtyRegion.lineRange == 0..<24)
+        #expect(screen.dirtyRegion.scrollDelta == 1)
+        #expect(screen.dirtyRegion.lineRange == 22..<24)
     }
 
     @Test func setCursorVisibleMarksCursorRow() {
