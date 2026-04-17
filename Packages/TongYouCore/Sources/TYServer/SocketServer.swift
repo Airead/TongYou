@@ -258,7 +258,7 @@ public final class SocketServer: @unchecked Sendable {
             let hasScrollDelta = snapshot.dirtyRegion.scrollDelta > 0
             let dirtyCount = snapshot.isPartial ? snapshot.dirtyRows.count : snapshot.dirtyRegion.dirtyRows.count
             let mostlyDirty = !hasScrollDelta && dirtyCount >= snapshot.rows * 4 / 5
-            if snapshot.dirtyRegion.fullRebuild || mostlyDirty {
+            if !snapshot.isPartial && (snapshot.dirtyRegion.fullRebuild || mostlyDirty) {
                 message = .screenFull(key.sessionID, key.paneID, snapshot, mouseTrackingMode: mouseMode)
             } else {
                 var diff = ScreenDiff(from: snapshot)
