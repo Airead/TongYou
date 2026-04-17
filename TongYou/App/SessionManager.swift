@@ -386,7 +386,7 @@ final class SessionManager {
         }
 
         if isLocal {
-            if wasAnonymous {
+            if wasAnonymous, !sessionSortOrder.contains(sessionID) {
                 sessionSortOrder.append(sessionID)
                 saveSessionOrder()
                 let previousActiveID = activeSession?.id
@@ -1252,7 +1252,9 @@ final class SessionManager {
         )
         session.name = uniqueSessionName(info.name, for: session.id)
         sessions.append(session)
-        sessionSortOrder.append(session.id)
+        if !sessionSortOrder.contains(session.id) {
+            sessionSortOrder.append(session.id)
+        }
         saveSessionOrder()
         applySessionOrder()
     }
@@ -1328,7 +1330,7 @@ final class SessionManager {
 
     private func applySessionOrder() {
         guard !sessionSortOrder.isEmpty else { return }
-        let orderMap = Dictionary(uniqueKeysWithValues: sessionSortOrder.enumerated().map { ($1, $0) })
+        let orderMap = Dictionary(sessionSortOrder.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
         let unknownOffset = sessionSortOrder.count
         let sorted = sessions.sorted {
             let o0 = orderMap[$0.id] ?? unknownOffset
