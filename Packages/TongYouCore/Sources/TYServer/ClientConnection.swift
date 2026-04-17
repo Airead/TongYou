@@ -198,7 +198,8 @@ extension ScreenDiff {
             cursorVisible: snapshot.cursorVisible,
             cursorShape: snapshot.cursorShape,
             scrollbackCount: snapshot.scrollbackCount,
-            viewportOffset: snapshot.viewportOffset
+            viewportOffset: snapshot.viewportOffset,
+            scrollDelta: Int16(clamping: snapshot.dirtyRegion.scrollDelta)
         )
     }
 }

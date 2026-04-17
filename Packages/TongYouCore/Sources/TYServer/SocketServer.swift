@@ -251,10 +251,15 @@ public final class SocketServer: @unchecked Sendable {
 
             let message: ServerMessage
             // Use full snapshot when the screen was fully rebuilt OR when
-            // ≥80% of rows are dirty — at that point a diff carries more
-            // overhead (row index array) than a plain full snapshot.
+            // ≥80% of rows are dirty (without scroll optimization) — at that
+            // point a diff carries more overhead than a plain full snapshot.
+            // When scrollDelta is set, the dirty rows are only the newly
+            // revealed ones, so skip the mostlyDirty heuristic.
+            let hasScrollDelta = snapshot.dirtyRegion.scrollDelta > 0
             let mostlyDirty: Bool
-            if let range = snapshot.dirtyRegion.lineRange {
+            if hasScrollDelta {
+                mostlyDirty = false
+            } else if let range = snapshot.dirtyRegion.lineRange {
                 mostlyDirty = range.count >= snapshot.rows * 4 / 5
             } else {
                 mostlyDirty = false
@@ -269,7 +274,8 @@ public final class SocketServer: @unchecked Sendable {
                     cursorCol: diff.cursorCol, cursorRow: diff.cursorRow,
                     cursorVisible: diff.cursorVisible, cursorShape: diff.cursorShape,
                     scrollbackCount: diff.scrollbackCount, viewportOffset: diff.viewportOffset,
-                    mouseTrackingMode: mouseMode
+                    mouseTrackingMode: mouseMode,
+                    scrollDelta: diff.scrollDelta
                 )
                 message = .screenDiff(key.sessionID, key.paneID, diff)
             }

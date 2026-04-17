@@ -299,6 +299,7 @@ public struct BinaryDecoder: Sendable {
         let scrollbackCount = Int(try readUInt32())
         let viewportOffset = Int(try readUInt32())
         let mouseTrackingMode = try readUInt8()
+        let scrollDelta = Int16(bitPattern: try readUInt16())
         return ScreenDiff(
             dirtyRows: dirtyRows,
             cellData: cellData,
@@ -309,7 +310,8 @@ public struct BinaryDecoder: Sendable {
             cursorShape: cursor.shape,
             scrollbackCount: scrollbackCount,
             viewportOffset: viewportOffset,
-            mouseTrackingMode: mouseTrackingMode
+            mouseTrackingMode: mouseTrackingMode,
+            scrollDelta: scrollDelta
         )
     }
 

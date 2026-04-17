@@ -196,6 +196,7 @@ public struct BinaryEncoder: Sendable {
         writeUInt32(UInt32(diff.scrollbackCount))
         writeUInt32(UInt32(diff.viewportOffset))
         writeUInt8(diff.mouseTrackingMode)
+        writeUInt16(UInt16(bitPattern: diff.scrollDelta))
     }
 
     /// Encode a `ScreenSnapshot` into the buffer.
