@@ -69,7 +69,7 @@ struct EmojiRenderingOutputTests {
             mipmapped: false
         )
         textureDescriptor.usage = [.renderTarget, .shaderRead]
-        guard let outputTexture = device.makeTexture(descriptor: textureDescriptor) else {
+        guard device.makeTexture(descriptor: textureDescriptor) != nil else {
             Issue.record("Failed to create output texture")
             return
         }
@@ -87,24 +87,24 @@ struct EmojiRenderingOutputTests {
         // 保存诊断信息
         let infoPath = outputDir + "/render-info.txt"
         var info = ""
-        info += "Emoji Rendering Test\\n"
-        info += "==================\\n\\n"
-        info += "Screen: 40x10\\n"
-        info += "Texture: 800x400\\n"
-        info += "Font: \\(fontSystem.pointSize)pt @ \\(fontSystem.scaleFactor)x\\n"
-        info += "Cell size: \\(fontSystem.cellSize.width)x\\(fontSystem.cellSize.height)\\n\\n"
-        info += "Test cases:\\n"
+        info += "Emoji Rendering Test\n"
+        info += "==================\n\n"
+        info += "Screen: 40x10\n"
+        info += "Texture: 800x400\n"
+        info += "Font: \(fontSystem.pointSize)pt @ \(fontSystem.scaleFactor)x\n"
+        info += "Cell size: \(fontSystem.cellSize.width)x\(fontSystem.cellSize.height)\n\n"
+        info += "Test cases:\n"
         for (text, row) in testCases {
-            info += "  Row \\(row): \\(text)\\n"
+            info += "  Row \(row): \(text)\n"
         }
-        info += "\\n"
-        info += "Atlas Info:\\n"
-        info += "  GlyphAtlas entries: \\(renderer.glyphAtlas.activeEntryCount)\\n"
-        info += "  ColorEmojiAtlas entries: \\(renderer.emojiAtlas.activeEntryCount)\\n"
+        info += "\n"
+        info += "Atlas Info:\n"
+        info += "  GlyphAtlas entries: \(renderer.glyphAtlas.activeEntryCount)\n"
+        info += "  ColorEmojiAtlas entries: \(renderer.emojiAtlas.activeEntryCount)\n"
 
         try? info.write(toFile: infoPath, atomically: true, encoding: .utf8)
 
-        print("✅ Render info saved to: \\(infoPath)")
+        print("✅ Render info saved to: \(infoPath)")
     }
 
     /// 测试ColorEmojiAtlas直接输出
@@ -139,8 +139,8 @@ struct EmojiRenderingOutputTests {
 
         // 生成报告
         let reportPath = outputDir + "/atlas-report.txt"
-        var report = "ColorEmojiAtlas Rasterization Report\\n"
-        report += "=================================\\n\\n"
+        var report = "ColorEmojiAtlas Rasterization Report\n"
+        report += "=================================\n\n"
 
         for (emoji, info) in results {
             if let glyphInfo = info {
@@ -161,14 +161,14 @@ struct EmojiRenderingOutputTests {
 
         try? report.write(toFile: reportPath, atomically: true, encoding: .utf8)
 
-        print("✅ Atlas report saved to: \\(reportPath)")
+        print("✅ Atlas report saved to: \(reportPath)")
 
         // 验证所有emoji都被成功光栅化
         for (emoji, info) in results {
-            #expect(info != nil, "Emoji \\(emoji) should be rasterized")
+            #expect(info != nil, "Emoji \(emoji) should be rasterized")
             if let glyphInfo = info {
-                #expect(glyphInfo.width > 0, "Emoji \\(emoji) should have non-zero width")
-                #expect(glyphInfo.height > 0, "Emoji \\(emoji) should have non-zero height")
+                #expect(glyphInfo.width > 0, "Emoji \(emoji) should have non-zero width")
+                #expect(glyphInfo.height > 0, "Emoji \(emoji) should have non-zero height")
             }
         }
     }

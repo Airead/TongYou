@@ -54,7 +54,7 @@ struct EmojiRenderingSnapshotTests {
             mipmapped: false
         )
         descriptor.usage = [.renderTarget, .shaderRead]
-        guard let texture = device.makeTexture(descriptor: descriptor) else {
+        guard device.makeTexture(descriptor: descriptor) != nil else {
             Issue.record("Failed to create texture")
             return
         }
@@ -168,15 +168,21 @@ struct EmojiRenderingSnapshotTests {
             throw NSError(domain: "Snapshot", code: 3, userInfo: [NSLocalizedDescriptionKey: "Unsupported pixel format: \(texture.pixelFormat)"])
         }
 
-        guard let context = CGContext(
-            data: UnsafeMutableRawPointer(mutating: pixelData),
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: bytesPerRow,
-            space: colorSpace,
-            bitmapInfo: bitmapInfo
-        ), let cgImage = context.makeImage() else {
+        var mutablePixelData = pixelData
+        let cgImage: CGImage? = mutablePixelData.withUnsafeMutableBytes { ptr -> CGImage? in
+            let context = CGContext(
+                data: ptr.baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: bytesPerRow,
+                space: colorSpace,
+                bitmapInfo: bitmapInfo
+            )
+            return context?.makeImage()
+        }
+
+        guard let cgImage else {
             throw NSError(domain: "Snapshot", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to create CGImage"])
         }
 
