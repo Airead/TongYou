@@ -49,6 +49,10 @@ final class SessionManager {
 
     private var overlayStacks: [UUID: [TerminalController]] = [:]
 
+    /// Floating panes whose process has exited but are kept open for reading.
+    /// ESC closes them.
+    private(set) var exitedFloatingPanes: Set<UUID> = []
+
     /// Local session persistence store.
     private let localSessionStore: SessionStore
 
@@ -261,6 +265,9 @@ final class SessionManager {
         let session = sessions[index]
         let paneIDs = session.allPaneIDs
 
+        // Clean up exited floating pane tracking.
+        for paneID in paneIDs { exitedFloatingPanes.remove(paneID) }
+
         // Clean up remote controllers if this is a remote session.
         if let serverSessionID = session.source.serverSessionID {
             teardownRemotePanes(Set(paneIDs), sessionID: session.id)
@@ -453,6 +460,7 @@ final class SessionManager {
 
         let removedPaneIDs = sessions[activeSessionIndex].tabs[index].allPaneIDsIncludingFloating
         for paneID in removedPaneIDs {
+            exitedFloatingPanes.remove(paneID)
             stopAllControllers(for: paneID)
         }
 
@@ -734,11 +742,17 @@ final class SessionManager {
         return candidate
     }
 
+    /// Mark a floating pane as exited (process finished). ESC will close it.
+    func markFloatingPaneExited(_ paneID: UUID) {
+        exitedFloatingPanes.insert(paneID)
+    }
+
     /// Close a floating pane by its pane ID. Returns true if found and removed.
     /// For remote sessions, sends the request to the server — local state
     /// updates when the server broadcasts a layoutUpdate.
     @discardableResult
     func closeFloatingPane(paneID: UUID) -> Bool {
+        exitedFloatingPanes.remove(paneID)
         if let serverPaneUUID = serverPaneUUID(for: paneID) {
             if let session = sessions.first(where: {
                 $0.source.isRemote && $0.allPaneIDs.contains(paneID)
@@ -904,7 +918,7 @@ final class SessionManager {
              .focusPane, .paneExited, .growPane, .shrinkPane,
              .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane,
              .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession,
-             .renameSession, .runInPlace(_, _), .runCommand(_, _),
+             .renameSession, .runInPlace(_, _), .runLocalCommand(_, _, _), .runRemoteCommand(_, _, _),
              .paneNotification:
             // Pane/remote actions are handled by TerminalWindowView.
             return false
@@ -966,6 +980,9 @@ final class SessionManager {
     /// Called on explicit disconnect and before wiring a new connection
     /// so stale state from a previous connection doesn't block re-attach.
     private func cleanupRemoteState() {
+        // Clean up exited floating pane tracking for remote panes.
+        for paneID in remoteControllers.keys { exitedFloatingPanes.remove(paneID) }
+
         for controller in remoteControllers.values {
             controller.stop()
         }
@@ -1582,6 +1599,18 @@ final class SessionManager {
     }
 
     func runInPlace(at paneID: UUID, command: String, arguments: [String] = []) async {
+        // Remote pane: forward to daemon.
+        if let remote = remoteControllers[paneID] {
+            remoteClient?.runInPlace(
+                sessionID: remote.sessionID,
+                paneID: remote.paneID,
+                command: command,
+                arguments: arguments
+            )
+            return
+        }
+
+        // Local pane: overlay stack.
         guard let active = activeController(for: paneID) as? TerminalController else { return }
         active.suspend()
 
@@ -1599,7 +1628,11 @@ final class SessionManager {
         overlayStacks[paneID, default: []].append(controller)
     }
 
-    func runCommand(at paneID: UUID, command: String, arguments: [String] = []) async {
+    func runLocalCommand(at paneID: UUID, command: String, arguments: [String] = [], options: CommandOptions = .empty) async {
+        if options.showInPane {
+            await runCommandInFloatingPane(at: paneID, command: command, arguments: arguments)
+            return
+        }
         guard let active = activeController(for: paneID) as? TerminalController else { return }
         let resolvedCommand = await resolveCommandPath(command, workingDirectory: active.currentWorkingDirectory)
         let wrapped = wrapCommandInLoginShell(resolvedCommand, arguments: arguments)
@@ -1613,6 +1646,67 @@ final class SessionManager {
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try? process.run()
+    }
+
+    func runRemoteCommand(at paneID: UUID, command: String, arguments: [String] = [], options: CommandOptions = .empty) async {
+        if options.showInPane {
+            await runCommandInFloatingPane(at: paneID, command: command, arguments: arguments)
+            return
+        }
+        guard let remote = remoteControllers[paneID] else { return }
+        remoteClient?.runRemoteCommand(
+            sessionID: remote.sessionID,
+            paneID: remote.paneID,
+            command: command,
+            arguments: arguments
+        )
+    }
+
+    /// Run a command in a new floating pane. Output is visible; ESC closes after exit.
+    /// Automatically uses the remote or local path based on the active session.
+    private func runCommandInFloatingPane(at paneID: UUID, command: String, arguments: [String]) async {
+        guard sessions.indices.contains(activeSessionIndex) else { return }
+        let session = sessions[activeSessionIndex]
+
+        if let serverSessionID = session.source.serverSessionID {
+            guard let tabIDs = serverTabIDs[session.id],
+                  tabIDs.indices.contains(session.activeTabIndex) else { return }
+            remoteClient?.createFloatingPaneWithCommand(
+                sessionID: SessionID(serverSessionID),
+                tabID: tabIDs[session.activeTabIndex],
+                command: command,
+                arguments: arguments
+            )
+        } else {
+            guard let active = activeController(for: paneID) as? TerminalController else { return }
+            let cwd = active.currentWorkingDirectory
+            let resolvedCommand = await resolveCommandPath(command, workingDirectory: cwd)
+            let wrapped = wrapCommandInLoginShell(resolvedCommand, arguments: arguments)
+            createFloatingPaneWithCommand(workingDirectory: cwd, command: wrapped.command, arguments: wrapped.arguments)
+        }
+    }
+
+    /// Create a local floating pane that runs a command directly (no shell spawned first).
+    @discardableResult
+    private func createFloatingPaneWithCommand(workingDirectory: String?, command: String, arguments: [String]) -> UUID? {
+        guard sessions.indices.contains(activeSessionIndex),
+              sessions[activeSessionIndex].tabs.indices.contains(
+                  sessions[activeSessionIndex].activeTabIndex) else { return nil }
+
+        let session = sessions[activeSessionIndex]
+        let pane = TerminalPane(initialWorkingDirectory: workingDirectory)
+        let nextZ = (activeFloatingPanes.max(by: { $0.zIndex < $1.zIndex })?.zIndex ?? -1) + 1
+        let frame = nextFloatingPaneFrame()
+        var floating = FloatingPane(pane: pane, frame: frame, zIndex: nextZ)
+        floating.clampFrame()
+        activeFloatingPanes.append(floating)
+
+        let controller = TerminalController(columns: 80, rows: 24)
+        controller.start(workingDirectory: workingDirectory, command: command, arguments: arguments)
+        localControllers[pane.id] = controller
+
+        scheduleLocalSaveIfNeeded(sessionID: session.id)
+        return pane.id
     }
 
     func restoreFromInPlace(at paneID: UUID) {

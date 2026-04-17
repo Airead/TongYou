@@ -318,6 +318,9 @@ struct TerminalWindowView: View {
                 },
                 onUserInteraction: { paneID in
                     notificationStore.markRead(paneID: paneID)
+                },
+                isProcessExited: { paneID in
+                    sessionManager.exitedFloatingPanes.contains(paneID)
                 }
             )
         }
@@ -472,7 +475,8 @@ struct TerminalWindowView: View {
     private func removePane(id paneID: UUID) {
         // Check if this is a floating pane first.
         if sessionManager.activeTab?.floatingPanes.contains(where: { $0.pane.id == paneID }) == true {
-            closeFloatingPane(id: paneID)
+            // Keep the pane open so the user can read output; ESC will close it.
+            sessionManager.markFloatingPaneExited(paneID)
             return
         }
 
@@ -617,10 +621,16 @@ struct TerminalWindowView: View {
                     await sessionManager.runInPlace(at: paneID, command: command, arguments: arguments)
                 }
             }
-        case .runCommand(let command, let arguments):
+        case .runLocalCommand(let command, let arguments, let options):
             if let paneID = focusManager.focusedPaneID {
                 Task {
-                    await sessionManager.runCommand(at: paneID, command: command, arguments: arguments)
+                    await sessionManager.runLocalCommand(at: paneID, command: command, arguments: arguments, options: options)
+                }
+            }
+        case .runRemoteCommand(let command, let arguments, let options):
+            if let paneID = focusManager.focusedPaneID {
+                Task {
+                    await sessionManager.runRemoteCommand(at: paneID, command: command, arguments: arguments, options: options)
                 }
             }
         case .paneNotification(let paneID, let title, let body):

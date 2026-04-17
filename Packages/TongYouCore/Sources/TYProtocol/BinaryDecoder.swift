@@ -120,6 +120,15 @@ public struct BinaryDecoder: Sendable {
         return string
     }
 
+    /// Read a count-prefixed string array (UInt16 count + length-prefixed strings).
+    public mutating func readStringArray() throws -> [String] {
+        let count = Int(try readUInt16())
+        var result: [String] = []
+        result.reserveCapacity(count)
+        for _ in 0..<count { result.append(try readString()) }
+        return result
+    }
+
     /// Read a length-prefixed byte array (UInt32 length + bytes).
     public mutating func readBytes() throws -> [UInt8] {
         let length = Int(try readUInt32())
@@ -543,6 +552,27 @@ public struct BinaryDecoder: Sendable {
             let sessionID = try readSessionID()
             let paneID = try readPaneID()
             return .toggleFloatingPanePin(sessionID, paneID)
+
+        case .runInPlace:
+            let sessionID = try readSessionID()
+            let paneID = try readPaneID()
+            let command = try readString()
+            let arguments = try readStringArray()
+            return .runInPlace(sessionID, paneID, command: command, arguments: arguments)
+
+        case .runRemoteCommand:
+            let sessionID = try readSessionID()
+            let paneID = try readPaneID()
+            let command = try readString()
+            let arguments = try readStringArray()
+            return .runRemoteCommand(sessionID, paneID, command: command, arguments: arguments)
+
+        case .createFloatingPaneWithCommand:
+            let sessionID = try readSessionID()
+            let tabID = try readTabID()
+            let command = try readString()
+            let arguments = try readStringArray()
+            return .createFloatingPaneWithCommand(sessionID, tabID, command: command, arguments: arguments)
         }
     }
 }

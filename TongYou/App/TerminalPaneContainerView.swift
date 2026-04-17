@@ -14,6 +14,7 @@ struct TerminalPaneContainerView: NSViewRepresentable {
     let onTitleChanged: (String) -> Void
     let onFocused: () -> Void
     let onUserInteraction: (() -> Void)?
+    var isProcessExited: (() -> Bool)?
 
     func makeNSView(context: Context) -> MetalView {
         if let existing = viewStore.view(for: paneID) {
@@ -22,6 +23,7 @@ struct TerminalPaneContainerView: NSViewRepresentable {
             existing.onTitleChanged = onTitleChanged
             existing.onFocused = onFocused
             existing.onUserInteraction = onUserInteraction
+            existing.isProcessExited = isProcessExited
             return existing
         }
         let view = MetalView()
@@ -32,6 +34,7 @@ struct TerminalPaneContainerView: NSViewRepresentable {
         view.onTitleChanged = onTitleChanged
         view.onFocused = onFocused
         view.onUserInteraction = onUserInteraction
+        view.isProcessExited = isProcessExited
         viewStore.store(view, for: paneID)
         return view
     }
@@ -42,6 +45,7 @@ struct TerminalPaneContainerView: NSViewRepresentable {
         nsView.onTitleChanged = onTitleChanged
         nsView.onFocused = onFocused
         nsView.onUserInteraction = onUserInteraction
+        nsView.isProcessExited = isProcessExited
         if nsView.externalController !== externalController {
             nsView.externalController = externalController
             if let external = externalController {

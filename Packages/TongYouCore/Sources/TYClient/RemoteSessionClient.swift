@@ -214,6 +214,23 @@ public final class RemoteSessionClient: @unchecked Sendable {
         connection?.send(.toggleFloatingPanePin(sessionID, paneID))
     }
 
+    // MARK: - Command Execution
+
+    /// Ask the server to run a command in-place (suspend shell, run, restore on exit).
+    public func runInPlace(sessionID: SessionID, paneID: PaneID, command: String, arguments: [String]) {
+        connection?.send(.runInPlace(sessionID, paneID, command: command, arguments: arguments))
+    }
+
+    /// Ask the server to run a command in the background (fire-and-forget).
+    public func runRemoteCommand(sessionID: SessionID, paneID: PaneID, command: String, arguments: [String]) {
+        connection?.send(.runRemoteCommand(sessionID, paneID, command: command, arguments: arguments))
+    }
+
+    /// Ask the server to create a floating pane that runs a command.
+    public func createFloatingPaneWithCommand(sessionID: SessionID, tabID: TabID, command: String, arguments: [String]) {
+        connection?.send(.createFloatingPaneWithCommand(sessionID, tabID, command: command, arguments: arguments))
+    }
+
     // MARK: - Screen Replica Access
 
     /// Get the screen replica for a pane, creating one if needed.

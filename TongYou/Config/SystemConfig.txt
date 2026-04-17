@@ -135,8 +135,19 @@ daemon-auto-exit-on-no-sessions = false
 #   list_remote_sessions, new_remote_session, show_session_picker,
 #   detach_session, rename_session,
 #   run_in_place:command, run_in_place:command:arg1,arg2,
-#   run_command:command, run_command:command:arg1,arg2,
+#   run_local_command:command, run_local_command[opts]:command:arg1,arg2,
+#   run_remote_command:command, run_remote_command[opts]:command:arg1,arg2,
 #   unbind
+#
+# run_in_place    – Suspend the active shell, run command full-screen,
+#                   restore on exit. Works in both local and remote mode.
+# run_local_command  – Fire-and-forget on the GUI machine (output discarded).
+# run_remote_command – Fire-and-forget on the daemon machine (output discarded).
+#
+# Options (placed in [] between action name and command):
+#   [pane]         – Show output in a floating pane (ESC closes after exit).
+#   [key=value]    – Key-value option.
+# Example: run_remote_command[pane]:git:status
 
 # Session management
 keybind = cmd+i=new_session
@@ -194,8 +205,12 @@ keybind = alt+-=shrink_pane
 keybind = alt+f=toggle_or_create_floating_pane
 keybind = alt+n=new_floating_pane
 
-# In-place overlay
+# In-place overlay (works in both local and remote mode)
 keybind = alt+m=run_in_place:lazygit
+
+# Remote command examples (daemon-side, fire-and-forget):
+# keybind = alt+g=run_remote_command:git:fetch,--all
+# keybind = alt+s=run_remote_command[pane]:git:status
 
 # Remote session management
 keybind = cmd+y=list_remote_sessions

@@ -54,6 +54,9 @@ final class MetalView: NSView {
     /// Callback for keybinding actions (forwarded to SessionManager via TerminalWindowView).
     var onTabAction: ((TabAction) -> Void)?
 
+    /// Returns true if this pane's process has exited (for ESC-to-close floating panes).
+    var isProcessExited: (() -> Bool)?
+
     /// Called on any keyboard or mouse interaction to indicate the pane is active.
     var onUserInteraction: (() -> Void)?
 
@@ -151,6 +154,15 @@ final class MetalView: NSView {
 
     override func keyDown(with event: NSEvent) {
         onUserInteraction?()
+
+        // ESC closes an exited floating pane.
+        if event.keyCode == 53,  // ESC key
+           isProcessExited?() == true,
+           let paneID {
+            onTabAction?(.closeFloatingPane(paneID))
+            return
+        }
+
         // Check keybindings first for Option+key combinations that
         // performKeyEquivalent may not intercept (macOS routes these
         // through keyDown rather than performKeyEquivalent).

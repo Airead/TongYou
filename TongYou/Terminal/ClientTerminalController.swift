@@ -12,8 +12,8 @@ import TYTerminal
 final class ClientTerminalController: TerminalControlling {
 
     private let remoteClient: RemoteSessionClient
-    private let sessionID: SessionID
-    private let paneID: PaneID
+    let sessionID: SessionID
+    let paneID: PaneID
     private let screenReplica: ScreenReplica
 
     private(set) var selection: Selection?

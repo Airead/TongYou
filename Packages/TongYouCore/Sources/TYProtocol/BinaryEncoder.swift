@@ -68,6 +68,12 @@ public struct BinaryEncoder: Sendable {
         data.append(contentsOf: utf8)
     }
 
+    /// Write a count-prefixed string array (UInt16 count + length-prefixed strings).
+    public mutating func writeStringArray(_ strings: [String]) {
+        writeUInt16(UInt16(strings.count))
+        for s in strings { writeString(s) }
+    }
+
     /// Write a length-prefixed byte array (UInt32 length + bytes).
     public mutating func writeBytes(_ bytes: [UInt8]) {
         writeUInt32(UInt32(bytes.count))
@@ -386,6 +392,24 @@ public struct BinaryEncoder: Sendable {
         case .toggleFloatingPanePin(let sessionID, let paneID):
             writeSessionID(sessionID)
             writePaneID(paneID)
+
+        case .runInPlace(let sessionID, let paneID, let command, let arguments):
+            writeSessionID(sessionID)
+            writePaneID(paneID)
+            writeString(command)
+            writeStringArray(arguments)
+
+        case .runRemoteCommand(let sessionID, let paneID, let command, let arguments):
+            writeSessionID(sessionID)
+            writePaneID(paneID)
+            writeString(command)
+            writeStringArray(arguments)
+
+        case .createFloatingPaneWithCommand(let sessionID, let tabID, let command, let arguments):
+            writeSessionID(sessionID)
+            writeTabID(tabID)
+            writeString(command)
+            writeStringArray(arguments)
         }
     }
 }

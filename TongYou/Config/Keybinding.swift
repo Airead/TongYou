@@ -1,5 +1,59 @@
 import AppKit
 
+/// Options parsed from `[key=value,flag]` syntax in command actions.
+///
+/// Examples:
+/// - `run_local_command[pane]:git:status`       → `pane: true`
+/// - `run_local_command[output=pane]:git:log`    → `output: "pane"`
+struct CommandOptions: Equatable, Sendable {
+    private var storage: [String: String] = [:]
+
+    nonisolated static let empty = CommandOptions()
+
+    /// Check if a boolean flag is set (e.g. `[pane]`).
+    func has(_ key: String) -> Bool {
+        storage[key] != nil
+    }
+
+    /// Get a value (e.g. `[output=pane]` → `value("output") == "pane"`).
+    func value(_ key: String) -> String? {
+        storage[key]
+    }
+
+    /// Whether the command output should be shown in a floating pane.
+    var showInPane: Bool {
+        has("pane") || value("output") == "pane"
+    }
+
+    var isEmpty: Bool { storage.isEmpty }
+
+    /// Parse from a string like `"pane,output=foo"`.
+    static func parse(_ raw: String) -> CommandOptions {
+        var opts = CommandOptions()
+        for part in raw.split(separator: ",") {
+            let trimmed = part.trimmingCharacters(in: .whitespaces)
+            if let eqIdx = trimmed.firstIndex(of: "=") {
+                let key = String(trimmed[trimmed.startIndex..<eqIdx])
+                let val = String(trimmed[trimmed.index(after: eqIdx)...])
+                opts.storage[key] = val
+            } else {
+                // Boolean flag: store with empty-string value.
+                opts.storage[trimmed] = ""
+            }
+        }
+        return opts
+    }
+
+    /// Serialize back to config string. Empty options return nil.
+    func formatted() -> String? {
+        guard !storage.isEmpty else { return nil }
+        let parts = storage.sorted(by: { $0.key < $1.key }).map { key, value in
+            value.isEmpty ? key : "\(key)=\(value)"
+        }
+        return parts.joined(separator: ",")
+    }
+}
+
 /// A keyboard shortcut bound to a terminal action.
 struct Keybinding: Equatable {
 
@@ -52,7 +106,8 @@ struct Keybinding: Equatable {
         case detachSession
         case renameSession
         case runInPlace(command: String, arguments: [String])
-        case runCommand(command: String, arguments: [String])
+        case runLocalCommand(command: String, arguments: [String], options: CommandOptions)
+        case runRemoteCommand(command: String, arguments: [String], options: CommandOptions)
         // Pass through to PTY (disables the keybinding)
         case unbind
 
@@ -98,26 +153,57 @@ struct Keybinding: Equatable {
             case .renameSession: "rename_session"
             case .runInPlace(let cmd, let args):
                 Self.formatPrefixedAction(prefix: "run_in_place", command: cmd, arguments: args)
-            case .runCommand(let cmd, let args):
-                Self.formatPrefixedAction(prefix: "run_command", command: cmd, arguments: args)
+            case .runLocalCommand(let cmd, let args, let opts):
+                Self.formatPrefixedAction(prefix: "run_local_command", command: cmd, arguments: args, options: opts)
+            case .runRemoteCommand(let cmd, let args, let opts):
+                Self.formatPrefixedAction(prefix: "run_remote_command", command: cmd, arguments: args, options: opts)
             case .unbind: "unbind"
             }
         }
 
         // MARK: - Helpers
 
-        private static func formatPrefixedAction(prefix: String, command: String, arguments: [String]) -> String {
+        private static func formatPrefixedAction(
+            prefix: String, command: String, arguments: [String],
+            options: CommandOptions = .empty
+        ) -> String {
+            let optsPart = options.formatted().map { "[\($0)]" } ?? ""
             if arguments.isEmpty {
-                return "\(prefix):\(command)"
+                return "\(prefix)\(optsPart):\(command)"
             } else {
-                return "\(prefix):\(command):\(arguments.joined(separator: ","))"
+                return "\(prefix)\(optsPart):\(command):\(arguments.joined(separator: ","))"
             }
         }
 
-        private static func parsePrefixedAction(rawValue: String, prefix: String) -> (command: String, arguments: [String])? {
-            guard rawValue.hasPrefix("\(prefix):") else { return nil }
-            let rest = String(rawValue.dropFirst("\(prefix):".count))
+        /// Parse a prefixed action with optional `[options]` syntax.
+        ///
+        /// Matches: `prefix:cmd`, `prefix:cmd:args`, `prefix[opts]:cmd`, `prefix[opts]:cmd:args`
+        private static func parsePrefixedAction(
+            rawValue: String, prefix: String
+        ) -> (command: String, arguments: [String], options: CommandOptions)? {
+            guard rawValue.hasPrefix(prefix) else { return nil }
+            let afterPrefix = rawValue.dropFirst(prefix.count)
+
+            let options: CommandOptions
+            let rest: Substring
+
+            if afterPrefix.hasPrefix("[") {
+                // Parse [options] block.
+                guard let closeBracket = afterPrefix.firstIndex(of: "]") else { return nil }
+                let optsStr = String(afterPrefix[afterPrefix.index(after: afterPrefix.startIndex)..<closeBracket])
+                options = CommandOptions.parse(optsStr)
+                let afterBracket = afterPrefix[afterPrefix.index(after: closeBracket)...]
+                guard afterBracket.hasPrefix(":") else { return nil }
+                rest = afterBracket.dropFirst()  // drop the ":"
+            } else if afterPrefix.hasPrefix(":") {
+                options = .empty
+                rest = afterPrefix.dropFirst()   // drop the ":"
+            } else {
+                return nil
+            }
+
             let parts = rest.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+            guard !parts.isEmpty else { return nil }
             let command = String(parts[0])
             let arguments: [String]
             if parts.count > 1 {
@@ -125,7 +211,7 @@ struct Keybinding: Equatable {
             } else {
                 arguments = []
             }
-            return (command, arguments)
+            return (command, arguments, options)
         }
 
         /// Map to TabAction for actions that pass straight through to the window.
@@ -155,7 +241,8 @@ struct Keybinding: Equatable {
             case .detachSession: .detachSession
             case .renameSession: .renameSession
             case .runInPlace(let cmd, let args): .runInPlace(command: cmd, arguments: args)
-            case .runCommand(let cmd, let args): .runCommand(command: cmd, arguments: args)
+            case .runLocalCommand(let cmd, let args, let opts): .runLocalCommand(command: cmd, arguments: args, options: opts)
+            case .runRemoteCommand(let cmd, let args, let opts): .runRemoteCommand(command: cmd, arguments: args, options: opts)
             case .copy, .paste, .search, .searchNext, .searchPrevious,
                  .resetFontSize, .increaseFontSize, .decreaseFontSize,
                  .unbind:
@@ -209,10 +296,19 @@ struct Keybinding: Equatable {
                 }
                 if let parsed = Self.parsePrefixedAction(rawValue: rawValue, prefix: "run_in_place") {
                     self = .runInPlace(command: parsed.command, arguments: parsed.arguments)
+                    return  // run_in_place does not use options (it always takes over the pane)
+                }
+                // "run_local_command" is the canonical name; "run_command" is accepted for backwards compatibility.
+                if let parsed = Self.parsePrefixedAction(rawValue: rawValue, prefix: "run_local_command") {
+                    self = .runLocalCommand(command: parsed.command, arguments: parsed.arguments, options: parsed.options)
                     return
                 }
                 if let parsed = Self.parsePrefixedAction(rawValue: rawValue, prefix: "run_command") {
-                    self = .runCommand(command: parsed.command, arguments: parsed.arguments)
+                    self = .runLocalCommand(command: parsed.command, arguments: parsed.arguments, options: parsed.options)
+                    return
+                }
+                if let parsed = Self.parsePrefixedAction(rawValue: rawValue, prefix: "run_remote_command") {
+                    self = .runRemoteCommand(command: parsed.command, arguments: parsed.arguments, options: parsed.options)
                     return
                 }
                 return nil

@@ -485,6 +485,25 @@ public final class SocketServer: @unchecked Sendable {
         case .toggleFloatingPanePin(let sessionID, let paneID):
             sessionManager.toggleFloatingPanePin(sessionID: sessionID, paneID: paneID)
             broadcastLayoutOrClosed(sessionID: sessionID)
+
+        case .runInPlace(let sessionID, let paneID, let command, let arguments):
+            sessionManager.runInPlace(
+                sessionID: sessionID, paneID: paneID,
+                command: command, arguments: arguments
+            )
+
+        case .runRemoteCommand(_, let paneID, let command, let arguments):
+            sessionManager.runRemoteCommand(
+                paneID: paneID, command: command, arguments: arguments
+            )
+
+        case .createFloatingPaneWithCommand(let sessionID, let tabID, let command, let arguments):
+            if sessionManager.createFloatingPaneWithCommand(
+                sessionID: sessionID, tabID: tabID,
+                command: command, arguments: arguments
+            ) != nil {
+                broadcastLayoutOrClosed(sessionID: sessionID)
+            }
         }
     }
 

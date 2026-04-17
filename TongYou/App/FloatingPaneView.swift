@@ -18,6 +18,7 @@ struct FloatingPaneView: View {
     let onClose: (UUID) -> Void
     let onTogglePin: (UUID) -> Void
     let onUserInteraction: ((UUID) -> Void)?
+    let isProcessExited: (UUID) -> Bool
 
     private static let titleBarHeight: CGFloat = 24
     private static let resizeHandleSize: CGFloat = 6
@@ -109,7 +110,8 @@ struct FloatingPaneView: View {
             onTabAction: onTabAction,
             onTitleChanged: onTitleChanged,
             onFocused: { bringToFrontAndFocus() },
-            onUserInteraction: { onUserInteraction?(floatingPane.pane.id) }
+            onUserInteraction: { onUserInteraction?(floatingPane.pane.id) },
+            isProcessExited: { isProcessExited(floatingPane.pane.id) }
         )
         .id(floatingPane.pane.id)
     }
