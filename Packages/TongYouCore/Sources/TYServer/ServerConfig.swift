@@ -8,9 +8,17 @@ public struct ServerConfig: Sendable {
     public var defaultRows: UInt16
     public var maxScrollback: Int
 
-    /// Screen update interval in seconds (controls diff send rate).
-    /// Default: ~60fps (16ms).
-    public var screenUpdateInterval: TimeInterval
+    /// Minimum coalesce delay for screen updates (seconds).
+    /// After the screen becomes dirty, the server waits at least this long
+    /// before flushing, allowing multiple changes to batch into one send.
+    /// Default: 1ms — near-instant response for interactive typing.
+    public var minCoalesceDelay: TimeInterval
+
+    /// Maximum coalesce delay for screen updates (seconds).
+    /// During sustained output (e.g. `cat` of a large file), the delay
+    /// ramps up exponentially from minCoalesceDelay to this cap.
+    /// Default: 200ms (~5fps) to reduce bandwidth under heavy output.
+    public var maxCoalesceDelay: TimeInterval
 
     /// Default working directory for new shells. nil means use $HOME.
     public var defaultWorkingDirectory: String?
@@ -33,7 +41,8 @@ public struct ServerConfig: Sendable {
         defaultColumns: UInt16 = 80,
         defaultRows: UInt16 = 24,
         maxScrollback: Int = 10000,
-        screenUpdateInterval: TimeInterval = 1.0 / 60.0,
+        minCoalesceDelay: TimeInterval = 0.001,
+        maxCoalesceDelay: TimeInterval = 0.200,
         defaultWorkingDirectory: String? = nil,
         maxPendingScreenUpdates: Int = 3,
         statsInterval: TimeInterval = 30.0,
@@ -44,7 +53,8 @@ public struct ServerConfig: Sendable {
         self.defaultColumns = defaultColumns
         self.defaultRows = defaultRows
         self.maxScrollback = maxScrollback
-        self.screenUpdateInterval = screenUpdateInterval
+        self.minCoalesceDelay = minCoalesceDelay
+        self.maxCoalesceDelay = maxCoalesceDelay
         self.defaultWorkingDirectory = defaultWorkingDirectory
         self.maxPendingScreenUpdates = maxPendingScreenUpdates
         self.statsInterval = statsInterval

@@ -5,9 +5,10 @@ import TYTerminal
 /// Listens on a Unix domain socket, accepts client connections,
 /// and dispatches messages between clients and the session manager.
 ///
-/// Screen updates use a single server-wide timer that consumes each dirty pane's
-/// snapshot once and distributes it to all attached clients, avoiding races
-/// where multiple clients compete to consume the same snapshot.
+/// Screen updates use an event-driven model with adaptive coalescing:
+/// when the screen becomes dirty, a one-shot timer is scheduled after a short
+/// delay (minCoalesceDelay). During sustained output the delay ramps up
+/// exponentially to maxCoalesceDelay, then resets when the screen goes idle.
 public final class SocketServer: @unchecked Sendable {
 
     private let config: ServerConfig
@@ -17,7 +18,10 @@ public final class SocketServer: @unchecked Sendable {
     private let clientsLock = NSLock()
 
     /// Global set of dirty (sessionID, paneID) pairs, populated by onScreenDirty callbacks.
+    /// Protected by `dirtyLock`.
     private var dirtyPanes: Set<DirtyPaneKey> = []
+    /// Whether a flush is already scheduled. Protected by `dirtyLock`.
+    private var flushScheduled = false
     private let dirtyLock = NSLock()
 
     /// Last-sent snapshot state per pane, used to suppress duplicate updates
@@ -25,8 +29,11 @@ public final class SocketServer: @unchecked Sendable {
     /// while new output arrives at the bottom).
     private var lastSentState: [PaneID: SentSnapshotState] = [:]
 
-    /// Single server-wide timer for coalescing screen updates.
-    private var updateTimer: DispatchSourceTimer?
+    /// One-shot timer for the next coalesced flush. Managed on `messageQueue`.
+    private var flushTimer: DispatchSourceTimer?
+    /// Number of consecutive flush cycles without an idle gap.
+    /// Used to compute the adaptive coalesce delay. Managed on `messageQueue`.
+    private var consecutiveFlushCount = 0
 
     /// Periodic stats logging timer.
     private var statsTimer: DispatchSourceTimer?
@@ -59,7 +66,6 @@ public final class SocketServer: @unchecked Sendable {
         let socket = try TYSocket.listen(path: config.socketPath)
         listenSocket = socket
 
-        startUpdateTimer()
         startStatsTimer()
         Log.info("Server started, listening on \(config.socketPath)")
         onReady?()
@@ -70,8 +76,8 @@ public final class SocketServer: @unchecked Sendable {
     }
 
     public func stop() {
-        updateTimer?.cancel()
-        updateTimer = nil
+        flushTimer?.cancel()
+        flushTimer = nil
 
         statsTimer?.cancel()
         statsTimer = nil
@@ -185,37 +191,71 @@ public final class SocketServer: @unchecked Sendable {
         }
     }
 
-    // MARK: - Private: Timers
+    // MARK: - Private: Adaptive Coalescing
 
-    private func makeTimer(interval: TimeInterval, handler: @escaping () -> Void) -> DispatchSourceTimer {
-        let timer = DispatchSource.makeTimerSource(queue: messageQueue)
-        timer.schedule(deadline: .now() + interval, repeating: interval)
-        timer.setEventHandler(handler: handler)
-        timer.resume()
-        return timer
+    /// Compute the coalesce delay based on how many consecutive flushes occurred.
+    /// Exponential ramp: minDelay * 2^count, capped at maxDelay.
+    private func coalesceDelay(for consecutiveCount: Int) -> TimeInterval {
+        let base = config.minCoalesceDelay * pow(2.0, Double(consecutiveCount))
+        return min(base, config.maxCoalesceDelay)
     }
 
-    private func startUpdateTimer() {
-        updateTimer = makeTimer(interval: config.screenUpdateInterval) { [weak self] in
-            self?.flushDirtyPanes()
+    /// Called from any queue via `onScreenDirty`. If no flush is pending,
+    /// dispatches to `messageQueue` to schedule one.
+    private func scheduleFlushIfNeeded() {
+        dirtyLock.lock()
+        guard !flushScheduled else {
+            dirtyLock.unlock()
+            return
         }
+        flushScheduled = true
+        dirtyLock.unlock()
+
+        messageQueue.async { [weak self] in
+            self?.scheduleFlush()
+        }
+    }
+
+    /// Schedule a one-shot timer for the next flush. Must run on `messageQueue`.
+    private func scheduleFlush() {
+        let delay = coalesceDelay(for: consecutiveFlushCount)
+        let timer = DispatchSource.makeTimerSource(queue: messageQueue)
+        timer.schedule(deadline: .now() + delay)
+        timer.setEventHandler { [weak self] in
+            self?.performFlush()
+        }
+        timer.resume()
+        flushTimer?.cancel()
+        flushTimer = timer
     }
 
     private func startStatsTimer() {
         guard config.statsInterval > 0 else { return }
-        statsTimer = makeTimer(interval: config.statsInterval) { [weak self] in
+        let timer = DispatchSource.makeTimerSource(queue: messageQueue)
+        timer.schedule(deadline: .now() + config.statsInterval, repeating: config.statsInterval)
+        timer.setEventHandler { [weak self] in
             self?.logStats()
         }
+        timer.resume()
+        statsTimer = timer
     }
 
     /// Consume each dirty pane's snapshot once and send to all attached clients.
-    private func flushDirtyPanes() {
+    /// After flushing, if more dirty panes arrived during the send, schedule
+    /// another flush with an increased coalesce delay. Otherwise reset to idle.
+    private func performFlush() {
         dirtyLock.lock()
         let panes = dirtyPanes
         dirtyPanes.removeAll(keepingCapacity: true)
         dirtyLock.unlock()
 
-        guard !panes.isEmpty else { return }
+        guard !panes.isEmpty else {
+            dirtyLock.lock()
+            flushScheduled = false
+            dirtyLock.unlock()
+            consecutiveFlushCount = 0
+            return
+        }
 
         for key in panes {
             guard let snapshot = sessionManager.consumeSnapshot(
@@ -275,6 +315,22 @@ public final class SocketServer: @unchecked Sendable {
             }
 
             forEachAttachedClient(session: key.sessionID) { $0.send(message) }
+        }
+
+        // Check if more dirty panes arrived during the flush.
+        dirtyLock.lock()
+        let hasPending = !dirtyPanes.isEmpty
+        if !hasPending {
+            flushScheduled = false
+        }
+        dirtyLock.unlock()
+
+        if hasPending {
+            consecutiveFlushCount += 1
+            scheduleFlush()
+        } else {
+            flushTimer = nil
+            consecutiveFlushCount = 0
         }
     }
 
@@ -444,6 +500,7 @@ public final class SocketServer: @unchecked Sendable {
             self.dirtyLock.lock()
             self.dirtyPanes.insert(DirtyPaneKey(sessionID: sessionID, paneID: paneID))
             self.dirtyLock.unlock()
+            self.scheduleFlushIfNeeded()
         }
 
         sessionManager.onTitleChanged = { [weak self] sessionID, paneID, title in
