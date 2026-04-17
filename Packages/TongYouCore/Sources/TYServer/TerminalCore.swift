@@ -160,6 +160,18 @@ public final class TerminalCore: @unchecked Sendable {
         write(Data(bytes))
     }
 
+    /// Encode a mouse event using the terminal's current tracking mode/format and write to PTY.
+    public func handleMouseEvent(_ event: MouseEncoder.Event) {
+        let (mode, format) = ptyQueue.sync {
+            (streamHandler.modes.mouseTracking, streamHandler.modes.mouseFormat)
+        }
+        guard mode != .none else { return }
+        guard let data = MouseEncoder.encode(
+            event: event, trackingMode: mode, format: format
+        ) else { return }
+        ptyProcess?.write(data)
+    }
+
     // MARK: - Resize
 
     public func resize(columns: UInt16, rows: UInt16) {

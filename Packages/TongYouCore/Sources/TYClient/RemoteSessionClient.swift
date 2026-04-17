@@ -158,6 +158,11 @@ public final class RemoteSessionClient: @unchecked Sendable {
         connection?.send(.extractSelection(sessionID, paneID, selection))
     }
 
+    /// Send a mouse event to the server for encoding and PTY delivery.
+    public func sendMouseEvent(sessionID: SessionID, paneID: PaneID, event: MouseEncoder.Event) {
+        connection?.send(.mouseEvent(sessionID, paneID, event))
+    }
+
     // MARK: - Tab/Pane Operations
 
     public func createTab(sessionID: SessionID) {
@@ -249,9 +254,9 @@ public final class RemoteSessionClient: @unchecked Sendable {
                 self?.onSessionClosed?(sessionID)
             }
 
-        case .screenFull(let sessionID, let paneID, let snapshot):
+        case .screenFull(let sessionID, let paneID, let snapshot, let mouseTrackingMode):
             let rep = replica(for: paneID)
-            rep.applyFullSnapshot(snapshot)
+            rep.applyFullSnapshot(snapshot, mouseTrackingMode: mouseTrackingMode)
             DispatchQueue.main.async { [weak self] in
                 self?.onScreenUpdated?(sessionID, paneID)
             }

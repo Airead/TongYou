@@ -247,6 +247,8 @@ public final class SocketServer: @unchecked Sendable {
             }
             lastSentState[key.paneID] = SentSnapshotState(from: snapshot)
 
+            let mouseMode = sessionManager.mouseTrackingMode(paneID: key.paneID)
+
             let message: ServerMessage
             // Use full snapshot when the screen was fully rebuilt OR when
             // ≥80% of rows are dirty — at that point a diff carries more
@@ -258,9 +260,18 @@ public final class SocketServer: @unchecked Sendable {
                 mostlyDirty = false
             }
             if snapshot.dirtyRegion.fullRebuild || mostlyDirty {
-                message = .screenFull(key.sessionID, key.paneID, snapshot)
+                message = .screenFull(key.sessionID, key.paneID, snapshot, mouseTrackingMode: mouseMode)
             } else {
-                message = .screenDiff(key.sessionID, key.paneID, ScreenDiff(from: snapshot))
+                var diff = ScreenDiff(from: snapshot)
+                diff = ScreenDiff(
+                    dirtyRows: diff.dirtyRows, cellData: diff.cellData,
+                    columns: diff.columns,
+                    cursorCol: diff.cursorCol, cursorRow: diff.cursorRow,
+                    cursorVisible: diff.cursorVisible, cursorShape: diff.cursorShape,
+                    scrollbackCount: diff.scrollbackCount, viewportOffset: diff.viewportOffset,
+                    mouseTrackingMode: mouseMode
+                )
+                message = .screenDiff(key.sessionID, key.paneID, diff)
             }
 
             forEachAttachedClient(session: key.sessionID) { $0.send(message) }
@@ -338,6 +349,9 @@ public final class SocketServer: @unchecked Sendable {
         case .input(_, let paneID, let bytes):
             sessionManager.sendInput(paneID: paneID, data: bytes)
 
+        case .mouseEvent(_, let paneID, let event):
+            sessionManager.handleMouseEvent(paneID: paneID, event: event)
+
         case .resize(_, let paneID, let cols, let rows):
             sessionManager.registerClientSize(
                 clientID: client.id, paneID: paneID, cols: cols, rows: rows
@@ -410,7 +424,8 @@ public final class SocketServer: @unchecked Sendable {
     private func sendFullSnapshots(to client: ClientConnection, sessionID: SessionID) {
         for paneID in sessionManager.allPaneIDs(sessionID: sessionID) {
             if let snapshot = sessionManager.snapshot(paneID: paneID) {
-                client.send(.screenFull(sessionID, paneID, snapshot))
+                let mouseMode = sessionManager.mouseTrackingMode(paneID: paneID)
+                client.send(.screenFull(sessionID, paneID, snapshot, mouseTrackingMode: mouseMode))
             }
         }
     }

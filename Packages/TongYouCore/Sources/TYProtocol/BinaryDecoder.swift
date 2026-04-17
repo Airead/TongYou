@@ -255,6 +255,29 @@ public struct BinaryDecoder: Sendable {
         }
     }
 
+    /// Read a `MouseEncoder.Event`.
+    public mutating func readMouseEvent() throws -> MouseEncoder.Event {
+        let actionRaw = try readUInt8()
+        let action: MouseEncoder.Action = switch actionRaw {
+        case 0: .press
+        case 1: .release
+        case 2: .motion
+        default: throw BinaryDecoderError.invalidEnumValue(type: "MouseEncoder.Action", rawValue: UInt64(actionRaw))
+        }
+        let hasButton = try readBool()
+        let buttonRaw = try readUInt8()
+        let button: MouseEncoder.Button? = hasButton ? MouseEncoder.Button(rawValue: buttonRaw) : nil
+        let col = Int(try readUInt16())
+        let row = Int(try readUInt16())
+        let modBits = try readUInt8()
+        let modifiers = MouseEncoder.Modifiers(
+            shift: modBits & 1 != 0,
+            option: modBits & 2 != 0,
+            control: modBits & 4 != 0
+        )
+        return MouseEncoder.Event(action: action, button: button, col: col, row: row, modifiers: modifiers)
+    }
+
     // MARK: - Protocol Messages
 
     /// Decode a `ScreenDiff` from the buffer.
@@ -275,6 +298,7 @@ public struct BinaryDecoder: Sendable {
         let cursor = try readCursorState()
         let scrollbackCount = Int(try readUInt32())
         let viewportOffset = Int(try readUInt32())
+        let mouseTrackingMode = try readUInt8()
         return ScreenDiff(
             dirtyRows: dirtyRows,
             cellData: cellData,
@@ -284,12 +308,13 @@ public struct BinaryDecoder: Sendable {
             cursorVisible: cursor.visible,
             cursorShape: cursor.shape,
             scrollbackCount: scrollbackCount,
-            viewportOffset: viewportOffset
+            viewportOffset: viewportOffset,
+            mouseTrackingMode: mouseTrackingMode
         )
     }
 
-    /// Decode a `ScreenSnapshot` from the buffer.
-    public mutating func readScreenSnapshot() throws -> ScreenSnapshot {
+    /// Decode a `ScreenSnapshot` and its trailing mouse tracking mode byte from the buffer.
+    public mutating func readScreenSnapshotWithMouse() throws -> (ScreenSnapshot, mouseTrackingMode: UInt8) {
         let columns = Int(try readUInt16())
         let rows = Int(try readUInt16())
         let cellCount = columns * rows
@@ -301,7 +326,8 @@ public struct BinaryDecoder: Sendable {
         let cursor = try readCursorState()
         let scrollbackCount = Int(try readUInt32())
         let viewportOffset = Int(try readUInt32())
-        return ScreenSnapshot(
+        let mouseTrackingMode = try readUInt8()
+        let snapshot = ScreenSnapshot(
             cells: cells,
             columns: columns,
             rows: rows,
@@ -314,6 +340,7 @@ public struct BinaryDecoder: Sendable {
             viewportOffset: viewportOffset,
             dirtyRegion: .full
         )
+        return (snapshot, mouseTrackingMode)
     }
 
     /// Decode a `SessionInfo` from the buffer.
@@ -367,8 +394,8 @@ public struct BinaryDecoder: Sendable {
         case .screenFull:
             let sessionID = try readSessionID()
             let paneID = try readPaneID()
-            let snapshot = try readScreenSnapshot()
-            return .screenFull(sessionID, paneID, snapshot)
+            let (snapshot, mouseTrackingMode) = try readScreenSnapshotWithMouse()
+            return .screenFull(sessionID, paneID, snapshot, mouseTrackingMode: mouseTrackingMode)
 
         case .screenDiff:
             let sessionID = try readSessionID()
@@ -450,6 +477,12 @@ public struct BinaryDecoder: Sendable {
             let paneID = try readPaneID()
             let selection = try readSelection()
             return .extractSelection(sessionID, paneID, selection)
+
+        case .mouseEvent:
+            let sessionID = try readSessionID()
+            let paneID = try readPaneID()
+            let event = try readMouseEvent()
+            return .mouseEvent(sessionID, paneID, event)
 
         case .createTab:
             return .createTab(try readSessionID())

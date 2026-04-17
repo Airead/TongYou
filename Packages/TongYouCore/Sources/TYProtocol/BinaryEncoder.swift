@@ -155,20 +155,37 @@ public struct BinaryEncoder: Sendable {
         }
     }
 
+    /// Write a `MouseEncoder.Event` (8 bytes: action 1B + hasButton 1B + button 1B + col 2B + row 2B + modifiers 1B).
+    public mutating func writeMouseEvent(_ event: MouseEncoder.Event) {
+        let actionByte: UInt8 = switch event.action {
+        case .press: 0
+        case .release: 1
+        case .motion: 2
+        }
+        writeUInt8(actionByte)
+        writeBool(event.button != nil)
+        writeUInt8(event.button?.rawValue ?? 0)
+        writeUInt16(UInt16(clamping: event.col))
+        writeUInt16(UInt16(clamping: event.row))
+        var modBits: UInt8 = 0
+        if event.modifiers.shift   { modBits |= 1 }
+        if event.modifiers.option  { modBits |= 2 }
+        if event.modifiers.control { modBits |= 4 }
+        writeUInt8(modBits)
+    }
+
     // MARK: - Protocol Messages
 
     /// Encode a `ScreenDiff` into the buffer.
     public mutating func writeScreenDiff(_ diff: ScreenDiff) {
-        // Pre-allocate: header (4B) + dirty row indices (2B each) + cells (16B each avg) + cursor (6B) + scrollback (8B).
         let cellBytes = diff.cellData.count * 16
-        let headerBytes = 4 + diff.dirtyRows.count * 2 + 6 + 8
+        let headerBytes = 4 + diff.dirtyRows.count * 2 + 6 + 8 + 1
         data.reserveCapacity(data.count + headerBytes + cellBytes)
         writeUInt16(diff.columns)
         writeUInt16(UInt16(diff.dirtyRows.count))
         for row in diff.dirtyRows {
             writeUInt16(row)
         }
-        // Cell data is not count-prefixed here; count = columns × dirtyRows.count.
         for cell in diff.cellData {
             writeCell(cell)
         }
@@ -178,14 +195,15 @@ public struct BinaryEncoder: Sendable {
         )
         writeUInt32(UInt32(diff.scrollbackCount))
         writeUInt32(UInt32(diff.viewportOffset))
+        writeUInt8(diff.mouseTrackingMode)
     }
 
     /// Encode a `ScreenSnapshot` into the buffer.
-    public mutating func writeScreenSnapshot(_ snapshot: ScreenSnapshot) {
+    /// - Parameter mouseTrackingMode: rawValue of the terminal's current mouse tracking mode.
+    public mutating func writeScreenSnapshot(_ snapshot: ScreenSnapshot, mouseTrackingMode: UInt8 = 0) {
         assert(!snapshot.isPartial, "Cannot encode a partial snapshot as screenFull")
-        // Pre-allocate: header (4B) + cells (16B each avg) + cursor (6B) + scrollback/viewport (8B).
         let cellBytes = snapshot.cells.count * 16
-        data.reserveCapacity(data.count + 4 + cellBytes + 6 + 8)
+        data.reserveCapacity(data.count + 4 + cellBytes + 6 + 8 + 1)
         writeUInt16(UInt16(snapshot.columns))
         writeUInt16(UInt16(snapshot.rows))
         for cell in snapshot.cells {
@@ -197,6 +215,7 @@ public struct BinaryEncoder: Sendable {
         )
         writeUInt32(UInt32(snapshot.scrollbackCount))
         writeUInt32(UInt32(snapshot.viewportOffset))
+        writeUInt8(mouseTrackingMode)
     }
 
     /// Encode a `SessionInfo` into the buffer.
@@ -238,10 +257,10 @@ public struct BinaryEncoder: Sendable {
         case .sessionClosed(let id):
             writeSessionID(id)
 
-        case .screenFull(let sessionID, let paneID, let snapshot):
+        case .screenFull(let sessionID, let paneID, let snapshot, let mouseTrackingMode):
             writeSessionID(sessionID)
             writePaneID(paneID)
-            writeScreenSnapshot(snapshot)
+            writeScreenSnapshot(snapshot, mouseTrackingMode: mouseTrackingMode)
 
         case .screenDiff(let sessionID, let paneID, let diff):
             writeSessionID(sessionID)
@@ -313,6 +332,11 @@ public struct BinaryEncoder: Sendable {
             writeSessionID(sessionID)
             writePaneID(paneID)
             writeSelection(selection)
+
+        case .mouseEvent(let sessionID, let paneID, let event):
+            writeSessionID(sessionID)
+            writePaneID(paneID)
+            writeMouseEvent(event)
 
         case .createTab(let sessionID):
             writeSessionID(sessionID)

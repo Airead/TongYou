@@ -167,7 +167,7 @@ struct IntegrationTests {
 
         let snapshotResp = try client2.receiveServerMessage()
         switch snapshotResp {
-        case .screenFull(let sid, _, let snapshot):
+        case .screenFull(let sid, _, let snapshot, _):
             #expect(sid == info.id)
             #expect(snapshot.columns == 80)
             #expect(snapshot.rows == 24)
@@ -247,7 +247,7 @@ struct IntegrationTests {
         // Send many screen updates rapidly.
         let totalSent = 20
         for _ in 0..<totalSent {
-            conn.send(.screenFull(dummySessionID, dummyPaneID, snapshot))
+            conn.send(.screenFull(dummySessionID, dummyPaneID, snapshot, mouseTrackingMode: 0))
         }
 
         // Also send non-screen messages — these must never be dropped.

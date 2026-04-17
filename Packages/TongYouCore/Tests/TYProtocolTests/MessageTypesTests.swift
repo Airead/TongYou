@@ -39,7 +39,7 @@ struct ServerMessageTests {
 
     @Test("screenFull is a screen update")
     func screenFullIsScreenUpdate() {
-        let msg = ServerMessage.screenFull(Self.dummySessionID, Self.dummyPaneID, Self.dummySnapshot)
+        let msg = ServerMessage.screenFull(Self.dummySessionID, Self.dummyPaneID, Self.dummySnapshot, mouseTrackingMode: 0)
         #expect(msg.isScreenUpdate == true)
     }
 

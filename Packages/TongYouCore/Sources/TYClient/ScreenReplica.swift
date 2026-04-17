@@ -18,6 +18,7 @@ public final class ScreenReplica: @unchecked Sendable {
     private var cursorShape: CursorShape = .block
     private var _scrollbackCount: Int = 0
     private var _viewportOffset: Int = 0
+    private var _mouseTrackingMode: UInt8 = 0
     private var dirty = false
 
     private let lock = NSLock()
@@ -50,6 +51,13 @@ public final class ScreenReplica: @unchecked Sendable {
         return _viewportOffset
     }
 
+    /// Current mouse tracking mode (rawValue of MouseTrackingMode).
+    public var mouseTrackingMode: UInt8 {
+        lock.lock()
+        defer { lock.unlock() }
+        return _mouseTrackingMode
+    }
+
     /// Atomically read all viewport-related state in a single lock acquisition.
     public func viewportInfo() -> ViewportInfo {
         lock.lock()
@@ -65,7 +73,7 @@ public final class ScreenReplica: @unchecked Sendable {
     // MARK: - Apply Server Updates
 
     /// Apply a full screen snapshot from the server.
-    public func applyFullSnapshot(_ snapshot: ScreenSnapshot) {
+    public func applyFullSnapshot(_ snapshot: ScreenSnapshot, mouseTrackingMode: UInt8 = 0) {
         lock.lock()
         defer { lock.unlock() }
         columns = snapshot.columns
@@ -77,6 +85,7 @@ public final class ScreenReplica: @unchecked Sendable {
         cursorShape = snapshot.cursorShape
         _scrollbackCount = snapshot.scrollbackCount
         _viewportOffset = snapshot.viewportOffset
+        _mouseTrackingMode = mouseTrackingMode
         dirty = true
     }
 
@@ -114,6 +123,7 @@ public final class ScreenReplica: @unchecked Sendable {
         cursorShape = diff.cursorShape
         _scrollbackCount = diff.scrollbackCount
         _viewportOffset = diff.viewportOffset
+        _mouseTrackingMode = diff.mouseTrackingMode
         dirty = true
     }
 
