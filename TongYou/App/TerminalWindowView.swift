@@ -187,7 +187,7 @@ struct TerminalWindowView: View {
         .onAppear {
             sessionManager.restoreLocalSessions()
             loadWindowBackground()
-            if configLoader.config.draftEnabled {
+            if configLoader.config.draftEnabled || sessionManager.tabs.isEmpty {
                 sessionManager.createAnonymousSession()
             }
             focusActiveTabRootPane()
