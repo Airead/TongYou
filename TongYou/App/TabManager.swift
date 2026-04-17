@@ -28,6 +28,7 @@ enum TabAction {
     case newFloatingPane
     case closeFloatingPane(UUID)
     case toggleOrCreateFloatingPane
+    case rerunFloatingPaneCommand(UUID)
     // Remote session management
     case listRemoteSessions
     case newRemoteSession
@@ -338,6 +339,7 @@ final class TabManager {
         case .splitVertical, .splitHorizontal, .closePane,
              .focusPane, .paneExited, .growPane, .shrinkPane,
              .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane,
+             .rerunFloatingPaneCommand,
              .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession,
              .renameSession, .runInPlace, .runLocalCommand, .runRemoteCommand,
              .paneNotification:

@@ -25,6 +25,13 @@ struct CommandOptions: Equatable, Sendable {
         has("pane") || value("output") == "pane"
     }
 
+    /// Whether the floating pane should close automatically when the command exits.
+    /// When false (default), the pane stays open for the user to read output;
+    /// ESC closes it, Enter re-runs the command.
+    var closeOnExit: Bool {
+        has("close_on_exit")
+    }
+
     var isEmpty: Bool { storage.isEmpty }
 
     /// Parse from a string like `"pane,output=foo"`.

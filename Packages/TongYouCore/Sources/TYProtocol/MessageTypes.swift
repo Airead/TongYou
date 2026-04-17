@@ -66,6 +66,7 @@ public enum ClientMessageType: UInt16, Sendable {
     case runInPlace               = 0x022B
     case runRemoteCommand         = 0x022C
     case createFloatingPaneWithCommand = 0x022D
+    case restartFloatingPaneCommand    = 0x022E
 }
 
 // MARK: - Server Messages
@@ -185,6 +186,8 @@ public enum ClientMessage: Sendable {
     case runRemoteCommand(SessionID, PaneID, command: String, arguments: [String])
     /// Create a floating pane that runs a command instead of a shell.
     case createFloatingPaneWithCommand(SessionID, TabID, command: String, arguments: [String])
+    /// Restart a command in an existing (exited) floating pane.
+    case restartFloatingPaneCommand(SessionID, PaneID, command: String, arguments: [String])
 
     /// Human-readable summary for debug logging. Long payloads are truncated.
     public var debugDescription: String {
@@ -242,6 +245,8 @@ public enum ClientMessage: Sendable {
             return "runRemoteCommand(session=\(sid), pane=\(pid), cmd=\(truncate(cmd, maxLength: 80)), args=\(args))"
         case .createFloatingPaneWithCommand(let sid, let tid, let cmd, let args):
             return "createFloatingPaneWithCommand(session=\(sid), tab=\(tid), cmd=\(truncate(cmd, maxLength: 80)), args=\(args))"
+        case .restartFloatingPaneCommand(let sid, let pid, let cmd, let args):
+            return "restartFloatingPaneCommand(session=\(sid), pane=\(pid), cmd=\(truncate(cmd, maxLength: 80)), args=\(args))"
         }
     }
 
@@ -273,6 +278,7 @@ public enum ClientMessage: Sendable {
         case .runInPlace:              return .runInPlace
         case .runRemoteCommand:        return .runRemoteCommand
         case .createFloatingPaneWithCommand: return .createFloatingPaneWithCommand
+        case .restartFloatingPaneCommand:    return .restartFloatingPaneCommand
         }
     }
 }

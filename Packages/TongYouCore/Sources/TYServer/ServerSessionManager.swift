@@ -767,6 +767,58 @@ public final class ServerSessionManager {
         return paneID
     }
 
+    /// Restart a command in an existing (exited) floating pane.
+    /// Replaces the old TerminalCore with a new one running the same command.
+    public func restartFloatingPaneCommand(
+        sessionID: SessionID, paneID: PaneID,
+        command: String, arguments: [String]
+    ) -> Bool {
+        guard var session = sessions[sessionID] else { return false }
+        guard let (tabIndex, _) = session.floatingPaneLocation(for: paneID) else { return false }
+
+        // Stop and remove the old core.
+        if let oldCore = session.tabs[tabIndex].floatingPaneCores[paneID] {
+            oldCore.stop()
+            coreLookup.removeValue(forKey: paneID)
+        }
+
+        // Use the tree pane's shell cwd — it's always running and has a valid cwd.
+        let treePaneID = PaneID(session.tabs[tabIndex].paneTree.firstPane.id)
+        let cwd = resolvedWorkingDirectory(coreLookup[treePaneID]?.currentWorkingDirectory)
+
+        // Reuse the client-reported size so the new core matches the existing MetalView.
+        let effectiveSize = clientPaneSizes[paneID]?.values.first
+        let cols = effectiveSize?.cols ?? config.defaultColumns
+        let rows = effectiveSize?.rows ?? config.defaultRows
+
+        let core = TerminalCore(
+            columns: Int(cols),
+            rows: Int(rows),
+            maxScrollback: config.maxScrollback
+        )
+
+        wireStandardCallbacks(core, sessionID: sessionID, paneID: paneID)
+        coreLookup[paneID] = core
+
+        let wrapped = wrapCommandInLoginShell(command, arguments: arguments)
+        do {
+            try core.start(
+                command: wrapped.command, arguments: wrapped.arguments,
+                columns: cols, rows: rows,
+                workingDirectory: cwd
+            )
+        } catch {
+            Log.error("restartFloatingPaneCommand: failed to start '\(command)': \(error)", category: .session)
+            coreLookup.removeValue(forKey: paneID)
+            return false
+        }
+
+        session.tabs[tabIndex].floatingPaneCores[paneID] = core
+        sessions[sessionID] = session
+        Log.info("Floating pane command restarted: \(paneID), cmd=\(command), cwd=\(cwd)", category: .session)
+        return true
+    }
+
     /// Wire standard callbacks on a TerminalCore for screen updates, title, bell, clipboard, and process exit.
     private func wireStandardCallbacks(
         _ core: TerminalCore,

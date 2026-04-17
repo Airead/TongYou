@@ -564,6 +564,21 @@ struct WireFormatTests {
         #expect(dDiff.mouseTrackingMode == 100)
     }
 
+    @Test func roundTripRestartFloatingPaneCommand() throws {
+        let sid = SessionID()
+        let pid = PaneID()
+        let msg = ClientMessage.restartFloatingPaneCommand(sid, pid, command: "git", arguments: ["status"])
+        let decoded = try encodeAndDecode(clientMessage: msg)
+        guard case .restartFloatingPaneCommand(let dSid, let dPid, let cmd, let args) = decoded else {
+            Issue.record("Expected .restartFloatingPaneCommand")
+            return
+        }
+        #expect(dSid == sid)
+        #expect(dPid == pid)
+        #expect(cmd == "git")
+        #expect(args == ["status"])
+    }
+
     // MARK: - Unknown Type Codes
 
     @Test func unknownServerTypeThrows() throws {

@@ -410,6 +410,12 @@ public struct BinaryEncoder: Sendable {
             writeTabID(tabID)
             writeString(command)
             writeStringArray(arguments)
+
+        case .restartFloatingPaneCommand(let sessionID, let paneID, let command, let arguments):
+            writeSessionID(sessionID)
+            writePaneID(paneID)
+            writeString(command)
+            writeStringArray(arguments)
         }
     }
 }

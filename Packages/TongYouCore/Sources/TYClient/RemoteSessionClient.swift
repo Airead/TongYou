@@ -231,6 +231,11 @@ public final class RemoteSessionClient: @unchecked Sendable {
         connection?.send(.createFloatingPaneWithCommand(sessionID, tabID, command: command, arguments: arguments))
     }
 
+    /// Ask the server to restart a command in an existing (exited) floating pane.
+    public func restartFloatingPaneCommand(sessionID: SessionID, paneID: PaneID, command: String, arguments: [String]) {
+        connection?.send(.restartFloatingPaneCommand(sessionID, paneID, command: command, arguments: arguments))
+    }
+
     // MARK: - Screen Replica Access
 
     /// Get the screen replica for a pane, creating one if needed.

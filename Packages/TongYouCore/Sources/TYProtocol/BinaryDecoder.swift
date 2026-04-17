@@ -573,6 +573,13 @@ public struct BinaryDecoder: Sendable {
             let command = try readString()
             let arguments = try readStringArray()
             return .createFloatingPaneWithCommand(sessionID, tabID, command: command, arguments: arguments)
+
+        case .restartFloatingPaneCommand:
+            let sessionID = try readSessionID()
+            let paneID = try readPaneID()
+            let command = try readString()
+            let arguments = try readStringArray()
+            return .restartFloatingPaneCommand(sessionID, paneID, command: command, arguments: arguments)
         }
     }
 }

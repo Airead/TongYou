@@ -163,6 +163,14 @@ final class MetalView: NSView {
             return
         }
 
+        // Enter re-runs the command in an exited floating pane.
+        if event.keyCode == 36,  // Enter key
+           isProcessExited?() == true,
+           let paneID {
+            onTabAction?(.rerunFloatingPaneCommand(paneID))
+            return
+        }
+
         // Check keybindings first for Option+key combinations that
         // performKeyEquivalent may not intercept (macOS routes these
         // through keyDown rather than performKeyEquivalent).

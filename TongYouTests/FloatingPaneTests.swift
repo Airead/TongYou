@@ -369,4 +369,58 @@ struct FloatingPaneTests {
         mgr.updateFloatingPanesVisibilityForFocus(focusedPaneID: nil)
         #expect(mgr.activeTab!.floatingPanes[0].isVisible)
     }
+
+    // MARK: - CommandOptions closeOnExit
+
+    @Test func commandOptionsCloseOnExitFlag() {
+        let opts = CommandOptions.parse("pane,close_on_exit")
+        #expect(opts.showInPane)
+        #expect(opts.closeOnExit)
+    }
+
+    @Test func commandOptionsDefaultNoCloseOnExit() {
+        let opts = CommandOptions.parse("pane")
+        #expect(opts.showInPane)
+        #expect(!opts.closeOnExit)
+    }
+
+    @Test func commandOptionsEmptyNoCloseOnExit() {
+        let opts = CommandOptions.empty
+        #expect(!opts.closeOnExit)
+    }
+
+    // MARK: - FloatingPaneCommandInfo
+
+    @Test func floatingPaneCommandInfoStoresValues() {
+        let info = FloatingPaneCommandInfo(
+            command: "/bin/sh", arguments: ["-c", "echo hello"],
+            workingDirectory: "/tmp", closeOnExit: false
+        )
+        #expect(info.command == "/bin/sh")
+        #expect(info.arguments == ["-c", "echo hello"])
+        #expect(info.workingDirectory == "/tmp")
+        #expect(!info.closeOnExit)
+    }
+
+    @Test func floatingPaneCommandInfoCloseOnExit() {
+        let info = FloatingPaneCommandInfo(
+            command: "/bin/sh", arguments: [],
+            workingDirectory: nil, closeOnExit: true
+        )
+        #expect(info.closeOnExit)
+    }
+
+    // MARK: - closeOnExit Keybinding round-trip
+
+    @Test func closeOnExitKeybindingRoundTrip() {
+        let action = Keybinding.Action.runLocalCommand(
+            command: "git", arguments: ["status"],
+            options: CommandOptions.parse("pane,close_on_exit")
+        )
+        let raw = action.rawValue
+        #expect(raw.contains("close_on_exit"))
+        #expect(raw.contains("pane"))
+        let parsed = Keybinding.Action(rawValue: raw)
+        #expect(parsed == action)
+    }
 }

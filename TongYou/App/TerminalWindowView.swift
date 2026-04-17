@@ -475,8 +475,14 @@ struct TerminalWindowView: View {
     private func removePane(id paneID: UUID) {
         // Check if this is a floating pane first.
         if sessionManager.activeTab?.floatingPanes.contains(where: { $0.pane.id == paneID }) == true {
-            // Keep the pane open so the user can read output; ESC will close it.
-            sessionManager.markFloatingPaneExited(paneID)
+            if let cmdInfo = sessionManager.floatingPaneCommands[paneID], !cmdInfo.closeOnExit {
+                // Command pane with confirm-on-exit: keep open for reading.
+                // ESC closes, Enter re-runs the command.
+                sessionManager.markFloatingPaneExited(paneID)
+            } else {
+                // Non-command pane or close-on-exit command pane: close immediately.
+                closeFloatingPane(id: paneID)
+            }
             return
         }
 
@@ -550,6 +556,11 @@ struct TerminalWindowView: View {
         }
     }
 
+    private func rerunFloatingPaneCommand(paneID: UUID) {
+        guard let controller = sessionManager.rerunFloatingPaneCommand(paneID: paneID) else { return }
+        viewStore.view(for: paneID)?.bindController(controller)
+    }
+
     // MARK: - Action Dispatch
 
     private func handleTabAction(_ action: TabAction) {
@@ -603,6 +614,8 @@ struct TerminalWindowView: View {
             closeFloatingPane(id: paneID)
         case .toggleOrCreateFloatingPane:
             toggleOrCreateFloatingPane()
+        case .rerunFloatingPaneCommand(let paneID):
+            rerunFloatingPaneCommand(paneID: paneID)
         case .listRemoteSessions:
             sessionManager.listRemoteSessions()
             ensureSidebarVisible()

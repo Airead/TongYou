@@ -504,15 +504,27 @@ public final class SocketServer: @unchecked Sendable {
             ) != nil {
                 broadcastLayoutOrClosed(sessionID: sessionID)
             }
+
+        case .restartFloatingPaneCommand(let sessionID, let paneID, let command, let arguments):
+            if sessionManager.restartFloatingPaneCommand(
+                sessionID: sessionID, paneID: paneID,
+                command: command, arguments: arguments
+            ) {
+                sendFullSnapshot(to: client, sessionID: sessionID, paneID: paneID)
+            }
+        }
+    }
+
+    private func sendFullSnapshot(to client: ClientConnection, sessionID: SessionID, paneID: PaneID) {
+        if let snapshot = sessionManager.snapshot(paneID: paneID) {
+            let mouseMode = sessionManager.mouseTrackingMode(paneID: paneID)
+            client.send(.screenFull(sessionID, paneID, snapshot, mouseTrackingMode: mouseMode))
         }
     }
 
     private func sendFullSnapshots(to client: ClientConnection, sessionID: SessionID) {
         for paneID in sessionManager.allPaneIDs(sessionID: sessionID) {
-            if let snapshot = sessionManager.snapshot(paneID: paneID) {
-                let mouseMode = sessionManager.mouseTrackingMode(paneID: paneID)
-                client.send(.screenFull(sessionID, paneID, snapshot, mouseTrackingMode: mouseMode))
-            }
+            sendFullSnapshot(to: client, sessionID: sessionID, paneID: paneID)
         }
     }
 

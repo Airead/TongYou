@@ -145,9 +145,14 @@ daemon-auto-exit-on-no-sessions = false
 # run_remote_command – Fire-and-forget on the daemon machine (output discarded).
 #
 # Options (placed in [] between action name and command):
-#   [pane]         – Show output in a floating pane (ESC closes after exit).
-#   [key=value]    – Key-value option.
-# Example: run_remote_command[pane]:git:status
+#   [pane]           – Show output in a floating pane (ESC closes after exit,
+#                      Enter re-runs the command).
+#   [close_on_exit]  – Close the floating pane automatically when the command
+#                      exits (no confirmation needed).
+#   [key=value]      – Key-value option.
+# Examples:
+#   run_remote_command[pane]:git:status
+#   run_local_command[pane,close_on_exit]:make:build
 
 # Session management
 keybind = cmd+i=new_session
