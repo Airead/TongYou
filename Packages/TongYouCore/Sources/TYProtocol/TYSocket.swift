@@ -37,14 +37,16 @@ public enum TYSocketError: Error, Sendable {
 /// Use `listen(path:)` on the server side and `connect(path:)` on the client side.
 public final class TYSocket: @unchecked Sendable {
     /// The underlying file descriptor, for integration with DispatchSource.
-    public let fileDescriptor: Int32
+    public private(set) var fileDescriptor: Int32
 
     private init(fileDescriptor: Int32) {
         self.fileDescriptor = fileDescriptor
     }
 
     deinit {
-        _ = sysClose(fileDescriptor)
+        if fileDescriptor >= 0 {
+            _ = sysClose(fileDescriptor)
+        }
     }
 
     // MARK: - Factory Methods
@@ -157,9 +159,11 @@ public final class TYSocket: @unchecked Sendable {
         return try WireFormat.decodeClientMessage(frame)
     }
 
-    /// Close the socket.
+    /// Close the socket. Safe to call multiple times.
     public func closeSocket() {
+        guard fileDescriptor >= 0 else { return }
         _ = sysClose(fileDescriptor)
+        fileDescriptor = -1
     }
 
     // MARK: - Internal Helpers

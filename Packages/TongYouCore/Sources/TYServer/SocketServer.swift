@@ -84,17 +84,17 @@ public final class SocketServer: @unchecked Sendable {
     public func stop() {
         runningLock.lock()
         running = false
+        let socket = listenSocket
+        listenSocket = nil
         runningLock.unlock()
+
+        socket?.closeSocket()
 
         flushTimer?.cancel()
         flushTimer = nil
 
         statsTimer?.cancel()
         statsTimer = nil
-
-        let socket = listenSocket
-        listenSocket = nil
-        socket?.closeSocket()
 
         clientsLock.lock()
         let allClients = Array(clients.values)
@@ -206,6 +206,8 @@ public final class SocketServer: @unchecked Sendable {
                 Log.info("Client accepted: \(connection.id.uuidString.prefix(8)), total: \(clientCount)")
 
                 connection.startReadLoop()
+            } catch TYSocketError.acceptFailed(let e) where e == EBADF {
+                return
             } catch {
                 runningLock.lock()
                 let stillRunning = running
