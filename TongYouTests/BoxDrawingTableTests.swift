@@ -11,11 +11,10 @@ struct BoxDrawingTableTests {
         #expect(boxDrawingSegments(codepoint: 0x2580, cellWidth: 16, cellHeight: 32) == nil)
     }
 
-    @Test func arcCornersRenderedAsRightAngle() {
+    @Test func arcCornersReturnNil() {
+        // Arc corners are rendered via SDF shader, not rectangular segments
         for cp: UInt32 in 0x256D...0x2570 {
-            let segs = boxDrawingSegments(codepoint: cp, cellWidth: 16, cellHeight: 32)
-            #expect(segs != nil)
-            #expect(segs!.count == 2) // two segments like regular corners
+            #expect(boxDrawingSegments(codepoint: cp, cellWidth: 16, cellHeight: 32) == nil)
         }
     }
 

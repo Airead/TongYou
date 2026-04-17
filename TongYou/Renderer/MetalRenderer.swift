@@ -25,6 +25,7 @@ final class MetalRenderer {
     private let underlinePipelineState: MTLRenderPipelineState
     private let strikethroughPipelineState: MTLRenderPipelineState
     private let boxDrawPipelineState: MTLRenderPipelineState
+    private let arcCornerPipelineState: MTLRenderPipelineState
     private let textPipelineState: MTLRenderPipelineState
     private let emojiPipelineState: MTLRenderPipelineState
 
@@ -67,6 +68,7 @@ final class MetalRenderer {
         var text: [CellTextInstance] = []
         var emoji: [CellTextInstance] = []
         var boxDraw: [BoxDrawSegmentInstance] = []
+        var arcCorner: [ArcCornerInstance] = []
     }
 
     private var shapedRowCache = ShapedRowCache()
@@ -187,6 +189,9 @@ final class MetalRenderer {
         var boxDrawInstanceBuffer: MTLBuffer
         var boxDrawInstanceCapacity: Int
         var boxDrawInstanceCount: Int
+        var arcCornerInstanceBuffer: MTLBuffer
+        var arcCornerInstanceCapacity: Int
+        var arcCornerInstanceCount: Int
         /// Per-frame staging for text/emoji instances. Enables partial updates
         /// without interfering with other swap-chain frames.
         var stagedRowInstances: [RowTextInstances] = []
@@ -195,6 +200,7 @@ final class MetalRenderer {
         var textRowOffsets: [Int] = []
         var emojiRowOffsets: [Int] = []
         var boxDrawRowOffsets: [Int] = []
+        var arcCornerRowOffsets: [Int] = []
     }
 
     init(device: MTLDevice, fontSystem: FontSystem, config: Config = .default,
@@ -317,6 +323,39 @@ final class MetalRenderer {
             fatalError("Failed to create box-draw pipeline state: \(error)")
         }
 
+        // --- Arc corner pipeline ---
+        guard let arcCornerVertexFunc = library.makeFunction(name: "arc_corner_vertex"),
+              let arcCornerFragmentFunc = library.makeFunction(name: "arc_corner_fragment") else {
+            fatalError("Failed to load arc corner shader functions")
+        }
+
+        let arcCornerVertexDescriptor = MTLVertexDescriptor()
+        arcCornerVertexDescriptor.attributes[0].format = .ushort2    // gridPos
+        arcCornerVertexDescriptor.attributes[0].offset = 0
+        arcCornerVertexDescriptor.attributes[0].bufferIndex = 1
+        arcCornerVertexDescriptor.attributes[1].format = .uchar4     // color
+        arcCornerVertexDescriptor.attributes[1].offset = 4
+        arcCornerVertexDescriptor.attributes[1].bufferIndex = 1
+        arcCornerVertexDescriptor.attributes[2].format = .ushort     // cornerType
+        arcCornerVertexDescriptor.attributes[2].offset = 8
+        arcCornerVertexDescriptor.attributes[2].bufferIndex = 1
+        arcCornerVertexDescriptor.layouts[1].stride = MemoryLayout<ArcCornerInstance>.stride
+        arcCornerVertexDescriptor.layouts[1].stepFunction = .perInstance
+        arcCornerVertexDescriptor.layouts[1].stepRate = 1
+
+        let arcCornerPipelineDesc = MTLRenderPipelineDescriptor()
+        arcCornerPipelineDesc.vertexFunction = arcCornerVertexFunc
+        arcCornerPipelineDesc.fragmentFunction = arcCornerFragmentFunc
+        arcCornerPipelineDesc.vertexDescriptor = arcCornerVertexDescriptor
+        arcCornerPipelineDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
+        Self.enablePremultipliedAlpha(arcCornerPipelineDesc.colorAttachments[0]!)
+
+        do {
+            arcCornerPipelineState = try device.makeRenderPipelineState(descriptor: arcCornerPipelineDesc)
+        } catch {
+            fatalError("Failed to create arc corner pipeline state: \(error)")
+        }
+
         // --- Text pipeline ---
         guard let textVertexFunc = library.makeFunction(name: "cell_text_vertex"),
               let textFragmentFunc = library.makeFunction(name: "cell_text_fragment") else {
@@ -408,6 +447,10 @@ final class MetalRenderer {
                 let boxDrawBuf = device.makeBuffer(
                     length: MemoryLayout<BoxDrawSegmentInstance>.stride * underlineInitialCapacity,
                     options: .storageModeShared
+                ),
+                let arcCornerBuf = device.makeBuffer(
+                    length: MemoryLayout<ArcCornerInstance>.stride * underlineInitialCapacity,
+                    options: .storageModeShared
                 ) else {
                     fatalError("Failed to allocate frame state buffers")
                 }
@@ -429,7 +472,10 @@ final class MetalRenderer {
                     emojiInstanceCount: 0,
                     boxDrawInstanceBuffer: boxDrawBuf,
                     boxDrawInstanceCapacity: underlineInitialCapacity,
-                    boxDrawInstanceCount: 0
+                    boxDrawInstanceCount: 0,
+                    arcCornerInstanceBuffer: arcCornerBuf,
+                    arcCornerInstanceCapacity: underlineInitialCapacity,
+                    arcCornerInstanceCount: 0
                 ))
             }
     }
@@ -697,6 +743,18 @@ final class MetalRenderer {
             )
         }
 
+        if frame.arcCornerInstanceCount > 0 {
+            encoder.setRenderPipelineState(arcCornerPipelineState)
+            encoder.setVertexBuffer(frame.uniformBuffer, offset: 0, index: 0)
+            encoder.setVertexBuffer(frame.arcCornerInstanceBuffer, offset: 0, index: 1)
+            encoder.drawPrimitives(
+                type: .triangleStrip,
+                vertexStart: 0,
+                vertexCount: 4,
+                instanceCount: frame.arcCornerInstanceCount
+            )
+        }
+
         if frame.textInstanceCount > 0 {
             encoder.setRenderPipelineState(textPipelineState)
             encoder.setVertexBuffer(frame.uniformBuffer, offset: 0, index: 0)
@@ -791,6 +849,16 @@ final class MetalRenderer {
                 ) {
                     state.boxDrawInstanceBuffer = buf
                     state.boxDrawInstanceCapacity = newCap
+                }
+            }
+            if state.arcCornerInstanceCapacity > threshold {
+                let newCap = needed * 2
+                if let buf = device.makeBuffer(
+                    length: MemoryLayout<ArcCornerInstance>.stride * newCap,
+                    options: .storageModeShared
+                ) {
+                    state.arcCornerInstanceBuffer = buf
+                    state.arcCornerInstanceCapacity = newCap
                 }
             }
             frameStates[i] = state
@@ -1271,19 +1339,28 @@ final class MetalRenderer {
             let cell = backingCells[rowBase + col]
             guard let scalar = cell.content.firstScalar,
                   scalar.isBoxDrawing else { continue }
-            guard let segments = boxDrawingSegments(
-                codepoint: scalar.value, cellWidth: cw, cellHeight: ch
-            ) else { continue }
             let fg = colorState.foreground(
                 attrs: cell.attributes,
                 row: row, col: col, absLine: absLine
             )
-            for seg in segments {
-                rowInstances.boxDraw.append(BoxDrawSegmentInstance(
+            let cp = scalar.value
+            if let segments = boxDrawingSegments(
+                codepoint: cp, cellWidth: cw, cellHeight: ch
+            ) {
+                for seg in segments {
+                    rowInstances.boxDraw.append(BoxDrawSegmentInstance(
+                        gridPos: SIMD2<UInt16>(UInt16(col), UInt16(row)),
+                        color: fg,
+                        cellOffset: SIMD2<UInt16>(seg.x, seg.y),
+                        segmentSize: SIMD2<UInt16>(seg.width, seg.height)
+                    ))
+                }
+            } else if cp >= 0x256D && cp <= 0x2570 {
+                // Arc corners — rendered via SDF shader
+                rowInstances.arcCorner.append(ArcCornerInstance(
                     gridPos: SIMD2<UInt16>(UInt16(col), UInt16(row)),
                     color: fg,
-                    cellOffset: SIMD2<UInt16>(seg.x, seg.y),
-                    segmentSize: SIMD2<UInt16>(seg.width, seg.height)
+                    cornerType: UInt16(cp - 0x256D)
                 ))
             }
         }
@@ -1305,10 +1382,12 @@ final class MetalRenderer {
             frame.pointee.textInstanceCount = 0
             frame.pointee.emojiInstanceCount = 0
             frame.pointee.boxDrawInstanceCount = 0
+            frame.pointee.arcCornerInstanceCount = 0
             frame.pointee.stagedRowInstances.removeAll()
             frame.pointee.textRowOffsets.removeAll()
             frame.pointee.emojiRowOffsets.removeAll()
             frame.pointee.boxDrawRowOffsets.removeAll()
+            frame.pointee.arcCornerRowOffsets.removeAll()
             return
         }
 
@@ -1345,13 +1424,15 @@ final class MetalRenderer {
                 let oldTextCount = frame.pointee.stagedRowInstances[row].text.count
                 let oldEmojiCount = frame.pointee.stagedRowInstances[row].emoji.count
                 let oldBoxDrawCount = frame.pointee.stagedRowInstances[row].boxDraw.count
+                let oldArcCornerCount = frame.pointee.stagedRowInstances[row].arcCorner.count
                 frame.pointee.stagedRowInstances[row] = rebuildTextRow(
                     row: row, cols: cols, snapshot: snapshot,
                     colorState: colorState, shaper: shaper, cellWidth: cellWidth
                 )
                 if frame.pointee.stagedRowInstances[row].text.count != oldTextCount ||
                     frame.pointee.stagedRowInstances[row].emoji.count != oldEmojiCount ||
-                    frame.pointee.stagedRowInstances[row].boxDraw.count != oldBoxDrawCount {
+                    frame.pointee.stagedRowInstances[row].boxDraw.count != oldBoxDrawCount ||
+                    frame.pointee.stagedRowInstances[row].arcCorner.count != oldArcCornerCount {
                     countsChanged = true
                 }
             }
@@ -1361,15 +1442,19 @@ final class MetalRenderer {
                frame.pointee.textRowOffsets.count == rows,
                frame.pointee.emojiRowOffsets.count == rows,
                frame.pointee.boxDrawRowOffsets.count == rows,
+               frame.pointee.arcCornerRowOffsets.count == rows,
                frame.pointee.textInstanceCapacity > 0,
                frame.pointee.emojiInstanceCapacity > 0,
-               frame.pointee.boxDrawInstanceCapacity > 0 {
+               frame.pointee.boxDrawInstanceCapacity > 0,
+               frame.pointee.arcCornerInstanceCapacity > 0 {
                 let textPtr = frame.pointee.textInstanceBuffer.contents()
                     .bindMemory(to: CellTextInstance.self, capacity: frame.pointee.textInstanceCapacity)
                 let emojiPtr = frame.pointee.emojiInstanceBuffer.contents()
                     .bindMemory(to: CellTextInstance.self, capacity: frame.pointee.emojiInstanceCapacity)
                 let boxDrawPtr = frame.pointee.boxDrawInstanceBuffer.contents()
                     .bindMemory(to: BoxDrawSegmentInstance.self, capacity: frame.pointee.boxDrawInstanceCapacity)
+                let arcCornerPtr = frame.pointee.arcCornerInstanceBuffer.contents()
+                    .bindMemory(to: ArcCornerInstance.self, capacity: frame.pointee.arcCornerInstanceCapacity)
                 for row in dirtyRegion.dirtyRows {
                     guard row >= 0 && row < rows else { continue }
                     let tOff = frame.pointee.textRowOffsets[row]
@@ -1384,6 +1469,10 @@ final class MetalRenderer {
                     for (i, inst) in frame.pointee.stagedRowInstances[row].boxDraw.enumerated() {
                         boxDrawPtr[bOff + i] = inst
                     }
+                    let acOff = frame.pointee.arcCornerRowOffsets[row]
+                    for (i, inst) in frame.pointee.stagedRowInstances[row].arcCorner.enumerated() {
+                        arcCornerPtr[acOff + i] = inst
+                    }
                 }
                 return
             }
@@ -1393,6 +1482,7 @@ final class MetalRenderer {
         let totalTextCount = frame.pointee.stagedRowInstances.reduce(0) { $0 + $1.text.count }
         let totalEmojiCount = frame.pointee.stagedRowInstances.reduce(0) { $0 + $1.emoji.count }
         let totalBoxDrawCount = frame.pointee.stagedRowInstances.reduce(0) { $0 + $1.boxDraw.count }
+        let totalArcCornerCount = frame.pointee.stagedRowInstances.reduce(0) { $0 + $1.arcCorner.count }
 
         ensureBufferCapacity(
             buffer: &frame.pointee.textInstanceBuffer,
@@ -1409,6 +1499,11 @@ final class MetalRenderer {
             capacity: &frame.pointee.boxDrawInstanceCapacity,
             requiredCount: max(1, totalBoxDrawCount), type: BoxDrawSegmentInstance.self
         )
+        ensureBufferCapacity(
+            buffer: &frame.pointee.arcCornerInstanceBuffer,
+            capacity: &frame.pointee.arcCornerInstanceCapacity,
+            requiredCount: max(1, totalArcCornerCount), type: ArcCornerInstance.self
+        )
 
         let textPtr = frame.pointee.textInstanceBuffer.contents()
             .bindMemory(to: CellTextInstance.self, capacity: max(1, totalTextCount))
@@ -1416,6 +1511,8 @@ final class MetalRenderer {
             .bindMemory(to: CellTextInstance.self, capacity: max(1, totalEmojiCount))
         let boxDrawPtr = frame.pointee.boxDrawInstanceBuffer.contents()
             .bindMemory(to: BoxDrawSegmentInstance.self, capacity: max(1, totalBoxDrawCount))
+        let arcCornerPtr = frame.pointee.arcCornerInstanceBuffer.contents()
+            .bindMemory(to: ArcCornerInstance.self, capacity: max(1, totalArcCornerCount))
 
         var textOffsets: [Int] = []
         textOffsets.reserveCapacity(rows)
@@ -1423,13 +1520,17 @@ final class MetalRenderer {
         emojiOffsets.reserveCapacity(rows)
         var boxDrawOffsets: [Int] = []
         boxDrawOffsets.reserveCapacity(rows)
+        var arcCornerOffsets: [Int] = []
+        arcCornerOffsets.reserveCapacity(rows)
         var textIdx = 0
         var emojiIdx = 0
         var boxDrawIdx = 0
+        var arcCornerIdx = 0
         for row in 0..<rows {
             textOffsets.append(textIdx)
             emojiOffsets.append(emojiIdx)
             boxDrawOffsets.append(boxDrawIdx)
+            arcCornerOffsets.append(arcCornerIdx)
             let rowInst = frame.pointee.stagedRowInstances[row]
             for inst in rowInst.text {
                 textPtr[textIdx] = inst
@@ -1443,14 +1544,20 @@ final class MetalRenderer {
                 boxDrawPtr[boxDrawIdx] = inst
                 boxDrawIdx += 1
             }
+            for inst in rowInst.arcCorner {
+                arcCornerPtr[arcCornerIdx] = inst
+                arcCornerIdx += 1
+            }
         }
         frame.pointee.textRowOffsets = textOffsets
         frame.pointee.emojiRowOffsets = emojiOffsets
         frame.pointee.boxDrawRowOffsets = boxDrawOffsets
+        frame.pointee.arcCornerRowOffsets = arcCornerOffsets
 
         frame.pointee.textInstanceCount = textIdx
         frame.pointee.emojiInstanceCount = emojiIdx
         frame.pointee.boxDrawInstanceCount = boxDrawIdx
+        frame.pointee.arcCornerInstanceCount = arcCornerIdx
     }
 
     /// Fast color-only patch for text instances in dirty rows.
@@ -1498,6 +1605,26 @@ final class MetalRenderer {
 
                 let absLine = snapshot.absoluteLine(forViewportRow: row)
                 bdPtr[i].color = colorState.foreground(
+                    attrs: backingCells[rowBase + col].attributes,
+                    row: row, col: col, absLine: absLine)
+            }
+        }
+
+        // Patch arc corner instance colors
+        let arcCornerCount = frame.pointee.arcCornerInstanceCount
+        if arcCornerCount > 0 {
+            let acPtr = frame.pointee.arcCornerInstanceBuffer.contents()
+                .bindMemory(to: ArcCornerInstance.self, capacity: arcCornerCount)
+            for i in 0..<arcCornerCount {
+                let row = Int(acPtr[i].gridPos.y)
+                if !dirtyRegion.isDirty(row: row) { continue }
+
+                let col = Int(acPtr[i].gridPos.x)
+                let rowBase = row * snapCols
+                guard rowBase + col < backingCells.count else { continue }
+
+                let absLine = snapshot.absoluteLine(forViewportRow: row)
+                acPtr[i].color = colorState.foreground(
                     attrs: backingCells[rowBase + col].attributes,
                     row: row, col: col, absLine: absLine)
             }

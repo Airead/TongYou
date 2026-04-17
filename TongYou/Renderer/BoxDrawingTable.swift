@@ -365,14 +365,8 @@ func boxDrawingSegments(
     // ╬ Double vertical and horizontal
     case 0x6C: return dblHFull() + dblVFull()
 
-    // ╭ Arc down and right (rendered as right-angle corner for alignment)
-    case 0x6D: return [hRight(light), vDown(light)]
-    // ╮ Arc down and left
-    case 0x6E: return [hLeft(light), vDown(light)]
-    // ╯ Arc up and left
-    case 0x6F: return [hLeft(light), vUp(light)]
-    // ╰ Arc up and right
-    case 0x70: return [hRight(light), vUp(light)]
+    // ╭╮╯╰ Arc corners — handled by SDF shader, not rectangular segments
+    case 0x6D, 0x6E, 0x6F, 0x70: return nil
 
     // ╱ Light diagonal upper right to lower left
     // ╲ Light diagonal upper left to lower right

@@ -35,3 +35,12 @@ struct BoxDrawSegmentInstance {
     var cellOffset: SIMD2<UInt16>   // (x0, y0) pixel offset in cell  — 4 bytes
     var segmentSize: SIMD2<UInt16>  // (width, height) in pixels      — 4 bytes
 }
+
+/// Per-instance data for arc corner rendering (╭╮╯╰).
+/// 12 bytes, matching the Metal vertex buffer layout.
+struct ArcCornerInstance {
+    var gridPos: SIMD2<UInt16>      // (column, row)                  — 4 bytes
+    var color: SIMD4<UInt8>         // foreground RGBA (0-255)        — 4 bytes
+    var cornerType: UInt16          // 0=╭, 1=╮, 2=╯, 3=╰            — 2 bytes
+    var _pad: UInt16 = 0            //                                — 2 bytes
+}
