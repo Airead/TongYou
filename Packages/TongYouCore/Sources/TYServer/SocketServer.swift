@@ -256,14 +256,8 @@ public final class SocketServer: @unchecked Sendable {
             // When scrollDelta is set, the dirty rows are only the newly
             // revealed ones, so skip the mostlyDirty heuristic.
             let hasScrollDelta = snapshot.dirtyRegion.scrollDelta > 0
-            let mostlyDirty: Bool
-            if hasScrollDelta {
-                mostlyDirty = false
-            } else if let range = snapshot.dirtyRegion.lineRange {
-                mostlyDirty = range.count >= snapshot.rows * 4 / 5
-            } else {
-                mostlyDirty = false
-            }
+            let dirtyCount = snapshot.isPartial ? snapshot.dirtyRows.count : snapshot.dirtyRegion.dirtyRows.count
+            let mostlyDirty = !hasScrollDelta && dirtyCount >= snapshot.rows * 4 / 5
             if snapshot.dirtyRegion.fullRebuild || mostlyDirty {
                 message = .screenFull(key.sessionID, key.paneID, snapshot, mouseTrackingMode: mouseMode)
             } else {

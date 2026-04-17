@@ -380,7 +380,7 @@ public final class ServerSessionManager {
 
     /// Consume a snapshot if the pane is dirty.
     public func consumeSnapshot(paneID: PaneID) -> ScreenSnapshot? {
-        coreLookup[paneID]?.consumeSnapshot()
+        coreLookup[paneID]?.consumeSnapshot(allowPartial: true)
     }
 
     // MARK: - Floating Pane Operations
