@@ -572,4 +572,24 @@ import TYTerminal
         let long = String(repeating: "X", count: 1500)
         #expect(StreamHandler.sanitizeTitle(long).count == 1024)
     }
+
+    // MARK: - XTMODKEYS must not pollute SGR
+
+    @Test func xtmodkeysDoesNotSetUnderline() {
+        // CSI > 4 ; 1 m is XTMODKEYS (xterm modifyOtherKeys), not SGR.
+        // It must NOT set underline (SGR 4) or bold (SGR 1).
+        let screen = process("\u{1B}[>4;1mA")
+        let cell = screen.cell(at: 0, row: 0)
+        #expect(cell.codepoint == "A")
+        #expect(!cell.attributes.flags.contains(.underline))
+        #expect(!cell.attributes.flags.contains(.bold))
+    }
+
+    @Test func xtmodkeysResetDoesNotAffectAttrs() {
+        // CSI > 4 ; 0 m should not reset current attributes.
+        // Set bold first, then send XTMODKEYS reset, then print.
+        let screen = process("\u{1B}[1m\u{1B}[>4;0mA")
+        let cell = screen.cell(at: 0, row: 0)
+        #expect(cell.attributes.flags.contains(.bold))
+    }
 }

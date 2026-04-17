@@ -18,6 +18,20 @@ public enum SGRParser {
         var i = 0
         while i < params.count {
             let p = params[i]
+            let colon = params.isColon(at: i)
+
+            // Guard: only 4, 38, 48, 58 accept colon sub-parameters.
+            // For any other param with a colon, consume the sub-params and skip.
+            if colon {
+                switch p {
+                case 4, 38, 48, 58:
+                    break // handled below
+                default:
+                    i = consumeColonGroup(params, from: i)
+                    i += 1
+                    continue
+                }
+            }
 
             switch p {
             case 0:
@@ -27,7 +41,26 @@ public enum SGRParser {
             case 1: attrs.flags.insert(.bold)
             case 2: attrs.flags.insert(.dim)
             case 3: attrs.flags.insert(.italic)
-            case 4: attrs.flags.insert(.underline)
+            case 4:
+                if colon {
+                    // Colon sub-parameter: 4:0=none, 4:1=single, 4:2=double, 4:3=curly, etc.
+                    if i + 1 < params.count {
+                        let sub = params[i + 1]
+                        if sub == 0 {
+                            attrs.flags.remove(.underline)
+                        } else {
+                            attrs.flags.insert(.underline)
+                        }
+                        i += 1
+                        // Consume any extra colon sub-params (e.g. 4:3:extra)
+                        while i < params.count - 1 && params.isColon(at: i) {
+                            i += 1
+                        }
+                    }
+                    // Trailing colon with no sub-param: ignore
+                } else {
+                    attrs.flags.insert(.underline)
+                }
             case 5, 6: attrs.flags.insert(.blink)
             case 7: attrs.flags.insert(.inverse)
             case 8: attrs.flags.insert(.hidden)
@@ -65,6 +98,14 @@ public enum SGRParser {
             // Default background
             case 49:
                 attrs.bgColor = .default
+
+            // Underline color (58:2:r:g:b or 58:5:n) — consume and ignore for now
+            case 58:
+                i = consumeColonGroup(params, from: i)
+
+            // Reset underline color
+            case 59:
+                break
 
             // Bright foreground colors
             case 90...97:
@@ -136,6 +177,16 @@ public enum SGRParser {
         default:
             return start
         }
+    }
+
+    /// Consume all colon-connected sub-parameters starting at `from`.
+    /// Returns the index of the last consumed param (caller will +1).
+    private static func consumeColonGroup(_ params: CSIParams, from start: Int) -> Int {
+        var i = start
+        while i < params.count - 1 && params.isColon(at: i) {
+            i += 1
+        }
+        return i
     }
 
     /// Count consecutive colon separators starting from index.

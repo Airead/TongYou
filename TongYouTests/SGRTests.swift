@@ -182,4 +182,63 @@ import TYTerminal
         let attrs = parseSGR([38, 2, 255, 128, 0], colons: [0, 1, 2, 3])
         #expect(attrs.fgColor == .rgb(255, 128, 0))
     }
+
+    // MARK: - Underline Colon Sub-parameters
+
+    @Test func underlineColonNone() {
+        // 4:0 = underline none (turn off underline)
+        let attrs = parseSGR([4, 0], colons: [0])
+        #expect(!attrs.flags.contains(.underline))
+    }
+
+    @Test func underlineColonSingle() {
+        // 4:1 = single underline
+        let attrs = parseSGR([4, 1], colons: [0])
+        #expect(attrs.flags.contains(.underline))
+    }
+
+    @Test func underlineColonDouble() {
+        // 4:2 = double underline (stored as underline for now)
+        let attrs = parseSGR([4, 2], colons: [0])
+        #expect(attrs.flags.contains(.underline))
+    }
+
+    @Test func underlineColonCurly() {
+        // 4:3 = curly underline
+        let attrs = parseSGR([4, 3], colons: [0])
+        #expect(attrs.flags.contains(.underline))
+    }
+
+    @Test func underlineColonNonePreservesOtherAttrs() {
+        // 1;4:0;31 = bold + underline off + red fg
+        // The 4:0 must NOT reset other attributes
+        let attrs = parseSGR([1, 4, 0, 31], colons: [1])
+        #expect(attrs.flags.contains(.bold))
+        #expect(!attrs.flags.contains(.underline))
+        #expect(attrs.fgColor == .indexed(1))
+    }
+
+    @Test func underlineColonWithTrueColor() {
+        // 38;2;100;200;50;4:0 = truecolor fg + underline off
+        let attrs = parseSGR([38, 2, 100, 200, 50, 4, 0], colons: [5])
+        #expect(attrs.fgColor == .rgb(100, 200, 50))
+        #expect(!attrs.flags.contains(.underline))
+    }
+
+    // MARK: - Unknown Colon Sub-parameters
+
+    @Test func unknownColonParamSkipped() {
+        // 1:2;31 — unknown colon group on param 1, then red fg
+        // The 1:2 should be consumed and ignored, not treated as bold+dim
+        let attrs = parseSGR([1, 2, 31], colons: [0])
+        #expect(!attrs.flags.contains(.bold))
+        #expect(!attrs.flags.contains(.dim))
+        #expect(attrs.fgColor == .indexed(1))
+    }
+
+    @Test func underlineColorConsumed() {
+        // 58:2:255:128:0;1 — underline color (ignored) + bold
+        let attrs = parseSGR([58, 2, 255, 128, 0, 1], colons: [0, 1, 2, 3])
+        #expect(attrs.flags.contains(.bold))
+    }
 }
