@@ -28,15 +28,14 @@ TongYou uses a `key = value` config file with hot-reload.
 
 **Config load order** (later overrides earlier):
 
-1. `~/.config/tongyou/config`
-2. `~/Library/Application Support/io.github.airead.tongyou/config`
-3. Files included via `config-file = ?path`
+1. `~/.config/tongyou/system_config.txt` (auto-generated on every launch, do not edit)
+2. `~/.config/tongyou/user_config.txt` (user customizations, included from system_config.txt)
 
-On first run, if no config file exists, TongYou generates a default one at `~/.config/tongyou/config` from the bundled template.
+On every launch, TongYou overwrites `system_config.txt` from the bundled template. To customize settings, edit `user_config.txt` — your values override all system defaults.
 
-**Default config template**: [TongYou/Config/DefaultConfig.txt](TongYou/Config/DefaultConfig.txt)
+**System config template**: [TongYou/Config/SystemConfig.txt](TongYou/Config/SystemConfig.txt)
 
-Use **Cmd + ,** (Preferences) to open the default config in TextEdit.
+Use **Cmd + ,** (Preferences) to open `user_config.txt` in TextEdit.
 
 ## License
 

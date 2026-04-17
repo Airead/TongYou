@@ -34,7 +34,7 @@ struct TongYouCommands: Commands {
     var body: some Commands {
         CommandGroup(replacing: .appSettings) {
             Button("Preferences...") {
-                ConfigLoader.openDefaultConfigFile()
+                ConfigLoader.openUserConfigFile()
             }
             .keyboardShortcut(",", modifiers: .command)
         }

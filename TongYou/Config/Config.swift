@@ -49,6 +49,16 @@ struct Config: Equatable {
     /// Programs that automatically receive non-Cmd keybindings when in foreground.
     var autoPassthroughPrograms: Set<String> = []
 
+    // MARK: - Draft Session
+
+    /// Create a Draft session automatically on launch.
+    var draftEnabled: Bool = true
+
+    // MARK: - Daemon
+
+    /// Automatically connect to tongyou daemon on launch.
+    var autoConnectDaemon: Bool = false
+
     // MARK: - Debug
 
     var debugMetrics: Bool = false
@@ -237,6 +247,14 @@ extension Config {
                         .filter { !$0.isEmpty }
                 )
             }
+
+        // Draft session
+        case "draft-enabled":
+            draftEnabled = value.isEmpty ? Config.default.draftEnabled : try parseBool(value, key: key)
+
+        // Daemon
+        case "auto-connect-daemon":
+            autoConnectDaemon = value.isEmpty ? Config.default.autoConnectDaemon : try parseBool(value, key: key)
 
         // Debug
         case "debug-metrics":

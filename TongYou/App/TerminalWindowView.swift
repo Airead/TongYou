@@ -186,10 +186,15 @@ struct TerminalWindowView: View {
         ))
         .onAppear {
             sessionManager.restoreLocalSessions()
-            sessionManager.createAnonymousSession()
-            focusActiveTabRootPane()
             loadWindowBackground()
+            if configLoader.config.draftEnabled {
+                sessionManager.createAnonymousSession()
+            }
+            focusActiveTabRootPane()
             wireRemoteLayoutCallback()
+            if configLoader.config.autoConnectDaemon {
+                sessionManager.ensureConnected {}
+            }
         }
         .onChange(of: focusManager.focusedPaneID) { _, newID in
             sessionManager.updateFloatingPanesVisibilityForFocus(focusedPaneID: newID)

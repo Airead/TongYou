@@ -5,9 +5,11 @@ import Foundation
 ///
 /// Load order (later overrides earlier):
 /// 1. Built-in defaults (`Config.default`)
-/// 2. `$XDG_CONFIG_HOME/tongyou/config` (default `~/.config/tongyou/config`)
-/// 3. `~/Library/Application Support/io.github.airead.tongyou/config`
-/// 4. Files referenced by `config-file` directives
+/// 2. `$XDG_CONFIG_HOME/tongyou/system_config.txt` (default `~/.config/tongyou/system_config.txt`)
+/// 3. Files referenced by `config-file` directives (including `user_config.txt`)
+///
+/// `system_config.txt` is auto-generated on every launch from the bundled template.
+/// Users should edit `user_config.txt` in the same directory to override system defaults.
 ///
 /// Hot reload: watches config files via DispatchSource with 200ms debounce.
 final class ConfigLoader {
@@ -33,9 +35,9 @@ final class ConfigLoader {
     // MARK: - Lifecycle
 
     /// Load configuration from standard locations and start watching.
-    /// On first run, generates a commented-out sample config file.
+    /// Always overwrites `system_config.txt` with the bundled template.
     func load() {
-        generateDefaultConfigIfNeeded()
+        writeSystemConfig()
         let (newConfig, paths) = loadFromDisk()
         config = newConfig
         setupWatchers(for: paths)
@@ -51,41 +53,34 @@ final class ConfigLoader {
 
     // MARK: - Config File Paths
 
-    /// Returns the ordered list of config file paths that exist.
-    static func configFilePaths() -> [URL] {
-        var paths: [URL] = []
-
-        // XDG_CONFIG_HOME/tongyou/config (default ~/.config/tongyou/config)
+    /// Returns the XDG config directory for tongyou.
+    static func configDirectory() -> URL {
         let xdgHome: String
         if let env = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"], !env.isEmpty {
             xdgHome = env
         } else {
             xdgHome = NSString(string: "~/.config").expandingTildeInPath
         }
-        let xdgPath = URL(fileURLWithPath: xdgHome)
-            .appendingPathComponent("tongyou")
-            .appendingPathComponent("config")
-        paths.append(xdgPath)
-
-        // ~/Library/Application Support/io.github.airead.tongyou/config
-        if let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask
-        ).first {
-            let libraryPath = appSupport
-                .appendingPathComponent("io.github.airead.tongyou")
-                .appendingPathComponent("config")
-            paths.append(libraryPath)
-        }
-
-        return paths
+        return URL(fileURLWithPath: xdgHome).appendingPathComponent("tongyou")
     }
 
-    // MARK: - Default Config Generation
+    /// Returns the ordered list of config file paths to load.
+    static func configFilePaths() -> [URL] {
+        let dir = configDirectory()
+        return [dir.appendingPathComponent("system_config.txt")]
+    }
 
-    /// Generate a commented-out sample config listing all available options.
-    static func generateDefaultConfig() -> String {
+    /// Returns the path to user_config.txt.
+    static func userConfigPath() -> URL {
+        configDirectory().appendingPathComponent("user_config.txt")
+    }
+
+    // MARK: - System Config Generation
+
+    /// Load the system config template from the bundle or source directory.
+    static func generateSystemConfig() -> String {
         // 1. Production: load from the app bundle.
-        if let bundleURL = Bundle.main.url(forResource: "DefaultConfig", withExtension: "txt") {
+        if let bundleURL = Bundle.main.url(forResource: "SystemConfig", withExtension: "txt") {
             if let content = try? String(contentsOf: bundleURL, encoding: .utf8) {
                 return content
             }
@@ -93,44 +88,38 @@ final class ConfigLoader {
 
         // 2. Development / tests: load from the source directory adjacent to this file.
         let sourceFile = URL(fileURLWithPath: #file)
-        let devURL = sourceFile.deletingLastPathComponent().appendingPathComponent("DefaultConfig.txt")
+        let devURL = sourceFile.deletingLastPathComponent().appendingPathComponent("SystemConfig.txt")
         if let content = try? String(contentsOf: devURL, encoding: .utf8) {
             return content
         }
 
-        fatalError("DefaultConfig.txt is missing from the bundle and source directory.")
+        fatalError("SystemConfig.txt is missing from the bundle and source directory.")
     }
 
-    /// Write the default sample config to the XDG config path if no config files exist.
-    private func generateDefaultConfigIfNeeded() {
-        let paths = Self.configFilePaths()
-        let anyExists = paths.contains { FileManager.default.fileExists(atPath: $0.path) }
-        guard !anyExists else { return }
-
-        // Use the first path (XDG)
-        guard let target = paths.first else { return }
-        Self.ensureDefaultConfigExists(at: target)
-    }
-
-    /// Ensure the default config file exists at the given URL, generating it if needed.
-    static func ensureDefaultConfigExists(at url: URL) {
-        if !FileManager.default.fileExists(atPath: url.path) {
-            let dir = url.deletingLastPathComponent()
-            do {
-                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-                try generateDefaultConfig().write(to: url, atomically: true, encoding: .utf8)
-                print("[config] generated default config at \(url.path)")
-            } catch {
-                print("[config] warning: could not generate default config: \(error)")
-            }
+    /// Overwrite system_config.txt with the bundled template on every launch.
+    private func writeSystemConfig() {
+        guard let target = Self.configFilePaths().first else { return }
+        let dir = target.deletingLastPathComponent()
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try Self.generateSystemConfig().write(to: target, atomically: true, encoding: .utf8)
+        } catch {
+            print("[config] warning: could not write system config: \(error)")
         }
     }
 
-    /// Open the default config file with TextEdit, generating it if needed.
-    static func openDefaultConfigFile() {
-        let paths = configFilePaths()
-        guard let target = paths.first else { return }
-        ensureDefaultConfigExists(at: target)
+    /// Open the user config file with TextEdit, creating an empty one if needed.
+    static func openUserConfigFile() {
+        let target = userConfigPath()
+        let dir = target.deletingLastPathComponent()
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            if !FileManager.default.fileExists(atPath: target.path) {
+                try "".write(to: target, atomically: true, encoding: .utf8)
+            }
+        } catch {
+            print("[config] warning: could not create user config: \(error)")
+        }
         guard let textEditURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.TextEdit") else { return }
         NSWorkspace.shared.open([target], withApplicationAt: textEditURL, configuration: NSWorkspace.OpenConfiguration())
     }
@@ -239,6 +228,8 @@ final class ConfigLoader {
         if old.scrollbackLimit != new.scrollbackLimit { changes.append("scrollback-limit") }
         if old.bell != new.bell { changes.append("bell") }
         if old.keybindings != new.keybindings { changes.append("keybind") }
+        if old.draftEnabled != new.draftEnabled { changes.append("draft-enabled") }
+        if old.autoConnectDaemon != new.autoConnectDaemon { changes.append("auto-connect-daemon") }
         if old.debugMetrics != new.debugMetrics { changes.append("debug-metrics") }
         if !changes.isEmpty {
             print("[config] reloaded: \(changes.joined(separator: ", ")) changed")
