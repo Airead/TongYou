@@ -94,6 +94,7 @@ public final class SocketServer: @unchecked Sendable {
             client.stop()
         }
         lastSentState.removeAll()
+        sessionManager.stopAllSessions()
         Log.info("Server stopped")
     }
 

@@ -3,7 +3,7 @@ import Foundation
 @testable import TYProtocol
 @testable import TYTerminal
 
-@Suite("ServerMessage Tests")
+@Suite("ServerMessage Tests", .serialized)
 struct ServerMessageTests {
 
     private static let dummySessionID = SessionID()

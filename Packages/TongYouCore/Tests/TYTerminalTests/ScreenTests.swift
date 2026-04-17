@@ -1,7 +1,7 @@
 import Testing
 @testable import TYTerminal
 
-@Suite("Screen tests")
+@Suite("Screen tests", .serialized)
 struct ScreenTests {
 
     @Test func initializesWithCorrectDimensions() {

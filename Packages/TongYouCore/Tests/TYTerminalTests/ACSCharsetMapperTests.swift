@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import TYTerminal
 
-@Suite("ACS charset mapper tests")
+@Suite("ACS charset mapper tests", .serialized)
 struct ACSCharsetMapperTests {
 
     @Test func decSpecialMapping() {

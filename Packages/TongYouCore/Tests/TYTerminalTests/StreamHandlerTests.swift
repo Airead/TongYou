@@ -17,7 +17,7 @@ private func processVTScreen(_ s: String, columns: Int = 80, rows: Int = 24) -> 
     return screen
 }
 
-@Suite("StreamHandler grapheme cluster tests")
+@Suite("StreamHandler grapheme cluster tests", .serialized)
 struct StreamHandlerGraphemeClusterTests {
 
     @Test func zwjSequenceRendersAsOneCell() {
@@ -70,7 +70,7 @@ struct StreamHandlerGraphemeClusterTests {
     }
 }
 
-@Suite("StreamHandler ACS tests")
+@Suite("StreamHandler ACS tests", .serialized)
 struct StreamHandlerACSTests {
 
     @Test func acsG0BoxDrawing() {

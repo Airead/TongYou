@@ -2,7 +2,7 @@ import Testing
 import Foundation
 @testable import TYConfig
 
-@Suite("ConfigParser")
+@Suite("ConfigParser", .serialized)
 struct ConfigParserTests {
 
     private let parser = ConfigParser()

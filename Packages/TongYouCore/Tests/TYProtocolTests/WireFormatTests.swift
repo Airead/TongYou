@@ -3,7 +3,7 @@ import Foundation
 @testable import TYProtocol
 @testable import TYTerminal
 
-@Suite("WireFormat tests")
+@Suite("WireFormat tests", .serialized)
 struct WireFormatTests {
 
     // MARK: - Frame Header

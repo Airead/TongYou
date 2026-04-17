@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import TYTerminal
 
-@Suite("DirtyRegion behavior tests")
+@Suite("DirtyRegion behavior tests", .serialized)
 struct DirtyRegionBehaviorTests {
 
     // MARK: - Helpers

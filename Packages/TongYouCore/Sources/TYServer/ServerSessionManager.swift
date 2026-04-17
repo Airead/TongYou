@@ -194,6 +194,18 @@ public final class ServerSessionManager {
         Log.info("Session renamed: \(name) (\(id))", category: .session)
     }
 
+    public func stopAllSessions() {
+        pendingSavesLock.lock()
+        for (_, item) in pendingSaves { item.cancel() }
+        pendingSaves.removeAll()
+        pendingSavesLock.unlock()
+
+        for (_, session) in sessions {
+            for tab in session.tabs { teardownAllPanes(in: tab) }
+        }
+        sessions.removeAll()
+    }
+
     public func closeSession(id: SessionID) {
         cancelPendingSave(id: id)
         guard let session = sessions.removeValue(forKey: id) else { return }

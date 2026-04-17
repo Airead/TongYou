@@ -1,6 +1,7 @@
 import Testing
 import TYTerminal
 
+@Suite("UnicodeCharacterSet Tests", .serialized)
 struct UnicodeCharacterSetTests {
 
     @Test func symbolCharacters() {
