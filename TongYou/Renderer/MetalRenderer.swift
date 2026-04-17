@@ -24,6 +24,7 @@ final class MetalRenderer {
     private let bgPipelineState: MTLRenderPipelineState
     private let underlinePipelineState: MTLRenderPipelineState
     private let strikethroughPipelineState: MTLRenderPipelineState
+    private let boxDrawPipelineState: MTLRenderPipelineState
     private let textPipelineState: MTLRenderPipelineState
     private let emojiPipelineState: MTLRenderPipelineState
 
@@ -65,6 +66,7 @@ final class MetalRenderer {
     private struct RowTextInstances {
         var text: [CellTextInstance] = []
         var emoji: [CellTextInstance] = []
+        var boxDraw: [BoxDrawSegmentInstance] = []
     }
 
     private var shapedRowCache = ShapedRowCache()
@@ -182,6 +184,9 @@ final class MetalRenderer {
         var emojiInstanceBuffer: MTLBuffer
         var emojiInstanceCapacity: Int
         var emojiInstanceCount: Int
+        var boxDrawInstanceBuffer: MTLBuffer
+        var boxDrawInstanceCapacity: Int
+        var boxDrawInstanceCount: Int
         /// Per-frame staging for text/emoji instances. Enables partial updates
         /// without interfering with other swap-chain frames.
         var stagedRowInstances: [RowTextInstances] = []
@@ -189,6 +194,7 @@ final class MetalRenderer {
         /// Used by partial updates to patch in-place without a full compact.
         var textRowOffsets: [Int] = []
         var emojiRowOffsets: [Int] = []
+        var boxDrawRowOffsets: [Int] = []
     }
 
     init(device: MTLDevice, fontSystem: FontSystem, config: Config = .default,
@@ -274,6 +280,41 @@ final class MetalRenderer {
             strikethroughPipelineState = try device.makeRenderPipelineState(descriptor: strikethroughPipelineDesc)
         } catch {
             fatalError("Failed to create strikethrough pipeline state: \(error)")
+        }
+
+        // --- Box-drawing pipeline ---
+        guard let boxDrawVertexFunc = library.makeFunction(name: "box_draw_vertex") else {
+            fatalError("Failed to load box_draw_vertex shader function")
+        }
+
+        let boxDrawVertexDescriptor = MTLVertexDescriptor()
+        boxDrawVertexDescriptor.attributes[0].format = .ushort2    // gridPos
+        boxDrawVertexDescriptor.attributes[0].offset = 0
+        boxDrawVertexDescriptor.attributes[0].bufferIndex = 1
+        boxDrawVertexDescriptor.attributes[1].format = .uchar4     // color
+        boxDrawVertexDescriptor.attributes[1].offset = 4
+        boxDrawVertexDescriptor.attributes[1].bufferIndex = 1
+        boxDrawVertexDescriptor.attributes[2].format = .ushort2    // cellOffset
+        boxDrawVertexDescriptor.attributes[2].offset = 8
+        boxDrawVertexDescriptor.attributes[2].bufferIndex = 1
+        boxDrawVertexDescriptor.attributes[3].format = .ushort2    // segmentSize
+        boxDrawVertexDescriptor.attributes[3].offset = 12
+        boxDrawVertexDescriptor.attributes[3].bufferIndex = 1
+        boxDrawVertexDescriptor.layouts[1].stride = MemoryLayout<BoxDrawSegmentInstance>.stride
+        boxDrawVertexDescriptor.layouts[1].stepFunction = .perInstance
+        boxDrawVertexDescriptor.layouts[1].stepRate = 1
+
+        let boxDrawPipelineDesc = MTLRenderPipelineDescriptor()
+        boxDrawPipelineDesc.vertexFunction = boxDrawVertexFunc
+        boxDrawPipelineDesc.fragmentFunction = bgFragmentFunc
+        boxDrawPipelineDesc.vertexDescriptor = boxDrawVertexDescriptor
+        boxDrawPipelineDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
+        Self.enablePremultipliedAlpha(boxDrawPipelineDesc.colorAttachments[0]!)
+
+        do {
+            boxDrawPipelineState = try device.makeRenderPipelineState(descriptor: boxDrawPipelineDesc)
+        } catch {
+            fatalError("Failed to create box-draw pipeline state: \(error)")
         }
 
         // --- Text pipeline ---
@@ -363,6 +404,10 @@ final class MetalRenderer {
                 let emojiBuf = device.makeBuffer(
                     length: MemoryLayout<CellTextInstance>.stride * initialCapacity,
                     options: .storageModeShared
+                ),
+                let boxDrawBuf = device.makeBuffer(
+                    length: MemoryLayout<BoxDrawSegmentInstance>.stride * underlineInitialCapacity,
+                    options: .storageModeShared
                 ) else {
                     fatalError("Failed to allocate frame state buffers")
                 }
@@ -381,7 +426,10 @@ final class MetalRenderer {
                     textInstanceCount: 0,
                     emojiInstanceBuffer: emojiBuf,
                     emojiInstanceCapacity: initialCapacity,
-                    emojiInstanceCount: 0
+                    emojiInstanceCount: 0,
+                    boxDrawInstanceBuffer: boxDrawBuf,
+                    boxDrawInstanceCapacity: underlineInitialCapacity,
+                    boxDrawInstanceCount: 0
                 ))
             }
     }
@@ -637,6 +685,18 @@ final class MetalRenderer {
             )
         }
 
+        if frame.boxDrawInstanceCount > 0 {
+            encoder.setRenderPipelineState(boxDrawPipelineState)
+            encoder.setVertexBuffer(frame.uniformBuffer, offset: 0, index: 0)
+            encoder.setVertexBuffer(frame.boxDrawInstanceBuffer, offset: 0, index: 1)
+            encoder.drawPrimitives(
+                type: .triangleStrip,
+                vertexStart: 0,
+                vertexCount: 4,
+                instanceCount: frame.boxDrawInstanceCount
+            )
+        }
+
         if frame.textInstanceCount > 0 {
             encoder.setRenderPipelineState(textPipelineState)
             encoder.setVertexBuffer(frame.uniformBuffer, offset: 0, index: 0)
@@ -721,6 +781,16 @@ final class MetalRenderer {
                 ) {
                     state.emojiInstanceBuffer = buf
                     state.emojiInstanceCapacity = newCap
+                }
+            }
+            if state.boxDrawInstanceCapacity > threshold {
+                let newCap = needed * 2
+                if let buf = device.makeBuffer(
+                    length: MemoryLayout<BoxDrawSegmentInstance>.stride * newCap,
+                    options: .storageModeShared
+                ) {
+                    state.boxDrawInstanceBuffer = buf
+                    state.boxDrawInstanceCapacity = newCap
                 }
             }
             frameStates[i] = state
@@ -1031,6 +1101,12 @@ final class MetalRenderer {
                 continue
             }
 
+            // Box-drawing characters skip CoreText shaping — rendered via GPU segments
+            if let scalar = cell.content.firstScalar, scalar.isBoxDrawing {
+                flushCurrentRun()
+                continue
+            }
+
             let cellFont = fontSystem.font(for: cell.content, attributes: cell.attributes)
 
             if let attrs = currentAttrs, let font = currentFont {
@@ -1188,6 +1264,30 @@ final class MetalRenderer {
             }
         }
 
+        // Box-drawing characters: decompose into rectangular segments
+        let cw = fontSystem.cellSize.width
+        let ch = fontSystem.cellSize.height
+        for col in 0..<snapCols {
+            let cell = backingCells[rowBase + col]
+            guard let scalar = cell.content.firstScalar,
+                  scalar.isBoxDrawing else { continue }
+            guard let segments = boxDrawingSegments(
+                codepoint: scalar.value, cellWidth: cw, cellHeight: ch
+            ) else { continue }
+            let fg = colorState.foreground(
+                attrs: cell.attributes,
+                row: row, col: col, absLine: absLine
+            )
+            for seg in segments {
+                rowInstances.boxDraw.append(BoxDrawSegmentInstance(
+                    gridPos: SIMD2<UInt16>(UInt16(col), UInt16(row)),
+                    color: fg,
+                    cellOffset: SIMD2<UInt16>(seg.x, seg.y),
+                    segmentSize: SIMD2<UInt16>(seg.width, seg.height)
+                ))
+            }
+        }
+
         return rowInstances
     }
 
@@ -1204,9 +1304,11 @@ final class MetalRenderer {
         guard let snapshot else {
             frame.pointee.textInstanceCount = 0
             frame.pointee.emojiInstanceCount = 0
+            frame.pointee.boxDrawInstanceCount = 0
             frame.pointee.stagedRowInstances.removeAll()
             frame.pointee.textRowOffsets.removeAll()
             frame.pointee.emojiRowOffsets.removeAll()
+            frame.pointee.boxDrawRowOffsets.removeAll()
             return
         }
 
@@ -1242,12 +1344,14 @@ final class MetalRenderer {
                 guard row >= 0 && row < rows && row < backingRows else { continue }
                 let oldTextCount = frame.pointee.stagedRowInstances[row].text.count
                 let oldEmojiCount = frame.pointee.stagedRowInstances[row].emoji.count
+                let oldBoxDrawCount = frame.pointee.stagedRowInstances[row].boxDraw.count
                 frame.pointee.stagedRowInstances[row] = rebuildTextRow(
                     row: row, cols: cols, snapshot: snapshot,
                     colorState: colorState, shaper: shaper, cellWidth: cellWidth
                 )
                 if frame.pointee.stagedRowInstances[row].text.count != oldTextCount ||
-                    frame.pointee.stagedRowInstances[row].emoji.count != oldEmojiCount {
+                    frame.pointee.stagedRowInstances[row].emoji.count != oldEmojiCount ||
+                    frame.pointee.stagedRowInstances[row].boxDraw.count != oldBoxDrawCount {
                     countsChanged = true
                 }
             }
@@ -1256,12 +1360,16 @@ final class MetalRenderer {
             if !countsChanged,
                frame.pointee.textRowOffsets.count == rows,
                frame.pointee.emojiRowOffsets.count == rows,
+               frame.pointee.boxDrawRowOffsets.count == rows,
                frame.pointee.textInstanceCapacity > 0,
-               frame.pointee.emojiInstanceCapacity > 0 {
+               frame.pointee.emojiInstanceCapacity > 0,
+               frame.pointee.boxDrawInstanceCapacity > 0 {
                 let textPtr = frame.pointee.textInstanceBuffer.contents()
                     .bindMemory(to: CellTextInstance.self, capacity: frame.pointee.textInstanceCapacity)
                 let emojiPtr = frame.pointee.emojiInstanceBuffer.contents()
                     .bindMemory(to: CellTextInstance.self, capacity: frame.pointee.emojiInstanceCapacity)
+                let boxDrawPtr = frame.pointee.boxDrawInstanceBuffer.contents()
+                    .bindMemory(to: BoxDrawSegmentInstance.self, capacity: frame.pointee.boxDrawInstanceCapacity)
                 for row in dirtyRegion.dirtyRows {
                     guard row >= 0 && row < rows else { continue }
                     let tOff = frame.pointee.textRowOffsets[row]
@@ -1272,6 +1380,10 @@ final class MetalRenderer {
                     for (i, inst) in frame.pointee.stagedRowInstances[row].emoji.enumerated() {
                         emojiPtr[eOff + i] = inst
                     }
+                    let bOff = frame.pointee.boxDrawRowOffsets[row]
+                    for (i, inst) in frame.pointee.stagedRowInstances[row].boxDraw.enumerated() {
+                        boxDrawPtr[bOff + i] = inst
+                    }
                 }
                 return
             }
@@ -1280,6 +1392,7 @@ final class MetalRenderer {
         // Full compact: rebuild GPU buffers and record per-row offsets for this frame.
         let totalTextCount = frame.pointee.stagedRowInstances.reduce(0) { $0 + $1.text.count }
         let totalEmojiCount = frame.pointee.stagedRowInstances.reduce(0) { $0 + $1.emoji.count }
+        let totalBoxDrawCount = frame.pointee.stagedRowInstances.reduce(0) { $0 + $1.boxDraw.count }
 
         ensureBufferCapacity(
             buffer: &frame.pointee.textInstanceBuffer,
@@ -1291,21 +1404,32 @@ final class MetalRenderer {
             capacity: &frame.pointee.emojiInstanceCapacity,
             requiredCount: max(1, totalEmojiCount), type: CellTextInstance.self
         )
+        ensureBufferCapacity(
+            buffer: &frame.pointee.boxDrawInstanceBuffer,
+            capacity: &frame.pointee.boxDrawInstanceCapacity,
+            requiredCount: max(1, totalBoxDrawCount), type: BoxDrawSegmentInstance.self
+        )
 
         let textPtr = frame.pointee.textInstanceBuffer.contents()
             .bindMemory(to: CellTextInstance.self, capacity: max(1, totalTextCount))
         let emojiPtr = frame.pointee.emojiInstanceBuffer.contents()
             .bindMemory(to: CellTextInstance.self, capacity: max(1, totalEmojiCount))
+        let boxDrawPtr = frame.pointee.boxDrawInstanceBuffer.contents()
+            .bindMemory(to: BoxDrawSegmentInstance.self, capacity: max(1, totalBoxDrawCount))
 
         var textOffsets: [Int] = []
         textOffsets.reserveCapacity(rows)
         var emojiOffsets: [Int] = []
         emojiOffsets.reserveCapacity(rows)
+        var boxDrawOffsets: [Int] = []
+        boxDrawOffsets.reserveCapacity(rows)
         var textIdx = 0
         var emojiIdx = 0
+        var boxDrawIdx = 0
         for row in 0..<rows {
             textOffsets.append(textIdx)
             emojiOffsets.append(emojiIdx)
+            boxDrawOffsets.append(boxDrawIdx)
             let rowInst = frame.pointee.stagedRowInstances[row]
             for inst in rowInst.text {
                 textPtr[textIdx] = inst
@@ -1315,12 +1439,18 @@ final class MetalRenderer {
                 emojiPtr[emojiIdx] = inst
                 emojiIdx += 1
             }
+            for inst in rowInst.boxDraw {
+                boxDrawPtr[boxDrawIdx] = inst
+                boxDrawIdx += 1
+            }
         }
         frame.pointee.textRowOffsets = textOffsets
         frame.pointee.emojiRowOffsets = emojiOffsets
+        frame.pointee.boxDrawRowOffsets = boxDrawOffsets
 
         frame.pointee.textInstanceCount = textIdx
         frame.pointee.emojiInstanceCount = emojiIdx
+        frame.pointee.boxDrawInstanceCount = boxDrawIdx
     }
 
     /// Fast color-only patch for text instances in dirty rows.
@@ -1351,6 +1481,26 @@ final class MetalRenderer {
             ptr[i].color = colorState.foreground(
                 attrs: backingCells[rowBase + col].attributes,
                 row: row, col: col, absLine: absLine)
+        }
+
+        // Patch box-drawing instance colors
+        let boxDrawCount = frame.pointee.boxDrawInstanceCount
+        if boxDrawCount > 0 {
+            let bdPtr = frame.pointee.boxDrawInstanceBuffer.contents()
+                .bindMemory(to: BoxDrawSegmentInstance.self, capacity: boxDrawCount)
+            for i in 0..<boxDrawCount {
+                let row = Int(bdPtr[i].gridPos.y)
+                if !dirtyRegion.isDirty(row: row) { continue }
+
+                let col = Int(bdPtr[i].gridPos.x)
+                let rowBase = row * snapCols
+                guard rowBase + col < backingCells.count else { continue }
+
+                let absLine = snapshot.absoluteLine(forViewportRow: row)
+                bdPtr[i].color = colorState.foreground(
+                    attrs: backingCells[rowBase + col].attributes,
+                    row: row, col: col, absLine: absLine)
+            }
         }
     }
 

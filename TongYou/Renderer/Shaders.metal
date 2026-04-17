@@ -101,6 +101,36 @@ vertex CellBgVertexOut strikethrough_vertex(
     return out;
 }
 
+// MARK: - Box Drawing
+
+struct BoxDrawSegmentInstance {
+    ushort2 gridPos     [[attribute(0)]];
+    uchar4  color       [[attribute(1)]];
+    ushort2 cellOffset  [[attribute(2)]];
+    ushort2 segmentSize [[attribute(3)]];
+};
+
+vertex CellBgVertexOut box_draw_vertex(
+    uint vertex_id [[vertex_id]],
+    BoxDrawSegmentInstance in [[stage_in]],
+    constant Uniforms &uniforms [[buffer(0)]]
+) {
+    float2 origin = cell_origin(in.gridPos, uniforms) + float2(in.cellOffset);
+    float2 size = float2(in.segmentSize);
+
+    float2 positions[4] = {
+        {0,      0},
+        {size.x, 0},
+        {0,      size.y},
+        {size.x, size.y}
+    };
+
+    CellBgVertexOut out;
+    out.position = uniforms.projectionMatrix * float4(origin + positions[vertex_id], 0.0, 1.0);
+    out.color = float4(in.color) / 255.0;
+    return out;
+}
+
 // MARK: - Cell Text (Glyph)
 
 struct CellTextInstance {

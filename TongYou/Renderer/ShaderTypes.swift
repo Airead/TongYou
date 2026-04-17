@@ -26,3 +26,12 @@ struct CellTextInstance {
     var color: SIMD4<UInt8>        // foreground RGBA (0-255)         — 4 bytes
     var offset: SIMD2<Int16> = .zero // (offsetX, offsetY) in pixels  — 4 bytes
 }
+
+/// Per-instance data for box-drawing segment rendering.
+/// 16 bytes, matching the Metal vertex buffer layout.
+struct BoxDrawSegmentInstance {
+    var gridPos: SIMD2<UInt16>      // (column, row)                  — 4 bytes
+    var color: SIMD4<UInt8>         // foreground RGBA (0-255)        — 4 bytes
+    var cellOffset: SIMD2<UInt16>   // (x0, y0) pixel offset in cell  — 4 bytes
+    var segmentSize: SIMD2<UInt16>  // (width, height) in pixels      — 4 bytes
+}

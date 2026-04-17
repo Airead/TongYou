@@ -71,6 +71,14 @@ extension Unicode.Scalar {
         return v >= 0x2500 && v <= 0x257F
     }
 
+    /// Returns true if the codepoint is a box drawing arc corner (╭╮╰╯).
+    ///
+    /// Range: U+256D to U+2570
+    public var isBoxDrawingArcCorner: Bool {
+        let v = self.value
+        return v >= 0x256D && v <= 0x2570
+    }
+
     /// Returns true if the codepoint is a block element.
     ///
     /// Range: U+2580 to U+259F
