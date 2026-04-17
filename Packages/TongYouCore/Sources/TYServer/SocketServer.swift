@@ -16,6 +16,8 @@ public final class SocketServer: @unchecked Sendable {
     private var listenSocket: TYSocket?
     private var clients: [UUID: ClientConnection] = [:]
     private let clientsLock = NSLock()
+    private var running = false
+    private let runningLock = NSLock()
 
     /// Global set of dirty (sessionID, paneID) pairs, populated by onScreenDirty callbacks.
     /// Protected by `dirtyLock`.
@@ -66,6 +68,10 @@ public final class SocketServer: @unchecked Sendable {
         let socket = try TYSocket.listen(path: config.socketPath)
         listenSocket = socket
 
+        runningLock.lock()
+        running = true
+        runningLock.unlock()
+
         startStatsTimer()
         Log.info("Server started, listening on \(config.socketPath)")
         onReady?()
@@ -76,14 +82,19 @@ public final class SocketServer: @unchecked Sendable {
     }
 
     public func stop() {
+        runningLock.lock()
+        running = false
+        runningLock.unlock()
+
         flushTimer?.cancel()
         flushTimer = nil
 
         statsTimer?.cancel()
         statsTimer = nil
 
-        listenSocket?.closeSocket()
+        let socket = listenSocket
         listenSocket = nil
+        socket?.closeSocket()
 
         clientsLock.lock()
         let allClients = Array(clients.values)
@@ -162,9 +173,15 @@ public final class SocketServer: @unchecked Sendable {
     // MARK: - Private: Accept Loop
 
     private func acceptLoop() {
-        while let listenSocket {
+        while true {
+            runningLock.lock()
+            let isRunning = running
+            let socket = listenSocket
+            runningLock.unlock()
+            guard isRunning, let socket else { return }
+
             do {
-                let clientSocket = try listenSocket.accept()
+                let clientSocket = try socket.accept()
                 let connection = ClientConnection(
                     socket: clientSocket,
                     maxPendingScreenUpdates: config.maxPendingScreenUpdates
@@ -190,9 +207,11 @@ public final class SocketServer: @unchecked Sendable {
 
                 connection.startReadLoop()
             } catch {
-                if self.listenSocket == nil { return }
+                runningLock.lock()
+                let stillRunning = running
+                runningLock.unlock()
+                if !stillRunning { return }
                 Log.error("Accept loop error: \(error)")
-                continue
             }
         }
     }
