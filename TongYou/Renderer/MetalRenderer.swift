@@ -541,12 +541,12 @@ final class MetalRenderer {
                 fillBgInstanceBuffer(frame: frame, grid: currentGrid, snapshot: snapshot,
                                      dirtyRegion: dirtyRegion, searchLineMap: searchMap)
                 fillUnderlineInstanceBuffer(frame: frame, grid: currentGrid, snapshot: snapshot, url: currentHighlightedURL)
-                fillTextInstanceBuffer(frame: frame, grid: currentGrid, snapshot: snapshot,
-                                       dirtyRegion: dirtyRegion, searchLineMap: searchMap)
                 if textContentDirty {
                     glyphAtlas.evictIfNeeded(fontSystem: fontSystem)
                     emojiAtlas.evictIfNeeded(fontSystem: fontSystem)
                 }
+                fillTextInstanceBuffer(frame: frame, grid: currentGrid, snapshot: snapshot,
+                                       dirtyRegion: dirtyRegion, searchLineMap: searchMap)
                 frameMetrics?.endInstanceBuild()
             }
             if updateUnis {

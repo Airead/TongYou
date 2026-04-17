@@ -393,7 +393,7 @@ final class ColorEmojiAtlas {
             mipmapped: false
         )
         descriptor.usage = [.shaderRead]
-        descriptor.storageMode = .managed
+        descriptor.storageMode = .shared
         guard let texture = device.makeTexture(descriptor: descriptor) else {
             fatalError("Failed to create emoji atlas texture \(size)x\(size)")
         }
