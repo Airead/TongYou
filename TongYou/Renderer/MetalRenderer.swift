@@ -23,6 +23,7 @@ final class MetalRenderer {
     private let commandQueue: MTLCommandQueue
     private let bgPipelineState: MTLRenderPipelineState
     private let underlinePipelineState: MTLRenderPipelineState
+    private let strikethroughPipelineState: MTLRenderPipelineState
     private let textPipelineState: MTLRenderPipelineState
     private let emojiPipelineState: MTLRenderPipelineState
 
@@ -172,6 +173,9 @@ final class MetalRenderer {
         var underlineInstanceBuffer: MTLBuffer
         var underlineInstanceCapacity: Int
         var underlineInstanceCount: Int
+        var strikethroughInstanceBuffer: MTLBuffer
+        var strikethroughInstanceCapacity: Int
+        var strikethroughInstanceCount: Int
         var textInstanceBuffer: MTLBuffer
         var textInstanceCapacity: Int
         var textInstanceCount: Int
@@ -254,6 +258,24 @@ final class MetalRenderer {
             fatalError("Failed to create underline pipeline state: \(error)")
         }
 
+        // --- Strikethrough pipeline ---
+        guard let strikethroughVertexFunc = library.makeFunction(name: "strikethrough_vertex") else {
+            fatalError("Failed to load strikethrough_vertex shader function")
+        }
+
+        let strikethroughPipelineDesc = MTLRenderPipelineDescriptor()
+        strikethroughPipelineDesc.vertexFunction = strikethroughVertexFunc
+        strikethroughPipelineDesc.fragmentFunction = bgFragmentFunc
+        strikethroughPipelineDesc.vertexDescriptor = bgVertexDescriptor
+        strikethroughPipelineDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
+        Self.enablePremultipliedAlpha(strikethroughPipelineDesc.colorAttachments[0]!)
+
+        do {
+            strikethroughPipelineState = try device.makeRenderPipelineState(descriptor: strikethroughPipelineDesc)
+        } catch {
+            fatalError("Failed to create strikethrough pipeline state: \(error)")
+        }
+
         // --- Text pipeline ---
         guard let textVertexFunc = library.makeFunction(name: "cell_text_vertex"),
               let textFragmentFunc = library.makeFunction(name: "cell_text_fragment") else {
@@ -330,6 +352,10 @@ final class MetalRenderer {
                     length: MemoryLayout<CellBgInstance>.stride * underlineInitialCapacity,
                     options: .storageModeShared
                 ),
+                let strikethroughBuf = device.makeBuffer(
+                    length: MemoryLayout<CellBgInstance>.stride * underlineInitialCapacity,
+                    options: .storageModeShared
+                ),
                 let textBuf = device.makeBuffer(
                     length: MemoryLayout<CellTextInstance>.stride * initialCapacity,
                     options: .storageModeShared
@@ -347,6 +373,9 @@ final class MetalRenderer {
                     underlineInstanceBuffer: underlineBuf,
                     underlineInstanceCapacity: underlineInitialCapacity,
                     underlineInstanceCount: 0,
+                    strikethroughInstanceBuffer: strikethroughBuf,
+                    strikethroughInstanceCapacity: underlineInitialCapacity,
+                    strikethroughInstanceCount: 0,
                     textInstanceBuffer: textBuf,
                     textInstanceCapacity: initialCapacity,
                     textInstanceCount: 0,
@@ -540,7 +569,7 @@ final class MetalRenderer {
                 let searchMap = buildSearchLineMap()
                 fillBgInstanceBuffer(frame: frame, grid: currentGrid, snapshot: snapshot,
                                      dirtyRegion: dirtyRegion, searchLineMap: searchMap)
-                fillUnderlineInstanceBuffer(frame: frame, grid: currentGrid, snapshot: snapshot, url: currentHighlightedURL)
+                fillDecorationInstanceBuffers(frame: frame, grid: currentGrid, snapshot: snapshot, url: currentHighlightedURL)
                 if textContentDirty {
                     glyphAtlas.evictIfNeeded(fontSystem: fontSystem)
                     emojiAtlas.evictIfNeeded(fontSystem: fontSystem)
@@ -593,6 +622,18 @@ final class MetalRenderer {
                 vertexStart: 0,
                 vertexCount: 4,
                 instanceCount: frame.underlineInstanceCount
+            )
+        }
+
+        if frame.strikethroughInstanceCount > 0 {
+            encoder.setRenderPipelineState(strikethroughPipelineState)
+            encoder.setVertexBuffer(frame.uniformBuffer, offset: 0, index: 0)
+            encoder.setVertexBuffer(frame.strikethroughInstanceBuffer, offset: 0, index: 1)
+            encoder.drawPrimitives(
+                type: .triangleStrip,
+                vertexStart: 0,
+                vertexCount: 4,
+                instanceCount: frame.strikethroughInstanceCount
             )
         }
 
@@ -806,51 +847,95 @@ final class MetalRenderer {
         }
     }
 
-    // MARK: - Private: Underline Instances
+    // MARK: - Private: Decoration Instances (Underline / Strikethrough)
 
-    private func fillUnderlineInstanceBuffer(
+    private func fillDecorationInstanceBuffers(
         frame: UnsafeMutablePointer<FrameState>,
         grid: GridSize, snapshot: ScreenSnapshot?, url: DetectedURL?
     ) {
-        guard let url else {
-            frame.pointee.underlineInstanceCount = 0
-            return
+        let rows = Int(grid.rows)
+        let cols = Int(grid.columns)
+
+        // Collect underline and strikethrough instances from cell attributes
+        var underlineInstances: [CellBgInstance] = []
+        var strikethroughInstances: [CellBgInstance] = []
+        underlineInstances.reserveCapacity(64)
+        strikethroughInstances.reserveCapacity(64)
+
+        if backingColumns > 0 && backingRows > 0 {
+            for row in 0..<min(rows, backingRows) {
+                for col in 0..<min(cols, backingColumns) {
+                    let cell = backingCells[row * backingColumns + col]
+                    let flags = cell.attributes.flags
+                    if flags.contains(.underline) {
+                        let fg = colorPalette.resolveDisplay(cell.attributes).fg
+                        underlineInstances.append(CellBgInstance(
+                            gridPos: SIMD2<UInt16>(UInt16(col), UInt16(row)),
+                            color: fg
+                        ))
+                    }
+                    if flags.contains(.strikethrough) {
+                        let fg = colorPalette.resolveDisplay(cell.attributes).fg
+                        strikethroughInstances.append(CellBgInstance(
+                            gridPos: SIMD2<UInt16>(UInt16(col), UInt16(row)),
+                            color: fg
+                        ))
+                    }
+                }
+            }
         }
 
-        let maxCol = Int(grid.columns) - 1
-        let clampedStart = min(url.startCol, maxCol)
-        let clampedEnd = min(url.endCol, maxCol)
-        let count = clampedEnd - clampedStart + 1
-        guard count > 0 else {
-            frame.pointee.underlineInstanceCount = 0
-            return
+        // URL hover underline (appended to underline instances)
+        if let url {
+            let maxCol = cols - 1
+            let clampedStart = min(url.startCol, maxCol)
+            let clampedEnd = min(url.endCol, maxCol)
+            if clampedEnd >= clampedStart {
+                let fg: SIMD4<UInt8>
+                if url.row < backingRows, clampedStart < backingColumns {
+                    let attrs = backingCells[url.row * backingColumns + clampedStart].attributes
+                    fg = colorPalette.resolveDisplay(attrs).fg
+                } else {
+                    fg = colorPalette.defaultFg
+                }
+                let row = UInt16(clamping: url.row)
+                for i in clampedStart...clampedEnd {
+                    let col = UInt16(clamping: i)
+                    underlineInstances.append(CellBgInstance(
+                        gridPos: SIMD2<UInt16>(col, row),
+                        color: fg
+                    ))
+                }
+            }
         }
-        ensureBufferCapacity(
-            buffer: &frame.pointee.underlineInstanceBuffer,
-            capacity: &frame.pointee.underlineInstanceCapacity,
-            requiredCount: count, type: CellBgInstance.self
-        )
 
-        let ptr = frame.pointee.underlineInstanceBuffer.contents()
-            .bindMemory(to: CellBgInstance.self, capacity: count)
-
-        let fg: SIMD4<UInt8>
-        if url.row < backingRows, clampedStart < backingColumns {
-            let attrs = backingCells[url.row * backingColumns + clampedStart].attributes
-            fg = colorPalette.resolveDisplay(attrs).fg
-        } else {
-            fg = colorPalette.defaultFg
-        }
-
-        let row = UInt16(clamping: url.row)
-        for i in 0..<count {
-            let col = UInt16(clamping: clampedStart + i)
-            ptr[i] = CellBgInstance(
-                gridPos: SIMD2<UInt16>(col, row),
-                color: fg
+        // Write underline buffer
+        let ulCount = underlineInstances.count
+        if ulCount > 0 {
+            ensureBufferCapacity(
+                buffer: &frame.pointee.underlineInstanceBuffer,
+                capacity: &frame.pointee.underlineInstanceCapacity,
+                requiredCount: ulCount, type: CellBgInstance.self
             )
+            let ptr = frame.pointee.underlineInstanceBuffer.contents()
+                .bindMemory(to: CellBgInstance.self, capacity: ulCount)
+            for i in 0..<ulCount { ptr[i] = underlineInstances[i] }
         }
-        frame.pointee.underlineInstanceCount = count
+        frame.pointee.underlineInstanceCount = ulCount
+
+        // Write strikethrough buffer
+        let stCount = strikethroughInstances.count
+        if stCount > 0 {
+            ensureBufferCapacity(
+                buffer: &frame.pointee.strikethroughInstanceBuffer,
+                capacity: &frame.pointee.strikethroughInstanceCapacity,
+                requiredCount: stCount, type: CellBgInstance.self
+            )
+            let ptr = frame.pointee.strikethroughInstanceBuffer.contents()
+                .bindMemory(to: CellBgInstance.self, capacity: stCount)
+            for i in 0..<stCount { ptr[i] = strikethroughInstances[i] }
+        }
+        frame.pointee.strikethroughInstanceCount = stCount
     }
 
     // MARK: - Private: Text Color Resolution
@@ -1309,9 +1394,10 @@ final class MetalRenderer {
         let uniformSize = UInt64(MemoryLayout<Uniforms>.stride)
         let bgSize = bufferSize(for: CellBgInstance.self, capacity: frame.bgInstanceCapacity)
         let underlineSize = bufferSize(for: CellBgInstance.self, capacity: frame.underlineInstanceCapacity)
+        let strikethroughSize = bufferSize(for: CellBgInstance.self, capacity: frame.strikethroughInstanceCapacity)
         let textSize = bufferSize(for: CellTextInstance.self, capacity: frame.textInstanceCapacity)
         let emojiSize = bufferSize(for: CellTextInstance.self, capacity: frame.emojiInstanceCapacity)
-        let frameBufferBytes = uniformSize + bgSize + underlineSize + textSize + emojiSize
+        let frameBufferBytes = uniformSize + bgSize + underlineSize + strikethroughSize + textSize + emojiSize
         let totalBufferBytes = frameBufferBytes * UInt64(Self.swapChainCount)
 
         let glyphAtlasBytes = UInt64(glyphAtlas.textureSize) * UInt64(glyphAtlas.textureSize)

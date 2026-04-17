@@ -76,6 +76,31 @@ vertex CellBgVertexOut underline_vertex(
     return out;
 }
 
+// MARK: - Cell Strikethrough
+
+vertex CellBgVertexOut strikethrough_vertex(
+    uint vertex_id [[vertex_id]],
+    CellBgInstance in [[stage_in]],
+    constant Uniforms &uniforms [[buffer(0)]]
+) {
+    float2 origin = cell_origin(in.gridPos, uniforms);
+    float2 size = uniforms.cellSize;
+    float thickness = 2.0;
+    float midY = floor(size.y * 0.5);
+
+    float2 positions[4] = {
+        {0,      midY - thickness * 0.5},
+        {size.x, midY - thickness * 0.5},
+        {0,      midY + thickness * 0.5},
+        {size.x, midY + thickness * 0.5}
+    };
+
+    CellBgVertexOut out;
+    out.position = uniforms.projectionMatrix * float4(origin + positions[vertex_id], 0.0, 1.0);
+    out.color = float4(in.color) / 255.0;
+    return out;
+}
+
 // MARK: - Cell Text (Glyph)
 
 struct CellTextInstance {
