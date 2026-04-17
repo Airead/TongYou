@@ -304,7 +304,7 @@ final class ClientTerminalController: TerminalControlling {
 
     // MARK: - State
 
-    var currentWorkingDirectory: String? { nil }
+    private(set) var currentWorkingDirectory: String?
     var foregroundProcessName: String? { nil }
 
     // MARK: - Lifecycle
@@ -329,6 +329,11 @@ final class ClientTerminalController: TerminalControlling {
     func handleTitleChanged(_ title: String) {
         windowTitle = title
         onTitleChanged?(title)
+    }
+
+    /// Called when the server reports a cwd change for this pane.
+    func handleCwdChanged(_ cwd: String) {
+        currentWorkingDirectory = cwd
     }
 
     /// Called when the server reports the pane's process exited.

@@ -35,6 +35,9 @@ public final class RemoteSessionClient: @unchecked Sendable {
     /// Called when a pane's title changes.
     public var onTitleChanged: ((SessionID, PaneID, String) -> Void)?
 
+    /// Called when a pane's working directory changes.
+    public var onCwdChanged: ((SessionID, PaneID, String) -> Void)?
+
     /// Called when a bell is received.
     public var onBell: ((SessionID, PaneID) -> Void)?
 
@@ -293,6 +296,11 @@ public final class RemoteSessionClient: @unchecked Sendable {
         case .titleChanged(let sessionID, let paneID, let title):
             DispatchQueue.main.async { [weak self] in
                 self?.onTitleChanged?(sessionID, paneID, title)
+            }
+
+        case .cwdChanged(let sessionID, let paneID, let cwd):
+            DispatchQueue.main.async { [weak self] in
+                self?.onCwdChanged?(sessionID, paneID, cwd)
             }
 
         case .bell(let sessionID, let paneID):

@@ -25,6 +25,7 @@ public enum ServerMessageType: UInt16, Sendable {
     case titleChanged    = 0x0120
     case bell            = 0x0121
     case paneExited      = 0x0122
+    case cwdChanged      = 0x0123
     case layoutUpdate    = 0x0130
     case clipboardSet    = 0x0131
 }
@@ -84,6 +85,7 @@ public enum ServerMessage: Sendable {
 
     // Events
     case titleChanged(SessionID, PaneID, String)
+    case cwdChanged(SessionID, PaneID, String)
     case bell(SessionID, PaneID)
     case paneExited(SessionID, PaneID, exitCode: Int32)
     case layoutUpdate(SessionInfo)
@@ -114,6 +116,8 @@ public enum ServerMessage: Sendable {
             return "screenDiff(session=\(sid), pane=\(pid), dirtyRows=\(diff.dirtyRows.count), cells=\(diff.cellData.count), mouse=\(diff.mouseTrackingMode))"
         case .titleChanged(let sid, let pid, let title):
             return "titleChanged(session=\(sid), pane=\(pid), title=\(truncate(title, maxLength: 80)))"
+        case .cwdChanged(let sid, let pid, let cwd):
+            return "cwdChanged(session=\(sid), pane=\(pid), cwd=\(truncate(cwd, maxLength: 80)))"
         case .bell(let sid, let pid):
             return "bell(session=\(sid), pane=\(pid))"
         case .paneExited(let sid, let pid, let exitCode):
@@ -134,6 +138,7 @@ public enum ServerMessage: Sendable {
         case .screenFull:     return .screenFull
         case .screenDiff:     return .screenDiff
         case .titleChanged:   return .titleChanged
+        case .cwdChanged:     return .cwdChanged
         case .bell:           return .bell
         case .paneExited:     return .paneExited
         case .layoutUpdate:   return .layoutUpdate

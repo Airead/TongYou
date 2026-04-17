@@ -36,8 +36,7 @@ enum TabAction {
     case detachSession
     case renameSession
     case runInPlace(command: String, arguments: [String])
-    case runLocalCommand(command: String, arguments: [String], options: CommandOptions)
-    case runRemoteCommand(command: String, arguments: [String], options: CommandOptions)
+    case runCommand(command: String, arguments: [String], options: CommandOptions)
     case paneNotification(UUID, String, String)  // paneID, title, body
 }
 
@@ -341,7 +340,7 @@ final class TabManager {
              .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane,
              .rerunFloatingPaneCommand,
              .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession,
-             .renameSession, .runInPlace, .runLocalCommand, .runRemoteCommand,
+             .renameSession, .runInPlace, .runCommand,
              .paneNotification:
             // Pane/remote actions are handled by TerminalWindowView, not TabManager.
             return false

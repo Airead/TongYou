@@ -413,13 +413,123 @@ struct FloatingPaneTests {
     // MARK: - closeOnExit Keybinding round-trip
 
     @Test func closeOnExitKeybindingRoundTrip() {
-        let action = Keybinding.Action.runLocalCommand(
+        let action = Keybinding.Action.runCommand(
             command: "git", arguments: ["status"],
-            options: CommandOptions.parse("pane,close_on_exit")
+            options: CommandOptions.parse("local,pane,close_on_exit")
         )
         let raw = action.rawValue
         #expect(raw.contains("close_on_exit"))
         #expect(raw.contains("pane"))
+        let parsed = Keybinding.Action(rawValue: raw)
+        #expect(parsed == action)
+    }
+
+    // MARK: - run_command mode flags
+
+    @Test func runCommandLocalOnly() {
+        let action = Keybinding.Action(rawValue: "run_command[pane,local]:git:status")
+        #expect(action != nil)
+        if case .runCommand(let cmd, let args, let opts) = action {
+            #expect(cmd == "git")
+            #expect(args == ["status"])
+            #expect(opts.runsLocal)
+            #expect(!opts.runsRemote)
+            #expect(opts.showInPane)
+        } else {
+            Issue.record("Expected .runCommand")
+        }
+    }
+
+    @Test func runCommandRemoteOnly() {
+        let action = Keybinding.Action(rawValue: "run_command[pane,remote]:git:status")
+        #expect(action != nil)
+        if case .runCommand(_, _, let opts) = action {
+            #expect(!opts.runsLocal)
+            #expect(opts.runsRemote)
+        } else {
+            Issue.record("Expected .runCommand")
+        }
+    }
+
+    @Test func runCommandBothModes() {
+        let action = Keybinding.Action(rawValue: "run_command[pane,local,remote]:git:status")
+        #expect(action != nil)
+        if case .runCommand(_, _, let opts) = action {
+            #expect(opts.runsLocal)
+            #expect(opts.runsRemote)
+            #expect(opts.showInPane)
+        } else {
+            Issue.record("Expected .runCommand")
+        }
+    }
+
+    @Test func runCommandDefaultsToLocal() {
+        // run_command without local/remote should default to local for backwards compat.
+        let action = Keybinding.Action(rawValue: "run_command[pane]:git:log")
+        #expect(action != nil)
+        if case .runCommand(_, _, let opts) = action {
+            #expect(opts.runsLocal)
+            #expect(!opts.runsRemote)
+        } else {
+            Issue.record("Expected .runCommand")
+        }
+    }
+
+    @Test func runLocalCommandLegacyParsesToRunCommand() {
+        let action = Keybinding.Action(rawValue: "run_local_command[pane]:make:build")
+        #expect(action != nil)
+        if case .runCommand(let cmd, let args, let opts) = action {
+            #expect(cmd == "make")
+            #expect(args == ["build"])
+            #expect(opts.runsLocal)
+            #expect(!opts.runsRemote)
+        } else {
+            Issue.record("Expected .runCommand from run_local_command")
+        }
+    }
+
+    @Test func runRemoteCommandLegacyParsesToRunCommand() {
+        let action = Keybinding.Action(rawValue: "run_remote_command[pane]:git:fetch,--all")
+        #expect(action != nil)
+        if case .runCommand(let cmd, let args, let opts) = action {
+            #expect(cmd == "git")
+            #expect(args == ["fetch", "--all"])
+            #expect(!opts.runsLocal)
+            #expect(opts.runsRemote)
+        } else {
+            Issue.record("Expected .runCommand from run_remote_command")
+        }
+    }
+
+    @Test func runCommandAlwaysLocal() {
+        let action = Keybinding.Action(rawValue: "run_command[pane,always_local]:open:.")
+        #expect(action != nil)
+        if case .runCommand(let cmd, let args, let opts) = action {
+            #expect(cmd == "open")
+            #expect(args == ["."])
+            #expect(opts.alwaysLocal)
+            #expect(opts.showInPane)
+        } else {
+            Issue.record("Expected .runCommand")
+        }
+    }
+
+    @Test func alwaysLocalRoundTrip() {
+        let action = Keybinding.Action.runCommand(
+            command: "pbcopy", arguments: [],
+            options: CommandOptions.parse("always_local")
+        )
+        let raw = action.rawValue
+        let parsed = Keybinding.Action(rawValue: raw)
+        #expect(parsed == action)
+    }
+
+    @Test func runCommandRoundTrip() {
+        let action = Keybinding.Action.runCommand(
+            command: "git", arguments: ["status"],
+            options: CommandOptions.parse("local,pane,remote")
+        )
+        let raw = action.rawValue
         let parsed = Keybinding.Action(rawValue: raw)
         #expect(parsed == action)
     }

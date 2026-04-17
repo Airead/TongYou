@@ -549,6 +549,10 @@ public final class SocketServer: @unchecked Sendable {
             self?.broadcast(.titleChanged(sessionID, paneID, title), toSession: sessionID)
         }
 
+        sessionManager.onCwdChanged = { [weak self] sessionID, paneID, cwd in
+            self?.broadcast(.cwdChanged(sessionID, paneID, cwd), toSession: sessionID)
+        }
+
         sessionManager.onBell = { [weak self] sessionID, paneID in
             self?.broadcast(.bell(sessionID, paneID), toSession: sessionID)
         }

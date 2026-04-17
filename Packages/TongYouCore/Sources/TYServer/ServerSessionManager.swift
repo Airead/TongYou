@@ -32,7 +32,7 @@ struct ServerSession {
         return tabs[activeTabIndex]
     }
 
-    func toSessionInfo() -> SessionInfo {
+    func toSessionInfo(coreLookup: [PaneID: TerminalCore] = [:]) -> SessionInfo {
         let tabInfos = tabs.map { tab in
             TabInfo(
                 id: tab.id,
@@ -42,11 +42,27 @@ struct ServerSession {
                 focusedPaneID: tab.focusedPaneID
             )
         }
+        // Collect pane metadata from all tree panes and floating panes.
+        var metadata: [PaneID: RemotePaneMetadata] = [:]
+        for tab in tabs {
+            for paneUUID in tab.paneTree.allPaneIDs {
+                let pid = PaneID(paneUUID)
+                if let cwd = coreLookup[pid]?.currentWorkingDirectory {
+                    metadata[pid] = RemotePaneMetadata(cwd: cwd)
+                }
+            }
+            for fp in tab.floatingPanes {
+                if let cwd = coreLookup[fp.paneID]?.currentWorkingDirectory {
+                    metadata[fp.paneID] = RemotePaneMetadata(cwd: cwd)
+                }
+            }
+        }
         return SessionInfo(
             id: id,
             name: name,
             tabs: tabInfos,
-            activeTabIndex: activeTabIndex
+            activeTabIndex: activeTabIndex,
+            paneMetadata: metadata
         )
     }
 
@@ -96,9 +112,13 @@ public final class ServerSessionManager {
 
     var onScreenDirty: ((SessionID, PaneID) -> Void)?
     var onTitleChanged: ((SessionID, PaneID, String) -> Void)?
+    var onCwdChanged: ((SessionID, PaneID, String) -> Void)?
     var onBell: ((SessionID, PaneID) -> Void)?
     var onClipboardSet: ((String) -> Void)?
     var onPaneExited: ((SessionID, PaneID, Int32) -> Void)?
+
+    /// Tracks the last known cwd per pane so we only fire onCwdChanged on actual changes.
+    private var lastKnownCwd: [PaneID: String] = [:]
 
     public init(config: ServerConfig) {
         self.config = config
@@ -135,7 +155,7 @@ public final class ServerSessionManager {
     // MARK: - Session Operations
 
     public func listSessions() -> [SessionInfo] {
-        sessions.values.map { $0.toSessionInfo() }
+        sessions.values.map { $0.toSessionInfo(coreLookup: coreLookup) }
     }
 
     @discardableResult
@@ -164,7 +184,7 @@ public final class ServerSessionManager {
         sessions[sessionID] = session
         saveSession(id: sessionID)
         Log.info("Session created: \(sessionName) (\(sessionID))", category: .session)
-        return session.toSessionInfo()
+        return session.toSessionInfo(coreLookup: coreLookup)
     }
 
     public func renameSession(id: SessionID, name: String) {
@@ -183,7 +203,7 @@ public final class ServerSessionManager {
     }
 
     public func sessionInfo(for id: SessionID) -> SessionInfo? {
-        sessions[id]?.toSessionInfo()
+        sessions[id]?.toSessionInfo(coreLookup: coreLookup)
     }
 
     public var hasSessions: Bool { !sessions.isEmpty }
@@ -544,7 +564,7 @@ public final class ServerSessionManager {
             }
         }
         let persisted = PersistedSession(
-            sessionInfo: session.toSessionInfo(),
+            sessionInfo: session.toSessionInfo(coreLookup: coreLookup),
             paneContexts: paneContexts
         )
         sessionStore.save(persisted)
@@ -831,6 +851,7 @@ public final class ServerSessionManager {
         core.onTitleChanged = { [weak self] title in
             self?.updateFloatingPaneTitle(sessionID: sessionID, paneID: paneID, title: title)
             self?.onTitleChanged?(sessionID, paneID, title)
+            self?.checkCwdChanged(core: core, sessionID: sessionID, paneID: paneID)
         }
         core.onBell = { [weak self] in
             self?.onBell?(sessionID, paneID)
@@ -840,6 +861,15 @@ public final class ServerSessionManager {
         }
         core.onProcessExited = { [weak self] exitCode in
             self?.onPaneExited?(sessionID, paneID, exitCode)
+        }
+    }
+
+    /// Check if a pane's cwd has changed and fire onCwdChanged if so.
+    private func checkCwdChanged(core: TerminalCore, sessionID: SessionID, paneID: PaneID) {
+        guard let cwd = core.currentWorkingDirectory else { return }
+        if lastKnownCwd[paneID] != cwd {
+            lastKnownCwd[paneID] = cwd
+            onCwdChanged?(sessionID, paneID, cwd)
         }
     }
 
@@ -863,7 +893,8 @@ public final class ServerSessionManager {
 
     private func wrapCommandInLoginShell(_ command: String, arguments: [String]) -> (command: String, arguments: [String]) {
         let shell = resolvedUserShell()
-        let parts = [command] + arguments
+        let expanded = (command as NSString).expandingTildeInPath
+        let parts = [expanded] + arguments
         let escaped = parts.map(shellEscape).joined(separator: " ")
         return (shell, ["-l", "-c", "exec \(escaped)"])
     }

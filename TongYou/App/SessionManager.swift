@@ -938,7 +938,7 @@ final class SessionManager {
              .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane,
              .rerunFloatingPaneCommand,
              .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession,
-             .renameSession, .runInPlace(_, _), .runLocalCommand(_, _, _), .runRemoteCommand(_, _, _),
+             .renameSession, .runInPlace(_, _), .runCommand(_, _, _),
              .paneNotification:
             // Pane/remote actions are handled by TerminalWindowView.
             return false
@@ -969,6 +969,9 @@ final class SessionManager {
         }
         client.onTitleChanged = { [weak self] _, paneID, title in
             self?.handleRemoteTitleChanged(paneID, title: title)
+        }
+        client.onCwdChanged = { [weak self] _, paneID, cwd in
+            self?.handleRemoteCwdChanged(paneID, cwd: cwd)
         }
         client.onPaneExited = { [weak self] _, paneID, exitCode in
             self?.handleRemotePaneExited(paneID, exitCode: exitCode)
@@ -1225,8 +1228,22 @@ final class SessionManager {
         controllerForServerPane(paneID)?.handleTitleChanged(title)
     }
 
+    private func handleRemoteCwdChanged(_ paneID: PaneID, cwd: String) {
+        controllerForServerPane(paneID)?.handleCwdChanged(cwd)
+    }
+
     private func handleRemotePaneExited(_ paneID: PaneID, exitCode: Int32) {
         controllerForServerPane(paneID)?.handleProcessExited(exitCode: exitCode)
+    }
+
+    /// Apply pane metadata (cwd, etc.) from a SessionInfo to the corresponding controllers.
+    private func applyPaneMetadata(_ metadata: [PaneID: RemotePaneMetadata]) {
+        for (serverPaneID, meta) in metadata {
+            guard let controller = controllerForServerPane(serverPaneID) else { continue }
+            if let cwd = meta.cwd {
+                controller.handleCwdChanged(cwd)
+            }
+        }
     }
 
     /// Reconcile local state with the authoritative server layout.
@@ -1267,6 +1284,8 @@ final class SessionManager {
         let removedPaneIDs = oldPaneIDs.subtracting(newPaneIDs)
         let addedPaneIDs = newPaneIDs.subtracting(oldPaneIDs)
         teardownRemotePanes(removedPaneIDs)
+
+        applyPaneMetadata(info.paneMetadata)
 
         onRemoteLayoutChanged?(sessions[sessionIndex].id, Array(removedPaneIDs), Array(addedPaneIDs))
         return Array(removedPaneIDs)
@@ -1656,38 +1675,54 @@ final class SessionManager {
         overlayStacks[paneID, default: []].append(controller)
     }
 
-    func runLocalCommand(at paneID: UUID, command: String, arguments: [String] = [], options: CommandOptions = .empty) async {
+    func runCommand(at paneID: UUID, command: String, arguments: [String] = [], options: CommandOptions = .empty) async {
+        guard sessions.indices.contains(activeSessionIndex) else { return }
+        let isRemote = sessions[activeSessionIndex].source.serverSessionID != nil
+
+        // always_local forces local execution regardless of session type.
+        let forceLocal = options.alwaysLocal
+
+        // Check if the command is allowed in the current session type.
+        if !forceLocal {
+            guard (isRemote && options.runsRemote) || (!isRemote && options.runsLocal) else { return }
+        }
+
         if options.showInPane {
-            await runCommandInFloatingPane(at: paneID, command: command, arguments: arguments, closeOnExit: options.closeOnExit)
+            if forceLocal || !isRemote {
+                // Local floating pane — get cwd from whichever controller owns this pane.
+                let cwd = activeController(for: paneID)?.currentWorkingDirectory
+                let resolvedCommand = await resolveCommandPath(command, workingDirectory: cwd)
+                let wrapped = wrapCommandInLoginShell(resolvedCommand, arguments: arguments)
+                createFloatingPaneWithCommand(workingDirectory: cwd, command: wrapped.command, arguments: wrapped.arguments, closeOnExit: options.closeOnExit)
+            } else {
+                await runCommandInFloatingPane(at: paneID, command: command, arguments: arguments, closeOnExit: options.closeOnExit)
+            }
             return
         }
-        guard let active = activeController(for: paneID) as? TerminalController else { return }
-        let resolvedCommand = await resolveCommandPath(command, workingDirectory: active.currentWorkingDirectory)
-        let wrapped = wrapCommandInLoginShell(resolvedCommand, arguments: arguments)
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: wrapped.command)
-        process.arguments = wrapped.arguments
-        if let cwd = active.currentWorkingDirectory {
-            process.currentDirectoryURL = URL(fileURLWithPath: cwd)
-        }
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        try? process.run()
-    }
+        if isRemote && !forceLocal {
+            guard let remote = remoteControllers[paneID] else { return }
+            remoteClient?.runRemoteCommand(
+                sessionID: remote.sessionID,
+                paneID: remote.paneID,
+                command: command,
+                arguments: arguments
+            )
+        } else {
+            let cwd = activeController(for: paneID)?.currentWorkingDirectory
+            let resolvedCommand = await resolveCommandPath(command, workingDirectory: cwd)
+            let wrapped = wrapCommandInLoginShell(resolvedCommand, arguments: arguments)
 
-    func runRemoteCommand(at paneID: UUID, command: String, arguments: [String] = [], options: CommandOptions = .empty) async {
-        if options.showInPane {
-            await runCommandInFloatingPane(at: paneID, command: command, arguments: arguments, closeOnExit: options.closeOnExit)
-            return
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: wrapped.command)
+            process.arguments = wrapped.arguments
+            if let cwd {
+                process.currentDirectoryURL = URL(fileURLWithPath: cwd)
+            }
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try? process.run()
         }
-        guard let remote = remoteControllers[paneID] else { return }
-        remoteClient?.runRemoteCommand(
-            sessionID: remote.sessionID,
-            paneID: remote.paneID,
-            command: command,
-            arguments: arguments
-        )
     }
 
     /// Run a command in a new floating pane. Output is visible; ESC closes after exit.

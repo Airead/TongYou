@@ -234,6 +234,20 @@ public struct BinaryEncoder: Sendable {
             writeTabInfo(tab)
         }
         writeUInt16(UInt16(info.activeTabIndex))
+        // Pane metadata map
+        writeUInt16(UInt16(info.paneMetadata.count))
+        for (paneID, meta) in info.paneMetadata {
+            writePaneID(paneID)
+            writePaneMetadata(meta)
+        }
+    }
+
+    /// Encode a `PaneMetadata` into the buffer.
+    public mutating func writePaneMetadata(_ meta: RemotePaneMetadata) {
+        writeBool(meta.cwd != nil)
+        if let cwd = meta.cwd {
+            writeString(cwd)
+        }
     }
 
     /// Encode a `TabInfo` into the buffer.
@@ -278,6 +292,11 @@ public struct BinaryEncoder: Sendable {
             writeSessionID(sessionID)
             writePaneID(paneID)
             writeString(title)
+
+        case .cwdChanged(let sessionID, let paneID, let cwd):
+            writeSessionID(sessionID)
+            writePaneID(paneID)
+            writeString(cwd)
 
         case .bell(let sessionID, let paneID):
             writeSessionID(sessionID)

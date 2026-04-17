@@ -32,7 +32,23 @@ struct CommandOptions: Equatable, Sendable {
         has("close_on_exit")
     }
 
+    /// Whether the command should run in local sessions.
+    var runsLocal: Bool { has("local") }
+
+    /// Whether the command should run in remote sessions.
+    var runsRemote: Bool { has("remote") }
+
+    /// Whether the command should always run locally, even in remote sessions.
+    var alwaysLocal: Bool { has("always_local") }
+
     var isEmpty: Bool { storage.isEmpty }
+
+    /// Set a boolean flag if it is not already present.
+    mutating func setIfMissing(_ key: String) {
+        if storage[key] == nil {
+            storage[key] = ""
+        }
+    }
 
     /// Parse from a string like `"pane,output=foo"`.
     static func parse(_ raw: String) -> CommandOptions {
@@ -113,8 +129,7 @@ struct Keybinding: Equatable {
         case detachSession
         case renameSession
         case runInPlace(command: String, arguments: [String])
-        case runLocalCommand(command: String, arguments: [String], options: CommandOptions)
-        case runRemoteCommand(command: String, arguments: [String], options: CommandOptions)
+        case runCommand(command: String, arguments: [String], options: CommandOptions)
         // Pass through to PTY (disables the keybinding)
         case unbind
 
@@ -160,10 +175,8 @@ struct Keybinding: Equatable {
             case .renameSession: "rename_session"
             case .runInPlace(let cmd, let args):
                 Self.formatPrefixedAction(prefix: "run_in_place", command: cmd, arguments: args)
-            case .runLocalCommand(let cmd, let args, let opts):
-                Self.formatPrefixedAction(prefix: "run_local_command", command: cmd, arguments: args, options: opts)
-            case .runRemoteCommand(let cmd, let args, let opts):
-                Self.formatPrefixedAction(prefix: "run_remote_command", command: cmd, arguments: args, options: opts)
+            case .runCommand(let cmd, let args, let opts):
+                Self.formatPrefixedAction(prefix: "run_command", command: cmd, arguments: args, options: opts)
             case .unbind: "unbind"
             }
         }
@@ -248,8 +261,7 @@ struct Keybinding: Equatable {
             case .detachSession: .detachSession
             case .renameSession: .renameSession
             case .runInPlace(let cmd, let args): .runInPlace(command: cmd, arguments: args)
-            case .runLocalCommand(let cmd, let args, let opts): .runLocalCommand(command: cmd, arguments: args, options: opts)
-            case .runRemoteCommand(let cmd, let args, let opts): .runRemoteCommand(command: cmd, arguments: args, options: opts)
+            case .runCommand(let cmd, let args, let opts): .runCommand(command: cmd, arguments: args, options: opts)
             case .copy, .paste, .search, .searchNext, .searchPrevious,
                  .resetFontSize, .increaseFontSize, .decreaseFontSize,
                  .unbind:
@@ -305,17 +317,28 @@ struct Keybinding: Equatable {
                     self = .runInPlace(command: parsed.command, arguments: parsed.arguments)
                     return  // run_in_place does not use options (it always takes over the pane)
                 }
-                // "run_local_command" is the canonical name; "run_command" is accepted for backwards compatibility.
+                // "run_command" is the canonical name.
+                // "run_local_command" → run_command with implicit [local].
+                // "run_remote_command" → run_command with implicit [remote].
                 if let parsed = Self.parsePrefixedAction(rawValue: rawValue, prefix: "run_local_command") {
-                    self = .runLocalCommand(command: parsed.command, arguments: parsed.arguments, options: parsed.options)
-                    return
-                }
-                if let parsed = Self.parsePrefixedAction(rawValue: rawValue, prefix: "run_command") {
-                    self = .runLocalCommand(command: parsed.command, arguments: parsed.arguments, options: parsed.options)
+                    var opts = parsed.options
+                    opts.setIfMissing("local")
+                    self = .runCommand(command: parsed.command, arguments: parsed.arguments, options: opts)
                     return
                 }
                 if let parsed = Self.parsePrefixedAction(rawValue: rawValue, prefix: "run_remote_command") {
-                    self = .runRemoteCommand(command: parsed.command, arguments: parsed.arguments, options: parsed.options)
+                    var opts = parsed.options
+                    opts.setIfMissing("remote")
+                    self = .runCommand(command: parsed.command, arguments: parsed.arguments, options: opts)
+                    return
+                }
+                if let parsed = Self.parsePrefixedAction(rawValue: rawValue, prefix: "run_command") {
+                    var opts = parsed.options
+                    // Default to [local] when neither local/remote/always_local is specified (backwards compat).
+                    if !opts.runsLocal && !opts.runsRemote && !opts.alwaysLocal {
+                        opts.setIfMissing("local")
+                    }
+                    self = .runCommand(command: parsed.command, arguments: parsed.arguments, options: opts)
                     return
                 }
                 return nil

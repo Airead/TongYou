@@ -365,7 +365,23 @@ public struct BinaryDecoder: Sendable {
             tabs.append(try readTabInfo())
         }
         let activeTabIndex = Int(try readUInt16())
-        return SessionInfo(id: id, name: name, tabs: tabs, activeTabIndex: activeTabIndex)
+        // Pane metadata map
+        let metaCount = Int(try readUInt16())
+        var paneMetadata: [PaneID: RemotePaneMetadata] = [:]
+        paneMetadata.reserveCapacity(metaCount)
+        for _ in 0..<metaCount {
+            let paneID = try readPaneID()
+            let meta = try readPaneMetadata()
+            paneMetadata[paneID] = meta
+        }
+        return SessionInfo(id: id, name: name, tabs: tabs, activeTabIndex: activeTabIndex, paneMetadata: paneMetadata)
+    }
+
+    /// Decode a `PaneMetadata` from the buffer.
+    public mutating func readPaneMetadata() throws -> RemotePaneMetadata {
+        let hasCwd = try readBool()
+        let cwd = hasCwd ? try readString() : nil
+        return RemotePaneMetadata(cwd: cwd)
     }
 
     /// Decode a `TabInfo` from the buffer.
@@ -419,6 +435,12 @@ public struct BinaryDecoder: Sendable {
             let paneID = try readPaneID()
             let title = try readString()
             return .titleChanged(sessionID, paneID, title)
+
+        case .cwdChanged:
+            let sessionID = try readSessionID()
+            let paneID = try readPaneID()
+            let cwd = try readString()
+            return .cwdChanged(sessionID, paneID, cwd)
 
         case .bell:
             let sessionID = try readSessionID()

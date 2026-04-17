@@ -639,16 +639,10 @@ struct TerminalWindowView: View {
                     await sessionManager.runInPlace(at: paneID, command: command, arguments: arguments)
                 }
             }
-        case .runLocalCommand(let command, let arguments, let options):
+        case .runCommand(let command, let arguments, let options):
             if let paneID = focusManager.focusedPaneID {
                 Task {
-                    await sessionManager.runLocalCommand(at: paneID, command: command, arguments: arguments, options: options)
-                }
-            }
-        case .runRemoteCommand(let command, let arguments, let options):
-            if let paneID = focusManager.focusedPaneID {
-                Task {
-                    await sessionManager.runRemoteCommand(at: paneID, command: command, arguments: arguments, options: options)
+                    await sessionManager.runCommand(at: paneID, command: command, arguments: arguments, options: options)
                 }
             }
         case .paneNotification(let paneID, let title, let body):
