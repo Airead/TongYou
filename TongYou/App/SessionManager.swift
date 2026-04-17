@@ -1647,8 +1647,12 @@ final class SessionManager {
         overlayStacks[paneID, default: []].append(controller)
     }
 
-    func runCommand(at paneID: UUID, command: String, arguments: [String] = [], options: CommandOptions = .empty) async {
-        guard sessions.indices.contains(activeSessionIndex) else { return }
+    /// Run a command, optionally in a floating pane.
+    /// Returns the new floating pane ID when `showInPane` is true and a local pane was created.
+    /// Remote floating panes are focused via `onRemoteLayoutChanged` instead.
+    @discardableResult
+    func runCommand(at paneID: UUID, command: String, arguments: [String] = [], options: CommandOptions = .empty) async -> UUID? {
+        guard sessions.indices.contains(activeSessionIndex) else { return nil }
         let isRemote = sessions[activeSessionIndex].source.serverSessionID != nil
 
         // always_local forces local execution regardless of session type.
@@ -1656,7 +1660,7 @@ final class SessionManager {
 
         // Check if the command is allowed in the current session type.
         if !forceLocal {
-            guard (isRemote && options.runsRemote) || (!isRemote && options.runsLocal) else { return }
+            guard (isRemote && options.runsRemote) || (!isRemote && options.runsLocal) else { return nil }
         }
 
         if options.showInPane {
@@ -1665,15 +1669,15 @@ final class SessionManager {
                 let cwd = activeController(for: paneID)?.currentWorkingDirectory
                 let resolvedCommand = await resolveCommandPath(command, workingDirectory: cwd)
                 let wrapped = wrapCommandInLoginShell(resolvedCommand, arguments: arguments)
-                createFloatingPaneWithCommand(workingDirectory: cwd, command: wrapped.command, arguments: wrapped.arguments, closeOnExit: options.closeOnExit, customFrame: options.paneFrame)
+                return createFloatingPaneWithCommand(workingDirectory: cwd, command: wrapped.command, arguments: wrapped.arguments, closeOnExit: options.closeOnExit, customFrame: options.paneFrame)
             } else {
                 await runCommandInFloatingPane(at: paneID, command: command, arguments: arguments, closeOnExit: options.closeOnExit, customFrame: options.paneFrame)
             }
-            return
+            return nil
         }
 
         if isRemote && !forceLocal {
-            guard let remote = remoteControllers[paneID] else { return }
+            guard let remote = remoteControllers[paneID] else { return nil }
             remoteClient?.runRemoteCommand(
                 sessionID: remote.sessionID,
                 paneID: remote.paneID,
@@ -1695,6 +1699,7 @@ final class SessionManager {
             process.standardError = FileHandle.nullDevice
             try? process.run()
         }
+        return nil
     }
 
     /// Run a command in a new floating pane. Output is visible; ESC closes after exit.

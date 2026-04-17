@@ -201,6 +201,7 @@ struct TerminalWindowView: View {
             if let paneID = newID {
                 sessionManager.notifyPaneFocused(paneID)
                 notificationStore.markRead(paneID: paneID)
+                activateFirstResponder(for: paneID)
             }
             for (paneID, view) in viewStore.allViews {
                 let shouldShow = notificationStore.unreadPaneIDs.contains(paneID) && paneID != newID
@@ -642,7 +643,9 @@ struct TerminalWindowView: View {
         case .runCommand(let command, let arguments, let options):
             if let paneID = focusManager.focusedPaneID {
                 Task {
-                    await sessionManager.runCommand(at: paneID, command: command, arguments: arguments, options: options)
+                    if let newPaneID = await sessionManager.runCommand(at: paneID, command: command, arguments: arguments, options: options) {
+                        focusAndActivate(paneID: newPaneID)
+                    }
                 }
             }
         case .paneNotification(let paneID, let title, let body):
