@@ -21,7 +21,7 @@ enum TabAction {
     case splitHorizontal
     case closePane
     case focusPane(FocusDirection)
-    case paneExited(UUID)
+    case paneExited(UUID, exitCode: Int32)
     case growPane
     case shrinkPane
     // Floating pane management

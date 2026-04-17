@@ -320,7 +320,7 @@ struct TerminalWindowView: View {
                     notificationStore.markRead(paneID: paneID)
                 },
                 isProcessExited: { paneID in
-                    sessionManager.exitedFloatingPanes.contains(paneID)
+                    sessionManager.exitedFloatingPanes[paneID] != nil
                 }
             )
         }
@@ -444,7 +444,7 @@ struct TerminalWindowView: View {
 
     private func closePane() {
         guard let focusedID = focusManager.focusedPaneID else { return }
-        removePane(id: focusedID)
+        removePane(id: focusedID, exitCode: 0)
     }
 
     /// Resize the focused pane. Works for both tree panes (adjusts split ratio)
@@ -472,15 +472,20 @@ struct TerminalWindowView: View {
     }
 
     /// Tear down a pane and focus the nearest sibling or close the tab/window.
-    private func removePane(id paneID: UUID) {
+    private func removePane(id paneID: UUID, exitCode: Int32) {
         // Check if this is a floating pane first.
         if sessionManager.activeTab?.floatingPanes.contains(where: { $0.pane.id == paneID }) == true {
-            if let cmdInfo = sessionManager.floatingPaneCommands[paneID], !cmdInfo.closeOnExit {
-                // Command pane with confirm-on-exit: keep open for reading.
-                // ESC closes, Enter re-runs the command.
-                sessionManager.markFloatingPaneExited(paneID)
+            if let cmdInfo = sessionManager.floatingPaneCommands[paneID] {
+                if cmdInfo.closeOnExit && exitCode == 0 {
+                    // close_on_exit with successful exit: close immediately.
+                    closeFloatingPane(id: paneID)
+                } else {
+                    // No close_on_exit, or non-zero exit: keep open for reading.
+                    // ESC closes, Enter re-runs the command.
+                    sessionManager.markFloatingPaneExited(paneID, exitCode: exitCode)
+                }
             } else {
-                // Non-command pane or close-on-exit command pane: close immediately.
+                // Non-command floating pane (e.g. shell): close immediately.
                 closeFloatingPane(id: paneID)
             }
             return
@@ -601,8 +606,8 @@ struct TerminalWindowView: View {
             closePane()
         case .focusPane(let direction):
             moveFocus(direction)
-        case .paneExited(let paneID):
-            removePane(id: paneID)
+        case .paneExited(let paneID, let exitCode):
+            removePane(id: paneID, exitCode: exitCode)
         case .growPane:
             resizePane(delta: 0.1)
         case .shrinkPane:

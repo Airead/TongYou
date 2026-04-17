@@ -79,7 +79,7 @@ protocol TerminalControlling: AnyObject {
     // MARK: - Callbacks
 
     var onNeedsDisplay: (() -> Void)? { get set }
-    var onProcessExited: (() -> Void)? { get set }
+    var onProcessExited: ((Int32) -> Void)? { get set }
     var onTitleChanged: ((String) -> Void)? { get set }
     var onPaneNotification: ((String, String) -> Void)? { get set }
 }

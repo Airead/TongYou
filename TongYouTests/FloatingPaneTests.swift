@@ -423,4 +423,83 @@ struct FloatingPaneTests {
         let parsed = Keybinding.Action(rawValue: raw)
         #expect(parsed == action)
     }
+
+    // MARK: - paneExited carries exit code
+
+    @Test func paneExitedActionCarriesExitCode() {
+        let id = UUID()
+        let action = TabAction.paneExited(id, exitCode: 42)
+        if case .paneExited(let paneID, let exitCode) = action {
+            #expect(paneID == id)
+            #expect(exitCode == 42)
+        } else {
+            Issue.record("Expected .paneExited")
+        }
+    }
+
+    @Test func paneExitedActionZeroExitCode() {
+        let id = UUID()
+        let action = TabAction.paneExited(id, exitCode: 0)
+        if case .paneExited(_, let exitCode) = action {
+            #expect(exitCode == 0)
+        } else {
+            Issue.record("Expected .paneExited")
+        }
+    }
+
+    @Test func paneExitedActionNegativeExitCode() {
+        let id = UUID()
+        let action = TabAction.paneExited(id, exitCode: -9)
+        if case .paneExited(_, let exitCode) = action {
+            #expect(exitCode == -9)
+        } else {
+            Issue.record("Expected .paneExited")
+        }
+    }
+
+    // MARK: - closeOnExit with exit code decision logic
+
+    @Test func closeOnExitWithSuccessShouldClose() {
+        // close_on_exit=true, exitCode=0 → should auto-close
+        let info = FloatingPaneCommandInfo(
+            command: "make", arguments: ["build"],
+            workingDirectory: nil, closeOnExit: true
+        )
+        let exitCode: Int32 = 0
+        let shouldClose = info.closeOnExit && exitCode == 0
+        #expect(shouldClose)
+    }
+
+    @Test func closeOnExitWithFailureShouldKeepOpen() {
+        // close_on_exit=true, exitCode=1 → should keep open
+        let info = FloatingPaneCommandInfo(
+            command: "make", arguments: ["build"],
+            workingDirectory: nil, closeOnExit: true
+        )
+        let exitCode: Int32 = 1
+        let shouldClose = info.closeOnExit && exitCode == 0
+        #expect(!shouldClose)
+    }
+
+    @Test func closeOnExitWithSignalKillShouldKeepOpen() {
+        // close_on_exit=true, exitCode=-9 (SIGKILL) → should keep open
+        let info = FloatingPaneCommandInfo(
+            command: "make", arguments: ["build"],
+            workingDirectory: nil, closeOnExit: true
+        )
+        let exitCode: Int32 = -9
+        let shouldClose = info.closeOnExit && exitCode == 0
+        #expect(!shouldClose)
+    }
+
+    @Test func noCloseOnExitAlwaysKeepsOpen() {
+        // close_on_exit=false, exitCode=0 → should still keep open
+        let info = FloatingPaneCommandInfo(
+            command: "make", arguments: ["build"],
+            workingDirectory: nil, closeOnExit: false
+        )
+        let exitCode: Int32 = 0
+        let shouldClose = info.closeOnExit && exitCode == 0
+        #expect(!shouldClose)
+    }
 }

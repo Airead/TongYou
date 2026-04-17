@@ -60,7 +60,8 @@ final class SessionManager {
 
     /// Floating panes whose process has exited but are kept open for reading.
     /// ESC closes them, Enter re-runs the command.
-    private(set) var exitedFloatingPanes: Set<UUID> = []
+    /// Maps pane ID to the process exit code.
+    private(set) var exitedFloatingPanes: [UUID: Int32] = [:]
 
     /// Command info for floating panes created via `createFloatingPaneWithCommand`.
     /// Keyed by local pane ID. Used to determine exit behavior and re-run commands.
@@ -282,7 +283,7 @@ final class SessionManager {
         let paneIDs = session.allPaneIDs
 
         // Clean up exited floating pane tracking.
-        for paneID in paneIDs { exitedFloatingPanes.remove(paneID) }
+        for paneID in paneIDs { exitedFloatingPanes.removeValue(forKey: paneID) }
 
         // Clean up remote controllers if this is a remote session.
         if let serverSessionID = session.source.serverSessionID {
@@ -476,7 +477,7 @@ final class SessionManager {
 
         let removedPaneIDs = sessions[activeSessionIndex].tabs[index].allPaneIDsIncludingFloating
         for paneID in removedPaneIDs {
-            exitedFloatingPanes.remove(paneID)
+            exitedFloatingPanes.removeValue(forKey: paneID)
             stopAllControllers(for: paneID)
         }
 
@@ -758,9 +759,10 @@ final class SessionManager {
         return candidate
     }
 
-    /// Mark a floating pane as exited (process finished). ESC will close it.
-    func markFloatingPaneExited(_ paneID: UUID) {
-        exitedFloatingPanes.insert(paneID)
+    /// Mark a floating pane as exited (process finished) with the given exit code.
+    /// ESC will close it, Enter will re-run the command.
+    func markFloatingPaneExited(_ paneID: UUID, exitCode: Int32) {
+        exitedFloatingPanes[paneID] = exitCode
     }
 
     /// Close a floating pane by its pane ID. Returns true if found and removed.
@@ -768,7 +770,7 @@ final class SessionManager {
     /// updates when the server broadcasts a layoutUpdate.
     @discardableResult
     func closeFloatingPane(paneID: UUID) -> Bool {
-        exitedFloatingPanes.remove(paneID)
+        exitedFloatingPanes.removeValue(forKey: paneID)
         floatingPaneCommands.removeValue(forKey: paneID)
         if let serverPaneUUID = serverPaneUUID(for: paneID) {
             if let session = sessions.first(where: {
@@ -968,8 +970,8 @@ final class SessionManager {
         client.onTitleChanged = { [weak self] _, paneID, title in
             self?.handleRemoteTitleChanged(paneID, title: title)
         }
-        client.onPaneExited = { [weak self] _, paneID, _ in
-            self?.handleRemotePaneExited(paneID)
+        client.onPaneExited = { [weak self] _, paneID, exitCode in
+            self?.handleRemotePaneExited(paneID, exitCode: exitCode)
         }
         client.onLayoutUpdate = { [weak self] info in
             self?.handleRemoteLayoutUpdate(info)
@@ -999,7 +1001,7 @@ final class SessionManager {
     /// so stale state from a previous connection doesn't block re-attach.
     private func cleanupRemoteState() {
         // Clean up exited floating pane tracking for remote panes.
-        for paneID in remoteControllers.keys { exitedFloatingPanes.remove(paneID) }
+        for paneID in remoteControllers.keys { exitedFloatingPanes.removeValue(forKey: paneID) }
 
         for controller in remoteControllers.values {
             controller.stop()
@@ -1223,8 +1225,8 @@ final class SessionManager {
         controllerForServerPane(paneID)?.handleTitleChanged(title)
     }
 
-    private func handleRemotePaneExited(_ paneID: PaneID) {
-        controllerForServerPane(paneID)?.handleProcessExited()
+    private func handleRemotePaneExited(_ paneID: PaneID, exitCode: Int32) {
+        controllerForServerPane(paneID)?.handleProcessExited(exitCode: exitCode)
     }
 
     /// Reconcile local state with the authoritative server layout.
@@ -1647,7 +1649,7 @@ final class SessionManager {
         let controller = TerminalController(columns: dims.columns, rows: dims.rows)
         controller.start(workingDirectory: active.currentWorkingDirectory, command: wrapped.command, arguments: wrapped.arguments)
 
-        controller.onProcessExited = { [weak self] in
+        controller.onProcessExited = { [weak self] _ in
             self?.restoreFromInPlace(at: paneID)
         }
 
@@ -1750,7 +1752,7 @@ final class SessionManager {
     @discardableResult
     func rerunFloatingPaneCommand(paneID: UUID) -> (any TerminalControlling)? {
         guard let cmdInfo = floatingPaneCommands[paneID] else { return nil }
-        exitedFloatingPanes.remove(paneID)
+        exitedFloatingPanes.removeValue(forKey: paneID)
 
         // Remote pane: send restart to server.
         if let remote = remoteControllers[paneID] {

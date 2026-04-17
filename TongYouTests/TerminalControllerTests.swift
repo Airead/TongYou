@@ -12,7 +12,7 @@ struct TerminalControllerTests {
         let controller = TerminalController(columns: 80, rows: 24)
         let semaphore = DispatchSemaphore(value: 0)
 
-        controller.onProcessExited = {
+        controller.onProcessExited = { _ in
             semaphore.signal()
         }
 

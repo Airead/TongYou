@@ -775,9 +775,9 @@ final class MetalView: NSView {
 
     private func wireControllerCallbacks(_ controller: any TerminalControlling) {
         wireDisplayCallbacks(controller)
-        controller.onProcessExited = { [weak self] in
+        controller.onProcessExited = { [weak self] exitCode in
             guard let self, let paneID = self.paneID else { return }
-            self.onTabAction?(.paneExited(paneID))
+            self.onTabAction?(.paneExited(paneID, exitCode: exitCode))
         }
         controller.onPaneNotification = { [weak self] title, body in
             guard let self, let paneID = self.paneID else { return }
@@ -1042,9 +1042,9 @@ final class MetalView: NSView {
         configureController(controller)
         wireDisplayCallbacks(controller)
         if controller.onProcessExited == nil {
-            controller.onProcessExited = { [weak self] in
+            controller.onProcessExited = { [weak self] exitCode in
                 guard let self, let paneID = self.paneID else { return }
-                self.onTabAction?(.paneExited(paneID))
+                self.onTabAction?(.paneExited(paneID, exitCode: exitCode))
             }
         }
         terminalController = controller

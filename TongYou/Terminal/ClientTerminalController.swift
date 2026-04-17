@@ -31,7 +31,7 @@ final class ClientTerminalController: TerminalControlling {
     private var optionAsAlt: Bool = false
 
     var onNeedsDisplay: (() -> Void)?
-    var onProcessExited: (() -> Void)?
+    var onProcessExited: ((Int32) -> Void)?
     var onTitleChanged: ((String) -> Void)?
     var onPaneNotification: ((String, String) -> Void)?
 
@@ -332,8 +332,8 @@ final class ClientTerminalController: TerminalControlling {
     }
 
     /// Called when the server reports the pane's process exited.
-    func handleProcessExited() {
-        onProcessExited?()
+    func handleProcessExited(exitCode: Int32) {
+        onProcessExited?(exitCode)
     }
 
 }

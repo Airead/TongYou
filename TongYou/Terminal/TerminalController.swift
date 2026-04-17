@@ -60,8 +60,8 @@ final class TerminalController: TerminalControlling {
     /// Current bell mode from configuration.
     private var bellMode: BellMode = .audible
 
-    /// Called on the main thread when the child process exits.
-    var onProcessExited: (() -> Void)?
+    /// Called on the main thread when the child process exits with an exit code.
+    var onProcessExited: ((Int32) -> Void)?
 
     /// Called on the main thread when the window title changes (OSC 0/2).
     var onTitleChanged: ((String) -> Void)?
@@ -109,8 +109,8 @@ final class TerminalController: TerminalControlling {
                 pb.setString(text, forType: .string)
             }
         }
-        core.onProcessExited = { [weak self] _ in
-            self?.onProcessExited?()
+        core.onProcessExited = { [weak self] exitCode in
+            self?.onProcessExited?(exitCode)
         }
         core.onRunningCommandChanged = { [weak self] cmd in
             self?.runningCommand = cmd
