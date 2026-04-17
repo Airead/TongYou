@@ -748,7 +748,9 @@ public final class ServerSessionManager {
     @discardableResult
     public func createFloatingPaneWithCommand(
         sessionID: SessionID, tabID: TabID,
-        command: String, arguments: [String]
+        command: String, arguments: [String],
+        frameX: Float? = nil, frameY: Float? = nil,
+        frameWidth: Float? = nil, frameHeight: Float? = nil
     ) -> PaneID? {
         guard var session = sessions[sessionID] else { return nil }
         guard let tabIndex = session.tabs.firstIndex(where: { $0.id == tabID }) else { return nil }
@@ -779,7 +781,11 @@ public final class ServerSessionManager {
         }
 
         let nextZ = (session.tabs[tabIndex].floatingPanes.max(by: { $0.zIndex < $1.zIndex })?.zIndex ?? -1) + 1
-        let fp = FloatingPaneInfo(paneID: paneID, zIndex: nextZ)
+        var fp = FloatingPaneInfo(paneID: paneID, zIndex: nextZ)
+        if let x = frameX { fp.frameX = x }
+        if let y = frameY { fp.frameY = y }
+        if let w = frameWidth { fp.frameWidth = min(max(w, 0.1), 1.0) }
+        if let h = frameHeight { fp.frameHeight = min(max(h, 0.1), 1.0) }
         session.tabs[tabIndex].floatingPanes.append(fp)
         session.tabs[tabIndex].floatingPaneCores[paneID] = core
         sessions[sessionID] = session

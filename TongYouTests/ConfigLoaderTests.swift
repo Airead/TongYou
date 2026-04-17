@@ -414,6 +414,27 @@ struct KeybindingTests {
         #expect(kb.action == .increaseFontSize)
     }
 
+    @Test func parseRunCommandWithFrameOptions() throws {
+        let kb = try Keybinding.parse("alt+s=run_command[remote,local,pane,x=0.1,y=0.2,w=0.8,h=0.6]:git:status")
+        #expect(kb.modifiers == .option)
+        #expect(kb.key == "s")
+        if case .runCommand(let cmd, let args, let opts) = kb.action {
+            #expect(cmd == "git")
+            #expect(args == ["status"])
+            #expect(opts.runsRemote)
+            #expect(opts.runsLocal)
+            #expect(opts.showInPane)
+            let frame = opts.paneFrame
+            #expect(frame != nil)
+            #expect(frame!.origin.x == 0.1)
+            #expect(frame!.origin.y == 0.2)
+            #expect(frame!.width == 0.8)
+            #expect(frame!.height == 0.6)
+        } else {
+            Issue.record("Expected .runCommand")
+        }
+    }
+
     @Test func invalidAction() {
         #expect(throws: ConfigError.self) {
             try Keybinding.parse("cmd+t=nonexistent_action")

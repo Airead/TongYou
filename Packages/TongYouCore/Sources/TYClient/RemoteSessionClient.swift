@@ -230,8 +230,8 @@ public final class RemoteSessionClient: @unchecked Sendable {
     }
 
     /// Ask the server to create a floating pane that runs a command.
-    public func createFloatingPaneWithCommand(sessionID: SessionID, tabID: TabID, command: String, arguments: [String]) {
-        connection?.send(.createFloatingPaneWithCommand(sessionID, tabID, command: command, arguments: arguments))
+    public func createFloatingPaneWithCommand(sessionID: SessionID, tabID: TabID, command: String, arguments: [String], frameX: Float? = nil, frameY: Float? = nil, frameWidth: Float? = nil, frameHeight: Float? = nil) {
+        connection?.send(.createFloatingPaneWithCommand(sessionID, tabID, command: command, arguments: arguments, frameX: frameX, frameY: frameY, frameWidth: frameWidth, frameHeight: frameHeight))
     }
 
     /// Ask the server to restart a command in an existing (exited) floating pane.

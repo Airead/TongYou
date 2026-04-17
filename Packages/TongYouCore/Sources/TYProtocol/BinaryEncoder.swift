@@ -424,11 +424,19 @@ public struct BinaryEncoder: Sendable {
             writeString(command)
             writeStringArray(arguments)
 
-        case .createFloatingPaneWithCommand(let sessionID, let tabID, let command, let arguments):
+        case .createFloatingPaneWithCommand(let sessionID, let tabID, let command, let arguments, let frameX, let frameY, let frameWidth, let frameHeight):
             writeSessionID(sessionID)
             writeTabID(tabID)
             writeString(command)
             writeStringArray(arguments)
+            let hasFrame = frameX != nil || frameY != nil || frameWidth != nil || frameHeight != nil
+            writeBool(hasFrame)
+            if hasFrame {
+                writeFloat(frameX ?? 0.3)
+                writeFloat(frameY ?? 0.3)
+                writeFloat(frameWidth ?? 0.4)
+                writeFloat(frameHeight ?? 0.4)
+            }
 
         case .restartFloatingPaneCommand(let sessionID, let paneID, let command, let arguments):
             writeSessionID(sessionID)

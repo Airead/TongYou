@@ -1693,9 +1693,9 @@ final class SessionManager {
                 let cwd = activeController(for: paneID)?.currentWorkingDirectory
                 let resolvedCommand = await resolveCommandPath(command, workingDirectory: cwd)
                 let wrapped = wrapCommandInLoginShell(resolvedCommand, arguments: arguments)
-                createFloatingPaneWithCommand(workingDirectory: cwd, command: wrapped.command, arguments: wrapped.arguments, closeOnExit: options.closeOnExit)
+                createFloatingPaneWithCommand(workingDirectory: cwd, command: wrapped.command, arguments: wrapped.arguments, closeOnExit: options.closeOnExit, customFrame: options.paneFrame)
             } else {
-                await runCommandInFloatingPane(at: paneID, command: command, arguments: arguments, closeOnExit: options.closeOnExit)
+                await runCommandInFloatingPane(at: paneID, command: command, arguments: arguments, closeOnExit: options.closeOnExit, customFrame: options.paneFrame)
             }
             return
         }
@@ -1727,7 +1727,7 @@ final class SessionManager {
 
     /// Run a command in a new floating pane. Output is visible; ESC closes after exit.
     /// Automatically uses the remote or local path based on the active session.
-    private func runCommandInFloatingPane(at paneID: UUID, command: String, arguments: [String], closeOnExit: Bool) async {
+    private func runCommandInFloatingPane(at paneID: UUID, command: String, arguments: [String], closeOnExit: Bool, customFrame: CGRect? = nil) async {
         guard sessions.indices.contains(activeSessionIndex) else { return }
         let session = sessions[activeSessionIndex]
 
@@ -1742,20 +1742,24 @@ final class SessionManager {
                 sessionID: SessionID(serverSessionID),
                 tabID: tabIDs[session.activeTabIndex],
                 command: command,
-                arguments: arguments
+                arguments: arguments,
+                frameX: customFrame.map { Float($0.origin.x) },
+                frameY: customFrame.map { Float($0.origin.y) },
+                frameWidth: customFrame.map { Float($0.width) },
+                frameHeight: customFrame.map { Float($0.height) }
             )
         } else {
             guard let active = activeController(for: paneID) as? TerminalController else { return }
             let cwd = active.currentWorkingDirectory
             let resolvedCommand = await resolveCommandPath(command, workingDirectory: cwd)
             let wrapped = wrapCommandInLoginShell(resolvedCommand, arguments: arguments)
-            createFloatingPaneWithCommand(workingDirectory: cwd, command: wrapped.command, arguments: wrapped.arguments, closeOnExit: closeOnExit)
+            createFloatingPaneWithCommand(workingDirectory: cwd, command: wrapped.command, arguments: wrapped.arguments, closeOnExit: closeOnExit, customFrame: customFrame)
         }
     }
 
     /// Create a local floating pane that runs a command directly (no shell spawned first).
     @discardableResult
-    private func createFloatingPaneWithCommand(workingDirectory: String?, command: String, arguments: [String], closeOnExit: Bool) -> UUID? {
+    private func createFloatingPaneWithCommand(workingDirectory: String?, command: String, arguments: [String], closeOnExit: Bool, customFrame: CGRect? = nil) -> UUID? {
         guard sessions.indices.contains(activeSessionIndex),
               sessions[activeSessionIndex].tabs.indices.contains(
                   sessions[activeSessionIndex].activeTabIndex) else { return nil }
@@ -1763,7 +1767,7 @@ final class SessionManager {
         let session = sessions[activeSessionIndex]
         let pane = TerminalPane(initialWorkingDirectory: workingDirectory)
         let nextZ = (activeFloatingPanes.max(by: { $0.zIndex < $1.zIndex })?.zIndex ?? -1) + 1
-        let frame = nextFloatingPaneFrame()
+        let frame = customFrame ?? nextFloatingPaneFrame()
         var floating = FloatingPane(pane: pane, frame: frame, zIndex: nextZ)
         floating.clampFrame()
         activeFloatingPanes.append(floating)

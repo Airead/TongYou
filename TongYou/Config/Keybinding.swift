@@ -41,6 +41,19 @@ struct CommandOptions: Equatable, Sendable {
     /// Whether the command should always run locally, even in remote sessions.
     var alwaysLocal: Bool { has("always_local") }
 
+    /// Build a custom floating pane frame from `x`, `y`, `w`, `h` options.
+    /// Returns nil if none of these options are set (use default frame).
+    /// Values are normalized (0–1); width/height are clamped to [minSize..1.0].
+    var paneFrame: CGRect? {
+        guard has("x") || has("y") || has("w") || has("h") else { return nil }
+        let defaultFrame = CGRect(x: 0.3, y: 0.3, width: 0.4, height: 0.4)
+        let x = value("x").flatMap(Double.init) ?? defaultFrame.origin.x
+        let y = value("y").flatMap(Double.init) ?? defaultFrame.origin.y
+        let w = min(max(value("w").flatMap(Double.init) ?? defaultFrame.width, 0.1), 1.0)
+        let h = min(max(value("h").flatMap(Double.init) ?? defaultFrame.height, 0.1), 1.0)
+        return CGRect(x: x, y: y, width: w, height: h)
+    }
+
     var isEmpty: Bool { storage.isEmpty }
 
     /// Set a boolean flag if it is not already present.
@@ -409,7 +422,18 @@ struct Keybinding: Equatable {
 
     /// Parse a keybinding string like "cmd+shift+t=new_tab".
     static func parse(_ string: String) throws -> Keybinding {
-        guard let eqIndex = string.lastIndex(of: "=") else {
+        // Find the '=' that separates key-combo from action.
+        // Options like [x=1,y=2] contain '=' inside brackets, so we search
+        // for the last '=' before the first '[' that appears in the action part.
+        // The action part starts after the first '=', so look for '[' only after it.
+        guard let firstEq = string.firstIndex(of: "=") else {
+            throw ConfigError.invalidValue(key: "keybind", value: string)
+        }
+        let afterFirstEq = string[string.index(after: firstEq)...]
+        let bracketInAction = afterFirstEq.firstIndex(of: "[")
+        let searchEnd = bracketInAction ?? string.endIndex
+        let searchRange = string.startIndex..<searchEnd
+        guard let eqIndex = string[searchRange].lastIndex(of: "=") else {
             throw ConfigError.invalidValue(key: "keybind", value: string)
         }
 

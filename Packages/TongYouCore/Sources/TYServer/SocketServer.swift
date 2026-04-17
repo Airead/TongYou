@@ -497,10 +497,11 @@ public final class SocketServer: @unchecked Sendable {
                 paneID: paneID, command: command, arguments: arguments
             )
 
-        case .createFloatingPaneWithCommand(let sessionID, let tabID, let command, let arguments):
+        case .createFloatingPaneWithCommand(let sessionID, let tabID, let command, let arguments, let frameX, let frameY, let frameWidth, let frameHeight):
             if sessionManager.createFloatingPaneWithCommand(
                 sessionID: sessionID, tabID: tabID,
-                command: command, arguments: arguments
+                command: command, arguments: arguments,
+                frameX: frameX, frameY: frameY, frameWidth: frameWidth, frameHeight: frameHeight
             ) != nil {
                 broadcastLayoutOrClosed(sessionID: sessionID)
             }

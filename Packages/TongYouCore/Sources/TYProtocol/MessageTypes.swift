@@ -190,7 +190,7 @@ public enum ClientMessage: Sendable {
     /// Run a command in the background on the daemon (fire-and-forget, output discarded).
     case runRemoteCommand(SessionID, PaneID, command: String, arguments: [String])
     /// Create a floating pane that runs a command instead of a shell.
-    case createFloatingPaneWithCommand(SessionID, TabID, command: String, arguments: [String])
+    case createFloatingPaneWithCommand(SessionID, TabID, command: String, arguments: [String], frameX: Float?, frameY: Float?, frameWidth: Float?, frameHeight: Float?)
     /// Restart a command in an existing (exited) floating pane.
     case restartFloatingPaneCommand(SessionID, PaneID, command: String, arguments: [String])
 
@@ -248,7 +248,7 @@ public enum ClientMessage: Sendable {
             return "runInPlace(session=\(sid), pane=\(pid), cmd=\(truncate(cmd, maxLength: 80)), args=\(args))"
         case .runRemoteCommand(let sid, let pid, let cmd, let args):
             return "runRemoteCommand(session=\(sid), pane=\(pid), cmd=\(truncate(cmd, maxLength: 80)), args=\(args))"
-        case .createFloatingPaneWithCommand(let sid, let tid, let cmd, let args):
+        case .createFloatingPaneWithCommand(let sid, let tid, let cmd, let args, _, _, _, _):
             return "createFloatingPaneWithCommand(session=\(sid), tab=\(tid), cmd=\(truncate(cmd, maxLength: 80)), args=\(args))"
         case .restartFloatingPaneCommand(let sid, let pid, let cmd, let args):
             return "restartFloatingPaneCommand(session=\(sid), pane=\(pid), cmd=\(truncate(cmd, maxLength: 80)), args=\(args))"

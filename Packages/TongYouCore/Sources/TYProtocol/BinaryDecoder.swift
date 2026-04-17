@@ -594,7 +594,14 @@ public struct BinaryDecoder: Sendable {
             let tabID = try readTabID()
             let command = try readString()
             let arguments = try readStringArray()
-            return .createFloatingPaneWithCommand(sessionID, tabID, command: command, arguments: arguments)
+            var frameX: Float?, frameY: Float?, frameWidth: Float?, frameHeight: Float?
+            if try readBool() {
+                frameX = try readFloat()
+                frameY = try readFloat()
+                frameWidth = try readFloat()
+                frameHeight = try readFloat()
+            }
+            return .createFloatingPaneWithCommand(sessionID, tabID, command: command, arguments: arguments, frameX: frameX, frameY: frameY, frameWidth: frameWidth, frameHeight: frameHeight)
 
         case .restartFloatingPaneCommand:
             let sessionID = try readSessionID()

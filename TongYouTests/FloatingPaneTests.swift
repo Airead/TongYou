@@ -389,6 +389,47 @@ struct FloatingPaneTests {
         #expect(!opts.closeOnExit)
     }
 
+    // MARK: - CommandOptions paneFrame
+
+    @Test func paneFrameAllValues() {
+        let opts = CommandOptions.parse("pane,x=0.1,y=0.2,w=0.6,h=0.5")
+        let frame = opts.paneFrame
+        #expect(frame != nil)
+        #expect(frame!.origin.x == 0.1)
+        #expect(frame!.origin.y == 0.2)
+        #expect(frame!.width == 0.6)
+        #expect(frame!.height == 0.5)
+    }
+
+    @Test func paneFramePartialValues() {
+        let opts = CommandOptions.parse("pane,x=0.1,h=0.8")
+        let frame = opts.paneFrame
+        #expect(frame != nil)
+        #expect(frame!.origin.x == 0.1)
+        #expect(frame!.origin.y == 0.3)  // default
+        #expect(frame!.width == 0.4)     // default
+        #expect(frame!.height == 0.8)
+    }
+
+    @Test func paneFrameNilWhenNoFrameOptions() {
+        let opts = CommandOptions.parse("pane,local,remote")
+        #expect(opts.paneFrame == nil)
+    }
+
+    @Test func paneFrameWidthClampedToMax() {
+        let opts = CommandOptions.parse("w=2.0,h=1.5")
+        let frame = opts.paneFrame!
+        #expect(frame.width == 1.0)
+        #expect(frame.height == 1.0)
+    }
+
+    @Test func paneFrameWidthClampedToMin() {
+        let opts = CommandOptions.parse("w=0.01,h=0.01")
+        let frame = opts.paneFrame!
+        #expect(frame.width == 0.1)
+        #expect(frame.height == 0.1)
+    }
+
     // MARK: - FloatingPaneCommandInfo
 
     @Test func floatingPaneCommandInfoStoresValues() {
@@ -528,6 +569,16 @@ struct FloatingPaneTests {
         let action = Keybinding.Action.runCommand(
             command: "git", arguments: ["status"],
             options: CommandOptions.parse("local,pane,remote")
+        )
+        let raw = action.rawValue
+        let parsed = Keybinding.Action(rawValue: raw)
+        #expect(parsed == action)
+    }
+
+    @Test func runCommandWithFrameRoundTrip() {
+        let action = Keybinding.Action.runCommand(
+            command: "git", arguments: ["status"],
+            options: CommandOptions.parse("pane,local,x=0.1,y=0.2,w=0.8,h=0.6")
         )
         let raw = action.rawValue
         let parsed = Keybinding.Action(rawValue: raw)
