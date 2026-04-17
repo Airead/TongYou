@@ -1,7 +1,7 @@
 import Testing
 @testable import TYTerminal
 
-@Suite("GraphemeCluster tests")
+@Suite("GraphemeCluster tests", .serialized)
 struct GraphemeClusterTests {
 
     @Test func initializesFromScalar() {
@@ -227,7 +227,7 @@ struct GraphemeClusterTests {
     }
 }
 
-@Suite("Cell with GraphemeCluster tests")
+@Suite("Cell with GraphemeCluster tests", .serialized)
 struct CellGraphemeClusterTests {
 
     @Test func cellBackwardCompatibleInit() {

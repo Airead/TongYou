@@ -25,6 +25,7 @@ public enum ServerMessageType: UInt16, Sendable {
     case titleChanged    = 0x0120
     case bell            = 0x0121
     case paneExited      = 0x0122
+    case cwdChanged      = 0x0123
     case layoutUpdate    = 0x0130
     case clipboardSet    = 0x0131
 }
@@ -61,6 +62,12 @@ public enum ClientMessageType: UInt16, Sendable {
     case updateFloatingPaneFrame  = 0x0227
     case bringFloatingPaneToFront = 0x0228
     case toggleFloatingPanePin    = 0x0229
+
+    // Command execution (daemon-side)
+    case runInPlace               = 0x022B
+    case runRemoteCommand         = 0x022C
+    case createFloatingPaneWithCommand = 0x022D
+    case restartFloatingPaneCommand    = 0x022E
 }
 
 // MARK: - Server Messages
@@ -78,6 +85,7 @@ public enum ServerMessage: Sendable {
 
     // Events
     case titleChanged(SessionID, PaneID, String)
+    case cwdChanged(SessionID, PaneID, String)
     case bell(SessionID, PaneID)
     case paneExited(SessionID, PaneID, exitCode: Int32)
     case layoutUpdate(SessionInfo)
@@ -108,6 +116,8 @@ public enum ServerMessage: Sendable {
             return "screenDiff(session=\(sid), pane=\(pid), dirtyRows=\(diff.dirtyRows.count), cells=\(diff.cellData.count), mouse=\(diff.mouseTrackingMode))"
         case .titleChanged(let sid, let pid, let title):
             return "titleChanged(session=\(sid), pane=\(pid), title=\(truncate(title, maxLength: 80)))"
+        case .cwdChanged(let sid, let pid, let cwd):
+            return "cwdChanged(session=\(sid), pane=\(pid), cwd=\(truncate(cwd, maxLength: 80)))"
         case .bell(let sid, let pid):
             return "bell(session=\(sid), pane=\(pid))"
         case .paneExited(let sid, let pid, let exitCode):
@@ -128,6 +138,7 @@ public enum ServerMessage: Sendable {
         case .screenFull:     return .screenFull
         case .screenDiff:     return .screenDiff
         case .titleChanged:   return .titleChanged
+        case .cwdChanged:     return .cwdChanged
         case .bell:           return .bell
         case .paneExited:     return .paneExited
         case .layoutUpdate:   return .layoutUpdate
@@ -172,6 +183,16 @@ public enum ClientMessage: Sendable {
     case updateFloatingPaneFrame(SessionID, PaneID, x: Float, y: Float, width: Float, height: Float)
     case bringFloatingPaneToFront(SessionID, PaneID)
     case toggleFloatingPanePin(SessionID, PaneID)
+
+    // Command execution (daemon-side)
+    /// Run a command in-place: suspend the active shell, run command, restore on exit.
+    case runInPlace(SessionID, PaneID, command: String, arguments: [String])
+    /// Run a command in the background on the daemon (fire-and-forget, output discarded).
+    case runRemoteCommand(SessionID, PaneID, command: String, arguments: [String])
+    /// Create a floating pane that runs a command instead of a shell.
+    case createFloatingPaneWithCommand(SessionID, TabID, command: String, arguments: [String], frameX: Float?, frameY: Float?, frameWidth: Float?, frameHeight: Float?)
+    /// Restart a command in an existing (exited) floating pane.
+    case restartFloatingPaneCommand(SessionID, PaneID, command: String, arguments: [String])
 
     /// Human-readable summary for debug logging. Long payloads are truncated.
     public var debugDescription: String {
@@ -223,6 +244,14 @@ public enum ClientMessage: Sendable {
             return "bringFloatingPaneToFront(session=\(sid), pane=\(pid))"
         case .toggleFloatingPanePin(let sid, let pid):
             return "toggleFloatingPanePin(session=\(sid), pane=\(pid))"
+        case .runInPlace(let sid, let pid, let cmd, let args):
+            return "runInPlace(session=\(sid), pane=\(pid), cmd=\(truncate(cmd, maxLength: 80)), args=\(args))"
+        case .runRemoteCommand(let sid, let pid, let cmd, let args):
+            return "runRemoteCommand(session=\(sid), pane=\(pid), cmd=\(truncate(cmd, maxLength: 80)), args=\(args))"
+        case .createFloatingPaneWithCommand(let sid, let tid, let cmd, let args, _, _, _, _):
+            return "createFloatingPaneWithCommand(session=\(sid), tab=\(tid), cmd=\(truncate(cmd, maxLength: 80)), args=\(args))"
+        case .restartFloatingPaneCommand(let sid, let pid, let cmd, let args):
+            return "restartFloatingPaneCommand(session=\(sid), pane=\(pid), cmd=\(truncate(cmd, maxLength: 80)), args=\(args))"
         }
     }
 
@@ -251,6 +280,10 @@ public enum ClientMessage: Sendable {
         case .updateFloatingPaneFrame:  return .updateFloatingPaneFrame
         case .bringFloatingPaneToFront: return .bringFloatingPaneToFront
         case .toggleFloatingPanePin:    return .toggleFloatingPanePin
+        case .runInPlace:              return .runInPlace
+        case .runRemoteCommand:        return .runRemoteCommand
+        case .createFloatingPaneWithCommand: return .createFloatingPaneWithCommand
+        case .restartFloatingPaneCommand:    return .restartFloatingPaneCommand
         }
     }
 }

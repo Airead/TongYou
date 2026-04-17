@@ -186,16 +186,22 @@ struct TerminalWindowView: View {
         ))
         .onAppear {
             sessionManager.restoreLocalSessions()
-            sessionManager.createAnonymousSession()
-            focusActiveTabRootPane()
             loadWindowBackground()
+            if configLoader.config.draftEnabled || sessionManager.tabs.isEmpty {
+                sessionManager.createAnonymousSession()
+            }
+            focusActiveTabRootPane()
             wireRemoteLayoutCallback()
+            if configLoader.config.autoConnectDaemon {
+                sessionManager.ensureConnected {}
+            }
         }
         .onChange(of: focusManager.focusedPaneID) { _, newID in
             sessionManager.updateFloatingPanesVisibilityForFocus(focusedPaneID: newID)
             if let paneID = newID {
                 sessionManager.notifyPaneFocused(paneID)
                 notificationStore.markRead(paneID: paneID)
+                activateFirstResponder(for: paneID)
             }
             for (paneID, view) in viewStore.allViews {
                 let shouldShow = notificationStore.unreadPaneIDs.contains(paneID) && paneID != newID
@@ -313,6 +319,9 @@ struct TerminalWindowView: View {
                 },
                 onUserInteraction: { paneID in
                     notificationStore.markRead(paneID: paneID)
+                },
+                isProcessExited: { paneID in
+                    sessionManager.exitedFloatingPanes[paneID] != nil
                 }
             )
         }
@@ -436,14 +445,50 @@ struct TerminalWindowView: View {
 
     private func closePane() {
         guard let focusedID = focusManager.focusedPaneID else { return }
-        removePane(id: focusedID)
+        removePane(id: focusedID, exitCode: 0)
+    }
+
+    /// Resize the focused pane. Works for both tree panes (adjusts split ratio)
+    /// and floating panes (scales frame around center).
+    private func resizePane(delta: CGFloat) {
+        guard let focusedID = focusManager.focusedPaneID,
+              let activeTab = sessionManager.activeTab else { return }
+
+        // Floating pane: scale width/height around center.
+        if let floating = activeTab.floatingPanes.first(where: { $0.pane.id == focusedID }) {
+            let scaleDelta: CGFloat = delta * 0.5  // 0.1 → ±0.05 per axis
+            var frame = floating.frame
+            frame.origin.x -= scaleDelta
+            frame.origin.y -= scaleDelta
+            frame.size.width += scaleDelta * 2
+            frame.size.height += scaleDelta * 2
+            sessionManager.updateFloatingPaneFrame(paneID: focusedID, frame: frame)
+            return
+        }
+
+        // Tree pane: adjust parent split ratio.
+        if let newTree = activeTab.paneTree.resizePane(id: focusedID, delta: delta) {
+            sessionManager.updateActivePaneTree(newTree)
+        }
     }
 
     /// Tear down a pane and focus the nearest sibling or close the tab/window.
-    private func removePane(id paneID: UUID) {
+    private func removePane(id paneID: UUID, exitCode: Int32) {
         // Check if this is a floating pane first.
         if sessionManager.activeTab?.floatingPanes.contains(where: { $0.pane.id == paneID }) == true {
-            closeFloatingPane(id: paneID)
+            if let cmdInfo = sessionManager.floatingPaneCommands[paneID] {
+                if cmdInfo.closeOnExit && exitCode == 0 {
+                    // close_on_exit with successful exit: close immediately.
+                    closeFloatingPane(id: paneID)
+                } else {
+                    // No close_on_exit, or non-zero exit: keep open for reading.
+                    // ESC closes, Enter re-runs the command.
+                    sessionManager.markFloatingPaneExited(paneID, exitCode: exitCode)
+                }
+            } else {
+                // Non-command floating pane (e.g. shell): close immediately.
+                closeFloatingPane(id: paneID)
+            }
             return
         }
 
@@ -517,6 +562,11 @@ struct TerminalWindowView: View {
         }
     }
 
+    private func rerunFloatingPaneCommand(paneID: UUID) {
+        guard let controller = sessionManager.rerunFloatingPaneCommand(paneID: paneID) else { return }
+        viewStore.view(for: paneID)?.bindController(controller)
+    }
+
     // MARK: - Action Dispatch
 
     private func handleTabAction(_ action: TabAction) {
@@ -557,8 +607,12 @@ struct TerminalWindowView: View {
             closePane()
         case .focusPane(let direction):
             moveFocus(direction)
-        case .paneExited(let paneID):
-            removePane(id: paneID)
+        case .paneExited(let paneID, let exitCode):
+            removePane(id: paneID, exitCode: exitCode)
+        case .growPane:
+            resizePane(delta: 0.1)
+        case .shrinkPane:
+            resizePane(delta: -0.1)
         // Floating pane actions
         case .newFloatingPane:
             createFloatingPane()
@@ -566,6 +620,8 @@ struct TerminalWindowView: View {
             closeFloatingPane(id: paneID)
         case .toggleOrCreateFloatingPane:
             toggleOrCreateFloatingPane()
+        case .rerunFloatingPaneCommand(let paneID):
+            rerunFloatingPaneCommand(paneID: paneID)
         case .listRemoteSessions:
             sessionManager.listRemoteSessions()
             ensureSidebarVisible()
@@ -584,10 +640,12 @@ struct TerminalWindowView: View {
                     await sessionManager.runInPlace(at: paneID, command: command, arguments: arguments)
                 }
             }
-        case .runCommand(let command, let arguments):
+        case .runCommand(let command, let arguments, let options):
             if let paneID = focusManager.focusedPaneID {
                 Task {
-                    await sessionManager.runCommand(at: paneID, command: command, arguments: arguments)
+                    if let newPaneID = await sessionManager.runCommand(at: paneID, command: command, arguments: arguments, options: options) {
+                        focusAndActivate(paneID: newPaneID)
+                    }
                 }
             }
         case .paneNotification(let paneID, let title, let body):

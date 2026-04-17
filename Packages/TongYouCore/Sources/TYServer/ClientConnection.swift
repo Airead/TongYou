@@ -160,7 +160,7 @@ public final class ClientConnection: @unchecked Sendable {
 
 extension ScreenDiff {
     /// Convert a ScreenSnapshot into a ScreenDiff using its dirty region.
-    public init(from snapshot: ScreenSnapshot) {
+    public init(from snapshot: ScreenSnapshot, mouseTrackingMode: UInt8 = 0) {
         let rows: [UInt16]
         let cells: [Cell]
 
@@ -172,21 +172,22 @@ extension ScreenDiff {
                 buf.append(contentsOf: rowCells)
             }
             cells = buf
-        } else if let range = snapshot.dirtyRegion.lineRange {
-            let lower = max(0, range.lowerBound)
-            let upper = min(snapshot.rows, range.upperBound)
-            rows = (lower..<upper).map { UInt16($0) }
-
-            var buf: [Cell] = []
-            buf.reserveCapacity(rows.count * snapshot.columns)
-            for row in rows {
-                let offset = Int(row) * snapshot.columns
-                buf.append(contentsOf: snapshot.cells[offset..<(offset + snapshot.columns)])
-            }
-            cells = buf
         } else {
-            rows = (0..<UInt16(snapshot.rows)).map { $0 }
-            cells = snapshot.cells
+            let dirty = snapshot.dirtyRegion.dirtyRows
+            if !dirty.isEmpty {
+                rows = dirty.map { UInt16($0) }
+                var buf: [Cell] = []
+                buf.reserveCapacity(rows.count * snapshot.columns)
+                for row in dirty {
+                    let offset = row * snapshot.columns
+                    buf.append(contentsOf: snapshot.cells[offset..<(offset + snapshot.columns)])
+                }
+                cells = buf
+            } else {
+                // fullRebuild or no dirty info — send all rows.
+                rows = (0..<UInt16(snapshot.rows)).map { $0 }
+                cells = snapshot.cells
+            }
         }
 
         self.init(
@@ -198,7 +199,9 @@ extension ScreenDiff {
             cursorVisible: snapshot.cursorVisible,
             cursorShape: snapshot.cursorShape,
             scrollbackCount: snapshot.scrollbackCount,
-            viewportOffset: snapshot.viewportOffset
+            viewportOffset: snapshot.viewportOffset,
+            mouseTrackingMode: mouseTrackingMode,
+            scrollDelta: Int16(clamping: snapshot.dirtyRegion.scrollDelta)
         )
     }
 }

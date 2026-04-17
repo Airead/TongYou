@@ -1,16 +1,24 @@
 import Foundation
 
 /// Configuration for the tongyou server daemon.
-public struct ServerConfig: Sendable {
+public struct ServerConfig: Sendable, Equatable {
     public var socketPath: String
     public var autoExitOnNoSessions: Bool
     public var defaultColumns: UInt16
     public var defaultRows: UInt16
     public var maxScrollback: Int
 
-    /// Screen update interval in seconds (controls diff send rate).
-    /// Default: ~60fps (16ms).
-    public var screenUpdateInterval: TimeInterval
+    /// Minimum coalesce delay for screen updates (seconds).
+    /// After the screen becomes dirty, the server waits at least this long
+    /// before flushing, allowing multiple changes to batch into one send.
+    /// Default: 1ms — near-instant response for interactive typing.
+    public var minCoalesceDelay: TimeInterval
+
+    /// Maximum coalesce delay for screen updates (seconds).
+    /// During sustained output (e.g. `cat` of a large file), the delay
+    /// ramps up exponentially from minCoalesceDelay to this cap.
+    /// Default: 200ms (~5fps) to reduce bandwidth under heavy output.
+    public var maxCoalesceDelay: TimeInterval
 
     /// Default working directory for new shells. nil means use $HOME.
     public var defaultWorkingDirectory: String?
@@ -27,16 +35,26 @@ public struct ServerConfig: Sendable {
     /// If nil, sessions are not persisted to disk.
     public var persistenceDirectory: String?
 
+    // MARK: - Default Values
+
+    public static let defaultAutoExitOnNoSessions: Bool = false
+    public static let defaultMaxScrollback: Int = 10000
+    public static let defaultMinCoalesceDelay: TimeInterval = 0.001
+    public static let defaultMaxCoalesceDelay: TimeInterval = 0.200
+    public static let defaultMaxPendingScreenUpdates: Int = 3
+    public static let defaultStatsInterval: TimeInterval = 30.0
+
     public init(
         socketPath: String? = nil,
-        autoExitOnNoSessions: Bool = false,
+        autoExitOnNoSessions: Bool = defaultAutoExitOnNoSessions,
         defaultColumns: UInt16 = 80,
         defaultRows: UInt16 = 24,
-        maxScrollback: Int = 10000,
-        screenUpdateInterval: TimeInterval = 1.0 / 60.0,
+        maxScrollback: Int = defaultMaxScrollback,
+        minCoalesceDelay: TimeInterval = defaultMinCoalesceDelay,
+        maxCoalesceDelay: TimeInterval = defaultMaxCoalesceDelay,
         defaultWorkingDirectory: String? = nil,
-        maxPendingScreenUpdates: Int = 3,
-        statsInterval: TimeInterval = 30.0,
+        maxPendingScreenUpdates: Int = defaultMaxPendingScreenUpdates,
+        statsInterval: TimeInterval = defaultStatsInterval,
         persistenceDirectory: String? = nil
     ) {
         self.socketPath = socketPath ?? Self.defaultSocketPath()
@@ -44,7 +62,8 @@ public struct ServerConfig: Sendable {
         self.defaultColumns = defaultColumns
         self.defaultRows = defaultRows
         self.maxScrollback = maxScrollback
-        self.screenUpdateInterval = screenUpdateInterval
+        self.minCoalesceDelay = minCoalesceDelay
+        self.maxCoalesceDelay = maxCoalesceDelay
         self.defaultWorkingDirectory = defaultWorkingDirectory
         self.maxPendingScreenUpdates = maxPendingScreenUpdates
         self.statsInterval = statsInterval

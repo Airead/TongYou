@@ -15,7 +15,7 @@ private final class MockMouseController: TerminalControlling {
     var currentWorkingDirectory: String?
     var foregroundProcessName: String?
     var onNeedsDisplay: (() -> Void)?
-    var onProcessExited: (() -> Void)?
+    var onProcessExited: ((Int32) -> Void)?
     var onTitleChanged: ((String) -> Void)?
     var onPaneNotification: ((String, String) -> Void)?
 
@@ -26,7 +26,7 @@ private final class MockMouseController: TerminalControlling {
         var mode: SelectionMode?
     }
 
-    private(set) var calls: [Call] = []
+    var calls: [Call] = []
 
     func consumeSnapshot() -> ScreenSnapshot? { nil }
     func handleKeyDown(_ event: NSEvent) {}
@@ -47,7 +47,15 @@ private final class MockMouseController: TerminalControlling {
     }
 
     @discardableResult
-    func copySelection() -> Bool { false }
+    func copySelection() -> Bool {
+        calls.append(Call(name: "copySelection"))
+        return selection != nil
+    }
+
+    func clearSelection() {
+        calls.append(Call(name: "clearSelection"))
+        selection = nil
+    }
 
     func setCommandKeyHeld(_ held: Bool) {}
     func openURL(at row: Int, col: Int) -> Bool { false }
@@ -98,7 +106,7 @@ struct AltMouseSelectionTests {
 
     // MARK: mouseDown
 
-    @Test func altMouseDownBypassesMouseTrackingAndStartsSelection() {
+    @Test func altMouseDownBypassesMouseTrackingAndClearsSelection() {
         let controller = MockMouseController()
         controller.mouseTrackingMode = .button
         let view = makeView(controller: controller)
@@ -108,7 +116,8 @@ struct AltMouseSelectionTests {
 
         view.mouseDown(with: event!)
 
-        #expect(controller.calls.contains(where: { $0.name == "startSelection" }))
+        // Single click clears selection and defers creation to drag
+        #expect(controller.calls.contains(where: { $0.name == "clearSelection" }))
         #expect(!controller.calls.contains(where: { $0.name == "handleMouseEvent" }))
     }
 
@@ -126,7 +135,7 @@ struct AltMouseSelectionTests {
         #expect(!controller.calls.contains(where: { $0.name == "startSelection" }))
     }
 
-    @Test func mouseDownWithoutTrackingModeStillSelects() {
+    @Test func mouseDownWithoutTrackingModeClearsSelection() {
         let controller = MockMouseController()
         controller.mouseTrackingMode = .none
         let view = makeView(controller: controller)
@@ -136,7 +145,8 @@ struct AltMouseSelectionTests {
 
         view.mouseDown(with: event!)
 
-        #expect(controller.calls.contains(where: { $0.name == "startSelection" }))
+        // Single click clears selection and defers creation to drag
+        #expect(controller.calls.contains(where: { $0.name == "clearSelection" }))
         #expect(!controller.calls.contains(where: { $0.name == "handleMouseEvent" }))
     }
 
@@ -147,11 +157,24 @@ struct AltMouseSelectionTests {
         controller.mouseTrackingMode = .button
         let view = makeView(controller: controller)
 
-        let event = makeEvent(type: .leftMouseDragged, modifierFlags: .option)
-        #expect(event != nil)
+        // mouseDown first to set pending drag origin
+        let downEvent = makeEvent(
+            type: .leftMouseDown, location: NSPoint(x: 10, y: 10),
+            modifierFlags: .option)
+        #expect(downEvent != nil)
+        view.mouseDown(with: downEvent!)
 
-        view.mouseDragged(with: event!)
+        controller.calls.removeAll()
 
+        // Drag far enough to exceed the 3-pixel threshold
+        let dragEvent = makeEvent(
+            type: .leftMouseDragged, location: NSPoint(x: 20, y: 10),
+            modifierFlags: .option)
+        #expect(dragEvent != nil)
+        view.mouseDragged(with: dragEvent!)
+
+        // First drag creates the selection, then updates it
+        #expect(controller.calls.contains(where: { $0.name == "startSelection" }))
         #expect(controller.calls.contains(where: { $0.name == "updateSelection" }))
         #expect(!controller.calls.contains(where: { $0.name == "handleMouseEvent" }))
     }
@@ -196,5 +219,108 @@ struct AltMouseSelectionTests {
         view.mouseUp(with: event!)
 
         #expect(controller.calls.contains(where: { $0.name == "handleMouseEvent" }))
+    }
+
+    // MARK: Deferred selection (single click does not create selection)
+
+    @Test func singleClickDoesNotCreateSelection() {
+        let controller = MockMouseController()
+        controller.mouseTrackingMode = .none
+        let view = makeView(controller: controller)
+
+        let event = makeEvent(type: .leftMouseDown)
+        #expect(event != nil)
+        view.mouseDown(with: event!)
+
+        #expect(controller.calls.contains(where: { $0.name == "clearSelection" }))
+        #expect(!controller.calls.contains(where: { $0.name == "startSelection" }))
+    }
+
+    @Test func dragAfterSingleClickCreatesAndUpdatesSelection() {
+        let controller = MockMouseController()
+        controller.mouseTrackingMode = .none
+        let view = makeView(controller: controller)
+
+        let downEvent = makeEvent(type: .leftMouseDown, location: NSPoint(x: 10, y: 10))
+        #expect(downEvent != nil)
+        view.mouseDown(with: downEvent!)
+        controller.calls.removeAll()
+
+        // Drag far enough to exceed the 3-pixel threshold
+        let dragEvent = makeEvent(type: .leftMouseDragged, location: NSPoint(x: 20, y: 10))
+        #expect(dragEvent != nil)
+        view.mouseDragged(with: dragEvent!)
+
+        #expect(controller.calls.contains(where: { $0.name == "startSelection" }))
+        #expect(controller.calls.contains(where: { $0.name == "updateSelection" }))
+    }
+
+    @Test func dragBelowThresholdDoesNotCreateSelection() {
+        let controller = MockMouseController()
+        controller.mouseTrackingMode = .none
+        let view = makeView(controller: controller)
+
+        let downEvent = makeEvent(type: .leftMouseDown, location: NSPoint(x: 10, y: 10))
+        #expect(downEvent != nil)
+        view.mouseDown(with: downEvent!)
+        controller.calls.removeAll()
+
+        // Drag only 1 pixel — below the 3-pixel threshold
+        let dragEvent = makeEvent(type: .leftMouseDragged, location: NSPoint(x: 11, y: 10))
+        #expect(dragEvent != nil)
+        view.mouseDragged(with: dragEvent!)
+
+        #expect(!controller.calls.contains(where: { $0.name == "startSelection" }))
+        #expect(!controller.calls.contains(where: { $0.name == "updateSelection" }))
+    }
+
+    // MARK: Auto-copy on mouse up
+
+    @Test func mouseUpAutoCopiesWhenSelectionExists() {
+        let controller = MockMouseController()
+        controller.mouseTrackingMode = .none
+        let view = makeView(controller: controller)
+
+        // Simulate an active selection with different start/end
+        controller.selection = Selection(
+            start: SelectionPoint(line: 0, col: 0),
+            end: SelectionPoint(line: 0, col: 5)
+        )
+
+        let event = makeEvent(type: .leftMouseUp)
+        #expect(event != nil)
+        view.mouseUp(with: event!)
+
+        #expect(controller.calls.contains(where: { $0.name == "copySelection" }))
+    }
+
+    @Test func mouseUpDoesNotCopyWhenNoSelection() {
+        let controller = MockMouseController()
+        controller.mouseTrackingMode = .none
+        let view = makeView(controller: controller)
+
+        let event = makeEvent(type: .leftMouseUp)
+        #expect(event != nil)
+        view.mouseUp(with: event!)
+
+        #expect(!controller.calls.contains(where: { $0.name == "copySelection" }))
+    }
+
+    @Test func mouseUpDoesNotCopyWhenSelectionIsZeroLength() {
+        let controller = MockMouseController()
+        controller.mouseTrackingMode = .none
+        let view = makeView(controller: controller)
+
+        // Same start and end = zero-length selection (e.g. after click without drag)
+        controller.selection = Selection(
+            start: SelectionPoint(line: 0, col: 3),
+            end: SelectionPoint(line: 0, col: 3)
+        )
+
+        let event = makeEvent(type: .leftMouseUp)
+        #expect(event != nil)
+        view.mouseUp(with: event!)
+
+        #expect(!controller.calls.contains(where: { $0.name == "copySelection" }))
     }
 }

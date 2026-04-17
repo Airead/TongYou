@@ -20,6 +20,7 @@ public final class ScreenReplica: @unchecked Sendable {
     private var _viewportOffset: Int = 0
     private var _mouseTrackingMode: UInt8 = 0
     private var dirty = false
+    private var pendingDirtyRegion = DirtyRegion.full
 
     private let lock = NSLock()
 
@@ -86,6 +87,7 @@ public final class ScreenReplica: @unchecked Sendable {
         _scrollbackCount = snapshot.scrollbackCount
         _viewportOffset = snapshot.viewportOffset
         _mouseTrackingMode = mouseTrackingMode
+        pendingDirtyRegion.markFull()
         dirty = true
     }
 
@@ -97,12 +99,28 @@ public final class ScreenReplica: @unchecked Sendable {
 
         // Resize if column count changed or any dirty row exceeds current buffer.
         let maxDirtyRow = diff.dirtyRows.max().map { Int($0) + 1 } ?? rows
+        var resized = false
         if cols != columns || maxDirtyRow > rows {
             let newRows = max(rows, maxDirtyRow)
             if cols != columns || newRows != rows {
                 columns = cols
                 rows = newRows
                 cells = [Cell](repeating: Cell.empty, count: columns * rows)
+                resized = true
+            }
+        }
+
+        // Shift buffer up when scrollDelta is present.
+        let delta = Int(diff.scrollDelta)
+        if delta > 0 && !resized && delta < rows {
+            let shiftCells = delta * columns
+            let totalCells = rows * columns
+            cells.replaceSubrange(0..<(totalCells - shiftCells),
+                                  with: cells[shiftCells..<totalCells])
+            // Clear the newly revealed bottom rows.
+            let emptyStart = totalCells - shiftCells
+            for i in emptyStart..<totalCells {
+                cells[i] = .empty
             }
         }
 
@@ -124,6 +142,17 @@ public final class ScreenReplica: @unchecked Sendable {
         _scrollbackCount = diff.scrollbackCount
         _viewportOffset = diff.viewportOffset
         _mouseTrackingMode = diff.mouseTrackingMode
+
+        if resized {
+            pendingDirtyRegion.markFull()
+        } else {
+            if delta > 0 {
+                pendingDirtyRegion.markScroll(delta: delta, rowCount: rows)
+            }
+            for row in diff.dirtyRows {
+                pendingDirtyRegion.markLine(Int(row))
+            }
+        }
         dirty = true
     }
 
@@ -147,6 +176,14 @@ public final class ScreenReplica: @unchecked Sendable {
     /// Must be called with lock held.
     private func buildSnapshot(selection: Selection?) -> ScreenSnapshot {
         dirty = false
+        var region = pendingDirtyRegion
+        pendingDirtyRegion = DirtyRegion(rowCount: rows, fullRebuild: false)
+        // The renderer doesn't handle scroll-shift of GPU instance buffers,
+        // so convert scrollDelta to fullRebuild for correct rendering.
+        // Network savings from Plan B are preserved (server sends only new rows).
+        if region.scrollDelta > 0 {
+            region.markFull()
+        }
         return ScreenSnapshot(
             cells: cells,
             columns: columns,
@@ -158,15 +195,25 @@ public final class ScreenReplica: @unchecked Sendable {
             selection: selection,
             scrollbackCount: _scrollbackCount,
             viewportOffset: _viewportOffset,
-            dirtyRegion: .full
+            dirtyRegion: region
         )
     }
 
     /// Mark as needing redraw (e.g. after selection change).
     public func markDirty() {
         lock.lock()
+        pendingDirtyRegion.markFull()
         dirty = true
         lock.unlock()
+    }
+
+    /// Read the Unicode scalar at a viewport-relative (row, col) position.
+    /// Returns a space if the position is out of bounds.
+    public func codepoint(atRow row: Int, col: Int) -> Unicode.Scalar {
+        lock.lock()
+        defer { lock.unlock() }
+        guard row >= 0, row < rows, col >= 0, col < columns else { return " " }
+        return cells[row * columns + col].codepoint
     }
 
     public var isDirty: Bool {

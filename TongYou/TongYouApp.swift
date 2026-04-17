@@ -5,9 +5,15 @@ import TYServer
 struct TongYouApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
+    private static let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+
     var body: some Scene {
         WindowGroup {
-            TerminalWindowView()
+            if Self.isTesting {
+                Color.clear
+            } else {
+                TerminalWindowView()
+            }
         }
         .commands {
             TongYouCommands()
@@ -34,7 +40,7 @@ struct TongYouCommands: Commands {
     var body: some Commands {
         CommandGroup(replacing: .appSettings) {
             Button("Preferences...") {
-                ConfigLoader.openDefaultConfigFile()
+                ConfigLoader.openUserConfigFile()
             }
             .keyboardShortcut(",", modifiers: .command)
         }

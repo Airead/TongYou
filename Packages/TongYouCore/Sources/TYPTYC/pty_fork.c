@@ -1,6 +1,7 @@
 #include <pty_fork.h>
 
 #include <unistd.h>
+#include <signal.h>
 #include <sys/ioctl.h>
 #include <sys/param.h>
 #include <stdlib.h>
@@ -30,6 +31,24 @@ pid_t pty_fork_exec(int slave_fd, int master_fd,
 
         /* Create a new session (detach from parent's controlling terminal) */
         setsid();
+
+        /* Restore default signal dispositions that the parent (daemon) may
+           have set to SIG_IGN.  SIG_IGN survives exec(), so without this
+           reset, child shells would inherit the ignored SIGINT/SIGTERM and
+           Ctrl-C / kill would not work as expected. */
+        signal(SIGINT,  SIG_DFL);
+        signal(SIGTERM, SIG_DFL);
+        signal(SIGPIPE, SIG_DFL);
+        signal(SIGHUP,  SIG_DFL);
+        signal(SIGQUIT, SIG_DFL);
+
+        /* Unblock all signals — DispatchSource or sigprocmask in the parent
+           may have blocked signals that would otherwise be inherited. */
+        {
+            sigset_t all_signals;
+            sigfillset(&all_signals);
+            sigprocmask(SIG_UNBLOCK, &all_signals, NULL);
+        }
 
         /* Make the slave PTY the controlling terminal */
         ioctl(slave_fd, TIOCSCTTY, 0);

@@ -37,11 +37,13 @@ final class MetalView: NSView {
     // nonisolated(unsafe) because deinit must invalidate without actor hop
     nonisolated(unsafe) private var dragAutoScrollTimer: Timer?
     /// Last known drag column (for auto-scroll timer updates).
+    private var pendingDragOrigin: (col: Int, row: Int, pixelLocation: NSPoint)?
+    private static let dragThresholdSquared: CGFloat = 9  // 3 pixels
     private var dragLastCol: Int = 0
     /// Last known unclamped drag row (for auto-scroll timer updates).
     private var dragLastUnclampedRow: Int = 0
     /// Last consumed content generation for display-link deduplication.
-    private var lastRenderedContentGeneration: UInt64 = 0
+    private var lastRenderedContentGeneration: UInt64 = .max
 
     /// The pane ID this MetalView belongs to (set by TerminalPaneContainerView).
     var paneID: UUID?
@@ -53,6 +55,9 @@ final class MetalView: NSView {
 
     /// Callback for keybinding actions (forwarded to SessionManager via TerminalWindowView).
     var onTabAction: ((TabAction) -> Void)?
+
+    /// Returns true if this pane's process has exited (for ESC-to-close floating panes).
+    var isProcessExited: (() -> Bool)?
 
     /// Called on any keyboard or mouse interaction to indicate the pane is active.
     var onUserInteraction: (() -> Void)?
@@ -151,6 +156,23 @@ final class MetalView: NSView {
 
     override func keyDown(with event: NSEvent) {
         onUserInteraction?()
+
+        // ESC closes an exited floating pane.
+        if event.keyCode == 53,  // ESC key
+           isProcessExited?() == true,
+           let paneID {
+            onTabAction?(.closeFloatingPane(paneID))
+            return
+        }
+
+        // Enter re-runs the command in an exited floating pane.
+        if event.keyCode == 36,  // Enter key
+           isProcessExited?() == true,
+           let paneID {
+            onTabAction?(.rerunFloatingPaneCommand(paneID))
+            return
+        }
+
         // Check keybindings first for Option+key combinations that
         // performKeyEquivalent may not intercept (macOS routes these
         // through keyDown rather than performKeyEquivalent).
@@ -435,19 +457,28 @@ final class MetalView: NSView {
 
         switch clickCount {
         case 2:
+            pendingDragOrigin = nil
             terminalController?.startSelection(col: col, row: row, mode: .word)
         case 3:
+            pendingDragOrigin = nil
             terminalController?.startSelection(col: col, row: row, mode: .line)
             clickCount = 0
         default:
-            terminalController?.startSelection(col: col, row: row, mode: .character)
+            // Single click: clear existing selection, defer selection creation to drag
+            terminalController?.clearSelection()
+            pendingDragOrigin = (col: col, row: row, pixelLocation: event.locationInWindow)
         }
     }
 
     override func mouseUp(with event: NSEvent) {
         stopDragAutoScrollTimer()
+        pendingDragOrigin = nil
         if isMouseTrackingActive && !isAltForcingSelection(event) {
             sendMouseEvent(event, action: .release, button: .left)
+        }
+        // Auto-copy selection to clipboard on mouse up
+        if let sel = terminalController?.selection, sel.start != sel.end {
+            terminalController?.copySelection()
         }
     }
 
@@ -488,6 +519,17 @@ final class MetalView: NSView {
         if isMouseTrackingActive && !isAltForcingSelection(event) {
             sendMouseEvent(event, action: .motion, button: .left)
         } else {
+            // Start selection on first drag if deferred from single click
+            if let origin = pendingDragOrigin {
+                let loc = event.locationInWindow
+                let dx = loc.x - origin.pixelLocation.x
+                let dy = loc.y - origin.pixelLocation.y
+                guard dx * dx + dy * dy >= Self.dragThresholdSquared else { return }
+                terminalController?.startSelection(
+                    col: origin.col, row: origin.row, mode: .character)
+                pendingDragOrigin = nil
+            }
+
             let (col, unclampedRow) = gridPosition(for: event, clampRow: false)
             let visibleRows = Int(renderer?.gridSize.rows ?? 1)
 
@@ -663,8 +705,10 @@ final class MetalView: NSView {
                     // Re-inserted after tab switch — force full redraw.
                     // setupIfNeeded already called updateDrawableSize above.
                     self.renderer?.markDirty()
-                    self.wakeDisplayLink()
                 }
+                // Always wake the display link — for newly created views,
+                // a screenFull snapshot may already be waiting in the replica.
+                self.wakeDisplayLink()
             } else {
                 self.stopDragAutoScrollTimer()
                 self.stopDisplayLink()
@@ -753,9 +797,9 @@ final class MetalView: NSView {
 
     private func wireControllerCallbacks(_ controller: any TerminalControlling) {
         wireDisplayCallbacks(controller)
-        controller.onProcessExited = { [weak self] in
+        controller.onProcessExited = { [weak self] exitCode in
             guard let self, let paneID = self.paneID else { return }
-            self.onTabAction?(.paneExited(paneID))
+            self.onTabAction?(.paneExited(paneID, exitCode: exitCode))
         }
         controller.onPaneNotification = { [weak self] title, body in
             guard let self, let paneID = self.paneID else { return }
@@ -1020,14 +1064,14 @@ final class MetalView: NSView {
         configureController(controller)
         wireDisplayCallbacks(controller)
         if controller.onProcessExited == nil {
-            controller.onProcessExited = { [weak self] in
+            controller.onProcessExited = { [weak self] exitCode in
                 guard let self, let paneID = self.paneID else { return }
-                self.onTabAction?(.paneExited(paneID))
+                self.onTabAction?(.paneExited(paneID, exitCode: exitCode))
             }
         }
         terminalController = controller
         renderer?.markDirty()
-        lastRenderedContentGeneration = 0
+        lastRenderedContentGeneration = .max
         wakeDisplayLink()
     }
 

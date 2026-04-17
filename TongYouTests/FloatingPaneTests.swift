@@ -369,4 +369,298 @@ struct FloatingPaneTests {
         mgr.updateFloatingPanesVisibilityForFocus(focusedPaneID: nil)
         #expect(mgr.activeTab!.floatingPanes[0].isVisible)
     }
+
+    // MARK: - CommandOptions closeOnExit
+
+    @Test func commandOptionsCloseOnExitFlag() {
+        let opts = CommandOptions.parse("pane,close_on_exit")
+        #expect(opts.showInPane)
+        #expect(opts.closeOnExit)
+    }
+
+    @Test func commandOptionsDefaultNoCloseOnExit() {
+        let opts = CommandOptions.parse("pane")
+        #expect(opts.showInPane)
+        #expect(!opts.closeOnExit)
+    }
+
+    @Test func commandOptionsEmptyNoCloseOnExit() {
+        let opts = CommandOptions.empty
+        #expect(!opts.closeOnExit)
+    }
+
+    // MARK: - CommandOptions paneFrame
+
+    @Test func paneFrameAllValues() {
+        let opts = CommandOptions.parse("pane,x=0.1,y=0.2,w=0.6,h=0.5")
+        let frame = opts.paneFrame
+        #expect(frame != nil)
+        #expect(frame!.origin.x == 0.1)
+        #expect(frame!.origin.y == 0.2)
+        #expect(frame!.width == 0.6)
+        #expect(frame!.height == 0.5)
+    }
+
+    @Test func paneFramePartialValues() {
+        let opts = CommandOptions.parse("pane,x=0.1,h=0.8")
+        let frame = opts.paneFrame
+        #expect(frame != nil)
+        #expect(frame!.origin.x == 0.1)
+        #expect(frame!.origin.y == 0.3)  // default
+        #expect(frame!.width == 0.4)     // default
+        #expect(frame!.height == 0.8)
+    }
+
+    @Test func paneFrameNilWhenNoFrameOptions() {
+        let opts = CommandOptions.parse("pane,local,remote")
+        #expect(opts.paneFrame == nil)
+    }
+
+    @Test func paneFrameWidthClampedToMax() {
+        let opts = CommandOptions.parse("w=2.0,h=1.5")
+        let frame = opts.paneFrame!
+        #expect(frame.width == 1.0)
+        #expect(frame.height == 1.0)
+    }
+
+    @Test func paneFrameWidthClampedToMin() {
+        let opts = CommandOptions.parse("w=0.01,h=0.01")
+        let frame = opts.paneFrame!
+        #expect(frame.width == 0.1)
+        #expect(frame.height == 0.1)
+    }
+
+    // MARK: - FloatingPaneCommandInfo
+
+    @Test func floatingPaneCommandInfoStoresValues() {
+        let info = FloatingPaneCommandInfo(
+            command: "/bin/sh", arguments: ["-c", "echo hello"],
+            workingDirectory: "/tmp", closeOnExit: false
+        )
+        #expect(info.command == "/bin/sh")
+        #expect(info.arguments == ["-c", "echo hello"])
+        #expect(info.workingDirectory == "/tmp")
+        #expect(!info.closeOnExit)
+    }
+
+    @Test func floatingPaneCommandInfoCloseOnExit() {
+        let info = FloatingPaneCommandInfo(
+            command: "/bin/sh", arguments: [],
+            workingDirectory: nil, closeOnExit: true
+        )
+        #expect(info.closeOnExit)
+    }
+
+    // MARK: - closeOnExit Keybinding round-trip
+
+    @Test func closeOnExitKeybindingRoundTrip() {
+        let action = Keybinding.Action.runCommand(
+            command: "git", arguments: ["status"],
+            options: CommandOptions.parse("local,pane,close_on_exit")
+        )
+        let raw = action.rawValue
+        #expect(raw.contains("close_on_exit"))
+        #expect(raw.contains("pane"))
+        let parsed = Keybinding.Action(rawValue: raw)
+        #expect(parsed == action)
+    }
+
+    // MARK: - run_command mode flags
+
+    @Test func runCommandLocalOnly() {
+        let action = Keybinding.Action(rawValue: "run_command[pane,local]:git:status")
+        #expect(action != nil)
+        if case .runCommand(let cmd, let args, let opts) = action {
+            #expect(cmd == "git")
+            #expect(args == ["status"])
+            #expect(opts.runsLocal)
+            #expect(!opts.runsRemote)
+            #expect(opts.showInPane)
+        } else {
+            Issue.record("Expected .runCommand")
+        }
+    }
+
+    @Test func runCommandRemoteOnly() {
+        let action = Keybinding.Action(rawValue: "run_command[pane,remote]:git:status")
+        #expect(action != nil)
+        if case .runCommand(_, _, let opts) = action {
+            #expect(!opts.runsLocal)
+            #expect(opts.runsRemote)
+        } else {
+            Issue.record("Expected .runCommand")
+        }
+    }
+
+    @Test func runCommandBothModes() {
+        let action = Keybinding.Action(rawValue: "run_command[pane,local,remote]:git:status")
+        #expect(action != nil)
+        if case .runCommand(_, _, let opts) = action {
+            #expect(opts.runsLocal)
+            #expect(opts.runsRemote)
+            #expect(opts.showInPane)
+        } else {
+            Issue.record("Expected .runCommand")
+        }
+    }
+
+    @Test func runCommandDefaultsToLocal() {
+        // run_command without local/remote should default to local for backwards compat.
+        let action = Keybinding.Action(rawValue: "run_command[pane]:git:log")
+        #expect(action != nil)
+        if case .runCommand(_, _, let opts) = action {
+            #expect(opts.runsLocal)
+            #expect(!opts.runsRemote)
+        } else {
+            Issue.record("Expected .runCommand")
+        }
+    }
+
+    @Test func runLocalCommandLegacyParsesToRunCommand() {
+        let action = Keybinding.Action(rawValue: "run_local_command[pane]:make:build")
+        #expect(action != nil)
+        if case .runCommand(let cmd, let args, let opts) = action {
+            #expect(cmd == "make")
+            #expect(args == ["build"])
+            #expect(opts.runsLocal)
+            #expect(!opts.runsRemote)
+        } else {
+            Issue.record("Expected .runCommand from run_local_command")
+        }
+    }
+
+    @Test func runRemoteCommandLegacyParsesToRunCommand() {
+        let action = Keybinding.Action(rawValue: "run_remote_command[pane]:git:fetch,--all")
+        #expect(action != nil)
+        if case .runCommand(let cmd, let args, let opts) = action {
+            #expect(cmd == "git")
+            #expect(args == ["fetch", "--all"])
+            #expect(!opts.runsLocal)
+            #expect(opts.runsRemote)
+        } else {
+            Issue.record("Expected .runCommand from run_remote_command")
+        }
+    }
+
+    @Test func runCommandAlwaysLocal() {
+        let action = Keybinding.Action(rawValue: "run_command[pane,always_local]:open:.")
+        #expect(action != nil)
+        if case .runCommand(let cmd, let args, let opts) = action {
+            #expect(cmd == "open")
+            #expect(args == ["."])
+            #expect(opts.alwaysLocal)
+            #expect(opts.showInPane)
+        } else {
+            Issue.record("Expected .runCommand")
+        }
+    }
+
+    @Test func alwaysLocalRoundTrip() {
+        let action = Keybinding.Action.runCommand(
+            command: "pbcopy", arguments: [],
+            options: CommandOptions.parse("always_local")
+        )
+        let raw = action.rawValue
+        let parsed = Keybinding.Action(rawValue: raw)
+        #expect(parsed == action)
+    }
+
+    @Test func runCommandRoundTrip() {
+        let action = Keybinding.Action.runCommand(
+            command: "git", arguments: ["status"],
+            options: CommandOptions.parse("local,pane,remote")
+        )
+        let raw = action.rawValue
+        let parsed = Keybinding.Action(rawValue: raw)
+        #expect(parsed == action)
+    }
+
+    @Test func runCommandWithFrameRoundTrip() {
+        let action = Keybinding.Action.runCommand(
+            command: "git", arguments: ["status"],
+            options: CommandOptions.parse("pane,local,x=0.1,y=0.2,w=0.8,h=0.6")
+        )
+        let raw = action.rawValue
+        let parsed = Keybinding.Action(rawValue: raw)
+        #expect(parsed == action)
+    }
+
+    // MARK: - paneExited carries exit code
+
+    @Test func paneExitedActionCarriesExitCode() {
+        let id = UUID()
+        let action = TabAction.paneExited(id, exitCode: 42)
+        if case .paneExited(let paneID, let exitCode) = action {
+            #expect(paneID == id)
+            #expect(exitCode == 42)
+        } else {
+            Issue.record("Expected .paneExited")
+        }
+    }
+
+    @Test func paneExitedActionZeroExitCode() {
+        let id = UUID()
+        let action = TabAction.paneExited(id, exitCode: 0)
+        if case .paneExited(_, let exitCode) = action {
+            #expect(exitCode == 0)
+        } else {
+            Issue.record("Expected .paneExited")
+        }
+    }
+
+    @Test func paneExitedActionNegativeExitCode() {
+        let id = UUID()
+        let action = TabAction.paneExited(id, exitCode: -9)
+        if case .paneExited(_, let exitCode) = action {
+            #expect(exitCode == -9)
+        } else {
+            Issue.record("Expected .paneExited")
+        }
+    }
+
+    // MARK: - closeOnExit with exit code decision logic
+
+    @Test func closeOnExitWithSuccessShouldClose() {
+        // close_on_exit=true, exitCode=0 → should auto-close
+        let info = FloatingPaneCommandInfo(
+            command: "make", arguments: ["build"],
+            workingDirectory: nil, closeOnExit: true
+        )
+        let exitCode: Int32 = 0
+        let shouldClose = info.closeOnExit && exitCode == 0
+        #expect(shouldClose)
+    }
+
+    @Test func closeOnExitWithFailureShouldKeepOpen() {
+        // close_on_exit=true, exitCode=1 → should keep open
+        let info = FloatingPaneCommandInfo(
+            command: "make", arguments: ["build"],
+            workingDirectory: nil, closeOnExit: true
+        )
+        let exitCode: Int32 = 1
+        let shouldClose = info.closeOnExit && exitCode == 0
+        #expect(!shouldClose)
+    }
+
+    @Test func closeOnExitWithSignalKillShouldKeepOpen() {
+        // close_on_exit=true, exitCode=-9 (SIGKILL) → should keep open
+        let info = FloatingPaneCommandInfo(
+            command: "make", arguments: ["build"],
+            workingDirectory: nil, closeOnExit: true
+        )
+        let exitCode: Int32 = -9
+        let shouldClose = info.closeOnExit && exitCode == 0
+        #expect(!shouldClose)
+    }
+
+    @Test func noCloseOnExitAlwaysKeepsOpen() {
+        // close_on_exit=false, exitCode=0 → should still keep open
+        let info = FloatingPaneCommandInfo(
+            command: "make", arguments: ["build"],
+            workingDirectory: nil, closeOnExit: false
+        )
+        let exitCode: Int32 = 0
+        let shouldClose = info.closeOnExit && exitCode == 0
+        #expect(!shouldClose)
+    }
 }

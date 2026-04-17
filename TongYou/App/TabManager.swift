@@ -21,11 +21,14 @@ enum TabAction {
     case splitHorizontal
     case closePane
     case focusPane(FocusDirection)
-    case paneExited(UUID)
+    case paneExited(UUID, exitCode: Int32)
+    case growPane
+    case shrinkPane
     // Floating pane management
     case newFloatingPane
     case closeFloatingPane(UUID)
     case toggleOrCreateFloatingPane
+    case rerunFloatingPaneCommand(UUID)
     // Remote session management
     case listRemoteSessions
     case newRemoteSession
@@ -33,7 +36,7 @@ enum TabAction {
     case detachSession
     case renameSession
     case runInPlace(command: String, arguments: [String])
-    case runCommand(command: String, arguments: [String])
+    case runCommand(command: String, arguments: [String], options: CommandOptions)
     case paneNotification(UUID, String, String)  // paneID, title, body
 }
 
@@ -195,38 +198,11 @@ final class TabManager {
     func createFloatingPane(initialWorkingDirectory: String? = nil) -> UUID? {
         guard tabs.indices.contains(activeTabIndex) else { return nil }
         let pane = TerminalPane(initialWorkingDirectory: initialWorkingDirectory)
-        let nextZ = (activeFloatingPanes.max(by: { $0.zIndex < $1.zIndex })?.zIndex ?? -1) + 1
-        let frame = nextFloatingPaneFrame()
-        var floating = FloatingPane(pane: pane, frame: frame, zIndex: nextZ)
-        floating.clampFrame()
+        let floating = FloatingPane(pane: pane, frame: activeFloatingPanes.nextCascadedFrame(), zIndex: activeFloatingPanes.nextZIndex)
         activeFloatingPanes.append(floating)
         return pane.id
     }
 
-    private func nextFloatingPaneFrame() -> CGRect {
-        let base = FloatingPane.defaultFrame
-        let step: CGFloat = 0.03
-        let existing = activeFloatingPanes
-
-        guard !existing.isEmpty else { return base }
-
-        var candidate = base
-        for i in 0..<existing.count {
-            let offset = step * CGFloat(i + 1)
-            candidate = CGRect(
-                x: base.origin.x + offset,
-                y: base.origin.y + offset,
-                width: base.width,
-                height: base.height
-            )
-            let collision = existing.contains { pane in
-                abs(pane.frame.origin.x - candidate.origin.x) < step / 2
-                    && abs(pane.frame.origin.y - candidate.origin.y) < step / 2
-            }
-            if !collision { break }
-        }
-        return candidate
-    }
 
     /// Close a floating pane by its pane ID. Returns true if found and removed.
     /// Searches all tabs (not just active) because a PTY exit may arrive after
@@ -333,8 +309,9 @@ final class TabManager {
             // Session actions are handled by SessionManager / TerminalWindowView.
             return false
         case .splitVertical, .splitHorizontal, .closePane,
-             .focusPane, .paneExited,
+             .focusPane, .paneExited, .growPane, .shrinkPane,
              .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane,
+             .rerunFloatingPaneCommand,
              .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession,
              .renameSession, .runInPlace, .runCommand,
              .paneNotification:

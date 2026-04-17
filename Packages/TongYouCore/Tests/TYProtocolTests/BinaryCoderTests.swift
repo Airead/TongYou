@@ -3,7 +3,7 @@ import Foundation
 @testable import TYProtocol
 @testable import TYTerminal
 
-@Suite("BinaryEncoder/Decoder round-trip tests")
+@Suite("BinaryEncoder/Decoder round-trip tests", .serialized)
 struct BinaryCoderTests {
 
     // MARK: - Primitives

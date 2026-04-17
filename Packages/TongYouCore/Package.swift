@@ -10,6 +10,7 @@ let package = Package(
         .library(name: "TYProtocol", targets: ["TYProtocol"]),
         .library(name: "TYPTY", targets: ["TYPTY"]),
         .library(name: "TYShell", targets: ["TYShell"]),
+        .library(name: "TYConfig", targets: ["TYConfig"]),
         .library(name: "TYServer", targets: ["TYServer"]),
         .library(name: "TYClient", targets: ["TYClient"]),
         .executable(name: "tongyou", targets: ["tongyou"]),
@@ -43,6 +44,12 @@ let package = Package(
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 
+        // Configuration file parser (key = value format).
+        .target(
+            name: "TYConfig",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+
         // Binary wire protocol for client/server communication.
         .target(
             name: "TYProtocol",
@@ -53,7 +60,7 @@ let package = Package(
         // Server daemon: manages PTY sessions, serves clients over Unix socket.
         .target(
             name: "TYServer",
-            dependencies: ["TYTerminal", "TYPTY", "TYProtocol", "TYShell"],
+            dependencies: ["TYTerminal", "TYPTY", "TYProtocol", "TYShell", "TYConfig"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 
@@ -78,6 +85,12 @@ let package = Package(
         ),
 
         .testTarget(
+            name: "TYConfigTests",
+            dependencies: ["TYConfig"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+
+        .testTarget(
             name: "TYProtocolTests",
             dependencies: ["TYProtocol", "TYTerminal"],
             swiftSettings: [.swiftLanguageMode(.v6)]
@@ -85,7 +98,7 @@ let package = Package(
 
         .testTarget(
             name: "TYServerTests",
-            dependencies: ["TYServer", "TYProtocol", "TYTerminal"],
+            dependencies: ["TYServer", "TYProtocol", "TYTerminal", "TYConfig"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 

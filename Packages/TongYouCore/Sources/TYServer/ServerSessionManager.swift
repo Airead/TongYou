@@ -32,7 +32,7 @@ struct ServerSession {
         return tabs[activeTabIndex]
     }
 
-    func toSessionInfo() -> SessionInfo {
+    func toSessionInfo(coreLookup: [PaneID: TerminalCore] = [:]) -> SessionInfo {
         let tabInfos = tabs.map { tab in
             TabInfo(
                 id: tab.id,
@@ -42,11 +42,27 @@ struct ServerSession {
                 focusedPaneID: tab.focusedPaneID
             )
         }
+        // Collect pane metadata from all tree panes and floating panes.
+        var metadata: [PaneID: RemotePaneMetadata] = [:]
+        for tab in tabs {
+            for paneUUID in tab.paneTree.allPaneIDs {
+                let pid = PaneID(paneUUID)
+                if let cwd = coreLookup[pid]?.currentWorkingDirectory {
+                    metadata[pid] = RemotePaneMetadata(cwd: cwd)
+                }
+            }
+            for fp in tab.floatingPanes {
+                if let cwd = coreLookup[fp.paneID]?.currentWorkingDirectory {
+                    metadata[fp.paneID] = RemotePaneMetadata(cwd: cwd)
+                }
+            }
+        }
         return SessionInfo(
             id: id,
             name: name,
             tabs: tabInfos,
-            activeTabIndex: activeTabIndex
+            activeTabIndex: activeTabIndex,
+            paneMetadata: metadata
         )
     }
 
@@ -75,7 +91,7 @@ struct ServerSession {
 public final class ServerSessionManager {
 
     private var sessions: [SessionID: ServerSession] = [:]
-    private let config: ServerConfig
+    private var config: ServerConfig
     private let sessionStore: SessionStore?
 
     /// Flat lookup from PaneID to its TerminalCore for O(1) access on the hot path.
@@ -85,15 +101,24 @@ public final class ServerSessionManager {
     /// Effective PTY size = min(cols) × min(rows) across all clients (tmux-style).
     private var clientPaneSizes: [PaneID: [UUID: (cols: UInt16, rows: UInt16)]] = [:]
 
+    /// Overlay stack for run-in-place: maps paneID to suspended original cores.
+    /// When an overlay is active, coreLookup[paneID] points to the overlay core;
+    /// the original core is preserved here and restored when the overlay exits.
+    private var overlayStacks: [PaneID: [TerminalCore]] = [:]
+
     /// Debounced save work items per session to avoid synchronous disk I/O on every mutation.
     private var pendingSaves: [SessionID: DispatchWorkItem] = [:]
     private let pendingSavesLock = NSLock()
 
     var onScreenDirty: ((SessionID, PaneID) -> Void)?
     var onTitleChanged: ((SessionID, PaneID, String) -> Void)?
+    var onCwdChanged: ((SessionID, PaneID, String) -> Void)?
     var onBell: ((SessionID, PaneID) -> Void)?
     var onClipboardSet: ((String) -> Void)?
     var onPaneExited: ((SessionID, PaneID, Int32) -> Void)?
+
+    /// Tracks the last known cwd per pane so we only fire onCwdChanged on actual changes.
+    private var lastKnownCwd: [PaneID: String] = [:]
 
     public init(config: ServerConfig) {
         self.config = config
@@ -121,10 +146,16 @@ public final class ServerSessionManager {
         ))
     }
 
+    /// Update configuration for future sessions.
+    /// Existing sessions retain their original settings.
+    public func updateConfig(_ newConfig: ServerConfig) {
+        config = newConfig
+    }
+
     // MARK: - Session Operations
 
     public func listSessions() -> [SessionInfo] {
-        sessions.values.map { $0.toSessionInfo() }
+        sessions.values.map { $0.toSessionInfo(coreLookup: coreLookup) }
     }
 
     @discardableResult
@@ -153,7 +184,7 @@ public final class ServerSessionManager {
         sessions[sessionID] = session
         saveSession(id: sessionID)
         Log.info("Session created: \(sessionName) (\(sessionID))", category: .session)
-        return session.toSessionInfo()
+        return session.toSessionInfo(coreLookup: coreLookup)
     }
 
     public func renameSession(id: SessionID, name: String) {
@@ -161,6 +192,18 @@ public final class ServerSessionManager {
         sessions[id]?.name = name
         saveSession(id: id)
         Log.info("Session renamed: \(name) (\(id))", category: .session)
+    }
+
+    public func stopAllSessions() {
+        pendingSavesLock.lock()
+        for (_, item) in pendingSaves { item.cancel() }
+        pendingSaves.removeAll()
+        pendingSavesLock.unlock()
+
+        for (_, session) in sessions {
+            for tab in session.tabs { teardownAllPanes(in: tab) }
+        }
+        sessions.removeAll()
     }
 
     public func closeSession(id: SessionID) {
@@ -172,7 +215,7 @@ public final class ServerSessionManager {
     }
 
     public func sessionInfo(for id: SessionID) -> SessionInfo? {
-        sessions[id]?.toSessionInfo()
+        sessions[id]?.toSessionInfo(coreLookup: coreLookup)
     }
 
     public var hasSessions: Bool { !sessions.isEmpty }
@@ -380,7 +423,7 @@ public final class ServerSessionManager {
 
     /// Consume a snapshot if the pane is dirty.
     public func consumeSnapshot(paneID: PaneID) -> ScreenSnapshot? {
-        coreLookup[paneID]?.consumeSnapshot()
+        coreLookup[paneID]?.consumeSnapshot(allowPartial: true)
     }
 
     // MARK: - Floating Pane Operations
@@ -468,6 +511,8 @@ public final class ServerSessionManager {
         core.stop()
         coreLookup.removeValue(forKey: paneID)
         clientPaneSizes.removeValue(forKey: paneID)
+        // Stop any overlay cores on the stack.
+        overlayStacks.removeValue(forKey: paneID)?.forEach { $0.stop() }
     }
 
     private func teardownAllPanes(in tab: ServerTab) {
@@ -524,14 +569,14 @@ public final class ServerSessionManager {
         guard let session = sessions[id], let sessionStore else { return }
         var paneContexts: [PaneID: PersistedPaneContext] = [:]
         for tab in session.tabs {
-            for (paneID, core) in tab.terminalCores.merging(tab.floatingPaneCores) { current, _ in current } {
+            for (paneID, core) in tab.terminalCores.merging(tab.floatingPaneCores, uniquingKeysWith: { current, _ in current }) {
                 paneContexts[paneID] = PersistedPaneContext(
                     cwd: core.currentWorkingDirectory ?? ""
                 )
             }
         }
         let persisted = PersistedSession(
-            sessionInfo: session.toSessionInfo(),
+            sessionInfo: session.toSessionInfo(coreLookup: coreLookup),
             paneContexts: paneContexts
         )
         sessionStore.save(persisted)
@@ -614,6 +659,264 @@ public final class ServerSessionManager {
         }
     }
 
+    // MARK: - Command Execution
+
+    /// Run a command in-place: push the current TerminalCore onto the overlay stack,
+    /// create a temporary core for the command, and restore on exit.
+    public func runInPlace(sessionID: SessionID, paneID: PaneID, command: String, arguments: [String]) {
+        guard let originalCore = coreLookup[paneID] else {
+            Log.warning("runInPlace: no core for pane \(paneID)", category: .session)
+            return
+        }
+
+        let cwd = resolvedWorkingDirectory(originalCore.currentWorkingDirectory)
+        let cols = UInt16(clamping: originalCore.columns)
+        let rows = UInt16(clamping: originalCore.rows)
+
+        let wrapped = wrapCommandInLoginShell(command, arguments: arguments)
+
+        let overlayCore = TerminalCore(
+            columns: Int(cols),
+            rows: Int(rows),
+            maxScrollback: config.maxScrollback
+        )
+
+        overlayCore.onScreenDirty = { [weak self] in
+            self?.onScreenDirty?(sessionID, paneID)
+        }
+        overlayCore.onTitleChanged = { [weak self] title in
+            self?.onTitleChanged?(sessionID, paneID, title)
+        }
+        overlayCore.onBell = { [weak self] in
+            self?.onBell?(sessionID, paneID)
+        }
+        overlayCore.onClipboardSet = { [weak self] text in
+            self?.onClipboardSet?(text)
+        }
+        overlayCore.onProcessExited = { [weak self] _ in
+            self?.restoreFromInPlace(sessionID: sessionID, paneID: paneID)
+        }
+
+        // Push original onto overlay stack and swap the active core.
+        overlayStacks[paneID, default: []].append(originalCore)
+        coreLookup[paneID] = overlayCore
+
+        do {
+            try overlayCore.start(
+                command: wrapped.command, arguments: wrapped.arguments,
+                columns: cols, rows: rows,
+                workingDirectory: cwd
+            )
+        } catch {
+            Log.error("runInPlace: failed to start overlay for pane \(paneID): \(error)", category: .session)
+            // Restore immediately on failure.
+            overlayStacks[paneID]?.removeLast()
+            if overlayStacks[paneID]?.isEmpty == true { overlayStacks.removeValue(forKey: paneID) }
+            coreLookup[paneID] = originalCore
+        }
+    }
+
+    /// Restore the original TerminalCore after an in-place overlay exits.
+    private func restoreFromInPlace(sessionID: SessionID, paneID: PaneID) {
+        guard var stack = overlayStacks[paneID], !stack.isEmpty else { return }
+        // Stop the overlay core (it's currently in coreLookup).
+        coreLookup[paneID]?.stop()
+
+        let restored = stack.removeLast()
+        if stack.isEmpty {
+            overlayStacks.removeValue(forKey: paneID)
+        } else {
+            overlayStacks[paneID] = stack
+        }
+
+        coreLookup[paneID] = restored
+        restored.forceFullRedraw()
+        Log.info("runInPlace: overlay exited, restored pane \(paneID)", category: .session)
+    }
+
+    /// Run a command in the background on the daemon (fire-and-forget, output discarded).
+    public func runRemoteCommand(paneID: PaneID, command: String, arguments: [String]) {
+        let cwd = resolvedWorkingDirectory(coreLookup[paneID]?.currentWorkingDirectory)
+
+        let wrapped = wrapCommandInLoginShell(command, arguments: arguments)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: wrapped.command)
+        process.arguments = wrapped.arguments
+        process.currentDirectoryURL = URL(fileURLWithPath: cwd)
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+
+        do {
+            try process.run()
+            Log.info("runRemoteCommand: started '\(command)' in \(cwd)", category: .session)
+        } catch {
+            Log.error("runRemoteCommand: failed to start '\(command)': \(error)", category: .session)
+        }
+    }
+
+    /// Create a floating pane that runs a command instead of a shell.
+    /// The pane stays open after the command exits (for the user to read output).
+    @discardableResult
+    public func createFloatingPaneWithCommand(
+        sessionID: SessionID, tabID: TabID,
+        command: String, arguments: [String],
+        frameX: Float? = nil, frameY: Float? = nil,
+        frameWidth: Float? = nil, frameHeight: Float? = nil
+    ) -> PaneID? {
+        guard var session = sessions[sessionID] else { return nil }
+        guard let tabIndex = session.tabs.firstIndex(where: { $0.id == tabID }) else { return nil }
+
+        let cwd = resolvedWorkingDirectory(session.tabs[tabIndex].focusedPaneCwd(coreLookup: coreLookup))
+
+        let paneID = PaneID()
+        let core = TerminalCore(
+            columns: Int(config.defaultColumns),
+            rows: Int(config.defaultRows),
+            maxScrollback: config.maxScrollback
+        )
+
+        wireStandardCallbacks(core, sessionID: sessionID, paneID: paneID)
+        coreLookup[paneID] = core
+
+        let wrapped = wrapCommandInLoginShell(command, arguments: arguments)
+        do {
+            try core.start(
+                command: wrapped.command, arguments: wrapped.arguments,
+                columns: config.defaultColumns, rows: config.defaultRows,
+                workingDirectory: cwd
+            )
+        } catch {
+            Log.error("createFloatingPaneWithCommand: failed to start '\(command)': \(error)", category: .session)
+            coreLookup.removeValue(forKey: paneID)
+            return nil
+        }
+
+        let nextZ = (session.tabs[tabIndex].floatingPanes.max(by: { $0.zIndex < $1.zIndex })?.zIndex ?? -1) + 1
+        var fp = FloatingPaneInfo(paneID: paneID, zIndex: nextZ)
+        if let x = frameX { fp.frameX = x }
+        if let y = frameY { fp.frameY = y }
+        if let w = frameWidth { fp.frameWidth = min(max(w, 0.1), 1.0) }
+        if let h = frameHeight { fp.frameHeight = min(max(h, 0.1), 1.0) }
+        session.tabs[tabIndex].floatingPanes.append(fp)
+        session.tabs[tabIndex].floatingPaneCores[paneID] = core
+        sessions[sessionID] = session
+        Log.info("Floating pane with command created: \(paneID), cmd=\(command)", category: .session)
+        return paneID
+    }
+
+    /// Restart a command in an existing (exited) floating pane.
+    /// Replaces the old TerminalCore with a new one running the same command.
+    public func restartFloatingPaneCommand(
+        sessionID: SessionID, paneID: PaneID,
+        command: String, arguments: [String]
+    ) -> Bool {
+        guard var session = sessions[sessionID] else { return false }
+        guard let (tabIndex, _) = session.floatingPaneLocation(for: paneID) else { return false }
+
+        // Stop and remove the old core.
+        if let oldCore = session.tabs[tabIndex].floatingPaneCores[paneID] {
+            oldCore.stop()
+            coreLookup.removeValue(forKey: paneID)
+        }
+
+        // Use the tree pane's shell cwd — it's always running and has a valid cwd.
+        let treePaneID = PaneID(session.tabs[tabIndex].paneTree.firstPane.id)
+        let cwd = resolvedWorkingDirectory(coreLookup[treePaneID]?.currentWorkingDirectory)
+
+        // Reuse the client-reported size so the new core matches the existing MetalView.
+        let effectiveSize = clientPaneSizes[paneID]?.values.first
+        let cols = effectiveSize?.cols ?? config.defaultColumns
+        let rows = effectiveSize?.rows ?? config.defaultRows
+
+        let core = TerminalCore(
+            columns: Int(cols),
+            rows: Int(rows),
+            maxScrollback: config.maxScrollback
+        )
+
+        wireStandardCallbacks(core, sessionID: sessionID, paneID: paneID)
+        coreLookup[paneID] = core
+
+        let wrapped = wrapCommandInLoginShell(command, arguments: arguments)
+        do {
+            try core.start(
+                command: wrapped.command, arguments: wrapped.arguments,
+                columns: cols, rows: rows,
+                workingDirectory: cwd
+            )
+        } catch {
+            Log.error("restartFloatingPaneCommand: failed to start '\(command)': \(error)", category: .session)
+            coreLookup.removeValue(forKey: paneID)
+            return false
+        }
+
+        session.tabs[tabIndex].floatingPaneCores[paneID] = core
+        sessions[sessionID] = session
+        Log.info("Floating pane command restarted: \(paneID), cmd=\(command), cwd=\(cwd)", category: .session)
+        return true
+    }
+
+    /// Wire standard callbacks on a TerminalCore for screen updates, title, bell, clipboard, and process exit.
+    private func wireStandardCallbacks(
+        _ core: TerminalCore,
+        sessionID: SessionID,
+        paneID: PaneID
+    ) {
+        core.onScreenDirty = { [weak self] in
+            self?.onScreenDirty?(sessionID, paneID)
+        }
+        core.onTitleChanged = { [weak self] title in
+            self?.updateFloatingPaneTitle(sessionID: sessionID, paneID: paneID, title: title)
+            self?.onTitleChanged?(sessionID, paneID, title)
+            self?.checkCwdChanged(core: core, sessionID: sessionID, paneID: paneID)
+        }
+        core.onBell = { [weak self] in
+            self?.onBell?(sessionID, paneID)
+        }
+        core.onClipboardSet = { [weak self] text in
+            self?.onClipboardSet?(text)
+        }
+        core.onProcessExited = { [weak self] exitCode in
+            self?.onPaneExited?(sessionID, paneID, exitCode)
+        }
+    }
+
+    /// Check if a pane's cwd has changed and fire onCwdChanged if so.
+    private func checkCwdChanged(core: TerminalCore, sessionID: SessionID, paneID: PaneID) {
+        guard let cwd = core.currentWorkingDirectory else { return }
+        if lastKnownCwd[paneID] != cwd {
+            lastKnownCwd[paneID] = cwd
+            onCwdChanged?(sessionID, paneID, cwd)
+        }
+    }
+
+    private func resolvedWorkingDirectory(_ preferred: String? = nil) -> String {
+        preferred
+            ?? config.defaultWorkingDirectory
+            ?? ProcessInfo.processInfo.environment["HOME"]
+            ?? "/"
+    }
+
+    private func resolvedUserShell() -> String {
+        if let shell = ProcessInfo.processInfo.environment["SHELL"], !shell.isEmpty {
+            return shell
+        }
+        return "/bin/sh"
+    }
+
+    private func shellEscape(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    private func wrapCommandInLoginShell(_ command: String, arguments: [String]) -> (command: String, arguments: [String]) {
+        let shell = resolvedUserShell()
+        let expanded = (command as NSString).expandingTildeInPath
+        let parts = [expanded] + arguments
+        let escaped = parts.map(shellEscape).joined(separator: " ")
+        return (shell, ["-l", "-c", "exec \(escaped)"])
+    }
+
     /// Create a new pane with its TerminalCore and start the PTY.
     /// - Parameter workingDirectory: If provided, the new pane starts in this directory;
     ///   otherwise falls back to `config.defaultWorkingDirectory` / `$HOME` / `/`.
@@ -638,29 +941,10 @@ public final class ServerSessionManager {
             maxScrollback: config.maxScrollback
         )
 
-        core.onScreenDirty = { [weak self] in
-            self?.onScreenDirty?(sessionID, actualPaneID)
-        }
-        core.onTitleChanged = { [weak self] title in
-            self?.updateFloatingPaneTitle(sessionID: sessionID, paneID: actualPaneID, title: title)
-            self?.onTitleChanged?(sessionID, actualPaneID, title)
-        }
-        core.onBell = { [weak self] in
-            self?.onBell?(sessionID, actualPaneID)
-        }
-        core.onClipboardSet = { [weak self] text in
-            self?.onClipboardSet?(text)
-        }
-        core.onProcessExited = { [weak self] exitCode in
-            self?.onPaneExited?(sessionID, actualPaneID, exitCode)
-        }
-
+        wireStandardCallbacks(core, sessionID: sessionID, paneID: actualPaneID)
         coreLookup[actualPaneID] = core
 
-        let effectiveCwd = workingDirectory
-            ?? config.defaultWorkingDirectory
-            ?? ProcessInfo.processInfo.environment["HOME"]
-            ?? "/"
+        let effectiveCwd = resolvedWorkingDirectory(workingDirectory)
 
         do {
             try core.start(

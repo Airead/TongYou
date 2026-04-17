@@ -1,23 +1,22 @@
 import AppKit
 import Foundation
 import TYTerminal
-import TYPTY
+import TYServer
 
-/// Coordinates PTY process, VT parser, stream handler, and screen buffer.
+/// Coordinates a local terminal session with GUI-specific features.
 ///
-/// Concurrency model:
-/// - PTY reads, VT parsing, and screen mutations happen on `ptyQueue` (background).
-/// - A dirty flag is set on ptyQueue; the snapshot is taken only when consumed.
-/// - `consumeSnapshot()` is called on MainActor by the display link.
+/// Wraps `TerminalCore` for PTY + VT + Screen management, adding:
+/// - Display-link debounce for efficient rendering
+/// - Text selection with word-boundary expansion
+/// - URL detection (on-demand when Cmd is held)
+/// - Bell rate limiting
+/// - Title change debouncing
+/// - Search result focusing
 final class TerminalController: TerminalControlling {
 
-    private var ptyProcess: PTYProcess?
+    private let core: TerminalCore
 
-    // Screen, parser, and handler are confined to ptyQueue.
-    nonisolated(unsafe) private var screen: Screen
-    nonisolated(unsafe) private var vtParser = VTParser()
-    nonisolated(unsafe) private var streamHandler: StreamHandler
-    // Set on ptyQueue, read on main — atomic flag avoids per-read snapshot copies.
+    // Set on ptyQueue (via core callback), read on main — atomic flag avoids per-read snapshot copies.
     nonisolated(unsafe) private var screenDirty = false
 
     /// Called when screen content becomes dirty. May be called from any thread.
@@ -36,13 +35,16 @@ final class TerminalController: TerminalControlling {
     /// Active text selection (MainActor-only).
     private(set) var selection: Selection?
 
+    /// Cached last successful core snapshot for selection-only updates.
+    private var lastCoreSnapshot: ScreenSnapshot?
+
     /// Detected URLs in the current visible area (populated on demand when Cmd key is held).
     private(set) var detectedURLs: [DetectedURL] = []
     /// Track whether content changed to refresh URL detection while Cmd is held.
     nonisolated(unsafe) private var _contentGeneration: UInt64 = 0
     /// Monotonically-increasing generation counter for snapshot deduplication.
     var contentGeneration: UInt64 {
-        ptyQueue.sync { _contentGeneration }
+        _contentGeneration
     }
 
     /// Debounce work item for coalescing rapid display-link wakeups.
@@ -58,8 +60,8 @@ final class TerminalController: TerminalControlling {
     /// Current bell mode from configuration.
     private var bellMode: BellMode = .audible
 
-    /// Called on the main thread when the child process exits.
-    var onProcessExited: (() -> Void)?
+    /// Called on the main thread when the child process exits with an exit code.
+    var onProcessExited: ((Int32) -> Void)?
 
     /// Called on the main thread when the window title changes (OSC 0/2).
     var onTitleChanged: ((String) -> Void)?
@@ -69,27 +71,55 @@ final class TerminalController: TerminalControlling {
     private(set) var isSuspended: Bool = false
 
     var dimensions: (columns: Int, rows: Int) {
-        ptyQueue.sync { (screen.columns, screen.rows) }
+        (core.columns, core.rows)
     }
-
-    private let ptyQueue = DispatchQueue(
-        label: "io.github.airead.tongyou.pty.read",
-        qos: .userInteractive
-    )
 
     private var optionAsAlt: Bool
 
     init(columns: Int, rows: Int, config: Config = .default) {
-        let screen = Screen(
+        self.core = TerminalCore(
             columns: columns,
             rows: rows,
             maxScrollback: config.scrollbackLimit,
             tabWidth: config.tabWidth
         )
-        self.screen = screen
-        self.streamHandler = StreamHandler(screen: screen)
         self.bellMode = config.bell
         self.optionAsAlt = config.optionAsAlt
+
+        wireCallbacks()
+    }
+
+    /// Wire TerminalCore callbacks to GUI-specific handlers.
+    private func wireCallbacks() {
+        core.onScreenDirty = { [weak self] in
+            self?.handleScreenDirty()
+        }
+        core.onTitleChanged = { [weak self] title in
+            guard let self else { return }
+            self.windowTitle = title
+            self.dispatchTitleToMain(title)
+        }
+        core.onBell = { [weak self] in
+            self?.handleBell()
+        }
+        core.onClipboardSet = { text in
+            DispatchQueue.main.async {
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                pb.setString(text, forType: .string)
+            }
+        }
+        core.onProcessExited = { [weak self] exitCode in
+            self?.onProcessExited?(exitCode)
+        }
+        core.onRunningCommandChanged = { [weak self] cmd in
+            self?.runningCommand = cmd
+        }
+        core.onPaneNotification = { [weak self] title, body in
+            DispatchQueue.main.async { [weak self] in
+                self?.onPaneNotification?(title, body)
+            }
+        }
     }
 
     /// Apply updated configuration (called from MetalView on hot reload).
@@ -104,95 +134,46 @@ final class TerminalController: TerminalControlling {
 
     /// Query the current working directory of the child shell process.
     var currentWorkingDirectory: String? {
-        ptyProcess?.currentWorkingDirectory
+        core.currentWorkingDirectory
     }
 
     /// Query the name of the foreground process in this terminal.
     var foregroundProcessName: String? {
-        ptyProcess?.foregroundProcessName
+        core.foregroundProcessName
     }
 
     private static let defaultWorkingDirectory: String =
         ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
 
     func start(workingDirectory: String? = nil, command: String? = nil, arguments: [String] = []) {
-        let process = PTYProcess(readQueue: ptyQueue)
-
-        process.onRead = { [weak self] bytes in
-            self?.processBytes(bytes)
-        }
-
-        process.onExit = { [weak self] _ in
-            self?.onProcessExited?()
-        }
-
-        // Wire StreamHandler callbacks (captured on ptyQueue)
-        streamHandler.onWriteBack = { [weak self] data in
-            self?.ptyProcess?.write(data)
-        }
-        streamHandler.onTitleChanged = { [weak self] title in
-            guard let self else { return }
-
-            if title.isEmpty {
-                let fallback = self.ptyProcess?.currentWorkingDirectory
-                    .flatMap { URL(filePath: $0).lastPathComponent }
-                    ?? ""
-                guard !fallback.isEmpty, self.windowTitle != fallback else { return }
-                self.windowTitle = fallback
-                self.dispatchTitleToMain(fallback)
-                return
-            }
-
-            guard self.windowTitle != title else { return }
-            self.windowTitle = title
-            self.dispatchTitleToMain(title)
-        }
-        streamHandler.onBell = { [weak self] in
-            self?.handleBell()
-        }
-        streamHandler.onClipboardSet = { text in
-            DispatchQueue.main.async {
-                let pb = NSPasteboard.general
-                pb.clearContents()
-                pb.setString(text, forType: .string)
-            }
-        }
-        streamHandler.onRunningCommandChanged = { [weak self] cmd in
-            self?.runningCommand = cmd
-        }
-        streamHandler.onPaneNotification = { [weak self] title, body in
-            DispatchQueue.main.async { [weak self] in
-                self?.onPaneNotification?(title, body)
-            }
-        }
+        let cols = UInt16(clamping: core.columns)
+        let rows = UInt16(clamping: core.rows)
+        let dir = workingDirectory ?? Self.defaultWorkingDirectory
 
         do {
             if let command = command {
-                try process.start(
+                try core.start(
                     command: command,
                     arguments: arguments,
-                    columns: UInt16(screen.columns),
-                    rows: UInt16(screen.rows),
-                    workingDirectory: workingDirectory ?? Self.defaultWorkingDirectory
+                    columns: cols,
+                    rows: rows,
+                    workingDirectory: dir
                 )
             } else {
-                try process.start(
-                    columns: UInt16(screen.columns),
-                    rows: UInt16(screen.rows),
-                    workingDirectory: workingDirectory ?? Self.defaultWorkingDirectory
+                try core.start(
+                    columns: cols,
+                    rows: rows,
+                    workingDirectory: dir
                 )
             }
         } catch {
             print("Failed to start PTY: \(error)")
             return
         }
-
-        ptyProcess = process
     }
 
     func stop() {
-        ptyProcess?.stop()
-        ptyProcess = nil
+        core.stop()
     }
 
     func suspend() {
@@ -201,7 +182,7 @@ final class TerminalController: TerminalControlling {
 
     func resume() {
         isSuspended = false
-        markScreenDirty()
+        handleScreenDirty()
     }
 
     // MARK: - Snapshot (called by display link on MainActor)
@@ -209,22 +190,23 @@ final class TerminalController: TerminalControlling {
     /// Returns a snapshot if screen content changed since the last call. Nil if idle.
     func consumeSnapshot() -> ScreenSnapshot? {
         guard screenDirty else { return nil }
+        screenDirty = false
         let sel = selection
-        let (snapshot, gen, urls): (ScreenSnapshot, UInt64, [DetectedURL]?) = ptyQueue.sync {
-            screenDirty = false
-            let snap = screen.snapshot(selection: sel, allowPartial: true)
-            let urls = commandKeyHeld ? URLDetector.detect(
-                rows: screen.rows,
-                cols: screen.columns,
-                cellAt: { screen.cell(at: $1, row: $0) }
-            ) : nil
-            return (snap, _contentGeneration, urls)
+        if let snapshot = core.consumeSnapshot(selection: sel, allowPartial: true) {
+            lastCoreSnapshot = snapshot
+            _contentGeneration &+= 1
+            // Refresh URL detection only while Command key is held and content changed.
+            if commandKeyHeld, _contentGeneration != lastURLGeneration {
+                detectedURLs = URLDetector.detect(in: snapshot)
+                lastURLGeneration = _contentGeneration
+            }
+            return snapshot
         }
-        // Refresh URL detection only while Command key is held and content changed.
-        if commandKeyHeld, gen != lastURLGeneration {
-            detectedURLs = urls ?? []
-            lastURLGeneration = gen
-        }
+        // Core screen content unchanged, but controller state (e.g. selection) changed.
+        // Reuse the last snapshot with updated selection to avoid ptyQueue contention.
+        guard var snapshot = lastCoreSnapshot else { return nil }
+        snapshot.selection = sel
+        _contentGeneration &+= 1
         return snapshot
     }
 
@@ -233,7 +215,7 @@ final class TerminalController: TerminalControlling {
     func handleKeyDown(_ event: NSEvent) {
         let input = KeyEncoder.KeyInput(event: event)
         let options = KeyEncoder.Options(
-            appCursorMode: streamHandler.modes.isSet(.cursorKeys),
+            appCursorMode: core.appCursorMode,
             optionAsAlt: optionAsAlt
         )
         guard let data = KeyEncoder.encode(input, options: options) else { return }
@@ -249,42 +231,29 @@ final class TerminalController: TerminalControlling {
     /// Clear selection, auto-scroll to bottom, and write data to the PTY.
     private func writeToPTY(_ data: Data) {
         selection = nil
-        ptyQueue.async { [weak self] in
-            guard let self else { return }
-            if self.screen.isScrolledUp {
-                self.screen.scrollViewportToBottom()
-                self.markScreenDirty()
-            }
+        if core.isScrolledUp {
+            core.scrollViewport(delta: Int32.max)
         }
-        ptyProcess?.write(data)
+        core.write(data)
     }
 
     // MARK: - Scrollback
 
     /// Scroll the viewport up (view older content).
     func scrollUp(lines: Int = 3) {
-        // Don't scroll in alt screen or when mouse tracking is active for scroll events
-        ptyQueue.async { [weak self] in
-            guard let self else { return }
-            self.screen.scrollViewportUp(lines: lines)
-            self.markScreenDirty()
-        }
+        core.scrollViewport(delta: Int32(clamping: lines))
     }
 
     /// Scroll the viewport down (view newer content).
     func scrollDown(lines: Int = 3) {
-        ptyQueue.async { [weak self] in
-            guard let self else { return }
-            self.screen.scrollViewportDown(lines: lines)
-            self.markScreenDirty()
-        }
+        core.scrollViewport(delta: -Int32(clamping: lines))
     }
 
     // MARK: - Selection
 
     /// Convert a viewport row to an absolute line number.
     private func viewportRowToAbsoluteLine(_ row: Int) -> Int {
-        screen.scrollbackCount - screen.viewportOffset + row
+        core.scrollbackCount - core.viewportOffset + row
     }
 
     /// Start a new selection at the given viewport position.
@@ -297,11 +266,11 @@ final class TerminalController: TerminalControlling {
             expandWordSelection(&sel, at: point)
         } else if mode == .line {
             sel.start.col = 0
-            sel.end.col = screen.columns - 1
+            sel.end.col = core.columns - 1
         }
 
         selection = sel
-        markScreenDirty()
+        handleScreenDirty()
     }
 
     /// Update the selection end point (for drag).
@@ -311,23 +280,20 @@ final class TerminalController: TerminalControlling {
 
     /// Update selection and auto-scroll when dragging outside viewport.
     func updateSelectionWithAutoScroll(col: Int, viewportRow: Int) {
-        ptyQueue.async { [weak self] in
-            guard let self else { return }
-            let visibleRows = self.screen.rows
+        let visibleRows = core.rows
 
-            let clampedRow: Int
-            if viewportRow < 0 {
-                self.screen.scrollViewportUp(lines: min(-viewportRow, 3))
-                clampedRow = 0
-            } else if viewportRow >= visibleRows {
-                self.screen.scrollViewportDown(lines: min(viewportRow - visibleRows + 1, 3))
-                clampedRow = visibleRows - 1
-            } else {
-                clampedRow = viewportRow
-            }
-
-            self.applySelectionEnd(col: col, absoluteLine: self.viewportRowToAbsoluteLine(clampedRow))
+        let clampedRow: Int
+        if viewportRow < 0 {
+            core.scrollViewport(delta: Int32(clamping: min(-viewportRow, 3)))
+            clampedRow = 0
+        } else if viewportRow >= visibleRows {
+            core.scrollViewport(delta: -Int32(clamping: min(viewportRow - visibleRows + 1, 3)))
+            clampedRow = visibleRows - 1
+        } else {
+            clampedRow = viewportRow
         }
+
+        applySelectionEnd(col: col, absoluteLine: viewportRowToAbsoluteLine(clampedRow))
     }
 
     /// Shared helper: set selection end-point and mark dirty.
@@ -335,10 +301,10 @@ final class TerminalController: TerminalControlling {
         guard var sel = selection else { return }
         sel.end = SelectionPoint(line: absoluteLine, col: col)
         if sel.mode == .line {
-            sel.end.col = screen.columns - 1
+            sel.end.col = core.columns - 1
         }
         selection = sel
-        markScreenDirty()
+        handleScreenDirty()
     }
 
     /// Copy the selected text to the system clipboard.
@@ -346,12 +312,18 @@ final class TerminalController: TerminalControlling {
     @discardableResult
     func copySelection() -> Bool {
         guard let sel = selection else { return false }
-        let text = ptyQueue.sync { screen.extractText(from: sel) }
+        let text = core.extractText(from: sel)
         guard !text.isEmpty else { return false }
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(text, forType: .string)
         return true
+    }
+
+    func clearSelection() {
+        guard selection != nil else { return }
+        selection = nil
+        handleScreenDirty()
     }
 
     // MARK: - URL Actions
@@ -362,12 +334,9 @@ final class TerminalController: TerminalControlling {
         guard commandKeyHeld != held else { return }
         commandKeyHeld = held
         if held {
-            let sel = selection
-            let (snapshot, gen): (ScreenSnapshot, UInt64) = ptyQueue.sync {
-                (screen.snapshot(selection: sel), _contentGeneration)
-            }
+            let snapshot = core.forceSnapshot()
             detectedURLs = URLDetector.detect(in: snapshot)
-            lastURLGeneration = gen
+            lastURLGeneration = _contentGeneration
         } else {
             detectedURLs = []
         }
@@ -396,15 +365,15 @@ final class TerminalController: TerminalControlling {
     private func expandWordSelection(_ sel: inout Selection, at point: SelectionPoint) {
         var startCol = point.col
         while startCol > 0 {
-            let scalar = screen.codepoint(atAbsoluteLine: point.line, col: startCol - 1)
+            let scalar = core.codepoint(atAbsoluteLine: point.line, col: startCol - 1)
             guard Self.wordChars.contains(scalar) else { break }
             startCol -= 1
         }
 
         var endCol = point.col
-        let maxCol = screen.columns - 1
+        let maxCol = core.columns - 1
         while endCol < maxCol {
-            let scalar = screen.codepoint(atAbsoluteLine: point.line, col: endCol + 1)
+            let scalar = core.codepoint(atAbsoluteLine: point.line, col: endCol + 1)
             guard Self.wordChars.contains(scalar) else { break }
             endCol += 1
         }
@@ -417,14 +386,14 @@ final class TerminalController: TerminalControlling {
 
     /// Current mouse tracking mode, read by MetalView to decide event routing.
     var mouseTrackingMode: TerminalModes.MouseTrackingMode {
-        streamHandler.modes.mouseTracking
+        core.mouseTrackingMode
     }
 
     /// Last reported cell for motion deduplication.
     private var lastMouseCell: (col: Int, row: Int)?
 
     func handleMouseEvent(_ event: MouseEncoder.Event) {
-        let mode = streamHandler.modes.mouseTracking
+        let mode = core.mouseTrackingMode
         guard mode != .none else { return }
 
         // Motion deduplication: don't report same cell twice
@@ -437,7 +406,7 @@ final class TerminalController: TerminalControlling {
         guard let data = MouseEncoder.encode(
             event: event,
             trackingMode: mode,
-            format: streamHandler.modes.mouseFormat
+            format: core.mouseFormat
         ) else { return }
 
         // Update dedup state
@@ -447,7 +416,7 @@ final class TerminalController: TerminalControlling {
             lastMouseCell = nil
         }
 
-        ptyProcess?.write(data)
+        core.write(data)
     }
 
     // MARK: - Resize
@@ -456,26 +425,17 @@ final class TerminalController: TerminalControlling {
                 cellWidth: UInt32 = 0, cellHeight: UInt32 = 0) {
         let cols = max(Screen.minColumns, newCols)
         let rows = max(Screen.minRows, newRows)
-        let process = ptyProcess  // Capture on MainActor before dispatching
-
-        ptyQueue.async { [weak self] in
-            guard let self else { return }
-            guard self.screen.columns != cols || self.screen.rows != rows else { return }
-            self.screen.resize(columns: cols, rows: rows)
-            self.markScreenDirty()
-
-            process?.resize(
-                columns: UInt16(clamping: cols),
-                rows: UInt16(clamping: rows),
-                pixelWidth: UInt16(clamping: Int(cellWidth) * cols),
-                pixelHeight: UInt16(clamping: Int(cellHeight) * rows)
-            )
-        }
+        core.resize(
+            columns: UInt16(clamping: cols),
+            rows: UInt16(clamping: rows),
+            pixelWidth: UInt16(clamping: Int(cellWidth) * cols),
+            pixelHeight: UInt16(clamping: Int(cellHeight) * rows)
+        )
     }
 
     // MARK: - Bell
 
-    /// Handle BEL character with rate limiting. Called on ptyQueue.
+    /// Handle BEL character with rate limiting. Called on ptyQueue via core callback.
     private func handleBell() {
         let now = CFAbsoluteTimeGetCurrent()
         guard now - lastBellTime >= Self.bellMinInterval else { return }
@@ -500,12 +460,12 @@ final class TerminalController: TerminalControlling {
     /// Returns a SearchResult with matches and the focused index nearest to the viewport center.
     func search(query: String) -> SearchResult {
         guard !query.isEmpty else { return .empty }
-        let matches = ptyQueue.sync { screen.search(query: query) }
+        let matches = core.search(query: query)
         guard !matches.isEmpty else {
             return SearchResult(matches: [], query: query, focusedIndex: nil)
         }
         // Focus the match nearest to the center of the current viewport.
-        let viewportCenter = screen.scrollbackCount - screen.viewportOffset + screen.rows / 2
+        let viewportCenter = core.scrollbackCount - core.viewportOffset + core.rows / 2
         var result = SearchResult(matches: matches, query: query, focusedIndex: 0)
         result.focusNearest(toAbsoluteLine: viewportCenter)
         return result
@@ -513,17 +473,13 @@ final class TerminalController: TerminalControlling {
 
     /// Scroll the viewport so that the given absolute line is visible.
     func scrollToLine(_ absoluteLine: Int) {
-        ptyQueue.async { [weak self] in
-            guard let self else { return }
-            let sbCount = self.screen.scrollbackCount
-            let rows = self.screen.rows
-            // Calculate the viewport offset that places the target line near the center.
-            let targetOffset = sbCount - absoluteLine + rows / 2
-            let clamped = max(0, min(targetOffset, sbCount))
-            guard self.screen.viewportOffset != clamped else { return }
-            self.screen.setViewportOffset(clamped)
-            self.markScreenDirty()
-        }
+        let sbCount = core.scrollbackCount
+        let rows = core.rows
+        // Calculate the viewport offset that places the target line near the center.
+        let targetOffset = sbCount - absoluteLine + rows / 2
+        let clamped = max(0, min(targetOffset, sbCount))
+        guard core.viewportOffset != clamped else { return }
+        core.setViewportOffset(clamped)
     }
 
     // MARK: - Paste
@@ -536,7 +492,7 @@ final class TerminalController: TerminalControlling {
             bytes[i] = 0x20
         }
 
-        let bracketed = streamHandler.modes.isSet(.bracketedPaste)
+        let bracketed = core.bracketedPasteMode
         var data = Data()
 
         if bracketed {
@@ -551,25 +507,15 @@ final class TerminalController: TerminalControlling {
             data.append(contentsOf: bytes)
         }
 
-        ptyProcess?.write(data)
+        writeToPTY(data)
     }
 
-    // MARK: - Private: Byte Processing (runs on ptyQueue)
+    // MARK: - Private: Screen Dirty Handling
 
-    private func processBytes(_ bytes: UnsafeBufferPointer<UInt8>) {
-        vtParser.feed(bytes) { [self] action in
-            streamHandler.handle(action)
-        }
-        streamHandler.flush()
-        markScreenDirty()
-    }
-
-    /// Set the dirty flag and notify the display to wake up.
-    /// Safe to call from any thread.
-    private func markScreenDirty() {
-        let wasDirty = screenDirty
+    /// Called from TerminalCore's onScreenDirty callback (fires on ptyQueue).
+    /// Coalesces rapid dirty marks into a single display-link wakeup.
+    private func handleScreenDirty() {
         screenDirty = true
-        _contentGeneration &+= 1
         guard !isSuspended else { return }
 
         // Coalesce rapid dirty marks into a single display-link wakeup.
@@ -591,10 +537,7 @@ final class TerminalController: TerminalControlling {
     // MARK: - Title Debounce
 
     func forceFullRedraw() {
-        ptyQueue.async { [weak self] in
-            self?.screen.forceFullRedraw()
-            self?.markScreenDirty()
-        }
+        core.forceFullRedraw()
     }
 
     /// Debounce interval for coalescing rapid title changes (seconds).
@@ -612,7 +555,9 @@ final class TerminalController: TerminalControlling {
             }
         }
         titleDebounceWork = work
-        ptyQueue.asyncAfter(
+        // Schedule after debounce interval. Since we're called from ptyQueue callback,
+        // dispatch to main with delay for debouncing.
+        DispatchQueue.main.asyncAfter(
             deadline: .now() + Self.titleDebounceInterval,
             execute: work
         )

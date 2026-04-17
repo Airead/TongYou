@@ -193,6 +193,203 @@ struct TYClientTests {
         #expect(replica.viewportOffset == 0)
     }
 
+    // MARK: - ScreenReplica DirtyRegion Tests
+
+    @Test("ScreenReplica full snapshot produces fullRebuild dirtyRegion")
+    func screenReplicaFullSnapshotDirtyRegion() {
+        let replica = ScreenReplica(columns: 4, rows: 2)
+
+        let cells = [Cell](repeating: .empty, count: 8)
+        let snapshot = ScreenSnapshot(
+            cells: cells, columns: 4, rows: 2,
+            cursorCol: 0, cursorRow: 0, cursorVisible: true, cursorShape: .block,
+            selection: nil, scrollbackCount: 0, viewportOffset: 0, dirtyRegion: .full
+        )
+        replica.applyFullSnapshot(snapshot)
+
+        let result = replica.consumeSnapshot()
+        #expect(result != nil)
+        #expect(result!.dirtyRegion.fullRebuild == true)
+    }
+
+    @Test("ScreenReplica diff produces per-row dirtyRegion")
+    func screenReplicaDiffDirtyRegion() {
+        let replica = ScreenReplica(columns: 4, rows: 3)
+
+        // Apply initial full snapshot and consume it.
+        let initialCells = [Cell](repeating: .empty, count: 12)
+        let snapshot = ScreenSnapshot(
+            cells: initialCells, columns: 4, rows: 3,
+            cursorCol: 0, cursorRow: 0, cursorVisible: true, cursorShape: .block,
+            selection: nil, scrollbackCount: 0, viewportOffset: 0, dirtyRegion: .full
+        )
+        replica.applyFullSnapshot(snapshot)
+        _ = replica.consumeSnapshot()
+
+        // Apply diff that changes row 1 only.
+        let newCells = (0..<4).map { i in
+            Cell(codepoint: Unicode.Scalar(UInt32(0x41 + i))!, attributes: .default, width: .normal)
+        }
+        let diff = ScreenDiff(
+            dirtyRows: [1],
+            cellData: newCells,
+            columns: 4,
+            cursorCol: 0, cursorRow: 1,
+            cursorVisible: true, cursorShape: .block
+        )
+        replica.applyDiff(diff)
+
+        let result = replica.consumeSnapshot()
+        #expect(result != nil)
+        #expect(result!.dirtyRegion.fullRebuild == false)
+        #expect(result!.dirtyRegion.isDirty(row: 0) == false)
+        #expect(result!.dirtyRegion.isDirty(row: 1) == true)
+        #expect(result!.dirtyRegion.isDirty(row: 2) == false)
+    }
+
+    @Test("ScreenReplica multiple diffs merge dirtyRegion")
+    func screenReplicaMultipleDiffsMergeDirtyRegion() {
+        let replica = ScreenReplica(columns: 4, rows: 4)
+
+        // Apply initial full snapshot and consume it.
+        let initialCells = [Cell](repeating: .empty, count: 16)
+        let snapshot = ScreenSnapshot(
+            cells: initialCells, columns: 4, rows: 4,
+            cursorCol: 0, cursorRow: 0, cursorVisible: true, cursorShape: .block,
+            selection: nil, scrollbackCount: 0, viewportOffset: 0, dirtyRegion: .full
+        )
+        replica.applyFullSnapshot(snapshot)
+        _ = replica.consumeSnapshot()
+
+        // Apply two diffs before consuming.
+        let rowCells = (0..<4).map { i in
+            Cell(codepoint: Unicode.Scalar(UInt32(0x41 + i))!, attributes: .default, width: .normal)
+        }
+        let diff1 = ScreenDiff(
+            dirtyRows: [0],
+            cellData: rowCells,
+            columns: 4,
+            cursorCol: 0, cursorRow: 0,
+            cursorVisible: true, cursorShape: .block
+        )
+        let diff2 = ScreenDiff(
+            dirtyRows: [2],
+            cellData: rowCells,
+            columns: 4,
+            cursorCol: 0, cursorRow: 2,
+            cursorVisible: true, cursorShape: .block
+        )
+        replica.applyDiff(diff1)
+        replica.applyDiff(diff2)
+
+        let result = replica.consumeSnapshot()
+        #expect(result != nil)
+        #expect(result!.dirtyRegion.fullRebuild == false)
+        #expect(result!.dirtyRegion.isDirty(row: 0) == true)
+        #expect(result!.dirtyRegion.isDirty(row: 1) == false)
+        #expect(result!.dirtyRegion.isDirty(row: 2) == true)
+        #expect(result!.dirtyRegion.isDirty(row: 3) == false)
+    }
+
+    @Test("ScreenReplica markDirty produces fullRebuild dirtyRegion")
+    func screenReplicaMarkDirtyProducesFullRebuild() {
+        let replica = ScreenReplica(columns: 4, rows: 2)
+
+        let cells = [Cell](repeating: .empty, count: 8)
+        let snapshot = ScreenSnapshot(
+            cells: cells, columns: 4, rows: 2,
+            cursorCol: 0, cursorRow: 0, cursorVisible: true, cursorShape: .block,
+            selection: nil, scrollbackCount: 0, viewportOffset: 0, dirtyRegion: .full
+        )
+        replica.applyFullSnapshot(snapshot)
+        _ = replica.consumeSnapshot()
+
+        replica.markDirty()
+        let result = replica.consumeSnapshot()
+        #expect(result != nil)
+        #expect(result!.dirtyRegion.fullRebuild == true)
+    }
+
+    @Test("ScreenReplica diff with resize produces fullRebuild")
+    func screenReplicaDiffResizeProducesFullRebuild() {
+        let replica = ScreenReplica(columns: 4, rows: 2)
+
+        let cells = [Cell](repeating: .empty, count: 8)
+        let snapshot = ScreenSnapshot(
+            cells: cells, columns: 4, rows: 2,
+            cursorCol: 0, cursorRow: 0, cursorVisible: true, cursorShape: .block,
+            selection: nil, scrollbackCount: 0, viewportOffset: 0, dirtyRegion: .full
+        )
+        replica.applyFullSnapshot(snapshot)
+        _ = replica.consumeSnapshot()
+
+        // Apply diff with different column count (resize).
+        let newCells = (0..<6).map { i in
+            Cell(codepoint: Unicode.Scalar(UInt32(0x41 + i))!, attributes: .default, width: .normal)
+        }
+        let diff = ScreenDiff(
+            dirtyRows: [0],
+            cellData: newCells,
+            columns: 6,
+            cursorCol: 0, cursorRow: 0,
+            cursorVisible: true, cursorShape: .block
+        )
+        replica.applyDiff(diff)
+
+        let result = replica.consumeSnapshot()
+        #expect(result != nil)
+        #expect(result!.dirtyRegion.fullRebuild == true)
+    }
+
+    @Test("ScreenReplica applies scrollDelta by shifting buffer")
+    func screenReplicaScrollDelta() {
+        let replica = ScreenReplica(columns: 3, rows: 3)
+
+        // Fill with known content: row0=ABC, row1=DEF, row2=GHI
+        let cells = (0..<9).map { i in
+            Cell(codepoint: Unicode.Scalar(UInt32(0x41 + i))!, attributes: .default, width: .normal)
+        }
+        let snapshot = ScreenSnapshot(
+            cells: cells, columns: 3, rows: 3,
+            cursorCol: 0, cursorRow: 0, cursorVisible: true, cursorShape: .block,
+            selection: nil, scrollbackCount: 0, viewportOffset: 0, dirtyRegion: .full
+        )
+        replica.applyFullSnapshot(snapshot)
+        _ = replica.consumeSnapshot()
+
+        // Scroll up by 1: row1→row0, row2→row1, new row2 has "XYZ"
+        let newRowCells = [
+            Cell(codepoint: Unicode.Scalar("X"), attributes: .default, width: .normal),
+            Cell(codepoint: Unicode.Scalar("Y"), attributes: .default, width: .normal),
+            Cell(codepoint: Unicode.Scalar("Z"), attributes: .default, width: .normal),
+        ]
+        let diff = ScreenDiff(
+            dirtyRows: [2],
+            cellData: newRowCells,
+            columns: 3,
+            cursorCol: 0, cursorRow: 2,
+            cursorVisible: true, cursorShape: .block,
+            scrollDelta: 1
+        )
+        replica.applyDiff(diff)
+
+        let result = replica.consumeSnapshot()!
+        // row0 should now have what was row1: DEF
+        #expect(result.cell(at: 0, row: 0).codepoint == Unicode.Scalar("D"))
+        #expect(result.cell(at: 1, row: 0).codepoint == Unicode.Scalar("E"))
+        #expect(result.cell(at: 2, row: 0).codepoint == Unicode.Scalar("F"))
+        // row1 should now have what was row2: GHI
+        #expect(result.cell(at: 0, row: 1).codepoint == Unicode.Scalar("G"))
+        // row2 should have the new content: XYZ
+        #expect(result.cell(at: 0, row: 2).codepoint == Unicode.Scalar("X"))
+        #expect(result.cell(at: 1, row: 2).codepoint == Unicode.Scalar("Y"))
+        #expect(result.cell(at: 2, row: 2).codepoint == Unicode.Scalar("Z"))
+
+        // Renderer doesn't handle scroll-shift, so scrollDelta is
+        // converted to fullRebuild for correct GPU instance rendering.
+        #expect(result.dirtyRegion.fullRebuild == true)
+    }
+
     // MARK: - TYDConnection Tests
 
     @Test("TYDConnection send/receive round-trip through server")

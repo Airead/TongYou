@@ -33,7 +33,7 @@ public struct FloatingPane: Identifiable, Equatable, Sendable {
     ) {
         self.id = UUID()
         self.pane = pane
-        self.frame = frame
+        self.frame = Self.clamped(frame)
         self.isVisible = isVisible
         self.zIndex = zIndex
         self.isPinned = isPinned
@@ -68,5 +68,38 @@ public struct FloatingPane: Identifiable, Equatable, Sendable {
             width: frame.width * containerSize.width,
             height: frame.height * containerSize.height
         )
+    }
+}
+
+extension [FloatingPane] {
+    /// The z-index for the next floating pane (one above the current highest).
+    public var nextZIndex: Int {
+        (self.max(by: { $0.zIndex < $1.zIndex })?.zIndex ?? -1) + 1
+    }
+
+    /// Compute a cascaded frame for a new floating pane, offset to avoid
+    /// stacking directly on top of existing panes.
+    public func nextCascadedFrame() -> CGRect {
+        let base = FloatingPane.defaultFrame
+        let step: CGFloat = 0.03
+
+        guard !isEmpty else { return base }
+
+        var candidate = base
+        for i in 0..<count {
+            let offset = step * CGFloat(i + 1)
+            candidate = CGRect(
+                x: base.origin.x + offset,
+                y: base.origin.y + offset,
+                width: base.width,
+                height: base.height
+            )
+            let collision = contains { pane in
+                abs(pane.frame.origin.x - candidate.origin.x) < step / 2
+                    && abs(pane.frame.origin.y - candidate.origin.y) < step / 2
+            }
+            if !collision { break }
+        }
+        return candidate
     }
 }

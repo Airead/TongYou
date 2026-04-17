@@ -35,6 +35,9 @@ public final class RemoteSessionClient: @unchecked Sendable {
     /// Called when a pane's title changes.
     public var onTitleChanged: ((SessionID, PaneID, String) -> Void)?
 
+    /// Called when a pane's working directory changes.
+    public var onCwdChanged: ((SessionID, PaneID, String) -> Void)?
+
     /// Called when a bell is received.
     public var onBell: ((SessionID, PaneID) -> Void)?
 
@@ -214,6 +217,28 @@ public final class RemoteSessionClient: @unchecked Sendable {
         connection?.send(.toggleFloatingPanePin(sessionID, paneID))
     }
 
+    // MARK: - Command Execution
+
+    /// Ask the server to run a command in-place (suspend shell, run, restore on exit).
+    public func runInPlace(sessionID: SessionID, paneID: PaneID, command: String, arguments: [String]) {
+        connection?.send(.runInPlace(sessionID, paneID, command: command, arguments: arguments))
+    }
+
+    /// Ask the server to run a command in the background (fire-and-forget).
+    public func runRemoteCommand(sessionID: SessionID, paneID: PaneID, command: String, arguments: [String]) {
+        connection?.send(.runRemoteCommand(sessionID, paneID, command: command, arguments: arguments))
+    }
+
+    /// Ask the server to create a floating pane that runs a command.
+    public func createFloatingPaneWithCommand(sessionID: SessionID, tabID: TabID, command: String, arguments: [String], frameX: Float? = nil, frameY: Float? = nil, frameWidth: Float? = nil, frameHeight: Float? = nil) {
+        connection?.send(.createFloatingPaneWithCommand(sessionID, tabID, command: command, arguments: arguments, frameX: frameX, frameY: frameY, frameWidth: frameWidth, frameHeight: frameHeight))
+    }
+
+    /// Ask the server to restart a command in an existing (exited) floating pane.
+    public func restartFloatingPaneCommand(sessionID: SessionID, paneID: PaneID, command: String, arguments: [String]) {
+        connection?.send(.restartFloatingPaneCommand(sessionID, paneID, command: command, arguments: arguments))
+    }
+
     // MARK: - Screen Replica Access
 
     /// Get the screen replica for a pane, creating one if needed.
@@ -271,6 +296,11 @@ public final class RemoteSessionClient: @unchecked Sendable {
         case .titleChanged(let sessionID, let paneID, let title):
             DispatchQueue.main.async { [weak self] in
                 self?.onTitleChanged?(sessionID, paneID, title)
+            }
+
+        case .cwdChanged(let sessionID, let paneID, let cwd):
+            DispatchQueue.main.async { [weak self] in
+                self?.onCwdChanged?(sessionID, paneID, cwd)
             }
 
         case .bell(let sessionID, let paneID):

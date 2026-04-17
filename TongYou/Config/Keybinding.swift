@@ -1,5 +1,95 @@
 import AppKit
 
+/// Options parsed from `[key=value,flag]` syntax in command actions.
+///
+/// Examples:
+/// - `run_local_command[pane]:git:status`       → `pane: true`
+/// - `run_local_command[output=pane]:git:log`    → `output: "pane"`
+struct CommandOptions: Equatable, Sendable {
+    private var storage: [String: String] = [:]
+
+    nonisolated static let empty = CommandOptions()
+
+    /// Check if a boolean flag is set (e.g. `[pane]`).
+    func has(_ key: String) -> Bool {
+        storage[key] != nil
+    }
+
+    /// Get a value (e.g. `[output=pane]` → `value("output") == "pane"`).
+    func value(_ key: String) -> String? {
+        storage[key]
+    }
+
+    /// Whether the command output should be shown in a floating pane.
+    var showInPane: Bool {
+        has("pane") || value("output") == "pane"
+    }
+
+    /// Whether the floating pane should close automatically when the command exits.
+    /// When false (default), the pane stays open for the user to read output;
+    /// ESC closes it, Enter re-runs the command.
+    var closeOnExit: Bool {
+        has("close_on_exit")
+    }
+
+    /// Whether the command should run in local sessions.
+    var runsLocal: Bool { has("local") }
+
+    /// Whether the command should run in remote sessions.
+    var runsRemote: Bool { has("remote") }
+
+    /// Whether the command should always run locally, even in remote sessions.
+    var alwaysLocal: Bool { has("always_local") }
+
+    /// Build a custom floating pane frame from `x`, `y`, `w`, `h` options.
+    /// Returns nil if none of these options are set (use default frame).
+    /// Values are normalized (0–1); width/height are clamped to [minSize..1.0].
+    var paneFrame: CGRect? {
+        guard has("x") || has("y") || has("w") || has("h") else { return nil }
+        let defaultFrame = CGRect(x: 0.3, y: 0.3, width: 0.4, height: 0.4)
+        let x = value("x").flatMap(Double.init) ?? defaultFrame.origin.x
+        let y = value("y").flatMap(Double.init) ?? defaultFrame.origin.y
+        let w = min(max(value("w").flatMap(Double.init) ?? defaultFrame.width, 0.1), 1.0)
+        let h = min(max(value("h").flatMap(Double.init) ?? defaultFrame.height, 0.1), 1.0)
+        return CGRect(x: x, y: y, width: w, height: h)
+    }
+
+    var isEmpty: Bool { storage.isEmpty }
+
+    /// Set a boolean flag if it is not already present.
+    mutating func setIfMissing(_ key: String) {
+        if storage[key] == nil {
+            storage[key] = ""
+        }
+    }
+
+    /// Parse from a string like `"pane,output=foo"`.
+    static func parse(_ raw: String) -> CommandOptions {
+        var opts = CommandOptions()
+        for part in raw.split(separator: ",") {
+            let trimmed = part.trimmingCharacters(in: .whitespaces)
+            if let eqIdx = trimmed.firstIndex(of: "=") {
+                let key = String(trimmed[trimmed.startIndex..<eqIdx])
+                let val = String(trimmed[trimmed.index(after: eqIdx)...])
+                opts.storage[key] = val
+            } else {
+                // Boolean flag: store with empty-string value.
+                opts.storage[trimmed] = ""
+            }
+        }
+        return opts
+    }
+
+    /// Serialize back to config string. Empty options return nil.
+    func formatted() -> String? {
+        guard !storage.isEmpty else { return nil }
+        let parts = storage.sorted(by: { $0.key < $1.key }).map { key, value in
+            value.isEmpty ? key : "\(key)=\(value)"
+        }
+        return parts.joined(separator: ",")
+    }
+}
+
 /// A keyboard shortcut bound to a terminal action.
 struct Keybinding: Equatable {
 
@@ -39,6 +129,9 @@ struct Keybinding: Equatable {
         case splitHorizontal
         case closePane
         case focusPane(FocusDirection)
+        // Pane resize
+        case growPane
+        case shrinkPane
         // Floating pane management
         case newFloatingPane
         case toggleOrCreateFloatingPane
@@ -49,7 +142,7 @@ struct Keybinding: Equatable {
         case detachSession
         case renameSession
         case runInPlace(command: String, arguments: [String])
-        case runCommand(command: String, arguments: [String])
+        case runCommand(command: String, arguments: [String], options: CommandOptions)
         // Pass through to PTY (disables the keybinding)
         case unbind
 
@@ -84,6 +177,8 @@ struct Keybinding: Equatable {
                 case .up: "focus_pane_up"
                 case .down: "focus_pane_down"
                 }
+            case .growPane: "grow_pane"
+            case .shrinkPane: "shrink_pane"
             case .newFloatingPane: "new_floating_pane"
             case .toggleOrCreateFloatingPane: "toggle_or_create_floating_pane"
             case .listRemoteSessions: "list_remote_sessions"
@@ -93,26 +188,55 @@ struct Keybinding: Equatable {
             case .renameSession: "rename_session"
             case .runInPlace(let cmd, let args):
                 Self.formatPrefixedAction(prefix: "run_in_place", command: cmd, arguments: args)
-            case .runCommand(let cmd, let args):
-                Self.formatPrefixedAction(prefix: "run_command", command: cmd, arguments: args)
+            case .runCommand(let cmd, let args, let opts):
+                Self.formatPrefixedAction(prefix: "run_command", command: cmd, arguments: args, options: opts)
             case .unbind: "unbind"
             }
         }
 
         // MARK: - Helpers
 
-        private static func formatPrefixedAction(prefix: String, command: String, arguments: [String]) -> String {
+        private static func formatPrefixedAction(
+            prefix: String, command: String, arguments: [String],
+            options: CommandOptions = .empty
+        ) -> String {
+            let optsPart = options.formatted().map { "[\($0)]" } ?? ""
             if arguments.isEmpty {
-                return "\(prefix):\(command)"
+                return "\(prefix)\(optsPart):\(command)"
             } else {
-                return "\(prefix):\(command):\(arguments.joined(separator: ","))"
+                return "\(prefix)\(optsPart):\(command):\(arguments.joined(separator: ","))"
             }
         }
 
-        private static func parsePrefixedAction(rawValue: String, prefix: String) -> (command: String, arguments: [String])? {
-            guard rawValue.hasPrefix("\(prefix):") else { return nil }
-            let rest = String(rawValue.dropFirst("\(prefix):".count))
+        /// Parse a prefixed action with optional `[options]` syntax.
+        ///
+        /// Matches: `prefix:cmd`, `prefix:cmd:args`, `prefix[opts]:cmd`, `prefix[opts]:cmd:args`
+        private static func parsePrefixedAction(
+            rawValue: String, prefix: String
+        ) -> (command: String, arguments: [String], options: CommandOptions)? {
+            guard rawValue.hasPrefix(prefix) else { return nil }
+            let afterPrefix = rawValue.dropFirst(prefix.count)
+
+            let options: CommandOptions
+            let rest: Substring
+
+            if afterPrefix.hasPrefix("[") {
+                // Parse [options] block.
+                guard let closeBracket = afterPrefix.firstIndex(of: "]") else { return nil }
+                let optsStr = String(afterPrefix[afterPrefix.index(after: afterPrefix.startIndex)..<closeBracket])
+                options = CommandOptions.parse(optsStr)
+                let afterBracket = afterPrefix[afterPrefix.index(after: closeBracket)...]
+                guard afterBracket.hasPrefix(":") else { return nil }
+                rest = afterBracket.dropFirst()  // drop the ":"
+            } else if afterPrefix.hasPrefix(":") {
+                options = .empty
+                rest = afterPrefix.dropFirst()   // drop the ":"
+            } else {
+                return nil
+            }
+
             let parts = rest.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+            guard !parts.isEmpty else { return nil }
             let command = String(parts[0])
             let arguments: [String]
             if parts.count > 1 {
@@ -120,7 +244,7 @@ struct Keybinding: Equatable {
             } else {
                 arguments = []
             }
-            return (command, arguments)
+            return (command, arguments, options)
         }
 
         /// Map to TabAction for actions that pass straight through to the window.
@@ -140,6 +264,8 @@ struct Keybinding: Equatable {
             case .splitHorizontal: .splitHorizontal
             case .closePane: .closePane
             case .focusPane(let dir): .focusPane(dir)
+            case .growPane: .growPane
+            case .shrinkPane: .shrinkPane
             case .newFloatingPane: .newFloatingPane
             case .toggleOrCreateFloatingPane: .toggleOrCreateFloatingPane
             case .listRemoteSessions: .listRemoteSessions
@@ -148,7 +274,7 @@ struct Keybinding: Equatable {
             case .detachSession: .detachSession
             case .renameSession: .renameSession
             case .runInPlace(let cmd, let args): .runInPlace(command: cmd, arguments: args)
-            case .runCommand(let cmd, let args): .runCommand(command: cmd, arguments: args)
+            case .runCommand(let cmd, let args, let opts): .runCommand(command: cmd, arguments: args, options: opts)
             case .copy, .paste, .search, .searchNext, .searchPrevious,
                  .resetFontSize, .increaseFontSize, .decreaseFontSize,
                  .unbind:
@@ -183,6 +309,8 @@ struct Keybinding: Equatable {
             case "focus_pane_right": self = .focusPane(.right)
             case "focus_pane_up": self = .focusPane(.up)
             case "focus_pane_down": self = .focusPane(.down)
+            case "grow_pane": self = .growPane
+            case "shrink_pane": self = .shrinkPane
             case "new_floating_pane": self = .newFloatingPane
             case "toggle_or_create_floating_pane": self = .toggleOrCreateFloatingPane
             case "list_remote_sessions": self = .listRemoteSessions
@@ -200,10 +328,30 @@ struct Keybinding: Equatable {
                 }
                 if let parsed = Self.parsePrefixedAction(rawValue: rawValue, prefix: "run_in_place") {
                     self = .runInPlace(command: parsed.command, arguments: parsed.arguments)
+                    return  // run_in_place does not use options (it always takes over the pane)
+                }
+                // "run_command" is the canonical name.
+                // "run_local_command" → run_command with implicit [local].
+                // "run_remote_command" → run_command with implicit [remote].
+                if let parsed = Self.parsePrefixedAction(rawValue: rawValue, prefix: "run_local_command") {
+                    var opts = parsed.options
+                    opts.setIfMissing("local")
+                    self = .runCommand(command: parsed.command, arguments: parsed.arguments, options: opts)
+                    return
+                }
+                if let parsed = Self.parsePrefixedAction(rawValue: rawValue, prefix: "run_remote_command") {
+                    var opts = parsed.options
+                    opts.setIfMissing("remote")
+                    self = .runCommand(command: parsed.command, arguments: parsed.arguments, options: opts)
                     return
                 }
                 if let parsed = Self.parsePrefixedAction(rawValue: rawValue, prefix: "run_command") {
-                    self = .runCommand(command: parsed.command, arguments: parsed.arguments)
+                    var opts = parsed.options
+                    // Default to [local] when neither local/remote/always_local is specified (backwards compat).
+                    if !opts.runsLocal && !opts.runsRemote && !opts.alwaysLocal {
+                        opts.setIfMissing("local")
+                    }
+                    self = .runCommand(command: parsed.command, arguments: parsed.arguments, options: opts)
                     return
                 }
                 return nil
@@ -256,6 +404,9 @@ struct Keybinding: Equatable {
         Keybinding(modifiers: [.command, .option], key: "right", action: .focusPane(.right)),
         Keybinding(modifiers: [.command, .option], key: "up", action: .focusPane(.up)),
         Keybinding(modifiers: [.command, .option], key: "down", action: .focusPane(.down)),
+        // Pane resize
+        Keybinding(modifiers: .option, key: "=", action: .growPane),
+        Keybinding(modifiers: .option, key: "-", action: .shrinkPane),
         // Floating pane management
         Keybinding(modifiers: .option, key: "f", action: .toggleOrCreateFloatingPane),
         Keybinding(modifiers: .option, key: "n", action: .newFloatingPane),
@@ -271,7 +422,18 @@ struct Keybinding: Equatable {
 
     /// Parse a keybinding string like "cmd+shift+t=new_tab".
     static func parse(_ string: String) throws -> Keybinding {
-        guard let eqIndex = string.firstIndex(of: "=") else {
+        // Find the '=' that separates key-combo from action.
+        // Options like [x=1,y=2] contain '=' inside brackets, so we search
+        // for the last '=' before the first '[' that appears in the action part.
+        // The action part starts after the first '=', so look for '[' only after it.
+        guard let firstEq = string.firstIndex(of: "=") else {
+            throw ConfigError.invalidValue(key: "keybind", value: string)
+        }
+        let afterFirstEq = string[string.index(after: firstEq)...]
+        let bracketInAction = afterFirstEq.firstIndex(of: "[")
+        let searchEnd = bracketInAction ?? string.endIndex
+        let searchRange = string.startIndex..<searchEnd
+        guard let eqIndex = string[searchRange].lastIndex(of: "=") else {
             throw ConfigError.invalidValue(key: "keybind", value: string)
         }
 
@@ -308,9 +470,12 @@ struct Keybinding: Equatable {
             }
         }
 
-        guard let key = keyPart else {
+        guard let raw = keyPart, !raw.isEmpty else {
             throw ConfigError.invalidValue(key: "keybind", value: string)
         }
+
+        // Resolve named keys to their character equivalents.
+        let key = Self.namedKeys[raw] ?? raw
 
         return Keybinding(modifiers: modifiers, key: key, action: action)
     }
@@ -339,6 +504,16 @@ struct Keybinding: Equatable {
         }
         return nil
     }
+
+    /// Maps named key aliases to their character equivalents.
+    /// This allows configs to use readable names for keys that conflict with
+    /// the config syntax (e.g. `+` is the modifier separator, `=` is the
+    /// action separator).
+    private static let namedKeys: [String: String] = [
+        "plus": "+", "equal": "=", "minus": "-",
+        "space": " ", "backslash": "\\", "slash": "/",
+        "comma": ",", "period": ".", "semicolon": ";",
+    ]
 
     /// Maps common shifted ASCII symbols back to their base key characters.
     /// This allows bindings like `cmd+shift+[` to match even though

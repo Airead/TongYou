@@ -1,0 +1,191 @@
+import Foundation
+
+/// File-based logging for the TongYou GUI client.
+///
+/// - Disabled by default; enable via `debug-log = true` in the config file.
+/// - When disabled, each call is a single boolean check — no string formatting,
+///   no I/O, no allocation.
+/// - When enabled, writes to `~/.local/share/TongYou/logs/gui-YYYY-MM-DD.log`.
+/// - Thread-safe: all file I/O is serialized on a dedicated dispatch queue.
+enum GUILog {
+
+    enum Category: String, Sendable {
+        case renderer
+        case session
+        case config
+        case input
+        case general
+    }
+
+    enum Level: Int, Sendable {
+        case debug = 0
+        case info = 1
+        case warning = 2
+        case error = 3
+
+        var label: String {
+            switch self {
+            case .debug:   return "DEBUG"
+            case .info:    return "INFO"
+            case .warning: return "WARN"
+            case .error:   return "ERROR"
+            }
+        }
+    }
+
+    // MARK: - State
+
+    nonisolated(unsafe) private static var _enabled = false
+
+    /// Serial queue for all file I/O.
+    private static let queue = DispatchQueue(
+        label: "io.github.airead.tongyou.guilog",
+        qos: .utility
+    )
+
+    /// Current log file handle (only non-nil while enabled).
+    nonisolated(unsafe) private static var fileHandle: FileHandle?
+
+    /// The date string (YYYY-MM-DD) of the currently open log file.
+    nonisolated(unsafe) private static var currentDateString: String?
+
+    /// Override for the log directory. When set, logs write here instead of the
+    /// default `~/.local/share/TongYou/logs`. Intended for testing.
+    nonisolated(unsafe) static var logDirectoryOverride: URL?
+
+    /// UTC date formatter — reused across calls.
+    private static let timestampFormatter: DateFormatter = {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
+        fmt.timeZone = TimeZone(identifier: "UTC")
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        return fmt
+    }()
+
+    /// Date-only formatter for log file names.
+    private static let dateOnlyFormatter: DateFormatter = {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd"
+        fmt.timeZone = TimeZone(identifier: "UTC")
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        return fmt
+    }()
+
+    // MARK: - Public API
+
+    /// Enable file logging. Opens (or creates) today's log file.
+    static func enable() {
+        _enabled = true
+        queue.async {
+            openLogFileIfNeeded()
+        }
+    }
+
+    /// Disable file logging. Closes the file handle and releases resources.
+    static func disable() {
+        _enabled = false
+        queue.async {
+            closeLogFile()
+        }
+    }
+
+    /// Whether logging is currently enabled.
+    static var isEnabled: Bool { _enabled }
+
+    /// Block until all pending log writes are flushed. For testing only.
+    static func flush() {
+        queue.sync {}
+    }
+
+    static func debug(_ message: @autoclosure () -> String, category: Category = .general) {
+        guard _enabled else { return }
+        emit(level: .debug, category: category, message: message())
+    }
+
+    static func info(_ message: @autoclosure () -> String, category: Category = .general) {
+        guard _enabled else { return }
+        emit(level: .info, category: category, message: message())
+    }
+
+    static func warning(_ message: @autoclosure () -> String, category: Category = .general) {
+        guard _enabled else { return }
+        emit(level: .warning, category: category, message: message())
+    }
+
+    static func error(_ message: @autoclosure () -> String, category: Category = .general) {
+        guard _enabled else { return }
+        emit(level: .error, category: category, message: message())
+    }
+
+    // MARK: - Private
+
+    private static func emit(level: Level, category: Category, message: String) {
+        let now = Date()
+        let timestamp = timestampFormatter.string(from: now)
+        let line = "[\(timestamp)] [\(level.label)] [\(category.rawValue)] \(message)\n"
+
+        queue.async {
+            rollDateIfNeeded(now)
+            if fileHandle == nil {
+                openLogFileIfNeeded()
+            }
+            guard let handle = fileHandle else { return }
+            if let data = line.data(using: .utf8) {
+                handle.write(data)
+            }
+        }
+    }
+
+    // MARK: - File Management
+
+    private static func logDirectory() -> URL {
+        if let override = logDirectoryOverride {
+            return override
+        }
+        let home = NSHomeDirectory()
+        return URL(fileURLWithPath: home)
+            .appendingPathComponent(".local/share/TongYou/logs")
+    }
+
+    private static func logFilePath(for dateString: String) -> URL {
+        logDirectory().appendingPathComponent("gui-\(dateString).log")
+    }
+
+    /// Open today's log file. Must be called on `queue`.
+    private static func openLogFileIfNeeded() {
+        let dateString = dateOnlyFormatter.string(from: Date())
+        let dir = logDirectory()
+        let filePath = logFilePath(for: dateString)
+
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            if !FileManager.default.fileExists(atPath: filePath.path) {
+                FileManager.default.createFile(atPath: filePath.path, contents: nil)
+            }
+            let handle = try FileHandle(forWritingTo: filePath)
+            handle.seekToEndOfFile()
+            fileHandle = handle
+            currentDateString = dateString
+        } catch {
+            // Logging failure should not crash the app.
+            fputs("[GUILog] Failed to open log file: \(error)\n", stderr)
+        }
+    }
+
+    /// Close the current log file. Must be called on `queue`.
+    private static func closeLogFile() {
+        try? fileHandle?.synchronize()
+        try? fileHandle?.close()
+        fileHandle = nil
+        currentDateString = nil
+    }
+
+    /// Roll to a new file if the date has changed. Must be called on `queue`.
+    private static func rollDateIfNeeded(_ now: Date) {
+        let dateString = dateOnlyFormatter.string(from: now)
+        if dateString != currentDateString {
+            closeLogFile()
+            openLogFileIfNeeded()
+        }
+    }
+}

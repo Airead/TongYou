@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import TYTerminal
 
-@Suite("DirtyRegion behavior tests")
+@Suite("DirtyRegion behavior tests", .serialized)
 struct DirtyRegionBehaviorTests {
 
     // MARK: - Helpers
@@ -85,13 +85,14 @@ struct DirtyRegionBehaviorTests {
         let region = consume(screen)
 
         #expect(!region.fullRebuild)
-        // Must NOT be merged into a single range (old behavior would yield 8..<13)
-        #expect(region.dirtyRows == [8, 10, 12])
+        // Row 0 is dirty because moveCursorRow marks the old cursor position (0,0).
+        // Must NOT be merged into a single range (old behavior would yield 0..<13)
+        #expect(region.dirtyRows == [0, 8, 10, 12])
     }
 
     // MARK: - Scrolling
 
-    @Test func lineFeedAtBottomMarksFullRebuild() {
+    @Test func lineFeedAtBottomUsesScrollDelta() {
         let screen = Screen(columns: 80, rows: 24)
         screen.setCursorPos(row: 23, col: 0)
         _ = consume(screen)
@@ -99,27 +100,65 @@ struct DirtyRegionBehaviorTests {
         screen.lineFeed()
         let region = consume(screen)
 
-        #expect(region.fullRebuild)
+        // Full-screen scroll now uses scrollDelta instead of fullRebuild.
+        #expect(!region.fullRebuild)
+        #expect(region.scrollDelta == 1)
+        // Only the newly revealed bottom row (and cursor row) should be dirty.
+        #expect(region.isDirty(row: 23))
+        #expect(!region.isDirty(row: 0))
     }
 
-    @Test func explicitScrollUpMarksFullRebuild() {
+    @Test func multipleLineFeedsAccumulateScrollDelta() {
+        let screen = Screen(columns: 80, rows: 24)
+        screen.setCursorPos(row: 23, col: 0)
+        _ = consume(screen)
+
+        screen.lineFeed()
+        screen.lineFeed()
+        screen.lineFeed()
+        let region = consume(screen)
+
+        #expect(!region.fullRebuild)
+        #expect(region.scrollDelta == 3)
+    }
+
+    @Test func scrollDeltaOverflowFallsBackToFullRebuild() {
+        let screen = Screen(columns: 80, rows: 4)
+        screen.setCursorPos(row: 3, col: 0)
+        _ = consume(screen)
+
+        // Scroll more than the total row count.
+        for _ in 0..<5 {
+            screen.lineFeed()
+        }
+        let region = consume(screen)
+
+        #expect(region.fullRebuild)
+        #expect(region.scrollDelta == 0)
+    }
+
+    @Test func explicitScrollUpMarksAllRowsDirty() {
         let screen = Screen(columns: 80, rows: 24)
         _ = consume(screen)
 
         screen.scrollUp(count: 1)
         let region = consume(screen)
 
-        #expect(region.fullRebuild)
+        // scrollUp uses markRange (not markFull) since df71289.
+        #expect(!region.fullRebuild)
+        #expect(region.lineRange == 0..<24)
     }
 
-    @Test func explicitScrollDownMarksFullRebuild() {
+    @Test func explicitScrollDownMarksAllRowsDirty() {
         let screen = Screen(columns: 80, rows: 24)
         _ = consume(screen)
 
         screen.scrollDown(count: 1)
         let region = consume(screen)
 
-        #expect(region.fullRebuild)
+        // scrollDown uses markRange (not markFull) since df71289.
+        #expect(!region.fullRebuild)
+        #expect(region.lineRange == 0..<24)
     }
 
     // MARK: - Erasing

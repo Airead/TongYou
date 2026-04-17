@@ -120,6 +120,15 @@ public struct BinaryDecoder: Sendable {
         return string
     }
 
+    /// Read a count-prefixed string array (UInt16 count + length-prefixed strings).
+    public mutating func readStringArray() throws -> [String] {
+        let count = Int(try readUInt16())
+        var result: [String] = []
+        result.reserveCapacity(count)
+        for _ in 0..<count { result.append(try readString()) }
+        return result
+    }
+
     /// Read a length-prefixed byte array (UInt32 length + bytes).
     public mutating func readBytes() throws -> [UInt8] {
         let length = Int(try readUInt32())
@@ -299,6 +308,7 @@ public struct BinaryDecoder: Sendable {
         let scrollbackCount = Int(try readUInt32())
         let viewportOffset = Int(try readUInt32())
         let mouseTrackingMode = try readUInt8()
+        let scrollDelta = Int16(bitPattern: try readUInt16())
         return ScreenDiff(
             dirtyRows: dirtyRows,
             cellData: cellData,
@@ -309,7 +319,8 @@ public struct BinaryDecoder: Sendable {
             cursorShape: cursor.shape,
             scrollbackCount: scrollbackCount,
             viewportOffset: viewportOffset,
-            mouseTrackingMode: mouseTrackingMode
+            mouseTrackingMode: mouseTrackingMode,
+            scrollDelta: scrollDelta
         )
     }
 
@@ -354,7 +365,23 @@ public struct BinaryDecoder: Sendable {
             tabs.append(try readTabInfo())
         }
         let activeTabIndex = Int(try readUInt16())
-        return SessionInfo(id: id, name: name, tabs: tabs, activeTabIndex: activeTabIndex)
+        // Pane metadata map
+        let metaCount = Int(try readUInt16())
+        var paneMetadata: [PaneID: RemotePaneMetadata] = [:]
+        paneMetadata.reserveCapacity(metaCount)
+        for _ in 0..<metaCount {
+            let paneID = try readPaneID()
+            let meta = try readPaneMetadata()
+            paneMetadata[paneID] = meta
+        }
+        return SessionInfo(id: id, name: name, tabs: tabs, activeTabIndex: activeTabIndex, paneMetadata: paneMetadata)
+    }
+
+    /// Decode a `PaneMetadata` from the buffer.
+    public mutating func readPaneMetadata() throws -> RemotePaneMetadata {
+        let hasCwd = try readBool()
+        let cwd = hasCwd ? try readString() : nil
+        return RemotePaneMetadata(cwd: cwd)
     }
 
     /// Decode a `TabInfo` from the buffer.
@@ -408,6 +435,12 @@ public struct BinaryDecoder: Sendable {
             let paneID = try readPaneID()
             let title = try readString()
             return .titleChanged(sessionID, paneID, title)
+
+        case .cwdChanged:
+            let sessionID = try readSessionID()
+            let paneID = try readPaneID()
+            let cwd = try readString()
+            return .cwdChanged(sessionID, paneID, cwd)
 
         case .bell:
             let sessionID = try readSessionID()
@@ -541,6 +574,41 @@ public struct BinaryDecoder: Sendable {
             let sessionID = try readSessionID()
             let paneID = try readPaneID()
             return .toggleFloatingPanePin(sessionID, paneID)
+
+        case .runInPlace:
+            let sessionID = try readSessionID()
+            let paneID = try readPaneID()
+            let command = try readString()
+            let arguments = try readStringArray()
+            return .runInPlace(sessionID, paneID, command: command, arguments: arguments)
+
+        case .runRemoteCommand:
+            let sessionID = try readSessionID()
+            let paneID = try readPaneID()
+            let command = try readString()
+            let arguments = try readStringArray()
+            return .runRemoteCommand(sessionID, paneID, command: command, arguments: arguments)
+
+        case .createFloatingPaneWithCommand:
+            let sessionID = try readSessionID()
+            let tabID = try readTabID()
+            let command = try readString()
+            let arguments = try readStringArray()
+            var frameX: Float?, frameY: Float?, frameWidth: Float?, frameHeight: Float?
+            if try readBool() {
+                frameX = try readFloat()
+                frameY = try readFloat()
+                frameWidth = try readFloat()
+                frameHeight = try readFloat()
+            }
+            return .createFloatingPaneWithCommand(sessionID, tabID, command: command, arguments: arguments, frameX: frameX, frameY: frameY, frameWidth: frameWidth, frameHeight: frameHeight)
+
+        case .restartFloatingPaneCommand:
+            let sessionID = try readSessionID()
+            let paneID = try readPaneID()
+            let command = try readString()
+            let arguments = try readStringArray()
+            return .restartFloatingPaneCommand(sessionID, paneID, command: command, arguments: arguments)
         }
     }
 }

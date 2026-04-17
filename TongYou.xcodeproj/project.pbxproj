@@ -15,6 +15,7 @@
 		2CC9C6C92F8B7B9500E10AD3 /* TYShell in Frameworks */ = {isa = PBXBuildFile; productRef = A1000002300000000000006 /* TYShell */; };
 		A1000003300000000000001 /* TYClient in Frameworks */ = {isa = PBXBuildFile; productRef = A1000002300000000000007 /* TYClient */; };
 		A1000003300000000000002 /* TYProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = A1000002300000000000008 /* TYProtocol */; };
+		A1000003300000000000003 /* TYConfig in Frameworks */ = {isa = PBXBuildFile; productRef = A1000002300000000000009 /* TYConfig */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -68,6 +69,7 @@
 				2CC9C57D2F8B7A7E00E10AD3 /* TYTerminal in Frameworks */,
 				A1000003300000000000001 /* TYClient in Frameworks */,
 				A1000003300000000000002 /* TYProtocol in Frameworks */,
+				A1000003300000000000003 /* TYConfig in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -137,6 +139,7 @@
 				A1000002300000000000003 /* TYShell */,
 				A1000002300000000000007 /* TYClient */,
 				A1000002300000000000008 /* TYProtocol */,
+				A1000002300000000000009 /* TYConfig */,
 			);
 			productName = TongYou;
 			productReference = 2C42370F2F88817B00DE6FC2 /* TongYou.app */;
@@ -669,6 +672,10 @@
 		A1000002300000000000008 /* TYProtocol */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = TYProtocol;
+		};
+		A1000002300000000000009 /* TYConfig */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TYConfig;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

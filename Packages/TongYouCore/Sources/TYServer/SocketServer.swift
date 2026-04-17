@@ -5,19 +5,25 @@ import TYTerminal
 /// Listens on a Unix domain socket, accepts client connections,
 /// and dispatches messages between clients and the session manager.
 ///
-/// Screen updates use a single server-wide timer that consumes each dirty pane's
-/// snapshot once and distributes it to all attached clients, avoiding races
-/// where multiple clients compete to consume the same snapshot.
+/// Screen updates use an event-driven model with adaptive coalescing:
+/// when the screen becomes dirty, a one-shot timer is scheduled after a short
+/// delay (minCoalesceDelay). During sustained output the delay ramps up
+/// exponentially to maxCoalesceDelay, then resets when the screen goes idle.
 public final class SocketServer: @unchecked Sendable {
 
-    private let config: ServerConfig
+    private var config: ServerConfig
     private let sessionManager: ServerSessionManager
     private var listenSocket: TYSocket?
     private var clients: [UUID: ClientConnection] = [:]
     private let clientsLock = NSLock()
+    private var running = false
+    private let runningLock = NSLock()
 
     /// Global set of dirty (sessionID, paneID) pairs, populated by onScreenDirty callbacks.
+    /// Protected by `dirtyLock`.
     private var dirtyPanes: Set<DirtyPaneKey> = []
+    /// Whether a flush is already scheduled. Protected by `dirtyLock`.
+    private var flushScheduled = false
     private let dirtyLock = NSLock()
 
     /// Last-sent snapshot state per pane, used to suppress duplicate updates
@@ -25,8 +31,11 @@ public final class SocketServer: @unchecked Sendable {
     /// while new output arrives at the bottom).
     private var lastSentState: [PaneID: SentSnapshotState] = [:]
 
-    /// Single server-wide timer for coalescing screen updates.
-    private var updateTimer: DispatchSourceTimer?
+    /// One-shot timer for the next coalesced flush. Managed on `messageQueue`.
+    private var flushTimer: DispatchSourceTimer?
+    /// Number of consecutive flush cycles without an idle gap.
+    /// Used to compute the adaptive coalesce delay. Managed on `messageQueue`.
+    private var consecutiveFlushCount = 0
 
     /// Periodic stats logging timer.
     private var statsTimer: DispatchSourceTimer?
@@ -59,7 +68,10 @@ public final class SocketServer: @unchecked Sendable {
         let socket = try TYSocket.listen(path: config.socketPath)
         listenSocket = socket
 
-        startUpdateTimer()
+        runningLock.lock()
+        running = true
+        runningLock.unlock()
+
         startStatsTimer()
         Log.info("Server started, listening on \(config.socketPath)")
         onReady?()
@@ -70,14 +82,19 @@ public final class SocketServer: @unchecked Sendable {
     }
 
     public func stop() {
-        updateTimer?.cancel()
-        updateTimer = nil
+        runningLock.lock()
+        running = false
+        let socket = listenSocket
+        listenSocket = nil
+        runningLock.unlock()
+
+        socket?.closeSocket()
+
+        flushTimer?.cancel()
+        flushTimer = nil
 
         statsTimer?.cancel()
         statsTimer = nil
-
-        listenSocket?.closeSocket()
-        listenSocket = nil
 
         clientsLock.lock()
         let allClients = Array(clients.values)
@@ -88,7 +105,28 @@ public final class SocketServer: @unchecked Sendable {
             client.stop()
         }
         lastSentState.removeAll()
+        sessionManager.stopAllSessions()
         Log.info("Server stopped")
+    }
+
+    /// Apply updated configuration at runtime.
+    /// Coalesce delays and pending limits take effect immediately.
+    /// Stats timer is restarted if the interval changed.
+    /// Scrollback limit only applies to newly created sessions.
+    public func updateConfig(_ newConfig: ServerConfig) {
+        messageQueue.async { [weak self] in
+            guard let self else { return }
+            let oldInterval = self.config.statsInterval
+            self.config = newConfig
+            self.sessionManager.updateConfig(newConfig)
+
+            // Restart stats timer if interval changed
+            if oldInterval != newConfig.statsInterval {
+                self.statsTimer?.cancel()
+                self.statsTimer = nil
+                self.startStatsTimer()
+            }
+        }
     }
 
     public var clientCount: Int {
@@ -135,9 +173,15 @@ public final class SocketServer: @unchecked Sendable {
     // MARK: - Private: Accept Loop
 
     private func acceptLoop() {
-        while let listenSocket {
+        while true {
+            runningLock.lock()
+            let isRunning = running
+            let socket = listenSocket
+            runningLock.unlock()
+            guard isRunning, let socket else { return }
+
             do {
-                let clientSocket = try listenSocket.accept()
+                let clientSocket = try socket.accept()
                 let connection = ClientConnection(
                     socket: clientSocket,
                     maxPendingScreenUpdates: config.maxPendingScreenUpdates
@@ -162,10 +206,14 @@ public final class SocketServer: @unchecked Sendable {
                 Log.info("Client accepted: \(connection.id.uuidString.prefix(8)), total: \(clientCount)")
 
                 connection.startReadLoop()
+            } catch TYSocketError.acceptFailed(let e) where e == EBADF {
+                return
             } catch {
-                if self.listenSocket == nil { return }
+                runningLock.lock()
+                let stillRunning = running
+                runningLock.unlock()
+                if !stillRunning { return }
                 Log.error("Accept loop error: \(error)")
-                continue
             }
         }
     }
@@ -185,37 +233,71 @@ public final class SocketServer: @unchecked Sendable {
         }
     }
 
-    // MARK: - Private: Timers
+    // MARK: - Private: Adaptive Coalescing
 
-    private func makeTimer(interval: TimeInterval, handler: @escaping () -> Void) -> DispatchSourceTimer {
-        let timer = DispatchSource.makeTimerSource(queue: messageQueue)
-        timer.schedule(deadline: .now() + interval, repeating: interval)
-        timer.setEventHandler(handler: handler)
-        timer.resume()
-        return timer
+    /// Compute the coalesce delay based on how many consecutive flushes occurred.
+    /// Exponential ramp: minDelay * 2^count, capped at maxDelay.
+    private func coalesceDelay(for consecutiveCount: Int) -> TimeInterval {
+        let base = config.minCoalesceDelay * pow(2.0, Double(consecutiveCount))
+        return min(base, config.maxCoalesceDelay)
     }
 
-    private func startUpdateTimer() {
-        updateTimer = makeTimer(interval: config.screenUpdateInterval) { [weak self] in
-            self?.flushDirtyPanes()
+    /// Called from any queue via `onScreenDirty`. If no flush is pending,
+    /// dispatches to `messageQueue` to schedule one.
+    private func scheduleFlushIfNeeded() {
+        dirtyLock.lock()
+        guard !flushScheduled else {
+            dirtyLock.unlock()
+            return
         }
+        flushScheduled = true
+        dirtyLock.unlock()
+
+        messageQueue.async { [weak self] in
+            self?.scheduleFlush()
+        }
+    }
+
+    /// Schedule a one-shot timer for the next flush. Must run on `messageQueue`.
+    private func scheduleFlush() {
+        let delay = coalesceDelay(for: consecutiveFlushCount)
+        let timer = DispatchSource.makeTimerSource(queue: messageQueue)
+        timer.schedule(deadline: .now() + delay)
+        timer.setEventHandler { [weak self] in
+            self?.performFlush()
+        }
+        timer.resume()
+        flushTimer?.cancel()
+        flushTimer = timer
     }
 
     private func startStatsTimer() {
         guard config.statsInterval > 0 else { return }
-        statsTimer = makeTimer(interval: config.statsInterval) { [weak self] in
+        let timer = DispatchSource.makeTimerSource(queue: messageQueue)
+        timer.schedule(deadline: .now() + config.statsInterval, repeating: config.statsInterval)
+        timer.setEventHandler { [weak self] in
             self?.logStats()
         }
+        timer.resume()
+        statsTimer = timer
     }
 
     /// Consume each dirty pane's snapshot once and send to all attached clients.
-    private func flushDirtyPanes() {
+    /// After flushing, if more dirty panes arrived during the send, schedule
+    /// another flush with an increased coalesce delay. Otherwise reset to idle.
+    private func performFlush() {
         dirtyLock.lock()
         let panes = dirtyPanes
         dirtyPanes.removeAll(keepingCapacity: true)
         dirtyLock.unlock()
 
-        guard !panes.isEmpty else { return }
+        guard !panes.isEmpty else {
+            dirtyLock.lock()
+            flushScheduled = false
+            dirtyLock.unlock()
+            consecutiveFlushCount = 0
+            return
+        }
 
         for key in panes {
             guard let snapshot = sessionManager.consumeSnapshot(
@@ -251,30 +333,37 @@ public final class SocketServer: @unchecked Sendable {
 
             let message: ServerMessage
             // Use full snapshot when the screen was fully rebuilt OR when
-            // ≥80% of rows are dirty — at that point a diff carries more
-            // overhead (row index array) than a plain full snapshot.
-            let mostlyDirty: Bool
-            if let range = snapshot.dirtyRegion.lineRange {
-                mostlyDirty = range.count >= snapshot.rows * 4 / 5
-            } else {
-                mostlyDirty = false
-            }
-            if snapshot.dirtyRegion.fullRebuild || mostlyDirty {
+            // ≥80% of rows are dirty (without scroll optimization) — at that
+            // point a diff carries more overhead than a plain full snapshot.
+            // When scrollDelta is set, the dirty rows are only the newly
+            // revealed ones, so skip the mostlyDirty heuristic.
+            let hasScrollDelta = snapshot.dirtyRegion.scrollDelta > 0
+            let dirtyCount = snapshot.isPartial ? snapshot.dirtyRows.count : snapshot.dirtyRegion.dirtyCount
+            let mostlyDirty = !hasScrollDelta && dirtyCount >= snapshot.rows * 4 / 5
+            if !snapshot.isPartial && (snapshot.dirtyRegion.fullRebuild || mostlyDirty) {
                 message = .screenFull(key.sessionID, key.paneID, snapshot, mouseTrackingMode: mouseMode)
             } else {
-                var diff = ScreenDiff(from: snapshot)
-                diff = ScreenDiff(
-                    dirtyRows: diff.dirtyRows, cellData: diff.cellData,
-                    columns: diff.columns,
-                    cursorCol: diff.cursorCol, cursorRow: diff.cursorRow,
-                    cursorVisible: diff.cursorVisible, cursorShape: diff.cursorShape,
-                    scrollbackCount: diff.scrollbackCount, viewportOffset: diff.viewportOffset,
-                    mouseTrackingMode: mouseMode
-                )
+                let diff = ScreenDiff(from: snapshot, mouseTrackingMode: mouseMode)
                 message = .screenDiff(key.sessionID, key.paneID, diff)
             }
 
             forEachAttachedClient(session: key.sessionID) { $0.send(message) }
+        }
+
+        // Check if more dirty panes arrived during the flush.
+        dirtyLock.lock()
+        let hasPending = !dirtyPanes.isEmpty
+        if !hasPending {
+            flushScheduled = false
+        }
+        dirtyLock.unlock()
+
+        if hasPending {
+            consecutiveFlushCount += 1
+            scheduleFlush()
+        } else {
+            flushTimer = nil
+            consecutiveFlushCount = 0
         }
     }
 
@@ -418,15 +507,47 @@ public final class SocketServer: @unchecked Sendable {
         case .toggleFloatingPanePin(let sessionID, let paneID):
             sessionManager.toggleFloatingPanePin(sessionID: sessionID, paneID: paneID)
             broadcastLayoutOrClosed(sessionID: sessionID)
+
+        case .runInPlace(let sessionID, let paneID, let command, let arguments):
+            sessionManager.runInPlace(
+                sessionID: sessionID, paneID: paneID,
+                command: command, arguments: arguments
+            )
+
+        case .runRemoteCommand(_, let paneID, let command, let arguments):
+            sessionManager.runRemoteCommand(
+                paneID: paneID, command: command, arguments: arguments
+            )
+
+        case .createFloatingPaneWithCommand(let sessionID, let tabID, let command, let arguments, let frameX, let frameY, let frameWidth, let frameHeight):
+            if sessionManager.createFloatingPaneWithCommand(
+                sessionID: sessionID, tabID: tabID,
+                command: command, arguments: arguments,
+                frameX: frameX, frameY: frameY, frameWidth: frameWidth, frameHeight: frameHeight
+            ) != nil {
+                broadcastLayoutOrClosed(sessionID: sessionID)
+            }
+
+        case .restartFloatingPaneCommand(let sessionID, let paneID, let command, let arguments):
+            if sessionManager.restartFloatingPaneCommand(
+                sessionID: sessionID, paneID: paneID,
+                command: command, arguments: arguments
+            ) {
+                sendFullSnapshot(to: client, sessionID: sessionID, paneID: paneID)
+            }
+        }
+    }
+
+    private func sendFullSnapshot(to client: ClientConnection, sessionID: SessionID, paneID: PaneID) {
+        if let snapshot = sessionManager.snapshot(paneID: paneID) {
+            let mouseMode = sessionManager.mouseTrackingMode(paneID: paneID)
+            client.send(.screenFull(sessionID, paneID, snapshot, mouseTrackingMode: mouseMode))
         }
     }
 
     private func sendFullSnapshots(to client: ClientConnection, sessionID: SessionID) {
         for paneID in sessionManager.allPaneIDs(sessionID: sessionID) {
-            if let snapshot = sessionManager.snapshot(paneID: paneID) {
-                let mouseMode = sessionManager.mouseTrackingMode(paneID: paneID)
-                client.send(.screenFull(sessionID, paneID, snapshot, mouseTrackingMode: mouseMode))
-            }
+            sendFullSnapshot(to: client, sessionID: sessionID, paneID: paneID)
         }
     }
 
@@ -444,10 +565,15 @@ public final class SocketServer: @unchecked Sendable {
             self.dirtyLock.lock()
             self.dirtyPanes.insert(DirtyPaneKey(sessionID: sessionID, paneID: paneID))
             self.dirtyLock.unlock()
+            self.scheduleFlushIfNeeded()
         }
 
         sessionManager.onTitleChanged = { [weak self] sessionID, paneID, title in
             self?.broadcast(.titleChanged(sessionID, paneID, title), toSession: sessionID)
+        }
+
+        sessionManager.onCwdChanged = { [weak self] sessionID, paneID, cwd in
+            self?.broadcast(.cwdChanged(sessionID, paneID, cwd), toSession: sessionID)
         }
 
         sessionManager.onBell = { [weak self] sessionID, paneID in

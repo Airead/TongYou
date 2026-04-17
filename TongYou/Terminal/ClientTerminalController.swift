@@ -12,11 +12,13 @@ import TYTerminal
 final class ClientTerminalController: TerminalControlling {
 
     private let remoteClient: RemoteSessionClient
-    private let sessionID: SessionID
-    private let paneID: PaneID
+    let sessionID: SessionID
+    let paneID: PaneID
     private let screenReplica: ScreenReplica
 
     private(set) var selection: Selection?
+    /// Cached last successful replica snapshot for selection-only updates.
+    private var lastReplicaSnapshot: ScreenSnapshot?
     private(set) var detectedURLs: [DetectedURL] = []
     private var commandKeyHeld = false
     private var lastURLGeneration: UInt64 = 0
@@ -29,7 +31,7 @@ final class ClientTerminalController: TerminalControlling {
     private var optionAsAlt: Bool = false
 
     var onNeedsDisplay: (() -> Void)?
-    var onProcessExited: (() -> Void)?
+    var onProcessExited: ((Int32) -> Void)?
     var onTitleChanged: ((String) -> Void)?
     var onPaneNotification: ((String, String) -> Void)?
 
@@ -48,15 +50,25 @@ final class ClientTerminalController: TerminalControlling {
 
     func consumeSnapshot() -> ScreenSnapshot? {
         let sel = selection
-        guard let snapshot = screenReplica.consumeSnapshot(selection: sel) else { return nil }
-
-        if commandKeyHeld {
-            let gen = contentGeneration
-            if gen != lastURLGeneration {
-                detectedURLs = URLDetector.detect(in: snapshot)
-                lastURLGeneration = gen
+        if let snapshot = screenReplica.consumeSnapshot(selection: sel) {
+            lastReplicaSnapshot = snapshot
+            if commandKeyHeld {
+                let gen = contentGeneration
+                if gen != lastURLGeneration {
+                    detectedURLs = URLDetector.detect(in: snapshot)
+                    lastURLGeneration = gen
+                }
             }
+            return snapshot
         }
+        // Replica screen content unchanged, but controller state (e.g. selection) changed.
+        // Reuse the last snapshot with updated selection to avoid lost updates
+        // when server layoutUpdate consumes the dirty flag before selection renders.
+        guard var snapshot = lastReplicaSnapshot,
+              snapshot.selection != sel else { return nil }
+        snapshot.selection = sel
+        lastReplicaSnapshot = snapshot
+        _contentGeneration &+= 1
         return snapshot
     }
 
@@ -121,7 +133,9 @@ final class ClientTerminalController: TerminalControlling {
         let point = SelectionPoint(line: line, col: col)
         var sel = Selection(start: point, end: point, mode: mode)
 
-        if mode == .line {
+        if mode == .word {
+            expandWordSelection(&sel, row: row, col: col, columns: info.columns)
+        } else if mode == .line {
             sel.start.col = 0
             sel.end.col = info.columns - 1
         }
@@ -170,6 +184,41 @@ final class ClientTerminalController: TerminalControlling {
             sessionID: sessionID, paneID: paneID, selection: sel
         )
         return true
+    }
+
+    func clearSelection() {
+        guard selection != nil else { return }
+        selection = nil
+        _contentGeneration &+= 1
+        screenReplica.markDirty()
+        onNeedsDisplay?()
+    }
+
+    // MARK: - Private: Word Boundary Detection
+
+    private static let wordChars = CharacterSet.alphanumerics
+        .union(CharacterSet(charactersIn: "_-./:~"))
+
+    private func expandWordSelection(
+        _ sel: inout Selection, row: Int, col: Int, columns: Int
+    ) {
+        var startCol = col
+        while startCol > 0 {
+            let scalar = screenReplica.codepoint(atRow: row, col: startCol - 1)
+            guard Self.wordChars.contains(scalar) else { break }
+            startCol -= 1
+        }
+
+        var endCol = col
+        let maxCol = columns - 1
+        while endCol < maxCol {
+            let scalar = screenReplica.codepoint(atRow: row, col: endCol + 1)
+            guard Self.wordChars.contains(scalar) else { break }
+            endCol += 1
+        }
+
+        sel.start.col = startCol
+        sel.end.col = endCol
     }
 
     // MARK: - URL Detection
@@ -292,7 +341,7 @@ final class ClientTerminalController: TerminalControlling {
 
     // MARK: - State
 
-    var currentWorkingDirectory: String? { nil }
+    private(set) var currentWorkingDirectory: String?
     var foregroundProcessName: String? { nil }
 
     // MARK: - Lifecycle
@@ -319,9 +368,14 @@ final class ClientTerminalController: TerminalControlling {
         onTitleChanged?(title)
     }
 
+    /// Called when the server reports a cwd change for this pane.
+    func handleCwdChanged(_ cwd: String) {
+        currentWorkingDirectory = cwd
+    }
+
     /// Called when the server reports the pane's process exited.
-    func handleProcessExited() {
-        onProcessExited?()
+    func handleProcessExited(exitCode: Int32) {
+        onProcessExited?(exitCode)
     }
 
 }

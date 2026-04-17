@@ -8,6 +8,11 @@ public struct DirtyRegion: Equatable, Sendable {
     private var lineBits: [Bool]
     /// O(1) flag tracking whether any element in lineBits is true.
     private var anyLineDirty: Bool
+    /// Number of full-screen scroll-up lines since the last snapshot.
+    /// Positive = content shifted up (new rows appeared at the bottom).
+    /// The client can memcpy-shift its buffer by this amount and only patch dirty rows.
+    /// Reset to 0 on fullRebuild or partial-region scroll.
+    public private(set) var scrollDelta: Int = 0
 
     public init(rowCount: Int = 0, fullRebuild: Bool = false) {
         self.fullRebuild = fullRebuild
@@ -43,8 +48,37 @@ public struct DirtyRegion: Equatable, Sendable {
     /// Mark full rebuild required.
     public mutating func markFull() {
         fullRebuild = true
+        scrollDelta = 0
         lineBits.removeAll()
         anyLineDirty = false
+    }
+
+    /// Record a full-screen scroll-up by `delta` lines and mark the newly
+    /// revealed bottom rows as dirty. Only valid for full-screen scrolls
+    /// (scrollTop == 0, scrollBottom == rows - 1).
+    public mutating func markScroll(delta: Int, rowCount: Int) {
+        guard !fullRebuild else { return }
+        let newTotal = scrollDelta + delta
+        if newTotal >= rowCount {
+            markFull()
+            return
+        }
+        scrollDelta = newTotal
+        // Shift existing dirty bits up by `delta` rows.
+        // Rows that scroll off the top are discarded; new bottom rows start clean
+        // (we mark them dirty below).
+        if !lineBits.isEmpty {
+            let count = lineBits.count
+            if delta < count {
+                lineBits.removeFirst(delta)
+                lineBits.append(contentsOf: [Bool](repeating: false, count: delta))
+            } else {
+                lineBits = [Bool](repeating: false, count: count)
+            }
+        }
+        // Mark the newly revealed bottom rows as dirty.
+        let firstNew = rowCount - delta
+        markRange(firstNew..<rowCount)
     }
 
     /// Merge another dirty region into this one.
@@ -53,6 +87,16 @@ public struct DirtyRegion: Equatable, Sendable {
             markFull()
             return
         }
+        if other.scrollDelta > 0 {
+            // Cannot merge scroll deltas from separate regions meaningfully
+            // when this region also has its own state — fall back to full.
+            if scrollDelta > 0 || anyLineDirty {
+                markFull()
+            } else {
+                scrollDelta = other.scrollDelta
+            }
+        }
+        guard !fullRebuild else { return }
         for (i, dirty) in other.lineBits.enumerated() where dirty {
             markLine(i)
         }
@@ -69,6 +113,14 @@ public struct DirtyRegion: Equatable, Sendable {
         let indices = lineBits.enumerated().compactMap { $1 ? $0 : nil }
         guard let first = indices.first, let last = indices.last else { return nil }
         return first..<(last + 1)
+    }
+
+    /// Number of dirty rows (O(n) scan, no allocation).
+    public var dirtyCount: Int {
+        guard !fullRebuild else { return 0 }
+        var count = 0
+        for bit in lineBits where bit { count += 1 }
+        return count
     }
 
     /// All dirty row indices (non-contiguous support).
@@ -120,7 +172,7 @@ public struct ScreenSnapshot: Sendable {
     public let cursorVisible: Bool
     public let cursorShape: CursorShape
     /// Active selection (absolute line coordinates).
-    public let selection: Selection?
+    public var selection: Selection?
     /// Number of scrollback lines, used to convert selection absolute coords
     /// to viewport-relative row for rendering.
     public let scrollbackCount: Int
@@ -1713,6 +1765,7 @@ public final class Screen {
             // Advance rowBase so old logical row 0 becomes new logical row (rows-1).
             rowBase = (rowBase + 1) % rows
             clearRows((rows - 1)..<rows)
+            dirtyRegion.markScroll(delta: 1, rowCount: rows)
         } else {
             // Partial scroll region: physical row-by-row copy with ring mapping
             for row in scrollTop..<scrollBottom {
@@ -1722,8 +1775,8 @@ public final class Screen {
                 setLineFlagForRow(row, lineFlagForRow(row + 1))
             }
             clearRows(scrollBottom..<(scrollBottom + 1))
+            dirtyRegion.markRange(scrollTop..<(scrollBottom + 1))
         }
-        dirtyRegion.markRange(scrollTop..<(scrollBottom + 1))
     }
 
     /// Scroll one line down within the scroll region.

@@ -206,6 +206,44 @@ struct ConfigTests {
         let config = Config.from(entries: entries)
         #expect(config.debugMetrics == true)
     }
+
+    @Test func debugLog() {
+        let config = Config.from(entries: [
+            .init(key: "debug-log", value: "true"),
+        ])
+        #expect(config.debugLog == true)
+    }
+
+    @Test func debugLogDefault() {
+        let config = Config.default
+        #expect(config.debugLog == false)
+    }
+
+    @Test func draftEnabledDefault() {
+        let config = Config.default
+        #expect(config.draftEnabled == true)
+    }
+
+    @Test func draftEnabledDisabled() {
+        let entries: [ConfigParser.Entry] = [
+            .init(key: "draft-enabled", value: "false"),
+        ]
+        let config = Config.from(entries: entries)
+        #expect(config.draftEnabled == false)
+    }
+
+    @Test func autoConnectDaemonDefault() {
+        let config = Config.default
+        #expect(config.autoConnectDaemon == false)
+    }
+
+    @Test func autoConnectDaemonEnabled() {
+        let entries: [ConfigParser.Entry] = [
+            .init(key: "auto-connect-daemon", value: "true"),
+        ]
+        let config = Config.from(entries: entries)
+        #expect(config.autoConnectDaemon == true)
+    }
 }
 
 @Suite("RGBColor")
@@ -352,6 +390,63 @@ struct KeybindingTests {
         #expect(Keybinding.match(event: event, in: [binding]) == .previousTab)
     }
 
+    @Test func parseNamedKeyEqual() throws {
+        let kb = try Keybinding.parse("cmd+equal=increase_font_size")
+        #expect(kb.modifiers == .command)
+        #expect(kb.key == "=")
+        #expect(kb.action == .increaseFontSize)
+    }
+
+    @Test func parseNamedKeyPlus() throws {
+        let kb = try Keybinding.parse("cmd+plus=increase_font_size")
+        #expect(kb.modifiers == .command)
+        #expect(kb.key == "+")
+        #expect(kb.action == .increaseFontSize)
+    }
+
+    @Test func parseGrowPane() throws {
+        let kb = try Keybinding.parse("alt+equal=grow_pane")
+        #expect(kb.modifiers == .option)
+        #expect(kb.key == "=")
+        #expect(kb.action == .growPane)
+    }
+
+    @Test func parseShrinkPane() throws {
+        let kb = try Keybinding.parse("alt+-=shrink_pane")
+        #expect(kb.modifiers == .option)
+        #expect(kb.key == "-")
+        #expect(kb.action == .shrinkPane)
+    }
+
+    @Test func parseEqualKeyViaLastEquals() throws {
+        // cmd+==increase_font_size: lastIndex splits on the second '='
+        let kb = try Keybinding.parse("cmd+==increase_font_size")
+        #expect(kb.modifiers == .command)
+        #expect(kb.key == "=")
+        #expect(kb.action == .increaseFontSize)
+    }
+
+    @Test func parseRunCommandWithFrameOptions() throws {
+        let kb = try Keybinding.parse("alt+s=run_command[remote,local,pane,x=0.1,y=0.2,w=0.8,h=0.6]:git:status")
+        #expect(kb.modifiers == .option)
+        #expect(kb.key == "s")
+        if case .runCommand(let cmd, let args, let opts) = kb.action {
+            #expect(cmd == "git")
+            #expect(args == ["status"])
+            #expect(opts.runsRemote)
+            #expect(opts.runsLocal)
+            #expect(opts.showInPane)
+            let frame = opts.paneFrame
+            #expect(frame != nil)
+            #expect(frame!.origin.x == 0.1)
+            #expect(frame!.origin.y == 0.2)
+            #expect(frame!.width == 0.8)
+            #expect(frame!.height == 0.6)
+        } else {
+            Issue.record("Expected .runCommand")
+        }
+    }
+
     @Test func invalidAction() {
         #expect(throws: ConfigError.self) {
             try Keybinding.parse("cmd+t=nonexistent_action")
@@ -376,7 +471,7 @@ struct ConfigLoaderTests {
 
     @Test func configFilePathsNotEmpty() {
         let paths = ConfigLoader.configFilePaths()
-        #expect(paths.count >= 2)
+        #expect(paths.count >= 1)
     }
 
     @Test func loadWithNoConfigFiles() {
@@ -389,8 +484,8 @@ struct ConfigLoaderTests {
         #expect(loader.config.fontFamily.isEmpty == false)
     }
 
-    @Test func generatedDefaultConfigIsValid() throws {
-        let content = ConfigLoader.generateDefaultConfig()
+    @Test func generatedSystemConfigIsValid() throws {
+        let content = ConfigLoader.generateSystemConfig()
 
         // Should not be empty
         #expect(!content.isEmpty)
@@ -400,11 +495,11 @@ struct ConfigLoaderTests {
         try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(atPath: dir) }
 
-        let url = URL(fileURLWithPath: dir + "config")
+        let url = URL(fileURLWithPath: dir + "system_config.txt")
         try content.write(to: url, atomically: true, encoding: .utf8)
 
         let entries = try ConfigParser().parse(contentsOf: url)
-        #expect(!entries.isEmpty, "Default config should produce active entries")
+        #expect(!entries.isEmpty, "System config should produce active entries")
 
         // Spot-check a few expected defaults
         let keybinds = entries.filter { $0.key == "keybind" }.map { $0.value }
@@ -419,7 +514,7 @@ struct ConfigLoaderTests {
     }
 
     @Test func generatedConfigDocumentsAllKeys() {
-        let content = ConfigLoader.generateDefaultConfig()
+        let content = ConfigLoader.generateSystemConfig()
 
         // Verify key configuration options are documented
         let expectedKeys = [
@@ -428,22 +523,18 @@ struct ConfigLoaderTests {
             "cursor-style", "cursor-blink",
             "option-as-alt", "scrollback-limit", "tab-width", "bell",
             "keybind", "config-file", "debug-metrics",
+            "draft-enabled", "auto-connect-daemon",
         ]
         for key in expectedKeys {
             #expect(content.contains(key),
-                    "Default config should document '\(key)'")
+                    "System config should document '\(key)'")
         }
     }
 
-    @Test func ensureDefaultConfigExistsCreatesFile() throws {
-        let dir = NSTemporaryDirectory() + "tongyou-test-\(UUID().uuidString)/"
-        defer { try? FileManager.default.removeItem(atPath: dir) }
-        let url = URL(fileURLWithPath: dir + "config")
-        #expect(!FileManager.default.fileExists(atPath: url.path))
-        ConfigLoader.ensureDefaultConfigExists(at: url)
-        #expect(FileManager.default.fileExists(atPath: url.path))
-        let content = try String(contentsOf: url, encoding: .utf8)
-        #expect(content == ConfigLoader.generateDefaultConfig())
+    @Test func systemConfigIncludesUserConfig() {
+        let content = ConfigLoader.generateSystemConfig()
+        #expect(content.contains("config-file = ?user_config.txt"),
+                "System config should include user_config.txt at the end")
     }
 
     @Test func fullIntegrationParse() throws {

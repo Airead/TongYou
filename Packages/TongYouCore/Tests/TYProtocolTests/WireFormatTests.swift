@@ -3,7 +3,7 @@ import Foundation
 @testable import TYProtocol
 @testable import TYTerminal
 
-@Suite("WireFormat tests")
+@Suite("WireFormat tests", .serialized)
 struct WireFormatTests {
 
     // MARK: - Frame Header
@@ -564,6 +564,21 @@ struct WireFormatTests {
         #expect(dDiff.mouseTrackingMode == 100)
     }
 
+    @Test func roundTripRestartFloatingPaneCommand() throws {
+        let sid = SessionID()
+        let pid = PaneID()
+        let msg = ClientMessage.restartFloatingPaneCommand(sid, pid, command: "git", arguments: ["status"])
+        let decoded = try encodeAndDecode(clientMessage: msg)
+        guard case .restartFloatingPaneCommand(let dSid, let dPid, let cmd, let args) = decoded else {
+            Issue.record("Expected .restartFloatingPaneCommand")
+            return
+        }
+        #expect(dSid == sid)
+        #expect(dPid == pid)
+        #expect(cmd == "git")
+        #expect(args == ["status"])
+    }
+
     // MARK: - Unknown Type Codes
 
     @Test func unknownServerTypeThrows() throws {
@@ -589,6 +604,42 @@ struct WireFormatTests {
             payload: Array(frame[WireFormat.headerSize...])
         )
         return try WireFormat.decodeServerMessage(raw)
+    }
+
+    @Test func roundTripCreateFloatingPaneWithCommandNoFrame() throws {
+        let sid = SessionID()
+        let tid = TabID()
+        let msg = ClientMessage.createFloatingPaneWithCommand(sid, tid, command: "git", arguments: ["status"], frameX: nil, frameY: nil, frameWidth: nil, frameHeight: nil)
+        let decoded = try encodeAndDecode(clientMessage: msg)
+        guard case .createFloatingPaneWithCommand(let dSid, let dTid, let cmd, let args, let fx, let fy, let fw, let fh) = decoded else {
+            Issue.record("Expected .createFloatingPaneWithCommand")
+            return
+        }
+        #expect(dSid == sid)
+        #expect(dTid == tid)
+        #expect(cmd == "git")
+        #expect(args == ["status"])
+        #expect(fx == nil)
+        #expect(fy == nil)
+        #expect(fw == nil)
+        #expect(fh == nil)
+    }
+
+    @Test func roundTripCreateFloatingPaneWithCommandWithFrame() throws {
+        let sid = SessionID()
+        let tid = TabID()
+        let msg = ClientMessage.createFloatingPaneWithCommand(sid, tid, command: "htop", arguments: [], frameX: 0.1, frameY: 0.2, frameWidth: 0.8, frameHeight: 0.6)
+        let decoded = try encodeAndDecode(clientMessage: msg)
+        guard case .createFloatingPaneWithCommand(_, _, let cmd, let args, let fx, let fy, let fw, let fh) = decoded else {
+            Issue.record("Expected .createFloatingPaneWithCommand")
+            return
+        }
+        #expect(cmd == "htop")
+        #expect(args == [])
+        #expect(fx == 0.1)
+        #expect(fy == 0.2)
+        #expect(fw == 0.8)
+        #expect(fh == 0.6)
     }
 
     private func encodeAndDecode(clientMessage msg: ClientMessage) throws -> ClientMessage {

@@ -786,7 +786,7 @@ struct SessionManagerOverlayStackTests {
         #expect(overlay !== base)
         #expect(base.isSuspended)
 
-        overlay?.onProcessExited?()
+        overlay?.onProcessExited?(0)
 
         #expect(mgr.activeController(for: paneID) === base)
         #expect(!base.isSuspended)
@@ -810,11 +810,11 @@ struct SessionManagerOverlayStackTests {
         #expect(overlay2 !== overlay1)
         #expect(overlay1?.isSuspended == true)
 
-        overlay2?.onProcessExited?()
+        overlay2?.onProcessExited?(0)
         #expect(mgr.activeController(for: paneID) === overlay1)
         #expect(overlay1?.isSuspended == false)
 
-        overlay1?.onProcessExited?()
+        overlay1?.onProcessExited?(0)
         #expect(mgr.activeController(for: paneID) === base)
         #expect(!base.isSuspended)
 

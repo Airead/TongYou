@@ -11,7 +11,7 @@ import TYPTY
 /// Thread safety:
 /// - PTY reads, VT parsing, and screen mutations happen on `ptyQueue`.
 /// - Callbacks (`onScreenDirty`, `onTitleChanged`, etc.) fire on `ptyQueue`.
-/// - `consumeSnapshot()` and `consumeDiff()` synchronize via `ptyQueue.sync`.
+/// - `consumeSnapshot()` and query properties synchronize via `ptyQueue.sync`.
 public final class TerminalCore: @unchecked Sendable {
 
     // Screen, parser, and handler are confined to ptyQueue.
@@ -30,24 +30,24 @@ public final class TerminalCore: @unchecked Sendable {
     // MARK: - Callbacks (fired on ptyQueue)
 
     /// Called when screen content becomes dirty.
-    var onScreenDirty: (() -> Void)?
+    public var onScreenDirty: (() -> Void)?
 
     /// Called when the window title changes (OSC 0/2).
-    var onTitleChanged: ((String) -> Void)?
+    public var onTitleChanged: ((String) -> Void)?
 
     /// Called when BEL (0x07) is received.
-    var onBell: (() -> Void)?
+    public var onBell: (() -> Void)?
 
     /// Called when OSC 52 clipboard set request is received.
-    var onClipboardSet: ((String) -> Void)?
+    public var onClipboardSet: ((String) -> Void)?
 
     /// Called when the child process exits with an exit code.
-    var onProcessExited: ((Int32) -> Void)?
+    public var onProcessExited: ((Int32) -> Void)?
 
     /// Called when the running command changes (shell integration OSC 7727).
-    var onRunningCommandChanged: ((String?) -> Void)?
+    public var onRunningCommandChanged: ((String?) -> Void)?
     /// Called when a pane notification sequence is received (OSC 9 / 777 / 1337).
-    var onPaneNotification: ((String, String) -> Void)?
+    public var onPaneNotification: ((String, String) -> Void)?
 
     // MARK: - Init
 
@@ -83,13 +83,45 @@ public final class TerminalCore: @unchecked Sendable {
 
     // MARK: - Lifecycle
 
-    /// Start the PTY process.
+    /// Start the PTY process with the default login shell.
     ///
     /// - Parameters:
     ///   - columns: Terminal width.
     ///   - rows: Terminal height.
     ///   - workingDirectory: Initial working directory for the shell.
     public func start(columns: UInt16, rows: UInt16, workingDirectory: String) throws {
+        try startProcess { process in
+            try process.start(
+                columns: columns,
+                rows: rows,
+                workingDirectory: workingDirectory
+            )
+        }
+    }
+
+    /// Start the PTY process with a custom command.
+    ///
+    /// - Parameters:
+    ///   - command: Executable path or name.
+    ///   - arguments: Command arguments.
+    ///   - columns: Terminal width.
+    ///   - rows: Terminal height.
+    ///   - workingDirectory: Initial working directory.
+    public func start(command: String, arguments: [String] = [],
+                      columns: UInt16, rows: UInt16, workingDirectory: String) throws {
+        try startProcess { process in
+            try process.start(
+                command: command,
+                arguments: arguments,
+                columns: columns,
+                rows: rows,
+                workingDirectory: workingDirectory
+            )
+        }
+    }
+
+    /// Shared PTY setup: create process, wire callbacks, then call the launcher closure.
+    private func startProcess(launcher: (PTYProcess) throws -> Void) rethrows {
         let process = PTYProcess(readQueue: ptyQueue)
 
         process.onRead = { [weak self] bytes in
@@ -132,12 +164,7 @@ public final class TerminalCore: @unchecked Sendable {
             self?.onPaneNotification?(title, body)
         }
 
-        try process.start(
-            columns: columns,
-            rows: rows,
-            workingDirectory: workingDirectory
-        )
-
+        try launcher(process)
         ptyProcess = process
     }
 
@@ -174,7 +201,8 @@ public final class TerminalCore: @unchecked Sendable {
 
     // MARK: - Resize
 
-    public func resize(columns: UInt16, rows: UInt16) {
+    public func resize(columns: UInt16, rows: UInt16,
+                       pixelWidth: UInt16 = 0, pixelHeight: UInt16 = 0) {
         let cols = max(Screen.minColumns, Int(columns))
         let rows = max(Screen.minRows, Int(rows))
         nonisolated(unsafe) let process = ptyProcess
@@ -187,31 +215,22 @@ public final class TerminalCore: @unchecked Sendable {
 
             process?.resize(
                 columns: UInt16(clamping: cols),
-                rows: UInt16(clamping: rows)
+                rows: UInt16(clamping: rows),
+                pixelWidth: pixelWidth,
+                pixelHeight: pixelHeight
             )
         }
     }
 
-    // MARK: - Snapshot / Diff
+    // MARK: - Snapshot
 
-    /// Returns a full screen snapshot if screen content changed since the last call.
-    /// Returns nil if nothing changed. Thread-safe (synchronizes via ptyQueue).
-    public func consumeSnapshot() -> ScreenSnapshot? {
+    /// Returns a screen snapshot if content changed since the last call. Nil if idle.
+    /// Thread-safe (synchronizes via ptyQueue).
+    public func consumeSnapshot(selection: Selection? = nil, allowPartial: Bool = false) -> ScreenSnapshot? {
         guard screenDirty else { return nil }
         return ptyQueue.sync {
             screenDirty = false
-            return screen.snapshot()
-        }
-    }
-
-    /// Build a ScreenDiff from the current dirty region.
-    /// Returns nil if nothing changed. Thread-safe (synchronizes via ptyQueue).
-    public func consumeDiff() -> (dirty: DirtyRegion, snapshot: ScreenSnapshot)? {
-        guard screenDirty else { return nil }
-        return ptyQueue.sync {
-            screenDirty = false
-            let snapshot = screen.snapshot()
-            return (snapshot.dirtyRegion, snapshot)
+            return screen.snapshot(selection: selection, allowPartial: allowPartial)
         }
     }
 
@@ -278,6 +297,51 @@ public final class TerminalCore: @unchecked Sendable {
 
     public var mouseFormat: TerminalModes.MouseFormat {
         ptyQueue.sync { streamHandler.modes.mouseFormat }
+    }
+
+    /// Number of scrollback lines above the visible screen.
+    public var scrollbackCount: Int {
+        ptyQueue.sync { screen.scrollbackCount }
+    }
+
+    /// Current viewport offset (0 = bottom, showing latest content).
+    public var viewportOffset: Int {
+        ptyQueue.sync { screen.viewportOffset }
+    }
+
+    /// Whether the viewport is scrolled up from the bottom.
+    public var isScrolledUp: Bool {
+        ptyQueue.sync { screen.isScrolledUp }
+    }
+
+    /// Read the Unicode scalar at an absolute line + column position. Thread-safe.
+    public func codepoint(atAbsoluteLine line: Int, col: Int) -> Unicode.Scalar {
+        ptyQueue.sync { screen.codepoint(atAbsoluteLine: line, col: col) }
+    }
+
+    /// Read a cell at the given viewport-relative position. Thread-safe.
+    public func cell(at col: Int, row: Int) -> Cell {
+        ptyQueue.sync { screen.cell(at: col, row: row) }
+    }
+
+    // MARK: - Screen Mutation
+
+    /// Force a full redraw by marking all rows dirty. Thread-safe.
+    public func forceFullRedraw() {
+        ptyQueue.async { [weak self] in
+            guard let self else { return }
+            self.screen.forceFullRedraw()
+            self.markScreenDirty()
+        }
+    }
+
+    /// Set the viewport offset directly (for scrollToLine). Thread-safe.
+    public func setViewportOffset(_ offset: Int) {
+        ptyQueue.async { [weak self] in
+            guard let self else { return }
+            self.screen.setViewportOffset(offset)
+            self.markScreenDirty()
+        }
     }
 
     // MARK: - Search

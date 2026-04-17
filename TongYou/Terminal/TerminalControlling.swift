@@ -34,6 +34,7 @@ protocol TerminalControlling: AnyObject {
     /// `viewportRow` may be negative (above) or >= rows (below).
     func updateSelectionWithAutoScroll(col: Int, viewportRow: Int)
     @discardableResult func copySelection() -> Bool
+    func clearSelection()
 
     // MARK: - URL Detection
 
@@ -79,7 +80,7 @@ protocol TerminalControlling: AnyObject {
     // MARK: - Callbacks
 
     var onNeedsDisplay: (() -> Void)? { get set }
-    var onProcessExited: (() -> Void)? { get set }
+    var onProcessExited: ((Int32) -> Void)? { get set }
     var onTitleChanged: ((String) -> Void)? { get set }
     var onPaneNotification: ((String, String) -> Void)? { get set }
 }

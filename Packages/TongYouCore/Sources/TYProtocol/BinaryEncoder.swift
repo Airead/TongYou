@@ -68,6 +68,12 @@ public struct BinaryEncoder: Sendable {
         data.append(contentsOf: utf8)
     }
 
+    /// Write a count-prefixed string array (UInt16 count + length-prefixed strings).
+    public mutating func writeStringArray(_ strings: [String]) {
+        writeUInt16(UInt16(strings.count))
+        for s in strings { writeString(s) }
+    }
+
     /// Write a length-prefixed byte array (UInt32 length + bytes).
     public mutating func writeBytes(_ bytes: [UInt8]) {
         writeUInt32(UInt32(bytes.count))
@@ -196,6 +202,7 @@ public struct BinaryEncoder: Sendable {
         writeUInt32(UInt32(diff.scrollbackCount))
         writeUInt32(UInt32(diff.viewportOffset))
         writeUInt8(diff.mouseTrackingMode)
+        writeUInt16(UInt16(bitPattern: diff.scrollDelta))
     }
 
     /// Encode a `ScreenSnapshot` into the buffer.
@@ -227,6 +234,20 @@ public struct BinaryEncoder: Sendable {
             writeTabInfo(tab)
         }
         writeUInt16(UInt16(info.activeTabIndex))
+        // Pane metadata map
+        writeUInt16(UInt16(info.paneMetadata.count))
+        for (paneID, meta) in info.paneMetadata {
+            writePaneID(paneID)
+            writePaneMetadata(meta)
+        }
+    }
+
+    /// Encode a `PaneMetadata` into the buffer.
+    public mutating func writePaneMetadata(_ meta: RemotePaneMetadata) {
+        writeBool(meta.cwd != nil)
+        if let cwd = meta.cwd {
+            writeString(cwd)
+        }
     }
 
     /// Encode a `TabInfo` into the buffer.
@@ -271,6 +292,11 @@ public struct BinaryEncoder: Sendable {
             writeSessionID(sessionID)
             writePaneID(paneID)
             writeString(title)
+
+        case .cwdChanged(let sessionID, let paneID, let cwd):
+            writeSessionID(sessionID)
+            writePaneID(paneID)
+            writeString(cwd)
 
         case .bell(let sessionID, let paneID):
             writeSessionID(sessionID)
@@ -385,6 +411,38 @@ public struct BinaryEncoder: Sendable {
         case .toggleFloatingPanePin(let sessionID, let paneID):
             writeSessionID(sessionID)
             writePaneID(paneID)
+
+        case .runInPlace(let sessionID, let paneID, let command, let arguments):
+            writeSessionID(sessionID)
+            writePaneID(paneID)
+            writeString(command)
+            writeStringArray(arguments)
+
+        case .runRemoteCommand(let sessionID, let paneID, let command, let arguments):
+            writeSessionID(sessionID)
+            writePaneID(paneID)
+            writeString(command)
+            writeStringArray(arguments)
+
+        case .createFloatingPaneWithCommand(let sessionID, let tabID, let command, let arguments, let frameX, let frameY, let frameWidth, let frameHeight):
+            writeSessionID(sessionID)
+            writeTabID(tabID)
+            writeString(command)
+            writeStringArray(arguments)
+            let hasFrame = frameX != nil || frameY != nil || frameWidth != nil || frameHeight != nil
+            writeBool(hasFrame)
+            if hasFrame {
+                writeFloat(frameX ?? 0.3)
+                writeFloat(frameY ?? 0.3)
+                writeFloat(frameWidth ?? 0.4)
+                writeFloat(frameHeight ?? 0.4)
+            }
+
+        case .restartFloatingPaneCommand(let sessionID, let paneID, let command, let arguments):
+            writeSessionID(sessionID)
+            writePaneID(paneID)
+            writeString(command)
+            writeStringArray(arguments)
         }
     }
 }

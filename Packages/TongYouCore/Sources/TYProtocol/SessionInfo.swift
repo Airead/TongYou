@@ -1,18 +1,32 @@
 import Foundation
 import TYTerminal
 
+/// Per-pane metadata sent alongside session info from the server.
+/// Add new fields here as the protocol evolves.
+public struct RemotePaneMetadata: Equatable, Sendable, Codable {
+    /// Current working directory of the pane's shell process.
+    public var cwd: String?
+
+    public init(cwd: String? = nil) {
+        self.cwd = cwd
+    }
+}
+
 /// Information about a session, suitable for listing and display.
 public struct SessionInfo: Equatable, Sendable, Codable {
     public let id: SessionID
     public var name: String
     public var tabs: [TabInfo]
     public var activeTabIndex: Int
+    /// Extended metadata for each pane, keyed by server pane ID.
+    public var paneMetadata: [PaneID: RemotePaneMetadata]
 
-    public init(id: SessionID, name: String, tabs: [TabInfo] = [], activeTabIndex: Int = 0) {
+    public init(id: SessionID, name: String, tabs: [TabInfo] = [], activeTabIndex: Int = 0, paneMetadata: [PaneID: RemotePaneMetadata] = [:]) {
         self.id = id
         self.name = name
         self.tabs = tabs
         self.activeTabIndex = activeTabIndex
+        self.paneMetadata = paneMetadata
     }
 }
 

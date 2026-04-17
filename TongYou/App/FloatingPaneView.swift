@@ -18,6 +18,7 @@ struct FloatingPaneView: View {
     let onClose: (UUID) -> Void
     let onTogglePin: (UUID) -> Void
     let onUserInteraction: ((UUID) -> Void)?
+    let isProcessExited: (UUID) -> Bool
 
     private static let titleBarHeight: CGFloat = 24
     private static let resizeHandleSize: CGFloat = 6
@@ -56,9 +57,6 @@ struct FloatingPaneView: View {
         )
         .shadow(color: .black.opacity(0.5), radius: 8, x: 0, y: 4)
         .position(x: frame.midX, y: frame.midY)
-        .onTapGesture {
-            bringToFrontAndFocus()
-        }
         .onChange(of: floatingPane.frame) { _, _ in
             // Model caught up from server — drop local override.
             if dragStartFrame == nil {
@@ -112,7 +110,8 @@ struct FloatingPaneView: View {
             onTabAction: onTabAction,
             onTitleChanged: onTitleChanged,
             onFocused: { bringToFrontAndFocus() },
-            onUserInteraction: { onUserInteraction?(floatingPane.pane.id) }
+            onUserInteraction: { onUserInteraction?(floatingPane.pane.id) },
+            isProcessExited: { isProcessExited(floatingPane.pane.id) }
         )
         .id(floatingPane.pane.id)
     }
@@ -232,6 +231,7 @@ struct FloatingPaneView: View {
     // MARK: - Helpers
 
     private func bringToFrontAndFocus() {
+        guard !isFocused else { return }
         onBringToFront(floatingPane.pane.id)
         focusManager.focusPane(id: floatingPane.pane.id)
     }

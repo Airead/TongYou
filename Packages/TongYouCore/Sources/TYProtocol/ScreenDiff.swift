@@ -32,6 +32,11 @@ public struct ScreenDiff: Equatable, Sendable {
     /// Current mouse tracking mode on the server (rawValue of MouseTrackingMode).
     public let mouseTrackingMode: UInt8
 
+    /// Number of full-screen scroll-up lines since the last update.
+    /// When > 0, the client should shift its cell buffer up by this many rows
+    /// before applying the dirty rows.
+    public let scrollDelta: Int16
+
     public init(
         dirtyRows: [UInt16],
         cellData: [Cell],
@@ -42,7 +47,8 @@ public struct ScreenDiff: Equatable, Sendable {
         cursorShape: CursorShape,
         scrollbackCount: Int = 0,
         viewportOffset: Int = 0,
-        mouseTrackingMode: UInt8 = 0
+        mouseTrackingMode: UInt8 = 0,
+        scrollDelta: Int16 = 0
     ) {
         self.dirtyRows = dirtyRows
         self.cellData = cellData
@@ -54,5 +60,6 @@ public struct ScreenDiff: Equatable, Sendable {
         self.scrollbackCount = scrollbackCount
         self.viewportOffset = viewportOffset
         self.mouseTrackingMode = mouseTrackingMode
+        self.scrollDelta = scrollDelta
     }
 }
