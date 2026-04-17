@@ -722,41 +722,13 @@ final class SessionManager {
         }
 
         let pane = TerminalPane(initialWorkingDirectory: initialWorkingDirectory)
-        let nextZ = (activeFloatingPanes.max(by: { $0.zIndex < $1.zIndex })?.zIndex ?? -1) + 1
-        let frame = nextFloatingPaneFrame()
-        var floating = FloatingPane(pane: pane, frame: frame, zIndex: nextZ)
-        floating.clampFrame()
+        let floating = FloatingPane(pane: pane, frame: activeFloatingPanes.nextCascadedFrame(), zIndex: activeFloatingPanes.nextZIndex)
         activeFloatingPanes.append(floating)
         if attachedLocalSessionIDs.contains(session.id) {
             _ = ensureLocalController(for: pane.id)
         }
         scheduleLocalSaveIfNeeded(sessionID: session.id)
         return pane.id
-    }
-
-    private func nextFloatingPaneFrame() -> CGRect {
-        let base = FloatingPane.defaultFrame
-        let step: CGFloat = 0.03
-        let existing = activeFloatingPanes
-
-        guard !existing.isEmpty else { return base }
-
-        var candidate = base
-        for i in 0..<existing.count {
-            let offset = step * CGFloat(i + 1)
-            candidate = CGRect(
-                x: base.origin.x + offset,
-                y: base.origin.y + offset,
-                width: base.width,
-                height: base.height
-            )
-            let collision = existing.contains { pane in
-                abs(pane.frame.origin.x - candidate.origin.x) < step / 2
-                    && abs(pane.frame.origin.y - candidate.origin.y) < step / 2
-            }
-            if !collision { break }
-        }
-        return candidate
     }
 
     /// Mark a floating pane as exited (process finished) with the given exit code.
@@ -1766,10 +1738,8 @@ final class SessionManager {
 
         let session = sessions[activeSessionIndex]
         let pane = TerminalPane(initialWorkingDirectory: workingDirectory)
-        let nextZ = (activeFloatingPanes.max(by: { $0.zIndex < $1.zIndex })?.zIndex ?? -1) + 1
-        let frame = customFrame ?? nextFloatingPaneFrame()
-        var floating = FloatingPane(pane: pane, frame: frame, zIndex: nextZ)
-        floating.clampFrame()
+        let frame = customFrame ?? activeFloatingPanes.nextCascadedFrame()
+        let floating = FloatingPane(pane: pane, frame: frame, zIndex: activeFloatingPanes.nextZIndex)
         activeFloatingPanes.append(floating)
 
         floatingPaneCommands[pane.id] = FloatingPaneCommandInfo(
