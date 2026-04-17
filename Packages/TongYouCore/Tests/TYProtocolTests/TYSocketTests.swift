@@ -15,7 +15,7 @@ struct TYSocketTests {
         defer { server.closeSocket() }
 
         // Connect client (in a thread since accept() is blocking)
-        var acceptedClient: TYSocket?
+        nonisolated(unsafe) var acceptedClient: TYSocket?
         let acceptThread = Thread {
             acceptedClient = try? server.accept()
         }
@@ -88,7 +88,7 @@ struct TYSocketTests {
         let server = try TYSocket.listen(path: socketPath)
         defer { server.closeSocket() }
 
-        var acceptedClient: TYSocket?
+        nonisolated(unsafe) var acceptedClient: TYSocket?
         let acceptThread = Thread {
             acceptedClient = try? server.accept()
         }

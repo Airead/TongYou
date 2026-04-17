@@ -524,7 +524,7 @@ public final class ServerSessionManager {
         guard let session = sessions[id], let sessionStore else { return }
         var paneContexts: [PaneID: PersistedPaneContext] = [:]
         for tab in session.tabs {
-            for (paneID, core) in tab.terminalCores.merging(tab.floatingPaneCores) { current, _ in current } {
+            for (paneID, core) in tab.terminalCores.merging(tab.floatingPaneCores, uniquingKeysWith: { current, _ in current }) {
                 paneContexts[paneID] = PersistedPaneContext(
                     cwd: core.currentWorkingDirectory ?? ""
                 )
