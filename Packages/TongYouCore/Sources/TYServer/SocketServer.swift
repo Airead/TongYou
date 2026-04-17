@@ -296,21 +296,12 @@ public final class SocketServer: @unchecked Sendable {
             // When scrollDelta is set, the dirty rows are only the newly
             // revealed ones, so skip the mostlyDirty heuristic.
             let hasScrollDelta = snapshot.dirtyRegion.scrollDelta > 0
-            let dirtyCount = snapshot.isPartial ? snapshot.dirtyRows.count : snapshot.dirtyRegion.dirtyRows.count
+            let dirtyCount = snapshot.isPartial ? snapshot.dirtyRows.count : snapshot.dirtyRegion.dirtyCount
             let mostlyDirty = !hasScrollDelta && dirtyCount >= snapshot.rows * 4 / 5
             if !snapshot.isPartial && (snapshot.dirtyRegion.fullRebuild || mostlyDirty) {
                 message = .screenFull(key.sessionID, key.paneID, snapshot, mouseTrackingMode: mouseMode)
             } else {
-                var diff = ScreenDiff(from: snapshot)
-                diff = ScreenDiff(
-                    dirtyRows: diff.dirtyRows, cellData: diff.cellData,
-                    columns: diff.columns,
-                    cursorCol: diff.cursorCol, cursorRow: diff.cursorRow,
-                    cursorVisible: diff.cursorVisible, cursorShape: diff.cursorShape,
-                    scrollbackCount: diff.scrollbackCount, viewportOffset: diff.viewportOffset,
-                    mouseTrackingMode: mouseMode,
-                    scrollDelta: diff.scrollDelta
-                )
+                let diff = ScreenDiff(from: snapshot, mouseTrackingMode: mouseMode)
                 message = .screenDiff(key.sessionID, key.paneID, diff)
             }
 

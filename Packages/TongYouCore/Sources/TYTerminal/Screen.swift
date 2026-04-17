@@ -115,6 +115,14 @@ public struct DirtyRegion: Equatable, Sendable {
         return first..<(last + 1)
     }
 
+    /// Number of dirty rows (O(n) scan, no allocation).
+    public var dirtyCount: Int {
+        guard !fullRebuild else { return 0 }
+        var count = 0
+        for bit in lineBits where bit { count += 1 }
+        return count
+    }
+
     /// All dirty row indices (non-contiguous support).
     public var dirtyRows: [Int] {
         guard !fullRebuild else { return [] }

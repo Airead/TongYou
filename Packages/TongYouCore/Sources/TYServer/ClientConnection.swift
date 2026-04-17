@@ -160,7 +160,7 @@ public final class ClientConnection: @unchecked Sendable {
 
 extension ScreenDiff {
     /// Convert a ScreenSnapshot into a ScreenDiff using its dirty region.
-    public init(from snapshot: ScreenSnapshot) {
+    public init(from snapshot: ScreenSnapshot, mouseTrackingMode: UInt8 = 0) {
         let rows: [UInt16]
         let cells: [Cell]
 
@@ -200,6 +200,7 @@ extension ScreenDiff {
             cursorShape: snapshot.cursorShape,
             scrollbackCount: snapshot.scrollbackCount,
             viewportOffset: snapshot.viewportOffset,
+            mouseTrackingMode: mouseTrackingMode,
             scrollDelta: Int16(clamping: snapshot.dirtyRegion.scrollDelta)
         )
     }
