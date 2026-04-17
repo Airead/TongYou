@@ -207,6 +207,15 @@ public final class ScreenReplica: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// Read the Unicode scalar at a viewport-relative (row, col) position.
+    /// Returns a space if the position is out of bounds.
+    public func codepoint(atRow row: Int, col: Int) -> Unicode.Scalar {
+        lock.lock()
+        defer { lock.unlock() }
+        guard row >= 0, row < rows, col >= 0, col < columns else { return " " }
+        return cells[row * columns + col].codepoint
+    }
+
     public var isDirty: Bool {
         lock.lock()
         defer { lock.unlock() }

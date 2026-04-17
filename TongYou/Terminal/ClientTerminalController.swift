@@ -133,7 +133,9 @@ final class ClientTerminalController: TerminalControlling {
         let point = SelectionPoint(line: line, col: col)
         var sel = Selection(start: point, end: point, mode: mode)
 
-        if mode == .line {
+        if mode == .word {
+            expandWordSelection(&sel, row: row, col: col, columns: info.columns)
+        } else if mode == .line {
             sel.start.col = 0
             sel.end.col = info.columns - 1
         }
@@ -190,6 +192,33 @@ final class ClientTerminalController: TerminalControlling {
         _contentGeneration &+= 1
         screenReplica.markDirty()
         onNeedsDisplay?()
+    }
+
+    // MARK: - Private: Word Boundary Detection
+
+    private static let wordChars = CharacterSet.alphanumerics
+        .union(CharacterSet(charactersIn: "_-./:~"))
+
+    private func expandWordSelection(
+        _ sel: inout Selection, row: Int, col: Int, columns: Int
+    ) {
+        var startCol = col
+        while startCol > 0 {
+            let scalar = screenReplica.codepoint(atRow: row, col: startCol - 1)
+            guard Self.wordChars.contains(scalar) else { break }
+            startCol -= 1
+        }
+
+        var endCol = col
+        let maxCol = columns - 1
+        while endCol < maxCol {
+            let scalar = screenReplica.codepoint(atRow: row, col: endCol + 1)
+            guard Self.wordChars.contains(scalar) else { break }
+            endCol += 1
+        }
+
+        sel.start.col = startCol
+        sel.end.col = endCol
     }
 
     // MARK: - URL Detection
