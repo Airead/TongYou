@@ -115,7 +115,6 @@ public final class ScreenReplica: @unchecked Sendable {
         if delta > 0 && !resized && delta < rows {
             let shiftCells = delta * columns
             let totalCells = rows * columns
-            // Move rows [delta..<rows] to [0..<rows-delta].
             cells.replaceSubrange(0..<(totalCells - shiftCells),
                                   with: cells[shiftCells..<totalCells])
             // Clear the newly revealed bottom rows.
@@ -146,12 +145,10 @@ public final class ScreenReplica: @unchecked Sendable {
 
         if resized {
             pendingDirtyRegion.markFull()
-        } else if delta > 0 {
-            pendingDirtyRegion.markScroll(delta: delta, rowCount: rows)
-            for row in diff.dirtyRows {
-                pendingDirtyRegion.markLine(Int(row))
-            }
         } else {
+            if delta > 0 {
+                pendingDirtyRegion.markScroll(delta: delta, rowCount: rows)
+            }
             for row in diff.dirtyRows {
                 pendingDirtyRegion.markLine(Int(row))
             }

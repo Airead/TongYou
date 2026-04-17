@@ -409,11 +409,13 @@ final class TerminalController: TerminalControlling {
 
     func resize(columns newCols: Int, rows newRows: Int,
                 cellWidth: UInt32 = 0, cellHeight: UInt32 = 0) {
+        let cols = max(Screen.minColumns, newCols)
+        let rows = max(Screen.minRows, newRows)
         core.resize(
-            columns: UInt16(clamping: max(Screen.minColumns, newCols)),
-            rows: UInt16(clamping: max(Screen.minRows, newRows)),
-            pixelWidth: UInt16(clamping: Int(cellWidth) * max(Screen.minColumns, newCols)),
-            pixelHeight: UInt16(clamping: Int(cellHeight) * max(Screen.minRows, newRows))
+            columns: UInt16(clamping: cols),
+            rows: UInt16(clamping: rows),
+            pixelWidth: UInt16(clamping: Int(cellWidth) * cols),
+            pixelHeight: UInt16(clamping: Int(cellHeight) * rows)
         )
     }
 

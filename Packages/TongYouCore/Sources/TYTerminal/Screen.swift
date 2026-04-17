@@ -96,6 +96,7 @@ public struct DirtyRegion: Equatable, Sendable {
                 scrollDelta = other.scrollDelta
             }
         }
+        guard !fullRebuild else { return }
         for (i, dirty) in other.lineBits.enumerated() where dirty {
             markLine(i)
         }
