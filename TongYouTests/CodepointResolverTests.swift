@@ -102,4 +102,25 @@ struct CodepointResolverTests {
         #expect(FontCollection.Style.from(attributes: italic) == .italic)
         #expect(FontCollection.Style.from(attributes: boldItalic) == .boldItalic)
     }
+
+    @Test func textPresentationCharacterDoesNotUseEmojiFont() {
+        // U+23FA (⏺) has Emoji=Yes but Emoji_Presentation=No → NOT emoji font
+        let (resolver, _) = makeResolver()
+        let cluster = GraphemeCluster(Unicode.Scalar(0x23FA)!)
+        let font = resolver.resolveFont(for: cluster, style: .regular)
+        let resolvedName = CTFontCopyPostScriptName(font) as String
+        #expect(!resolvedName.contains("AppleColorEmoji"))
+    }
+
+    @Test func vs16ForcesEmojiFont() {
+        // ⏺ + VS16 → emoji font
+        let (resolver, _) = makeResolver()
+        let cluster = GraphemeCluster(scalars: [
+            Unicode.Scalar(0x23FA)!,  // ⏺
+            Unicode.Scalar(0xFE0F)!,  // VS16
+        ])
+        let font = resolver.resolveFont(for: cluster, style: .regular)
+        let resolvedName = CTFontCopyPostScriptName(font) as String
+        #expect(resolvedName.contains("AppleColorEmoji"))
+    }
 }

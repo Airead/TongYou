@@ -128,6 +128,103 @@ struct GraphemeClusterTests {
             #expect(GraphemeCluster(Character(cluster.string)) == cluster)
         }
     }
+
+    // MARK: - Presentation tests
+
+    @Test func singleAsciiDefaultsToText() {
+        let a = GraphemeCluster(Unicode.Scalar("A"))
+        #expect(a.explicitPresentation == nil)
+        #expect(a.resolvedPresentation == .text)
+        #expect(!a.isEmojiContent)
+    }
+
+    @Test func emojiPresentationCharacterDefaultsToEmoji() {
+        // U+1F600 (😀) has Emoji_Presentation=Yes
+        let smiley = GraphemeCluster(Unicode.Scalar(0x1F600)!)
+        #expect(smiley.explicitPresentation == nil)
+        #expect(smiley.resolvedPresentation == .emoji)
+        #expect(smiley.isEmojiContent)
+    }
+
+    @Test func nonEmojiPresentationCharacterDefaultsToText() {
+        // U+23FA (⏺) has Emoji=Yes but Emoji_Presentation=No
+        let record = GraphemeCluster(Unicode.Scalar(0x23FA)!)
+        #expect(record.explicitPresentation == nil)
+        #expect(record.resolvedPresentation == .text)
+        #expect(!record.isEmojiContent)
+    }
+
+    @Test func vs16ForcesEmojiPresentation() {
+        // ⏺ + VS16 → emoji
+        let scalars: [Unicode.Scalar] = [
+            Unicode.Scalar(0x23FA)!,  // ⏺
+            Unicode.Scalar(0xFE0F)!,  // VS16
+        ]
+        let cluster = GraphemeCluster(scalars: scalars)
+        #expect(cluster.explicitPresentation == .emoji)
+        #expect(cluster.resolvedPresentation == .emoji)
+        #expect(cluster.isEmojiContent)
+        #expect(cluster.terminalWidth == 2)
+    }
+
+    @Test func vs15ForcesTextPresentation() {
+        // ⏺ + VS15 → text
+        let scalars: [Unicode.Scalar] = [
+            Unicode.Scalar(0x23FA)!,  // ⏺
+            Unicode.Scalar(0xFE0E)!,  // VS15
+        ]
+        let cluster = GraphemeCluster(scalars: scalars)
+        #expect(cluster.explicitPresentation == .text)
+        #expect(cluster.resolvedPresentation == .text)
+        #expect(!cluster.isEmojiContent)
+        #expect(cluster.terminalWidth == 1)
+    }
+
+    @Test func vs15OnEmojiPresentationForcesText() {
+        // 😀 + VS15 → text (explicit overrides default)
+        let scalars: [Unicode.Scalar] = [
+            Unicode.Scalar(0x1F600)!,  // 😀
+            Unicode.Scalar(0xFE0E)!,   // VS15
+        ]
+        let cluster = GraphemeCluster(scalars: scalars)
+        #expect(cluster.explicitPresentation == .text)
+        #expect(cluster.resolvedPresentation == .text)
+        #expect(!cluster.isEmojiContent)
+        #expect(cluster.terminalWidth == 1)
+    }
+
+    @Test func emojiSequenceResolvedAsEmoji() {
+        // ZWJ sequence is always emoji
+        let family = GraphemeCluster(Character("👨‍👩‍👧‍👦"))
+        #expect(family.resolvedPresentation == .emoji)
+        #expect(family.isEmojiContent)
+    }
+
+    @Test func otherTextEmojiCharactersDefaultToText() {
+        // These have Emoji=Yes but Emoji_Presentation=No
+        let textEmoji: [UInt32] = [
+            0x260E,  // ☎ Black Telephone
+            0x2702,  // ✂ Black Scissors
+            0x2708,  // ✈ Airplane
+            0x2709,  // ✉ Envelope
+            0x2600,  // ☀ Black Sun with Rays
+            0x267B,  // ♻ Black Universal Recycling Symbol
+        ]
+        for v in textEmoji {
+            let cluster = GraphemeCluster(Unicode.Scalar(v)!)
+            #expect(cluster.resolvedPresentation == .text,
+                    "U+\(String(v, radix: 16, uppercase: true)) should default to text presentation")
+            #expect(!cluster.isEmojiContent,
+                    "U+\(String(v, radix: 16, uppercase: true)) should not be emoji content")
+        }
+    }
+
+    @Test func equalityIncludesPresentation() {
+        // Same base scalar, different presentation
+        let text = GraphemeCluster(scalars: [Unicode.Scalar(0x23FA)!, Unicode.Scalar(0xFE0E)!])
+        let emoji = GraphemeCluster(scalars: [Unicode.Scalar(0x23FA)!, Unicode.Scalar(0xFE0F)!])
+        #expect(text != emoji)
+    }
 }
 
 @Suite("Cell with GraphemeCluster tests")

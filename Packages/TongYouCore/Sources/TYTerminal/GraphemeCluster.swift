@@ -1,3 +1,9 @@
+/// Presentation style for a character: text (monochrome) or emoji (color).
+public enum Presentation: UInt8, Equatable, Sendable {
+    case text = 0   // U+FE0E (VS15) or default text presentation
+    case emoji = 1  // U+FE0F (VS16) or default emoji presentation
+}
+
 /// A grapheme cluster representing one or more Unicode scalars that form
 /// a single visual character (e.g., emoji sequences with ZWJ, skin tones, etc.).
 ///
@@ -12,6 +18,8 @@ public struct GraphemeCluster: Equatable, Sendable, Hashable {
     private var _storage: (UInt32, UInt32)
     private var _count: UInt8
     private var _heapStorage: [UInt32]?
+    /// Explicit presentation from variation selector: 0=none, 1=text(VS15), 2=emoji(VS16).
+    private var _explicitPresentation: UInt8
 
     private var _isHeapAllocated: Bool {
         _count > Self.inlineCapacity
@@ -21,12 +29,14 @@ public struct GraphemeCluster: Equatable, Sendable, Hashable {
         self._storage = (0, 0)
         self._count = 0
         self._heapStorage = nil
+        self._explicitPresentation = 0
     }
 
     public init(_ scalar: Unicode.Scalar) {
         self._storage = (scalar.value, 0)
         self._count = 1
         self._heapStorage = nil
+        self._explicitPresentation = 0
     }
 
     public init(_ character: Character) {
@@ -46,6 +56,13 @@ public struct GraphemeCluster: Equatable, Sendable, Hashable {
             )
         } else {
             self._storage = (0, 0)
+        }
+
+        // Detect explicit presentation from variation selectors.
+        self._explicitPresentation = 0
+        for s in scalars.prefix(count) {
+            if s.value == 0xFE0E { self._explicitPresentation = 1; break }
+            if s.value == 0xFE0F { self._explicitPresentation = 2; break }
         }
     }
     
@@ -80,23 +97,43 @@ public struct GraphemeCluster: Equatable, Sendable, Hashable {
         return Unicode.Scalar(_storage.0)
     }
     
+    /// Explicit presentation set by a variation selector, or nil if none.
+    public var explicitPresentation: Presentation? {
+        switch _explicitPresentation {
+        case 1: return .text
+        case 2: return .emoji
+        default: return nil
+        }
+    }
+
+    /// Resolved presentation: explicit VS if present, otherwise UCD default.
+    /// Only characters with Emoji_Presentation=Yes default to emoji.
+    /// Characters with Emoji=Yes but Emoji_Presentation=No (e.g. U+23FA)
+    /// default to text and only become emoji with explicit VS16.
+    public var resolvedPresentation: Presentation {
+        if let explicit = explicitPresentation { return explicit }
+        if isEmojiSequence { return .emoji }
+        if let first = firstScalar, first.isEmojiPresentation { return .emoji }
+        return .text
+    }
+
     public var isEmojiSequence: Bool {
         if _count <= 1 { return false }
         return _checkForEmojiMarkers()
     }
 
     public var isEmojiContent: Bool {
-        if isEmojiSequence { return true }
-        return firstScalar?.isEmojiScalar ?? false
+        resolvedPresentation == .emoji
     }
 
     private func _checkForEmojiMarkers() -> Bool {
         func checkValue(_ v: UInt32) -> Bool {
-            v == 0x200D ||
-            v == 0xFE0E || v == 0xFE0F ||
-            (v >= 0x1F3FB && v <= 0x1F3FF) ||
-            (v >= 0x1F1E6 && v <= 0x1F1FF) ||
-            (v >= 0xE0020 && v <= 0xE007F)
+            v == 0x200D ||      // ZWJ
+            v == 0xFE0F ||      // VS16 (emoji presentation)
+            (v >= 0x1F3FB && v <= 0x1F3FF) ||  // skin tones
+            (v >= 0x1F1E6 && v <= 0x1F1FF) ||  // regional indicators
+            (v >= 0xE0020 && v <= 0xE007F)     // tags
+            // Note: 0xFE0E (VS15) is NOT an emoji marker — it forces text presentation.
         }
 
         if let heap = _heapStorage {
@@ -112,16 +149,21 @@ public struct GraphemeCluster: Equatable, Sendable, Hashable {
     }
     
     public var terminalWidth: UInt8 {
+        // Explicit VS16 forces wide (2), VS15 forces narrow (1).
+        if let p = explicitPresentation {
+            return p == .emoji ? 2 : 1
+        }
+
         guard let first = firstScalar else { return 1 }
-        
+
         if isEmojiSequence {
             return first.terminalWidth
         }
-        
+
         if _count == 1 {
             return first.terminalWidth
         }
-        
+
         var width: UInt8 = 0
         for scalar in scalars {
             width += scalar.terminalWidth
@@ -151,6 +193,7 @@ public struct GraphemeCluster: Equatable, Sendable, Hashable {
 extension GraphemeCluster {
     public static func == (lhs: GraphemeCluster, rhs: GraphemeCluster) -> Bool {
         guard lhs._count == rhs._count else { return false }
+        guard lhs._explicitPresentation == rhs._explicitPresentation else { return false }
 
         if let leftHeap = lhs._heapStorage, let rightHeap = rhs._heapStorage {
             return leftHeap == rightHeap
@@ -168,6 +211,7 @@ extension GraphemeCluster {
 extension GraphemeCluster {
     public func hash(into hasher: inout Hasher) {
         hasher.combine(_count)
+        hasher.combine(_explicitPresentation)
         if let heap = _heapStorage {
             hasher.combine(heap)
         } else {
