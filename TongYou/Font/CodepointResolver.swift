@@ -24,7 +24,7 @@ final class CodepointResolver {
     }
 
     func resolveFont(for cluster: GraphemeCluster, style: FontCollection.Style) -> CTFont {
-        if cluster.isEmojiContent {
+        if cluster.resolvedPresentation == .emoji {
             return emojiFont ?? baseFont
         }
 

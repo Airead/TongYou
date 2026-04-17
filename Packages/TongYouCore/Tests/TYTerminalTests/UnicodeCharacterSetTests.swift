@@ -115,4 +115,22 @@ struct UnicodeCharacterSetTests {
         #expect("#".unicodeScalars.first!.terminalWidth == 1)
         #expect("*".unicodeScalars.first!.terminalWidth == 1)
     }
+
+    @Test func isEmojiScalarOnlyForEmojiPresentation() {
+        // Characters with Emoji_Presentation=Yes should be emoji scalars
+        #expect(Unicode.Scalar(0x1F600)!.isEmojiScalar)  // 😀
+        #expect(Unicode.Scalar(0x1F680)!.isEmojiScalar)  // 🚀
+
+        // Characters with Emoji=Yes but Emoji_Presentation=No should NOT be emoji scalars
+        #expect(!Unicode.Scalar(0x23FA)!.isEmojiScalar)  // ⏺
+        #expect(!Unicode.Scalar(0x260E)!.isEmojiScalar)  // ☎
+        #expect(!Unicode.Scalar(0x2702)!.isEmojiScalar)  // ✂
+        #expect(!Unicode.Scalar(0x2708)!.isEmojiScalar)  // ✈
+        #expect(!Unicode.Scalar(0x2600)!.isEmojiScalar)  // ☀
+        #expect(!Unicode.Scalar(0x267B)!.isEmojiScalar)  // ♻
+
+        // Plain ASCII should not be emoji scalars
+        #expect(!Unicode.Scalar("A").isEmojiScalar)
+        #expect(!Unicode.Scalar("0").isEmojiScalar)
+    }
 }

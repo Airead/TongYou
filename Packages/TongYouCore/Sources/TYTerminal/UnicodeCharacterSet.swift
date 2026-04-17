@@ -71,6 +71,14 @@ extension Unicode.Scalar {
         return v >= 0x2500 && v <= 0x257F
     }
 
+    /// Returns true if the codepoint is a box drawing arc corner (╭╮╰╯).
+    ///
+    /// Range: U+256D to U+2570
+    public var isBoxDrawingArcCorner: Bool {
+        let v = self.value
+        return v >= 0x256D && v <= 0x2570
+    }
+
     /// Returns true if the codepoint is a block element.
     ///
     /// Range: U+2580 to U+259F
@@ -115,30 +123,11 @@ extension Unicode.Scalar {
 
     /// Returns true if this scalar should be treated as a standalone emoji glyph.
     ///
-    /// This is used by the renderer to decide whether a scalar (outside of a
-    /// known emoji sequence) should be routed to the color emoji atlas.
+    /// Only characters with the Unicode Emoji_Presentation property default to
+    /// emoji rendering. Characters with Emoji=Yes but Emoji_Presentation=No
+    /// (e.g. U+23FA ⏺, U+260E ☎) default to text and only become emoji
+    /// when followed by an explicit VS16 (U+FE0F).
     public var isEmojiScalar: Bool {
-        let v = self.value
-
-        if self.isEmojiPresentation {
-            return true
-        }
-
-        // ASCII digits 0-9 and #/* can be emoji with variation selector (U+FE0F),
-        // but without VS16 they should be treated as text.
-        if v == 0x0023 || v == 0x002A || (v >= 0x0030 && v <= 0x0039) {
-            return false
-        }
-
-        // Regional indicators (flags) are handled via emoji sequences when paired.
-        if v >= 0x1F1E6 && v <= 0x1F1FF {
-            return false
-        }
-
-        if self.isEmoji {
-            return true
-        }
-
-        return false
+        self.isEmojiPresentation
     }
 }

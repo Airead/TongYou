@@ -296,6 +296,16 @@ public final class ServerSessionManager {
         coreLookup[paneID]?.write(data)
     }
 
+    /// Forward a mouse event to the terminal core for encoding and PTY delivery.
+    public func handleMouseEvent(paneID: PaneID, event: MouseEncoder.Event) {
+        coreLookup[paneID]?.handleMouseEvent(event)
+    }
+
+    /// Current mouse tracking mode for a pane (rawValue of MouseTrackingMode).
+    public func mouseTrackingMode(paneID: PaneID) -> UInt8 {
+        coreLookup[paneID]?.mouseTrackingMode.rawValue ?? 0
+    }
+
     public func resizePane(paneID: PaneID, cols: UInt16, rows: UInt16) {
         coreLookup[paneID]?.resize(columns: cols, rows: rows)
     }

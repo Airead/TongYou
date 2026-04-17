@@ -122,6 +122,7 @@ public struct StreamHandler {
     private mutating func handleCSI(_ params: CSIParams) {
         let final = params.finalByte
         let hasQuestion = params.hasIntermediate(0x3F) // '?'
+        let hasGreater = params.hasIntermediate(0x3E)  // '>'
         let hasSpace = params.hasIntermediate(0x20)    // ' '
 
         switch final {
@@ -206,6 +207,8 @@ public struct StreamHandler {
 
         // --- SGR ---
         case 0x6D: // 'm' - SGR (Select Graphic Rendition)
+            // CSI > 4 ; 1 m is XTMODKEYS (xterm modifyOtherKeys), not SGR.
+            guard !hasGreater else { break }
             SGRParser.parse(params, into: &currentAttributes)
 
         // --- Modes ---

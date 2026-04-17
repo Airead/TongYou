@@ -29,6 +29,9 @@ public struct ScreenDiff: Equatable, Sendable {
     /// Current viewport offset (0 = bottom, >0 = scrolled up).
     public let viewportOffset: Int
 
+    /// Current mouse tracking mode on the server (rawValue of MouseTrackingMode).
+    public let mouseTrackingMode: UInt8
+
     public init(
         dirtyRows: [UInt16],
         cellData: [Cell],
@@ -38,7 +41,8 @@ public struct ScreenDiff: Equatable, Sendable {
         cursorVisible: Bool,
         cursorShape: CursorShape,
         scrollbackCount: Int = 0,
-        viewportOffset: Int = 0
+        viewportOffset: Int = 0,
+        mouseTrackingMode: UInt8 = 0
     ) {
         self.dirtyRows = dirtyRows
         self.cellData = cellData
@@ -49,5 +53,6 @@ public struct ScreenDiff: Equatable, Sendable {
         self.cursorShape = cursorShape
         self.scrollbackCount = scrollbackCount
         self.viewportOffset = viewportOffset
+        self.mouseTrackingMode = mouseTrackingMode
     }
 }

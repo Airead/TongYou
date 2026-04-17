@@ -156,10 +156,13 @@ public struct ColorPalette: Sendable {
         resolve(attrs.bgColor, isFg: false)
     }
 
-    /// Resolve a cell's display colors, handling inverse and hidden flags.
+    /// Resolve a cell's display colors, handling dim, inverse, and hidden flags.
     public func resolveDisplay(_ attrs: CellAttributes) -> (fg: SIMD4<UInt8>, bg: SIMD4<UInt8>) {
         var fg = resolveFg(attrs)
         var bg = resolveBg(attrs)
+        if attrs.flags.contains(.dim) {
+            fg = SIMD4<UInt8>(fg.x / 2, fg.y / 2, fg.z / 2, fg.w)
+        }
         if attrs.flags.contains(.inverse) {
             swap(&fg, &bg)
         }

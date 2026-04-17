@@ -115,10 +115,10 @@ struct WireFormatTests {
             selection: nil, scrollbackCount: 0,
             viewportOffset: 0, dirtyRegion: .full
         )
-        let msg = ServerMessage.screenFull(sid, pid, snapshot)
+        let msg = ServerMessage.screenFull(sid, pid, snapshot, mouseTrackingMode: 0)
 
         let decoded = try encodeAndDecode(serverMessage: msg)
-        guard case .screenFull(let dSid, let dPid, let dSnap) = decoded else {
+        guard case .screenFull(let dSid, let dPid, let dSnap, let dMouse) = decoded else {
             Issue.record("Expected .screenFull")
             return
         }
@@ -127,6 +127,7 @@ struct WireFormatTests {
         #expect(dSnap.columns == 3)
         #expect(dSnap.rows == 2)
         #expect(dSnap.cells.count == 6)
+        #expect(dMouse == 0)
     }
 
     @Test func roundTripScreenDiff() throws {
@@ -483,6 +484,84 @@ struct WireFormatTests {
             return
         }
         #expect(dInfo.tabs[0].focusedPaneID == nil)
+    }
+
+    @Test func roundTripMouseEvent() throws {
+        let sid = SessionID()
+        let pid = PaneID()
+        let event = MouseEncoder.Event(
+            action: .press, button: .left, col: 10, row: 5,
+            modifiers: MouseEncoder.Modifiers(shift: true, option: false, control: true)
+        )
+        let msg = ClientMessage.mouseEvent(sid, pid, event)
+        let decoded = try encodeAndDecode(clientMessage: msg)
+        guard case .mouseEvent(let dSid, let dPid, let dEvent) = decoded else {
+            Issue.record("Expected .mouseEvent")
+            return
+        }
+        #expect(dSid == sid)
+        #expect(dPid == pid)
+        #expect(dEvent.col == 10)
+        #expect(dEvent.row == 5)
+        #expect(dEvent.modifiers.shift == true)
+        #expect(dEvent.modifiers.option == false)
+        #expect(dEvent.modifiers.control == true)
+    }
+
+    @Test func roundTripMouseEventMotionNoButton() throws {
+        let sid = SessionID()
+        let pid = PaneID()
+        let event = MouseEncoder.Event(action: .motion, button: nil, col: 42, row: 13)
+        let msg = ClientMessage.mouseEvent(sid, pid, event)
+        let decoded = try encodeAndDecode(clientMessage: msg)
+        guard case .mouseEvent(_, _, let dEvent) = decoded else {
+            Issue.record("Expected .mouseEvent")
+            return
+        }
+        #expect(dEvent.button == nil)
+        #expect(dEvent.col == 42)
+        #expect(dEvent.row == 13)
+    }
+
+    @Test func roundTripScreenFullWithMouseTrackingMode() throws {
+        let sid = SessionID()
+        let pid = PaneID()
+        let cells = [Cell](repeating: Cell.empty, count: 4)
+        let snapshot = ScreenSnapshot(
+            cells: cells, columns: 2, rows: 2,
+            cursorCol: 0, cursorRow: 0,
+            cursorVisible: true, cursorShape: .block,
+            selection: nil, scrollbackCount: 0,
+            viewportOffset: 0, dirtyRegion: .full
+        )
+        let msg = ServerMessage.screenFull(sid, pid, snapshot, mouseTrackingMode: 103)
+        let decoded = try encodeAndDecode(serverMessage: msg)
+        guard case .screenFull(_, _, _, let dMouse) = decoded else {
+            Issue.record("Expected .screenFull")
+            return
+        }
+        #expect(dMouse == 103)
+    }
+
+    @Test func roundTripScreenDiffWithMouseTrackingMode() throws {
+        let sid = SessionID()
+        let pid = PaneID()
+        let cells = [Cell](repeating: Cell.empty, count: 4)
+        let diff = ScreenDiff(
+            dirtyRows: [0],
+            cellData: cells,
+            columns: 4,
+            cursorCol: 0, cursorRow: 0,
+            cursorVisible: true, cursorShape: .block,
+            mouseTrackingMode: 100
+        )
+        let msg = ServerMessage.screenDiff(sid, pid, diff)
+        let decoded = try encodeAndDecode(serverMessage: msg)
+        guard case .screenDiff(_, _, let dDiff) = decoded else {
+            Issue.record("Expected .screenDiff")
+            return
+        }
+        #expect(dDiff.mouseTrackingMode == 100)
     }
 
     // MARK: - Unknown Type Codes

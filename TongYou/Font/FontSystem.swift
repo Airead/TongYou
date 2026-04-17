@@ -42,6 +42,20 @@ final class FontSystem {
     private lazy var codepointResolver: CodepointResolver = {
         var fontCollection = FontCollection()
         fontCollection.addFont(self.ctFont, style: .regular)
+
+        // Create bold/italic/boldItalic variants via symbolic traits
+        let size = CTFontGetSize(self.ctFont)
+        if let bold = CTFontCreateCopyWithSymbolicTraits(self.ctFont, size, nil, .boldTrait, .boldTrait) {
+            fontCollection.addFont(bold, style: .bold)
+        }
+        if let italic = CTFontCreateCopyWithSymbolicTraits(self.ctFont, size, nil, .italicTrait, .italicTrait) {
+            fontCollection.addFont(italic, style: .italic)
+        }
+        let boldItalicTraits: CTFontSymbolicTraits = [.boldTrait, .italicTrait]
+        if let boldItalic = CTFontCreateCopyWithSymbolicTraits(self.ctFont, size, nil, boldItalicTraits, boldItalicTraits) {
+            fontCollection.addFont(boldItalic, style: .boldItalic)
+        }
+
         let emojiFont = CTFontCreateWithName("Apple Color Emoji" as CFString, self.pointSize * self.scaleFactor, nil)
         return CodepointResolver(
             collection: fontCollection,

@@ -45,6 +45,12 @@ Run unit tests with parallel testing disabled and skip UI tests:
 xcodebuild test -scheme TongYou -destination 'platform=macOS' -parallel-testing-enabled NO -only-testing:TongYouTests
 ```
 
+TongYouCore package tests (TYProtocolTests, TYServerTests, etc.) are not included in the Xcode TongYouTests target. Run them separately:
+
+```bash
+cd Packages/TongYouCore && swift test
+```
+
 **Avoid running multiple `xcodebuild` or `swift build`/`swift test` processes concurrently** — they compete for DerivedData / `.build` directory locks, causing hangs or build failures. Always wait for the previous build/test to finish before starting a new one. **Before every build or test, run `pgrep -fl "swift|xcodebuild"` to check for existing processes.** Only proceed when no build/test processes are active (background services like `swift-plugin-server` are fine).
 
 **Never use real user data in tests.** Use isolated/mock resources instead of the real system state. For example, use a custom `NSPasteboard(name:)` instead of `.general`, use a temporary directory instead of `~/Desktop`, and use in-memory `UserDefaults` instead of `.standard`.

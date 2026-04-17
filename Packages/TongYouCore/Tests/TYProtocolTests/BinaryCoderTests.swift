@@ -537,10 +537,10 @@ struct BinaryCoderTests {
         )
 
         var encoder = BinaryEncoder()
-        encoder.writeScreenSnapshot(snapshot)
+        encoder.writeScreenSnapshot(snapshot, mouseTrackingMode: 103)
 
         var decoder = BinaryDecoder(encoder.data)
-        let decoded = try decoder.readScreenSnapshot()
+        let (decoded, mouseMode) = try decoder.readScreenSnapshotWithMouse()
         #expect(decoded.columns == 3)
         #expect(decoded.rows == 2)
         #expect(decoded.cells.count == 6)
@@ -550,6 +550,7 @@ struct BinaryCoderTests {
         #expect(decoded.cursorShape == .underline)
         #expect(decoded.scrollbackCount == 100)
         #expect(decoded.viewportOffset == 5)
+        #expect(mouseMode == 103)
     }
 
     // MARK: - SessionInfo

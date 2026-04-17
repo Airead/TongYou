@@ -127,6 +127,7 @@ final class ClientTerminalController: TerminalControlling {
         }
 
         selection = sel
+        _contentGeneration &+= 1
         screenReplica.markDirty()
         onNeedsDisplay?()
     }
@@ -142,6 +143,7 @@ final class ClientTerminalController: TerminalControlling {
         }
 
         selection = sel
+        _contentGeneration &+= 1
         screenReplica.markDirty()
         onNeedsDisplay?()
     }
@@ -198,11 +200,35 @@ final class ClientTerminalController: TerminalControlling {
 
     // MARK: - Mouse
 
-    var mouseTrackingMode: TerminalModes.MouseTrackingMode { .none }
+    var mouseTrackingMode: TerminalModes.MouseTrackingMode {
+        TerminalModes.MouseTrackingMode(rawValue: screenReplica.mouseTrackingMode) ?? .none
+    }
+
+    /// Last reported cell for motion deduplication.
+    private var lastMouseCell: (col: Int, row: Int)?
 
     func handleMouseEvent(_ event: MouseEncoder.Event) {
-        // Mouse tracking for remote sessions would require server-side mode tracking.
-        // For now, not supported.
+        guard mouseTrackingMode != .none else { return }
+
+        // Motion deduplication: don't send same cell twice.
+        if event.action == .motion {
+            if let last = lastMouseCell, last.col == event.col, last.row == event.row {
+                return
+            }
+        }
+
+        // Update dedup state.
+        if event.action == .motion {
+            lastMouseCell = (event.col, event.row)
+        } else {
+            lastMouseCell = nil
+        }
+
+        remoteClient.sendMouseEvent(
+            sessionID: sessionID,
+            paneID: paneID,
+            event: event
+        )
     }
 
     // MARK: - Resize

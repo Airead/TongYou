@@ -44,6 +44,7 @@ public enum ClientMessageType: UInt16, Sendable {
     case resize          = 0x0211
     case scrollViewport  = 0x0212
     case extractSelection = 0x0213
+    case mouseEvent      = 0x0214
 
     // Tab/Pane operations
     case createTab       = 0x0220
@@ -72,7 +73,7 @@ public enum ServerMessage: Sendable {
     case sessionClosed(SessionID)
 
     // Screen updates (hot path)
-    case screenFull(SessionID, PaneID, ScreenSnapshot)
+    case screenFull(SessionID, PaneID, ScreenSnapshot, mouseTrackingMode: UInt8)
     case screenDiff(SessionID, PaneID, ScreenDiff)
 
     // Events
@@ -101,10 +102,10 @@ public enum ServerMessage: Sendable {
             return "sessionCreated(id=\(info.id))"
         case .sessionClosed(let id):
             return "sessionClosed(id=\(id))"
-        case .screenFull(let sid, let pid, let snap):
-            return "screenFull(session=\(sid), pane=\(pid), \(snap.columns)x\(snap.rows), cells=\(snap.cells.count))"
+        case .screenFull(let sid, let pid, let snap, let mtm):
+            return "screenFull(session=\(sid), pane=\(pid), \(snap.columns)x\(snap.rows), cells=\(snap.cells.count), mouse=\(mtm))"
         case .screenDiff(let sid, let pid, let diff):
-            return "screenDiff(session=\(sid), pane=\(pid), dirtyRows=\(diff.dirtyRows.count), cells=\(diff.cellData.count))"
+            return "screenDiff(session=\(sid), pane=\(pid), dirtyRows=\(diff.dirtyRows.count), cells=\(diff.cellData.count), mouse=\(diff.mouseTrackingMode))"
         case .titleChanged(let sid, let pid, let title):
             return "titleChanged(session=\(sid), pane=\(pid), title=\(truncate(title, maxLength: 80)))"
         case .bell(let sid, let pid):
@@ -154,6 +155,8 @@ public enum ClientMessage: Sendable {
     case scrollViewport(SessionID, PaneID, delta: Int32)
     /// Extract selected text from a pane (server replies with .clipboardSet).
     case extractSelection(SessionID, PaneID, Selection)
+    /// Mouse event forwarded to the server for encoding and PTY delivery.
+    case mouseEvent(SessionID, PaneID, MouseEncoder.Event)
 
     // Tab/Pane operations
     case createTab(SessionID)
@@ -196,6 +199,8 @@ public enum ClientMessage: Sendable {
         case .extractSelection(let sid, let pid, let sel):
             let (s, e) = sel.ordered
             return "extractSelection(session=\(sid), pane=\(pid), [\(s.line):\(s.col)..\(e.line):\(e.col)])"
+        case .mouseEvent(let sid, let pid, let event):
+            return "mouseEvent(session=\(sid), pane=\(pid), action=\(event.action), col=\(event.col), row=\(event.row))"
         case .createTab(let sid):
             return "createTab(session=\(sid))"
         case .closeTab(let sid, let tid):
@@ -234,6 +239,7 @@ public enum ClientMessage: Sendable {
         case .resize:         return .resize
         case .scrollViewport: return .scrollViewport
         case .extractSelection: return .extractSelection
+        case .mouseEvent:     return .mouseEvent
         case .createTab:      return .createTab
         case .closeTab:       return .closeTab
         case .splitPane:      return .splitPane
