@@ -41,7 +41,7 @@ final class MetalView: NSView {
     /// Last known unclamped drag row (for auto-scroll timer updates).
     private var dragLastUnclampedRow: Int = 0
     /// Last consumed content generation for display-link deduplication.
-    private var lastRenderedContentGeneration: UInt64 = 0
+    private var lastRenderedContentGeneration: UInt64 = .max
 
     /// The pane ID this MetalView belongs to (set by TerminalPaneContainerView).
     var paneID: UUID?
@@ -663,8 +663,10 @@ final class MetalView: NSView {
                     // Re-inserted after tab switch — force full redraw.
                     // setupIfNeeded already called updateDrawableSize above.
                     self.renderer?.markDirty()
-                    self.wakeDisplayLink()
                 }
+                // Always wake the display link — for newly created views,
+                // a screenFull snapshot may already be waiting in the replica.
+                self.wakeDisplayLink()
             } else {
                 self.stopDragAutoScrollTimer()
                 self.stopDisplayLink()
@@ -1027,7 +1029,7 @@ final class MetalView: NSView {
         }
         terminalController = controller
         renderer?.markDirty()
-        lastRenderedContentGeneration = 0
+        lastRenderedContentGeneration = .max
         wakeDisplayLink()
     }
 
