@@ -11,7 +11,7 @@ import TYTerminal
 /// exponentially to maxCoalesceDelay, then resets when the screen goes idle.
 public final class SocketServer: @unchecked Sendable {
 
-    private let config: ServerConfig
+    private var config: ServerConfig
     private let sessionManager: ServerSessionManager
     private var listenSocket: TYSocket?
     private var clients: [UUID: ClientConnection] = [:]
@@ -95,6 +95,26 @@ public final class SocketServer: @unchecked Sendable {
         }
         lastSentState.removeAll()
         Log.info("Server stopped")
+    }
+
+    /// Apply updated configuration at runtime.
+    /// Coalesce delays and pending limits take effect immediately.
+    /// Stats timer is restarted if the interval changed.
+    /// Scrollback limit only applies to newly created sessions.
+    public func updateConfig(_ newConfig: ServerConfig) {
+        messageQueue.async { [weak self] in
+            guard let self else { return }
+            let oldInterval = self.config.statsInterval
+            self.config = newConfig
+            self.sessionManager.updateConfig(newConfig)
+
+            // Restart stats timer if interval changed
+            if oldInterval != newConfig.statsInterval {
+                self.statsTimer?.cancel()
+                self.statsTimer = nil
+                self.startStatsTimer()
+            }
+        }
     }
 
     public var clientCount: Int {

@@ -93,6 +93,30 @@ draft-enabled = true
 # Automatically connect to tongyou daemon on launch.
 auto-connect-daemon = false
 
+# ── Daemon Server ────────────────────────────────────────────────
+# Settings below configure the tongyou daemon process.
+# Changes are picked up via hot reload (no restart needed),
+# except daemon-scrollback-limit which only applies to new sessions.
+
+# Maximum number of scrollback lines per pane.
+# Higher values consume more memory (~48 bytes × columns × lines).
+daemon-scrollback-limit = 10000
+
+# Screen update coalescing delays (seconds).
+# Min delay: initial wait after screen becomes dirty (near-instant typing).
+# Max delay: cap during sustained output (e.g. cat large file).
+daemon-min-coalesce-delay = 0.001
+daemon-max-coalesce-delay = 0.200
+
+# Maximum pending screen update messages per client before dropping.
+daemon-max-pending-screen-updates = 3
+
+# Interval in seconds between stats logging (0 = disabled).
+daemon-stats-interval = 30
+
+# Exit daemon when the last session closes.
+daemon-auto-exit-on-no-sessions = false
+
 # ── Keybindings ──────────────────────────────────────────────────
 # Format: keybind = modifiers+key=action
 # Modifiers: cmd, shift, ctrl, alt, opt, option, control, super

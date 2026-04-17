@@ -1,7 +1,7 @@
 import Foundation
 
 /// Configuration for the tongyou server daemon.
-public struct ServerConfig: Sendable {
+public struct ServerConfig: Sendable, Equatable {
     public var socketPath: String
     public var autoExitOnNoSessions: Bool
     public var defaultColumns: UInt16
@@ -35,17 +35,26 @@ public struct ServerConfig: Sendable {
     /// If nil, sessions are not persisted to disk.
     public var persistenceDirectory: String?
 
+    // MARK: - Default Values
+
+    public static let defaultAutoExitOnNoSessions: Bool = false
+    public static let defaultMaxScrollback: Int = 10000
+    public static let defaultMinCoalesceDelay: TimeInterval = 0.001
+    public static let defaultMaxCoalesceDelay: TimeInterval = 0.200
+    public static let defaultMaxPendingScreenUpdates: Int = 3
+    public static let defaultStatsInterval: TimeInterval = 30.0
+
     public init(
         socketPath: String? = nil,
-        autoExitOnNoSessions: Bool = false,
+        autoExitOnNoSessions: Bool = defaultAutoExitOnNoSessions,
         defaultColumns: UInt16 = 80,
         defaultRows: UInt16 = 24,
-        maxScrollback: Int = 10000,
-        minCoalesceDelay: TimeInterval = 0.001,
-        maxCoalesceDelay: TimeInterval = 0.200,
+        maxScrollback: Int = defaultMaxScrollback,
+        minCoalesceDelay: TimeInterval = defaultMinCoalesceDelay,
+        maxCoalesceDelay: TimeInterval = defaultMaxCoalesceDelay,
         defaultWorkingDirectory: String? = nil,
-        maxPendingScreenUpdates: Int = 3,
-        statsInterval: TimeInterval = 30.0,
+        maxPendingScreenUpdates: Int = defaultMaxPendingScreenUpdates,
+        statsInterval: TimeInterval = defaultStatsInterval,
         persistenceDirectory: String? = nil
     ) {
         self.socketPath = socketPath ?? Self.defaultSocketPath()

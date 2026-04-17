@@ -75,7 +75,7 @@ struct ServerSession {
 public final class ServerSessionManager {
 
     private var sessions: [SessionID: ServerSession] = [:]
-    private let config: ServerConfig
+    private var config: ServerConfig
     private let sessionStore: SessionStore?
 
     /// Flat lookup from PaneID to its TerminalCore for O(1) access on the hot path.
@@ -119,6 +119,12 @@ public final class ServerSessionManager {
             defaultRows: defaultRows,
             defaultWorkingDirectory: defaultWorkingDirectory
         ))
+    }
+
+    /// Update configuration for future sessions.
+    /// Existing sessions retain their original settings.
+    public func updateConfig(_ newConfig: ServerConfig) {
+        config = newConfig
     }
 
     // MARK: - Session Operations

@@ -200,10 +200,20 @@ func runServer(daemonize: Bool, debug: Bool) {
         _ = DaemonLifecycle.daemonize()
     }
 
-    let config = ServerConfig(persistenceDirectory: ServerConfig.defaultPersistenceDirectory())
+    let baseConfig = ServerConfig(persistenceDirectory: ServerConfig.defaultPersistenceDirectory())
+    let configLoader = DaemonConfigLoader(baseConfig: baseConfig)
+    configLoader.load()
+
+    let config = configLoader.config
+    Log.info("Config loaded: scrollback=\(config.maxScrollback), coalesce=\(config.minCoalesceDelay)...\(config.maxCoalesceDelay)s")
+
     let lifecycle = DaemonLifecycle()
     let sessionManager = ServerSessionManager(config: config)
     let server = SocketServer(config: config, sessionManager: sessionManager)
+
+    configLoader.onConfigChanged = { [weak server] newConfig in
+        server?.updateConfig(newConfig)
+    }
 
     do {
         try lifecycle.writePIDFile()
