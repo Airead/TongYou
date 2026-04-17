@@ -378,6 +378,28 @@ struct KeybindingTests {
         #expect(Keybinding.match(event: event, in: [binding]) == .previousTab)
     }
 
+    @Test func parseNamedKeyEqual() throws {
+        let kb = try Keybinding.parse("cmd+equal=increase_font_size")
+        #expect(kb.modifiers == .command)
+        #expect(kb.key == "=")
+        #expect(kb.action == .increaseFontSize)
+    }
+
+    @Test func parseNamedKeyPlus() throws {
+        let kb = try Keybinding.parse("cmd+plus=increase_font_size")
+        #expect(kb.modifiers == .command)
+        #expect(kb.key == "+")
+        #expect(kb.action == .increaseFontSize)
+    }
+
+    @Test func parseEqualKeyViaLastEquals() throws {
+        // cmd+==increase_font_size: lastIndex splits on the second '='
+        let kb = try Keybinding.parse("cmd+==increase_font_size")
+        #expect(kb.modifiers == .command)
+        #expect(kb.key == "=")
+        #expect(kb.action == .increaseFontSize)
+    }
+
     @Test func invalidAction() {
         #expect(throws: ConfigError.self) {
             try Keybinding.parse("cmd+t=nonexistent_action")

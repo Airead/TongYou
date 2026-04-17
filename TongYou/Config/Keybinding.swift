@@ -271,7 +271,7 @@ struct Keybinding: Equatable {
 
     /// Parse a keybinding string like "cmd+shift+t=new_tab".
     static func parse(_ string: String) throws -> Keybinding {
-        guard let eqIndex = string.firstIndex(of: "=") else {
+        guard let eqIndex = string.lastIndex(of: "=") else {
             throw ConfigError.invalidValue(key: "keybind", value: string)
         }
 
@@ -308,9 +308,12 @@ struct Keybinding: Equatable {
             }
         }
 
-        guard let key = keyPart else {
+        guard let raw = keyPart, !raw.isEmpty else {
             throw ConfigError.invalidValue(key: "keybind", value: string)
         }
+
+        // Resolve named keys to their character equivalents.
+        let key = Self.namedKeys[raw] ?? raw
 
         return Keybinding(modifiers: modifiers, key: key, action: action)
     }
@@ -339,6 +342,16 @@ struct Keybinding: Equatable {
         }
         return nil
     }
+
+    /// Maps named key aliases to their character equivalents.
+    /// This allows configs to use readable names for keys that conflict with
+    /// the config syntax (e.g. `+` is the modifier separator, `=` is the
+    /// action separator).
+    private static let namedKeys: [String: String] = [
+        "plus": "+", "equal": "=", "minus": "-",
+        "space": " ", "backslash": "\\", "slash": "/",
+        "comma": ",", "period": ".", "semicolon": ";",
+    ]
 
     /// Maps common shifted ASCII symbols back to their base key characters.
     /// This allows bindings like `cmd+shift+[` to match even though

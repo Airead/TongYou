@@ -149,7 +149,7 @@ keybind = cmd+shift+g=search_previous
 
 # Font size
 keybind = cmd+0=reset_font_size
-keybind = cmd++=increase_font_size
+keybind = cmd+equal=increase_font_size
 keybind = cmd+-=decrease_font_size
 
 # Pane management
