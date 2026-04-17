@@ -501,7 +501,6 @@ final class TerminalController: TerminalControlling {
     /// Called from TerminalCore's onScreenDirty callback (fires on ptyQueue).
     /// Coalesces rapid dirty marks into a single display-link wakeup.
     private func handleScreenDirty() {
-        let wasDirty = screenDirty
         screenDirty = true
         guard !isSuspended else { return }
 

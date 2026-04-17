@@ -155,7 +155,7 @@ final class ColorEmojiAtlas {
 
         // Create a temporary context for CTRunGetImageBounds
         let tempColorSpace = CGColorSpaceCreateDeviceRGB()
-        var tempContext: CGContext? = CGContext(
+        let tempContext: CGContext? = CGContext(
             data: nil, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
             space: tempColorSpace,
             bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue

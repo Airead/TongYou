@@ -1,4 +1,4 @@
-.PHONY: build build-release test clean run install install-cli icon dmg-resources build-dmg swift-build
+.PHONY: build build-release test clean run install install-cli icon dmg-resources build-dmg swift-build core-build core-test
 
 SCHEME = TongYou
 DESTINATION = platform=macOS
@@ -37,10 +37,16 @@ swift-build:
 swift-test:
 	swift test --build-path $(BUILD_DIR)/spn
 
+core-build:
+	cd $(PKG_DIR) && swift build
+
+core-test:
+	cd $(PKG_DIR) && swift test
+
 clean:
 	xcodebuild clean -scheme $(SCHEME) -destination '$(DESTINATION)'
 	@echo "Cleaning SPM build artifacts..."
-	rm -rf .build build/spn
+	rm -rf .build build/spn $(PKG_DIR)/.build
 	rm -f *.d *.dia *.swiftdeps *.swiftmodule
 	@echo "Clean complete."
 
