@@ -1061,7 +1061,7 @@ final class MetalRenderer {
                         attrs: run.cells[glyph.cellIndex].attributes,
                         row: row, col: glyphCol, absLine: absLine
                     ),
-                    offset: SIMD2<Int16>(Int16(glyph.position.x - CGFloat(glyph.cellIndex) * CGFloat(cellWidth)), 0)
+                    offset: SIMD2<Int16>(0, 0)
                 ))
             }
         }
