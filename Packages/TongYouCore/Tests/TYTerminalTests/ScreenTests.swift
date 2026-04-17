@@ -73,7 +73,7 @@ struct ScreenTests {
         let screen = Screen(columns: 10, rows: 2, maxScrollback: 100)
         // Fill up: writing enough lines to push into scrollback.
         // Each newline when cursor is at bottom pushes top row into scrollback.
-        for i in 0..<100 {
+        for i in 0..<101 {
             let ch = Character(UnicodeScalar(UInt32(0x41 + (i % 26)))!)
             screen.write(GraphemeCluster(ch), attributes: .default)
             screen.newline()
@@ -88,7 +88,7 @@ struct ScreenTests {
         // (1024 → 2048 → 3000).
         let cols = 10
         let screen = Screen(columns: cols, rows: 2, maxScrollback: 3000)
-        for i in 0..<3000 {
+        for i in 0..<3001 {
             let ch = Character(UnicodeScalar(UInt32(0x41 + (i % 26)))!)
             screen.write(GraphemeCluster(ch), attributes: .default)
             screen.newline()
@@ -106,7 +106,7 @@ struct ScreenTests {
         // Small maxScrollback to test ring overwrite after segmented growth completes.
         let screen = Screen(columns: 5, rows: 2, maxScrollback: 10)
         // Write 15 lines — first 5 should be evicted by ring overwrite.
-        for i in 0..<15 {
+        for i in 0..<16 {
             let ch = Character(UnicodeScalar(UInt32(0x41 + i))!)
             screen.write(GraphemeCluster(ch), attributes: .default)
             screen.newline()
@@ -122,7 +122,7 @@ struct ScreenTests {
         // Verify that data written before a growth event is still accessible after growth.
         let screen = Screen(columns: 5, rows: 2, maxScrollback: 2000)
         // Write exactly 1024 lines (fills initial segment), then 1 more to trigger growth.
-        for i in 0..<1025 {
+        for i in 0..<1026 {
             let ch = Character(UnicodeScalar(UInt32(0x41 + (i % 26)))!)
             screen.write(GraphemeCluster(ch), attributes: .default)
             screen.newline()
