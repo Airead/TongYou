@@ -35,6 +35,9 @@ final class TerminalController: TerminalControlling {
     /// Active text selection (MainActor-only).
     private(set) var selection: Selection?
 
+    /// Cached last successful core snapshot for selection-only updates.
+    private var lastCoreSnapshot: ScreenSnapshot?
+
     /// Detected URLs in the current visible area (populated on demand when Cmd key is held).
     private(set) var detectedURLs: [DetectedURL] = []
     /// Track whether content changed to refresh URL detection while Cmd is held.
@@ -189,16 +192,21 @@ final class TerminalController: TerminalControlling {
         guard screenDirty else { return nil }
         screenDirty = false
         let sel = selection
-        guard let snapshot = core.consumeSnapshot(selection: sel, allowPartial: true) else {
-            return nil
+        if let snapshot = core.consumeSnapshot(selection: sel, allowPartial: true) {
+            lastCoreSnapshot = snapshot
+            _contentGeneration &+= 1
+            // Refresh URL detection only while Command key is held and content changed.
+            if commandKeyHeld, _contentGeneration != lastURLGeneration {
+                detectedURLs = URLDetector.detect(in: snapshot)
+                lastURLGeneration = _contentGeneration
+            }
+            return snapshot
         }
-
+        // Core screen content unchanged, but controller state (e.g. selection) changed.
+        // Reuse the last snapshot with updated selection to avoid ptyQueue contention.
+        guard var snapshot = lastCoreSnapshot else { return nil }
+        snapshot.selection = sel
         _contentGeneration &+= 1
-        // Refresh URL detection only while Command key is held and content changed.
-        if commandKeyHeld, _contentGeneration != lastURLGeneration {
-            detectedURLs = URLDetector.detect(in: snapshot)
-            lastURLGeneration = _contentGeneration
-        }
         return snapshot
     }
 

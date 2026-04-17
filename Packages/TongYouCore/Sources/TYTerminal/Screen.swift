@@ -172,7 +172,7 @@ public struct ScreenSnapshot: Sendable {
     public let cursorVisible: Bool
     public let cursorShape: CursorShape
     /// Active selection (absolute line coordinates).
-    public let selection: Selection?
+    public var selection: Selection?
     /// Number of scrollback lines, used to convert selection absolute coords
     /// to viewport-relative row for rendering.
     public let scrollbackCount: Int
