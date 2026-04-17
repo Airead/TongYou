@@ -207,6 +207,18 @@ struct ConfigTests {
         #expect(config.debugMetrics == true)
     }
 
+    @Test func debugLog() {
+        let config = Config.from(entries: [
+            .init(key: "debug-log", value: "true"),
+        ])
+        #expect(config.debugLog == true)
+    }
+
+    @Test func debugLogDefault() {
+        let config = Config.default
+        #expect(config.debugLog == false)
+    }
+
     @Test func draftEnabledDefault() {
         let config = Config.default
         #expect(config.draftEnabled == true)

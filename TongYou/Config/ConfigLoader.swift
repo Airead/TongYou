@@ -41,6 +41,11 @@ final class ConfigLoader {
         let (newConfig, paths) = loadFromDisk()
         config = newConfig
         setupWatchers(for: paths)
+
+        // Apply initial GUILog state from config
+        if newConfig.debugLog {
+            GUILog.enable()
+        }
     }
 
     deinit {
@@ -211,6 +216,15 @@ final class ConfigLoader {
         // Re-setup watchers in case new files appeared
         setupWatchers(for: paths)
 
+        // Toggle GUILog on config hot-reload
+        if oldConfig.debugLog != newConfig.debugLog {
+            if newConfig.debugLog {
+                GUILog.enable()
+            } else {
+                GUILog.disable()
+            }
+        }
+
         onConfigChanged?(newConfig)
 
         logConfigDiff(old: oldConfig, new: newConfig)
@@ -231,6 +245,7 @@ final class ConfigLoader {
         if old.draftEnabled != new.draftEnabled { changes.append("draft-enabled") }
         if old.autoConnectDaemon != new.autoConnectDaemon { changes.append("auto-connect-daemon") }
         if old.debugMetrics != new.debugMetrics { changes.append("debug-metrics") }
+        if old.debugLog != new.debugLog { changes.append("debug-log") }
         if !changes.isEmpty {
             print("[config] reloaded: \(changes.joined(separator: ", ")) changed")
         }

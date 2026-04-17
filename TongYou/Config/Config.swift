@@ -62,6 +62,7 @@ struct Config: Equatable {
     // MARK: - Debug
 
     var debugMetrics: Bool = false
+    var debugLog: Bool = false
 
     // MARK: - Static
 
@@ -259,6 +260,8 @@ extension Config {
         // Debug
         case "debug-metrics":
             debugMetrics = value.isEmpty ? false : try parseBool(value, key: key)
+        case "debug-log":
+            debugLog = value.isEmpty ? false : try parseBool(value, key: key)
 
         default:
             // Unknown keys are silently ignored for forward compatibility
