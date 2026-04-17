@@ -106,6 +106,7 @@ auto-connect-daemon = false
 #   reset_font_size, increase_font_size, decrease_font_size,
 #   split_vertical, split_horizontal, close_pane,
 #   focus_pane_left, focus_pane_right, focus_pane_up, focus_pane_down,
+#   grow_pane, shrink_pane,
 #   new_floating_pane, toggle_or_create_floating_pane,
 #   list_remote_sessions, new_remote_session, show_session_picker,
 #   detach_session, rename_session,
@@ -160,6 +161,10 @@ keybind = cmd+alt+left=focus_pane_left
 keybind = cmd+alt+right=focus_pane_right
 keybind = cmd+alt+up=focus_pane_up
 keybind = cmd+alt+down=focus_pane_down
+
+# Pane resize
+keybind = alt+equal=grow_pane
+keybind = alt+-=shrink_pane
 
 # Floating pane management
 keybind = alt+f=toggle_or_create_floating_pane

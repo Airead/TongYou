@@ -22,6 +22,8 @@ enum TabAction {
     case closePane
     case focusPane(FocusDirection)
     case paneExited(UUID)
+    case growPane
+    case shrinkPane
     // Floating pane management
     case newFloatingPane
     case closeFloatingPane(UUID)
@@ -333,7 +335,7 @@ final class TabManager {
             // Session actions are handled by SessionManager / TerminalWindowView.
             return false
         case .splitVertical, .splitHorizontal, .closePane,
-             .focusPane, .paneExited,
+             .focusPane, .paneExited, .growPane, .shrinkPane,
              .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane,
              .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession,
              .renameSession, .runInPlace, .runCommand,

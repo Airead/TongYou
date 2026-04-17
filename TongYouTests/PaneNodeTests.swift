@@ -250,6 +250,129 @@ struct PaneNodeTests {
         }
     }
 
+    // MARK: - Resize
+
+    @Test func resizeFirstChild() {
+        let pane1 = TerminalPane()
+        let pane2 = TerminalPane()
+        let node = PaneNode.split(
+            direction: .vertical,
+            ratio: 0.5,
+            first: .leaf(pane1),
+            second: .leaf(pane2)
+        )
+
+        // Grow first child: ratio increases.
+        let result = node.resizePane(id: pane1.id, delta: 0.1)
+        #expect(result != nil)
+        if case .split(_, let ratio, _, _) = result! {
+            #expect(abs(ratio - 0.6) < 0.001)
+        } else {
+            Issue.record("Expected split node")
+        }
+    }
+
+    @Test func resizeSecondChild() {
+        let pane1 = TerminalPane()
+        let pane2 = TerminalPane()
+        let node = PaneNode.split(
+            direction: .vertical,
+            ratio: 0.5,
+            first: .leaf(pane1),
+            second: .leaf(pane2)
+        )
+
+        // Grow second child: ratio decreases.
+        let result = node.resizePane(id: pane2.id, delta: 0.1)
+        #expect(result != nil)
+        if case .split(_, let ratio, _, _) = result! {
+            #expect(abs(ratio - 0.4) < 0.001)
+        } else {
+            Issue.record("Expected split node")
+        }
+    }
+
+    @Test func resizeClampsToMin() {
+        let pane1 = TerminalPane()
+        let pane2 = TerminalPane()
+        let node = PaneNode.split(
+            direction: .vertical,
+            ratio: 0.15,
+            first: .leaf(pane1),
+            second: .leaf(pane2)
+        )
+
+        // Shrink first child below minimum: clamped to 0.1.
+        let result = node.resizePane(id: pane1.id, delta: -0.1)
+        #expect(result != nil)
+        if case .split(_, let ratio, _, _) = result! {
+            #expect(abs(ratio - 0.1) < 0.001)
+        } else {
+            Issue.record("Expected split node")
+        }
+    }
+
+    @Test func resizeClampsToMax() {
+        let pane1 = TerminalPane()
+        let pane2 = TerminalPane()
+        let node = PaneNode.split(
+            direction: .vertical,
+            ratio: 0.85,
+            first: .leaf(pane1),
+            second: .leaf(pane2)
+        )
+
+        // Grow first child beyond maximum: clamped to 0.9.
+        let result = node.resizePane(id: pane1.id, delta: 0.1)
+        #expect(result != nil)
+        if case .split(_, let ratio, _, _) = result! {
+            #expect(abs(ratio - 0.9) < 0.001)
+        } else {
+            Issue.record("Expected split node")
+        }
+    }
+
+    @Test func resizeNestedPane() {
+        let pane1 = TerminalPane()
+        let pane2 = TerminalPane()
+        let pane3 = TerminalPane()
+
+        let inner = PaneNode.split(direction: .horizontal, ratio: 0.5, first: .leaf(pane2), second: .leaf(pane3))
+        let node = PaneNode.split(direction: .vertical, ratio: 0.5, first: .leaf(pane1), second: inner)
+
+        // Resize pane2 (inner first child).
+        let result = node.resizePane(id: pane2.id, delta: 0.1)
+        #expect(result != nil)
+        if case .split(_, let outerRatio, _, let secondChild) = result! {
+            #expect(abs(outerRatio - 0.5) < 0.001)  // Outer unchanged.
+            if case .split(_, let innerRatio, _, _) = secondChild {
+                #expect(abs(innerRatio - 0.6) < 0.001)  // Inner grew.
+            } else {
+                Issue.record("Expected inner split node")
+            }
+        } else {
+            Issue.record("Expected outer split node")
+        }
+    }
+
+    @Test func resizeLeafReturnsNil() {
+        let pane = TerminalPane()
+        let node = PaneNode.leaf(pane)
+        #expect(node.resizePane(id: pane.id, delta: 0.1) == nil)
+    }
+
+    @Test func resizeNonExistentReturnsNil() {
+        let pane1 = TerminalPane()
+        let pane2 = TerminalPane()
+        let node = PaneNode.split(
+            direction: .vertical,
+            ratio: 0.5,
+            first: .leaf(pane1),
+            second: .leaf(pane2)
+        )
+        #expect(node.resizePane(id: UUID(), delta: 0.1) == nil)
+    }
+
     // MARK: - Replace
 
     @Test func replacingPane() {

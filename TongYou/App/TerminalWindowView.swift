@@ -444,6 +444,30 @@ struct TerminalWindowView: View {
         removePane(id: focusedID)
     }
 
+    /// Resize the focused pane. Works for both tree panes (adjusts split ratio)
+    /// and floating panes (scales frame around center).
+    private func resizePane(delta: CGFloat) {
+        guard let focusedID = focusManager.focusedPaneID,
+              let activeTab = sessionManager.activeTab else { return }
+
+        // Floating pane: scale width/height around center.
+        if let floating = activeTab.floatingPanes.first(where: { $0.pane.id == focusedID }) {
+            let scaleDelta: CGFloat = delta * 0.5  // 0.1 → ±0.05 per axis
+            var frame = floating.frame
+            frame.origin.x -= scaleDelta
+            frame.origin.y -= scaleDelta
+            frame.size.width += scaleDelta * 2
+            frame.size.height += scaleDelta * 2
+            sessionManager.updateFloatingPaneFrame(paneID: focusedID, frame: frame)
+            return
+        }
+
+        // Tree pane: adjust parent split ratio.
+        if let newTree = activeTab.paneTree.resizePane(id: focusedID, delta: delta) {
+            sessionManager.updateActivePaneTree(newTree)
+        }
+    }
+
     /// Tear down a pane and focus the nearest sibling or close the tab/window.
     private func removePane(id paneID: UUID) {
         // Check if this is a floating pane first.
@@ -564,6 +588,10 @@ struct TerminalWindowView: View {
             moveFocus(direction)
         case .paneExited(let paneID):
             removePane(id: paneID)
+        case .growPane:
+            resizePane(delta: 0.1)
+        case .shrinkPane:
+            resizePane(delta: -0.1)
         // Floating pane actions
         case .newFloatingPane:
             createFloatingPane()

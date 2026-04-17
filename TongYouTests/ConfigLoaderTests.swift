@@ -392,6 +392,20 @@ struct KeybindingTests {
         #expect(kb.action == .increaseFontSize)
     }
 
+    @Test func parseGrowPane() throws {
+        let kb = try Keybinding.parse("alt+equal=grow_pane")
+        #expect(kb.modifiers == .option)
+        #expect(kb.key == "=")
+        #expect(kb.action == .growPane)
+    }
+
+    @Test func parseShrinkPane() throws {
+        let kb = try Keybinding.parse("alt+-=shrink_pane")
+        #expect(kb.modifiers == .option)
+        #expect(kb.key == "-")
+        #expect(kb.action == .shrinkPane)
+    }
+
     @Test func parseEqualKeyViaLastEquals() throws {
         // cmd+==increase_font_size: lastIndex splits on the second '='
         let kb = try Keybinding.parse("cmd+==increase_font_size")

@@ -39,6 +39,9 @@ struct Keybinding: Equatable {
         case splitHorizontal
         case closePane
         case focusPane(FocusDirection)
+        // Pane resize
+        case growPane
+        case shrinkPane
         // Floating pane management
         case newFloatingPane
         case toggleOrCreateFloatingPane
@@ -84,6 +87,8 @@ struct Keybinding: Equatable {
                 case .up: "focus_pane_up"
                 case .down: "focus_pane_down"
                 }
+            case .growPane: "grow_pane"
+            case .shrinkPane: "shrink_pane"
             case .newFloatingPane: "new_floating_pane"
             case .toggleOrCreateFloatingPane: "toggle_or_create_floating_pane"
             case .listRemoteSessions: "list_remote_sessions"
@@ -140,6 +145,8 @@ struct Keybinding: Equatable {
             case .splitHorizontal: .splitHorizontal
             case .closePane: .closePane
             case .focusPane(let dir): .focusPane(dir)
+            case .growPane: .growPane
+            case .shrinkPane: .shrinkPane
             case .newFloatingPane: .newFloatingPane
             case .toggleOrCreateFloatingPane: .toggleOrCreateFloatingPane
             case .listRemoteSessions: .listRemoteSessions
@@ -183,6 +190,8 @@ struct Keybinding: Equatable {
             case "focus_pane_right": self = .focusPane(.right)
             case "focus_pane_up": self = .focusPane(.up)
             case "focus_pane_down": self = .focusPane(.down)
+            case "grow_pane": self = .growPane
+            case "shrink_pane": self = .shrinkPane
             case "new_floating_pane": self = .newFloatingPane
             case "toggle_or_create_floating_pane": self = .toggleOrCreateFloatingPane
             case "list_remote_sessions": self = .listRemoteSessions
@@ -256,6 +265,9 @@ struct Keybinding: Equatable {
         Keybinding(modifiers: [.command, .option], key: "right", action: .focusPane(.right)),
         Keybinding(modifiers: [.command, .option], key: "up", action: .focusPane(.up)),
         Keybinding(modifiers: [.command, .option], key: "down", action: .focusPane(.down)),
+        // Pane resize
+        Keybinding(modifiers: .option, key: "=", action: .growPane),
+        Keybinding(modifiers: .option, key: "-", action: .shrinkPane),
         // Floating pane management
         Keybinding(modifiers: .option, key: "f", action: .toggleOrCreateFloatingPane),
         Keybinding(modifiers: .option, key: "n", action: .newFloatingPane),

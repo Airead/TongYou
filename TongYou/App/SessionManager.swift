@@ -800,9 +800,11 @@ final class SessionManager {
                 x: Float(frame.origin.x), y: Float(frame.origin.y),
                 width: Float(frame.width), height: Float(frame.height)
             )
-            return
         }
 
+        // Always update locally for immediate visual feedback.
+        // For remote sessions the server's layoutUpdate will later reconcile
+        // the authoritative state.
         guard let idx = activeFloatingPaneIndex(for: paneID) else { return }
         activeFloatingPanes[idx].frame = frame
         activeFloatingPanes[idx].clampFrame()
@@ -899,7 +901,7 @@ final class SessionManager {
             // Session-level actions are handled by TerminalWindowView.
             return false
         case .splitVertical, .splitHorizontal, .closePane,
-             .focusPane, .paneExited,
+             .focusPane, .paneExited, .growPane, .shrinkPane,
              .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane,
              .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession,
              .renameSession, .runInPlace(_, _), .runCommand(_, _),
@@ -996,7 +998,7 @@ final class SessionManager {
     /// Ensure connection to the tongyou server, auto-starting if needed.
     /// Performs blocking connect off main thread, then wires the client on main thread.
     /// Calls `completion` on the main thread after the client is wired.
-    func ensureConnected(completion: @escaping @Sendable () -> Void = {}) {
+    func ensureConnected(completion: @escaping () -> Void = {}) {
         if isConnectedToTYD {
             completion()
             return
@@ -1005,35 +1007,33 @@ final class SessionManager {
         connectionStatus = .connecting
         let manager = connectionManager ?? TYDConnectionManager(autoStart: true)
         connectionManager = manager
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        Task {
             do {
-                let conn = try manager.connect()
-                DispatchQueue.main.async {
-                    self?.connectionStatus = .idle
-                    self?.attachToTYD(connectionManager: manager, connection: conn)
-                    completion()
-                }
+                let conn = try await Task { @concurrent in
+                    try manager.connect()
+                }.value
+                self.connectionStatus = .idle
+                self.attachToTYD(connectionManager: manager, connection: conn)
+                completion()
             } catch {
-                DispatchQueue.main.async {
-                    self?.connectionStatus = .failed("\(error)")
-                    print("[TongYou] Failed to connect to server: \(error)")
-                }
+                self.connectionStatus = .failed("\(error)")
+                print("[TongYou] Failed to connect to server: \(error)")
             }
         }
     }
 
     /// List remote sessions: connect if needed, then request session list.
     func listRemoteSessions() {
-        ensureConnected { [weak self] in
-            self?.remoteClient?.requestSessionList()
+        ensureConnected {
+            self.remoteClient?.requestSessionList()
         }
     }
 
     /// Create a new remote session: connect if needed, then request creation.
     func createRemoteSession(name: String? = nil) {
         let sessionName = name ?? nextAvailableName(prefix: "RSession")
-        ensureConnected { [weak self] in
-            self?.remoteClient?.createSession(name: sessionName)
+        ensureConnected {
+            self.remoteClient?.createSession(name: sessionName)
         }
     }
 

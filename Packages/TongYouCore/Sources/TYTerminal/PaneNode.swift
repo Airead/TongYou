@@ -166,6 +166,36 @@ public indirect enum PaneNode: Equatable, Sendable {
         }
     }
 
+    /// Resize the pane by adjusting its direct parent split ratio.
+    /// A positive delta grows the pane; a negative delta shrinks it.
+    /// The ratio is clamped to [0.1, 0.9]. Returns nil if the pane is not
+    /// inside a split (i.e. it's the only pane).
+    public func resizePane(id paneID: UUID, delta: CGFloat) -> PaneNode? {
+        switch self {
+        case .leaf:
+            return nil
+        case .split(let dir, let ratio, let first, let second):
+            // Check if target pane is a direct leaf child.
+            if case .leaf(let p) = first, p.id == paneID {
+                let newRatio = min(max(ratio + delta, 0.1), 0.9)
+                return .split(direction: dir, ratio: newRatio, first: first, second: second)
+            }
+            if case .leaf(let p) = second, p.id == paneID {
+                // Second child grows when ratio decreases.
+                let newRatio = min(max(ratio - delta, 0.1), 0.9)
+                return .split(direction: dir, ratio: newRatio, first: first, second: second)
+            }
+            // Recurse into children.
+            if let newFirst = first.resizePane(id: paneID, delta: delta) {
+                return .split(direction: dir, ratio: ratio, first: newFirst, second: second)
+            }
+            if let newSecond = second.resizePane(id: paneID, delta: delta) {
+                return .split(direction: dir, ratio: ratio, first: first, second: newSecond)
+            }
+            return nil
+        }
+    }
+
     /// Replace a specific pane with a new subtree.
     public func replacingPane(id: UUID, with newNode: PaneNode) -> PaneNode {
         switch self {
