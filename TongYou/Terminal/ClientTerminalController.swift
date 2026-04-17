@@ -127,6 +127,7 @@ final class ClientTerminalController: TerminalControlling {
         }
 
         selection = sel
+        _contentGeneration &+= 1
         screenReplica.markDirty()
         onNeedsDisplay?()
     }
@@ -142,6 +143,7 @@ final class ClientTerminalController: TerminalControlling {
         }
 
         selection = sel
+        _contentGeneration &+= 1
         screenReplica.markDirty()
         onNeedsDisplay?()
     }
