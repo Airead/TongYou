@@ -33,10 +33,48 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         GUIAutomationService.shared.start()
+        installFocusTraceObservers()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         GUIAutomationService.shared.stop()
+    }
+
+    /// Phase 7 debug: log every app/window activation with a short stack.
+    /// Helps find the real source when a non-whitelisted automation command
+    /// appears to steal focus.
+    private func installFocusTraceObservers() {
+        let nc = NotificationCenter.default
+        nc.addObserver(forName: NSApplication.didBecomeActiveNotification,
+                       object: nil, queue: .main) { _ in
+            GUILog.debug(
+                "NSApplication.didBecomeActive fired; stack=\n\(Thread.callStackSymbols.prefix(18).joined(separator: "\n"))",
+                category: .session
+            )
+        }
+        nc.addObserver(forName: NSApplication.didResignActiveNotification,
+                       object: nil, queue: .main) { _ in
+            GUILog.debug("NSApplication.didResignActive fired", category: .session)
+        }
+        // NSWindow notifications: we log an ObjectIdentifier rather than the
+        // window's title to avoid crossing `note` into a MainActor context
+        // (Notification is not Sendable under Swift 6 strict concurrency).
+        nc.addObserver(forName: NSWindow.didBecomeKeyNotification,
+                       object: nil, queue: .main) { note in
+            let windowID = (note.object as AnyObject?).map { ObjectIdentifier($0) }
+            GUILog.debug(
+                "NSWindow.didBecomeKey window=\(windowID.map { String(describing: $0) } ?? "<nil>"); stack=\n\(Thread.callStackSymbols.prefix(18).joined(separator: "\n"))",
+                category: .session
+            )
+        }
+        nc.addObserver(forName: NSWindow.didResignKeyNotification,
+                       object: nil, queue: .main) { note in
+            let windowID = (note.object as AnyObject?).map { ObjectIdentifier($0) }
+            GUILog.debug(
+                "NSWindow.didResignKey window=\(windowID.map { String(describing: $0) } ?? "<nil>")",
+                category: .session
+            )
+        }
     }
 }
 

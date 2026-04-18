@@ -32,9 +32,9 @@ final class GUIAutomationService {
                 let service = self
                 return Self.runOnMain { service?.buildSessionList() ?? SessionListResponse(sessions: []) }
             },
-            handleSessionCreate: { [weak self] name, type in
+            handleSessionCreate: { [weak self] name, type, focus in
                 let service = self
-                return service?.handleSessionCreate(name: name, type: type)
+                return service?.handleSessionCreate(name: name, type: type, focus: focus)
                     ?? .failure(.internal("GUIAutomationService deallocated"))
             },
             handleSessionClose: { [weak self] ref in
@@ -42,9 +42,9 @@ final class GUIAutomationService {
                 return service?.handleSessionClose(ref: ref)
                     ?? .failure(.internal("GUIAutomationService deallocated"))
             },
-            handleSessionAttach: { [weak self] ref in
+            handleSessionAttach: { [weak self] ref, focus in
                 let service = self
-                return service?.handleSessionAttach(ref: ref)
+                return service?.handleSessionAttach(ref: ref, focus: focus)
                     ?? .failure(.internal("GUIAutomationService deallocated"))
             },
             handleSessionDetach: { [weak self] ref in
@@ -62,9 +62,9 @@ final class GUIAutomationService {
                 return service?.handlePaneSendKey(ref: ref, input: input)
                     ?? .failure(.internal("GUIAutomationService deallocated"))
             },
-            handleTabCreate: { [weak self] ref in
+            handleTabCreate: { [weak self] ref, focus in
                 let service = self
-                return service?.handleTabCreate(ref: ref)
+                return service?.handleTabCreate(ref: ref, focus: focus)
                     ?? .failure(.internal("GUIAutomationService deallocated"))
             },
             handleTabSelect: { [weak self] ref in
@@ -77,9 +77,9 @@ final class GUIAutomationService {
                 return service?.handleTabClose(ref: ref)
                     ?? .failure(.internal("GUIAutomationService deallocated"))
             },
-            handlePaneSplit: { [weak self] ref, direction in
+            handlePaneSplit: { [weak self] ref, direction, focus in
                 let service = self
-                return service?.handlePaneSplit(ref: ref, direction: direction)
+                return service?.handlePaneSplit(ref: ref, direction: direction, focus: focus)
                     ?? .failure(.internal("GUIAutomationService deallocated"))
             },
             handlePaneFocus: { [weak self] ref in
@@ -97,9 +97,9 @@ final class GUIAutomationService {
                 return service?.handlePaneResize(ref: ref, ratio: ratio)
                     ?? .failure(.internal("GUIAutomationService deallocated"))
             },
-            handleFloatPaneCreate: { [weak self] ref in
+            handleFloatPaneCreate: { [weak self] ref, focus in
                 let service = self
-                return service?.handleFloatPaneCreate(ref: ref)
+                return service?.handleFloatPaneCreate(ref: ref, focus: focus)
                     ?? .failure(.internal("GUIAutomationService deallocated"))
             },
             handleFloatPaneFocus: { [weak self] ref in
@@ -202,26 +202,43 @@ final class GUIAutomationService {
 
     nonisolated private func handleSessionCreate(
         name: String?,
-        type: AutomationSessionType
+        type: AutomationSessionType,
+        focus: Bool
     ) -> Result<SessionCreateResponse, AutomationError> {
         switch type {
         case .local:
-            return Self.runOnMain { self.createLocalSessionOnMain(name: name) }
+            return Self.runOnMain {
+                GUIAutomationPolicy.withAutomationRequest(command: .sessionCreate, viewFocus: focus) {
+                    self.createLocalSessionOnMain(name: name)
+                }
+            }
         case .remote:
-            return createRemoteSessionBlocking(name: name)
+            return createRemoteSessionBlocking(name: name, focus: focus)
         }
     }
 
     nonisolated private func handleSessionClose(ref: String) -> Result<Void, AutomationError> {
-        Self.runOnMain { self.closeSessionOnMain(ref: ref) }
+        Self.runOnMain {
+            GUIAutomationPolicy.withAutomationRequest(command: .sessionClose) {
+                self.closeSessionOnMain(ref: ref)
+            }
+        }
     }
 
-    nonisolated private func handleSessionAttach(ref: String) -> Result<Void, AutomationError> {
-        Self.runOnMain { self.attachSessionOnMain(ref: ref) }
+    nonisolated private func handleSessionAttach(ref: String, focus: Bool) -> Result<Void, AutomationError> {
+        Self.runOnMain {
+            GUIAutomationPolicy.withAutomationRequest(command: .sessionAttach, viewFocus: focus) {
+                self.attachSessionOnMain(ref: ref)
+            }
+        }
     }
 
     nonisolated private func handleSessionDetach(ref: String) -> Result<Void, AutomationError> {
-        Self.runOnMain { self.detachSessionOnMain(ref: ref) }
+        Self.runOnMain {
+            GUIAutomationPolicy.withAutomationRequest(command: .sessionDetach) {
+                self.detachSessionOnMain(ref: ref)
+            }
+        }
     }
 
     // MARK: - pane.sendText / pane.sendKey
@@ -232,14 +249,22 @@ final class GUIAutomationService {
     // paths below.
 
     nonisolated private func handlePaneSendText(ref: String, text: String) -> Result<Void, AutomationError> {
-        Self.runOnMain { self.sendTextOnMain(ref: ref, text: text) }
+        Self.runOnMain {
+            GUIAutomationPolicy.withAutomationRequest(command: .paneSendText) {
+                self.sendTextOnMain(ref: ref, text: text)
+            }
+        }
     }
 
     nonisolated private func handlePaneSendKey(
         ref: String,
         input: KeyEncoder.KeyInput
     ) -> Result<Void, AutomationError> {
-        Self.runOnMain { self.sendKeyOnMain(ref: ref, input: input) }
+        Self.runOnMain {
+            GUIAutomationPolicy.withAutomationRequest(command: .paneSendKey) {
+                self.sendKeyOnMain(ref: ref, input: input)
+            }
+        }
     }
 
     // MARK: - tab / pane structure commands (Phase 5)
@@ -248,9 +273,13 @@ final class GUIAutomationService {
     // GUI to the foreground on success. All other tab/pane commands here
     // mutate model state without activating the window.
 
-    nonisolated private func handleTabCreate(ref: String) -> Result<TabCreateResponse, AutomationError> {
+    nonisolated private func handleTabCreate(ref: String, focus: Bool) -> Result<TabCreateResponse, AutomationError> {
         let remote: RemoteTabCreateRequest?
-        switch (Self.runOnMain { self.resolveTabCreateTarget(ref: ref) }) {
+        switch (Self.runOnMain {
+            GUIAutomationPolicy.withAutomationRequest(command: .tabCreate, viewFocus: focus) {
+                self.resolveTabCreateTarget(ref: ref)
+            }
+        }) {
         case .failure(let err): return .failure(err)
         case .success(let decision):
             switch decision {
@@ -260,23 +289,36 @@ final class GUIAutomationService {
             }
         }
         guard let remote else { return .failure(.internal("tab.create decision missing")) }
-        return createRemoteTabBlocking(request: remote)
+        return createRemoteTabBlocking(request: remote, focus: focus)
     }
 
     nonisolated private func handleTabSelect(ref: String) -> Result<Void, AutomationError> {
-        Self.runOnMain { self.tabSelectOnMain(ref: ref) }
+        Self.runOnMain {
+            GUIAutomationPolicy.withAutomationRequest(command: .tabSelect) {
+                self.tabSelectOnMain(ref: ref)
+            }
+        }
     }
 
     nonisolated private func handleTabClose(ref: String) -> Result<Void, AutomationError> {
-        Self.runOnMain { self.tabCloseOnMain(ref: ref) }
+        Self.runOnMain {
+            GUIAutomationPolicy.withAutomationRequest(command: .tabClose) {
+                self.tabCloseOnMain(ref: ref)
+            }
+        }
     }
 
     nonisolated private func handlePaneSplit(
         ref: String,
-        direction: SplitDirection
+        direction: SplitDirection,
+        focus: Bool
     ) -> Result<PaneSplitResponse, AutomationError> {
         let remote: RemotePaneSplitRequest?
-        switch (Self.runOnMain { self.resolvePaneSplitTarget(ref: ref, direction: direction) }) {
+        switch (Self.runOnMain {
+            GUIAutomationPolicy.withAutomationRequest(command: .paneSplit, viewFocus: focus) {
+                self.resolvePaneSplitTarget(ref: ref, direction: direction)
+            }
+        }) {
         case .failure(let err): return .failure(err)
         case .success(let decision):
             switch decision {
@@ -286,22 +328,34 @@ final class GUIAutomationService {
             }
         }
         guard let remote else { return .failure(.internal("pane.split decision missing")) }
-        return splitRemotePaneBlocking(request: remote)
+        return splitRemotePaneBlocking(request: remote, focus: focus)
     }
 
     nonisolated private func handlePaneFocus(ref: String) -> Result<Void, AutomationError> {
-        Self.runOnMain { self.paneFocusOnMain(ref: ref) }
+        Self.runOnMain {
+            GUIAutomationPolicy.withAutomationRequest(command: .paneFocus) {
+                self.paneFocusOnMain(ref: ref)
+            }
+        }
     }
 
     nonisolated private func handlePaneClose(ref: String) -> Result<Void, AutomationError> {
-        Self.runOnMain { self.paneCloseOnMain(ref: ref) }
+        Self.runOnMain {
+            GUIAutomationPolicy.withAutomationRequest(command: .paneClose) {
+                self.paneCloseOnMain(ref: ref)
+            }
+        }
     }
 
     nonisolated private func handlePaneResize(
         ref: String,
         ratio: Double
     ) -> Result<Void, AutomationError> {
-        Self.runOnMain { self.paneResizeOnMain(ref: ref, ratio: ratio) }
+        Self.runOnMain {
+            GUIAutomationPolicy.withAutomationRequest(command: .paneResize) {
+                self.paneResizeOnMain(ref: ref, ratio: ratio)
+            }
+        }
     }
 
     // MARK: - floatPane.* (Phase 6)
@@ -315,9 +369,13 @@ final class GUIAutomationService {
     // one-shot listener on `SessionManager`, send the RPC, then wait for
     // the server's layoutUpdate to materialize the new float.
 
-    nonisolated private func handleFloatPaneCreate(ref: String) -> Result<FloatPaneCreateResponse, AutomationError> {
+    nonisolated private func handleFloatPaneCreate(ref: String, focus: Bool) -> Result<FloatPaneCreateResponse, AutomationError> {
         let remote: RemoteFloatCreateRequest?
-        switch (Self.runOnMain { self.resolveFloatCreateTarget(ref: ref) }) {
+        switch (Self.runOnMain {
+            GUIAutomationPolicy.withAutomationRequest(command: .floatPaneCreate, viewFocus: focus) {
+                self.resolveFloatCreateTarget(ref: ref)
+            }
+        }) {
         case .failure(let err): return .failure(err)
         case .success(let decision):
             switch decision {
@@ -327,26 +385,42 @@ final class GUIAutomationService {
             }
         }
         guard let remote else { return .failure(.internal("floatPane.create decision missing")) }
-        return createRemoteFloatBlocking(request: remote)
+        return createRemoteFloatBlocking(request: remote, focus: focus)
     }
 
     nonisolated private func handleFloatPaneFocus(ref: String) -> Result<Void, AutomationError> {
-        Self.runOnMain { self.floatPaneFocusOnMain(ref: ref) }
+        Self.runOnMain {
+            GUIAutomationPolicy.withAutomationRequest(command: .floatPaneFocus) {
+                self.floatPaneFocusOnMain(ref: ref)
+            }
+        }
     }
 
     nonisolated private func handleFloatPaneClose(ref: String) -> Result<Void, AutomationError> {
-        Self.runOnMain { self.floatPaneCloseOnMain(ref: ref) }
+        Self.runOnMain {
+            GUIAutomationPolicy.withAutomationRequest(command: .floatPaneClose) {
+                self.floatPaneCloseOnMain(ref: ref)
+            }
+        }
     }
 
     nonisolated private func handleFloatPanePin(ref: String) -> Result<Void, AutomationError> {
-        Self.runOnMain { self.floatPanePinOnMain(ref: ref) }
+        Self.runOnMain {
+            GUIAutomationPolicy.withAutomationRequest(command: .floatPanePin) {
+                self.floatPanePinOnMain(ref: ref)
+            }
+        }
     }
 
     nonisolated private func handleFloatPaneMove(
         ref: String,
         frame: FloatPaneFrame
     ) -> Result<Void, AutomationError> {
-        Self.runOnMain { self.floatPaneMoveOnMain(ref: ref, frame: frame) }
+        Self.runOnMain {
+            GUIAutomationPolicy.withAutomationRequest(command: .floatPaneMove) {
+                self.floatPaneMoveOnMain(ref: ref, frame: frame)
+            }
+        }
     }
 
     // MARK: - window.focus
@@ -357,14 +431,17 @@ final class GUIAutomationService {
 
     nonisolated private func handleWindowFocus() -> Result<Void, AutomationError> {
         Self.runOnMain {
-            GUIAutomationPolicy.activateIfAllowed(command: .windowFocus)
-            return .success(())
+            GUIAutomationPolicy.withAutomationRequest(command: .windowFocus) {
+                GUIAutomationPolicy.activateIfAllowed(command: .windowFocus)
+                return .success(())
+            }
         }
     }
 
     // MARK: - MainActor operations
 
     private func createLocalSessionOnMain(name: String?) -> Result<SessionCreateResponse, AutomationError> {
+        GUILog.debug("createLocalSessionOnMain ENTER name=\(name ?? "<nil>") appActive=\(NSApp.isActive) keyWin=\(NSApp.keyWindow?.title ?? "<none>")", category: .session)
         guard let manager = SessionManagerRegistry.shared.primaryManager else {
             return .failure(.internal("no SessionManager available"))
         }
@@ -375,6 +452,7 @@ final class GUIAutomationService {
         guard let ref = refStore.sessionRef(for: sessionID) else {
             return .failure(.internal("ref allocation failed for new session"))
         }
+        GUILog.debug("createLocalSessionOnMain EXIT ref=\(ref) appActive=\(NSApp.isActive) keyWin=\(NSApp.keyWindow?.title ?? "<none>")", category: .session)
         return .success(SessionCreateResponse(ref: ref))
     }
 
@@ -440,6 +518,14 @@ final class GUIAutomationService {
             return .failure(.unsupportedOperation("cannot attach a local session"))
         }
         manager.attachRemoteSession(serverSessionID: serverSessionID)
+        // When the caller opted into view focus, jump to the attached
+        // session so they can start working in it. Otherwise leave the
+        // user's active view alone.
+        if GUIAutomationPolicy.shouldTakeViewFocus(),
+           let idx = manager.sessions.firstIndex(where: { $0.id == target.sessionID }),
+           idx != manager.activeSessionIndex {
+            manager.selectSession(at: idx)
+        }
         return .success(())
     }
 
@@ -785,13 +871,20 @@ final class GUIAutomationService {
 
         // Local: createFloatingPane operates on the active session — make
         // sure the target session is active so the new float lands in the
-        // right tab.
+        // right tab. If the automation caller didn't ask to take view focus,
+        // restore the previous active index once the float is in place so
+        // the user's current view stays put.
+        let prevActiveIndex = manager.activeSessionIndex
         if let idx = manager.sessions.firstIndex(where: { $0.id == target.sessionID }),
            idx != manager.activeSessionIndex {
             manager.selectSession(at: idx)
         }
         guard let newPaneID = manager.createFloatingPane() else {
             return .success(.failed(.internal("floatPane.create failed")))
+        }
+        if !GUIAutomationPolicy.shouldTakeViewFocus(),
+           manager.activeSessionIndex != prevActiveIndex {
+            manager.selectSession(at: prevActiveIndex)
         }
         let postSnapshots = Self.collectSnapshots()
         refStore.refreshRefs(snapshots: postSnapshots)
@@ -842,12 +935,18 @@ final class GUIAutomationService {
         case .success(let (manager, sessionID, paneID, _)):
             // `toggleFloatingPanePin` only touches the *active* session's
             // floats. Make the owning session active first so the toggle
-            // lands on the right float.
+            // lands on the right float; restore the user's view afterwards
+            // if the caller isn't asking to take focus.
+            let prevActiveIndex = manager.activeSessionIndex
             if let idx = manager.sessions.firstIndex(where: { $0.id == sessionID }),
                idx != manager.activeSessionIndex {
                 manager.selectSession(at: idx)
             }
             manager.toggleFloatingPanePin(paneID: paneID)
+            if !GUIAutomationPolicy.shouldTakeViewFocus(),
+               manager.activeSessionIndex != prevActiveIndex {
+                manager.selectSession(at: prevActiveIndex)
+            }
             return .success(())
         }
     }
@@ -860,6 +959,8 @@ final class GUIAutomationService {
         case .failure(let err): return .failure(err)
         case .success(let (manager, sessionID, paneID, _)):
             // `updateFloatingPaneFrame` operates on the active session only.
+            // Same save/restore as `floatPanePinOnMain`.
+            let prevActiveIndex = manager.activeSessionIndex
             if let idx = manager.sessions.firstIndex(where: { $0.id == sessionID }),
                idx != manager.activeSessionIndex {
                 manager.selectSession(at: idx)
@@ -871,6 +972,10 @@ final class GUIAutomationService {
                 height: CGFloat(frame.height)
             )
             manager.updateFloatingPaneFrame(paneID: paneID, frame: cgFrame)
+            if !GUIAutomationPolicy.shouldTakeViewFocus(),
+               manager.activeSessionIndex != prevActiveIndex {
+                manager.selectSession(at: prevActiveIndex)
+            }
             return .success(())
         }
     }
@@ -1098,13 +1203,15 @@ final class GUIAutomationService {
     /// blocks the caller (the connection thread) on a semaphore until the
     /// daemon round-trips. Timeout returns `MAIN_THREAD_TIMEOUT` so the
     /// CLI gets a definite answer instead of hanging.
-    nonisolated private func createRemoteSessionBlocking(name: String?) -> Result<SessionCreateResponse, AutomationError> {
+    nonisolated private func createRemoteSessionBlocking(name: String?, focus: Bool) -> Result<SessionCreateResponse, AutomationError> {
         let semaphore = DispatchSemaphore(value: 0)
         let box = ResultBox<SessionCreateResponse>()
 
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
-                self.startRemoteCreate(name: name, box: box, signal: { semaphore.signal() })
+                GUIAutomationPolicy.withAutomationRequest(command: .sessionCreate, viewFocus: focus) {
+                    self.startRemoteCreate(name: name, box: box, signal: { semaphore.signal() })
+                }
             }
         }
 
@@ -1127,7 +1234,11 @@ final class GUIAutomationService {
             signal()
             return
         }
-        manager.createRemoteSession(name: name) { [weak self] localID in
+        // Thread the caller's view-focus preference through to
+        // `handleRemoteSessionCreated` so it knows whether to switch
+        // `activeSessionIndex` when the daemon confirms the session.
+        let takeFocus = GUIAutomationPolicy.shouldTakeViewFocus()
+        manager.createRemoteSession(name: name, takeViewFocus: takeFocus) { [weak self] localID in
             guard let self else {
                 box.error = .internal("GUIAutomationService deallocated")
                 signal()
@@ -1157,14 +1268,17 @@ final class GUIAutomationService {
     // next layoutUpdate materializes the new entity.
 
     nonisolated private func createRemoteTabBlocking(
-        request: RemoteTabCreateRequest
+        request: RemoteTabCreateRequest,
+        focus: Bool
     ) -> Result<TabCreateResponse, AutomationError> {
         let semaphore = DispatchSemaphore(value: 0)
         let box = ResultBox<TabCreateResponse>()
 
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
-                self.startRemoteTabCreate(request: request, box: box, signal: { semaphore.signal() })
+                GUIAutomationPolicy.withAutomationRequest(command: .tabCreate, viewFocus: focus) {
+                    self.startRemoteTabCreate(request: request, box: box, signal: { semaphore.signal() })
+                }
             }
         }
 
@@ -1210,14 +1324,17 @@ final class GUIAutomationService {
     }
 
     nonisolated private func splitRemotePaneBlocking(
-        request: RemotePaneSplitRequest
+        request: RemotePaneSplitRequest,
+        focus: Bool
     ) -> Result<PaneSplitResponse, AutomationError> {
         let semaphore = DispatchSemaphore(value: 0)
         let box = ResultBox<PaneSplitResponse>()
 
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
-                self.startRemotePaneSplit(request: request, box: box, signal: { semaphore.signal() })
+                GUIAutomationPolicy.withAutomationRequest(command: .paneSplit, viewFocus: focus) {
+                    self.startRemotePaneSplit(request: request, box: box, signal: { semaphore.signal() })
+                }
             }
         }
 
@@ -1271,14 +1388,17 @@ final class GUIAutomationService {
     // MARK: - Remote floatPane.create: blocking wait
 
     nonisolated private func createRemoteFloatBlocking(
-        request: RemoteFloatCreateRequest
+        request: RemoteFloatCreateRequest,
+        focus: Bool
     ) -> Result<FloatPaneCreateResponse, AutomationError> {
         let semaphore = DispatchSemaphore(value: 0)
         let box = ResultBox<FloatPaneCreateResponse>()
 
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
-                self.startRemoteFloatCreate(request: request, box: box, signal: { semaphore.signal() })
+                GUIAutomationPolicy.withAutomationRequest(command: .floatPaneCreate, viewFocus: focus) {
+                    self.startRemoteFloatCreate(request: request, box: box, signal: { semaphore.signal() })
+                }
             }
         }
 
@@ -1322,12 +1442,18 @@ final class GUIAutomationService {
         }
         // `createFloatingPane` on a remote session sends the RPC to the
         // daemon; the local state mutates only when the layoutUpdate
-        // arrives and our listener above fires.
+        // arrives and our listener above fires. Save/restore active index
+        // so non-focus callers don't see their view jump.
+        let prevActiveIndex = manager.activeSessionIndex
         if let idx = manager.sessions.firstIndex(where: { $0.id == sessionID }),
            idx != manager.activeSessionIndex {
             manager.selectSession(at: idx)
         }
         _ = manager.createFloatingPane()
+        if !GUIAutomationPolicy.shouldTakeViewFocus(),
+           manager.activeSessionIndex != prevActiveIndex {
+            manager.selectSession(at: prevActiveIndex)
+        }
     }
 
 }

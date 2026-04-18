@@ -240,7 +240,7 @@ struct GUIAutomationServerTests {
             socketPath: baseConfig.socketPath,
             tokenPath: baseConfig.tokenPath,
             allowedPeerUID: baseConfig.allowedPeerUID,
-            handleSessionCreate: { name, type in
+            handleSessionCreate: { name, type, _ in
                 #expect(type == .local)
                 let ref = name ?? "sess:1"
                 return .success(SessionCreateResponse(ref: ref))
@@ -265,6 +265,51 @@ struct GUIAutomationServerTests {
         #expect(envelope.result.ref == "dev")
     }
 
+    @Test func sessionCreateForwardsFocusFlag() throws {
+        let (baseConfig, tmpDir) = Self.isolatedConfig()
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        final class Captured: @unchecked Sendable {
+            var observed: [Bool] = []
+        }
+        let captured = Captured()
+
+        let config = GUIAutomationServer.Configuration(
+            socketPath: baseConfig.socketPath,
+            tokenPath: baseConfig.tokenPath,
+            allowedPeerUID: baseConfig.allowedPeerUID,
+            handleSessionCreate: { _, _, focus in
+                captured.observed.append(focus)
+                return .success(SessionCreateResponse(ref: "dev"))
+            }
+        )
+        let server = GUIAutomationServer(configuration: config)
+        try server.start()
+        defer { server.stop() }
+        Thread.sleep(forTimeInterval: 0.05)
+
+        let token = try #require(GUIAutomationAuth.read(tokenPath: config.tokenPath))
+        let socket = try TYSocket.connect(path: config.socketPath)
+        defer { socket.closeSocket() }
+
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        _ = try Self.readLine(socket)
+
+        // Default: no "focus" key → server should pass false.
+        try Self.sendLine(socket, #"{"cmd":"session.create","type":"local"}"#)
+        _ = try Self.readLine(socket)
+
+        // Explicit false.
+        try Self.sendLine(socket, #"{"cmd":"session.create","type":"local","focus":false}"#)
+        _ = try Self.readLine(socket)
+
+        // Explicit true.
+        try Self.sendLine(socket, #"{"cmd":"session.create","type":"local","focus":true}"#)
+        _ = try Self.readLine(socket)
+
+        #expect(captured.observed == [false, false, true])
+    }
+
     @Test func sessionCreateRejectsBadType() throws {
         let (baseConfig, tmpDir) = Self.isolatedConfig()
         defer { try? FileManager.default.removeItem(atPath: tmpDir) }
@@ -273,7 +318,7 @@ struct GUIAutomationServerTests {
             socketPath: baseConfig.socketPath,
             tokenPath: baseConfig.tokenPath,
             allowedPeerUID: baseConfig.allowedPeerUID,
-            handleSessionCreate: { _, _ in .success(SessionCreateResponse(ref: "x")) }
+            handleSessionCreate: { _, _, _ in .success(SessionCreateResponse(ref: "x")) }
         )
         let server = GUIAutomationServer(configuration: config)
         try server.start()
@@ -453,7 +498,7 @@ struct GUIAutomationServerTests {
             socketPath: baseConfig.socketPath,
             tokenPath: baseConfig.tokenPath,
             allowedPeerUID: baseConfig.allowedPeerUID,
-            handleSessionAttach: { _ in
+            handleSessionAttach: { _, _ in
                 .failure(.unsupportedOperation("cannot attach a local session"))
             }
         )
@@ -482,7 +527,7 @@ struct GUIAutomationServerTests {
             socketPath: baseConfig.socketPath,
             tokenPath: baseConfig.tokenPath,
             allowedPeerUID: baseConfig.allowedPeerUID,
-            handleSessionCreate: { _, _ in .failure(.mainThreadTimeout) }
+            handleSessionCreate: { _, _, _ in .failure(.mainThreadTimeout) }
         )
         let server = GUIAutomationServer(configuration: config)
         try server.start()
@@ -514,7 +559,7 @@ struct GUIAutomationServerTests {
             socketPath: baseConfig.socketPath,
             tokenPath: baseConfig.tokenPath,
             allowedPeerUID: baseConfig.allowedPeerUID,
-            handleTabCreate: { ref in
+            handleTabCreate: { ref, _ in
                 captured.ref = ref
                 return .success(TabCreateResponse(ref: "\(ref)/tab:1"))
             }
@@ -547,7 +592,7 @@ struct GUIAutomationServerTests {
             socketPath: baseConfig.socketPath,
             tokenPath: baseConfig.tokenPath,
             allowedPeerUID: baseConfig.allowedPeerUID,
-            handleTabCreate: { _ in .success(TabCreateResponse(ref: "x")) }
+            handleTabCreate: { _, _ in .success(TabCreateResponse(ref: "x")) }
         )
         let server = GUIAutomationServer(configuration: config)
         try server.start()
@@ -643,7 +688,7 @@ struct GUIAutomationServerTests {
             socketPath: baseConfig.socketPath,
             tokenPath: baseConfig.tokenPath,
             allowedPeerUID: baseConfig.allowedPeerUID,
-            handlePaneSplit: { ref, dir in
+            handlePaneSplit: { ref, dir, _ in
                 captured.ref = ref
                 captured.direction = dir
                 return .success(PaneSplitResponse(ref: "dev/pane:2"))
@@ -678,7 +723,7 @@ struct GUIAutomationServerTests {
             socketPath: baseConfig.socketPath,
             tokenPath: baseConfig.tokenPath,
             allowedPeerUID: baseConfig.allowedPeerUID,
-            handlePaneSplit: { _, _ in .success(PaneSplitResponse(ref: "x")) }
+            handlePaneSplit: { _, _, _ in .success(PaneSplitResponse(ref: "x")) }
         )
         let server = GUIAutomationServer(configuration: config)
         try server.start()
@@ -904,7 +949,7 @@ struct GUIAutomationServerTests {
             socketPath: baseConfig.socketPath,
             tokenPath: baseConfig.tokenPath,
             allowedPeerUID: baseConfig.allowedPeerUID,
-            handleFloatPaneCreate: { ref in
+            handleFloatPaneCreate: { ref, _ in
                 captured.ref = ref
                 return .success(FloatPaneCreateResponse(ref: "dev/float:1"))
             }

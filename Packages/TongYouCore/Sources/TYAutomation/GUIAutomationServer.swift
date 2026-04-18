@@ -35,13 +35,18 @@ public final class GUIAutomationServer: @unchecked Sendable {
         /// useful for tests that don't exercise the GUI path.
         public let handleSessionList: (@Sendable () -> SessionListResponse)?
         /// Creates a session of the given type, returning the allocated ref.
-        /// Not focus-whitelisted — must not bring the GUI to the foreground.
-        public let handleSessionCreate: (@Sendable (String?, AutomationSessionType) -> Result<SessionCreateResponse, AutomationError>)?
+        /// The third parameter is the caller's view-focus preference
+        /// (Phase 7): when true, the GUI switches its active session to the
+        /// newly created one; when false (default), the user's current view
+        /// stays put. Not focus-whitelisted at the app level regardless.
+        public let handleSessionCreate: (@Sendable (String?, AutomationSessionType, Bool) -> Result<SessionCreateResponse, AutomationError>)?
         /// Closes the session named by the ref. Not focus-whitelisted.
         public let handleSessionClose: (@Sendable (String) -> Result<Void, AutomationError>)?
         /// Attaches a detached remote session by ref. Local sessions must
-        /// return `.unsupportedOperation`. Not focus-whitelisted.
-        public let handleSessionAttach: (@Sendable (String) -> Result<Void, AutomationError>)?
+        /// return `.unsupportedOperation`. Not focus-whitelisted at the
+        /// app level; the second `Bool` parameter is the caller's view-
+        /// focus preference (switch to the attached session on success).
+        public let handleSessionAttach: (@Sendable (String, Bool) -> Result<Void, AutomationError>)?
         /// Detaches an attached session by ref. Works for both local and
         /// remote sessions — the session remains in the sidebar but stops
         /// rendering / receiving input. Not focus-whitelisted.
@@ -54,15 +59,19 @@ public final class GUIAutomationServer: @unchecked Sendable {
         /// to the pane resolved from `ref`. Not focus-whitelisted.
         public let handlePaneSendKey: (@Sendable (String, KeyEncoder.KeyInput) -> Result<Void, AutomationError>)?
         /// Creates a new tab in the session resolved from `ref`. Returns the
-        /// newly allocated tab ref. Not focus-whitelisted.
-        public let handleTabCreate: (@Sendable (String) -> Result<TabCreateResponse, AutomationError>)?
+        /// newly allocated tab ref. Not focus-whitelisted at the app level;
+        /// the second `Bool` parameter is the caller's view-focus preference
+        /// (switch the session's active tab to the new one on success).
+        public let handleTabCreate: (@Sendable (String, Bool) -> Result<TabCreateResponse, AutomationError>)?
         /// Selects (makes active) the tab resolved from `ref`. Not focus-whitelisted.
         public let handleTabSelect: (@Sendable (String) -> Result<Void, AutomationError>)?
         /// Closes the tab resolved from `ref`. Not focus-whitelisted.
         public let handleTabClose: (@Sendable (String) -> Result<Void, AutomationError>)?
         /// Splits the pane resolved from `ref` in the given direction. Returns
-        /// the newly allocated pane ref. Not focus-whitelisted.
-        public let handlePaneSplit: (@Sendable (String, SplitDirection) -> Result<PaneSplitResponse, AutomationError>)?
+        /// the newly allocated pane ref. Not focus-whitelisted at the app
+        /// level; the third `Bool` parameter is the caller's view-focus
+        /// preference (focus the new pane on success).
+        public let handlePaneSplit: (@Sendable (String, SplitDirection, Bool) -> Result<PaneSplitResponse, AutomationError>)?
         /// Focuses the pane resolved from `ref`. Focus-whitelisted —
         /// implementations bring the GUI to the foreground on success.
         public let handlePaneFocus: (@Sendable (String) -> Result<Void, AutomationError>)?
@@ -75,8 +84,10 @@ public final class GUIAutomationServer: @unchecked Sendable {
         /// Creates a new floating pane in the session resolved from `ref`.
         /// The session ref determines which tab hosts the new float (server
         /// uses the active tab). Returns the newly allocated float ref.
-        /// Not focus-whitelisted.
-        public let handleFloatPaneCreate: (@Sendable (String) -> Result<FloatPaneCreateResponse, AutomationError>)?
+        /// Not focus-whitelisted at the app level; the second `Bool`
+        /// parameter is the caller's view-focus preference (switch the
+        /// active session to the new float's session on success).
+        public let handleFloatPaneCreate: (@Sendable (String, Bool) -> Result<FloatPaneCreateResponse, AutomationError>)?
         /// Focuses the floating pane resolved from `ref`. Focus-whitelisted —
         /// implementations bring the GUI to the foreground on success.
         public let handleFloatPaneFocus: (@Sendable (String) -> Result<Void, AutomationError>)?
@@ -97,20 +108,20 @@ public final class GUIAutomationServer: @unchecked Sendable {
             tokenPath: String = GUIAutomationPaths.tokenPath(),
             allowedPeerUID: uid_t = getuid(),
             handleSessionList: (@Sendable () -> SessionListResponse)? = nil,
-            handleSessionCreate: (@Sendable (String?, AutomationSessionType) -> Result<SessionCreateResponse, AutomationError>)? = nil,
+            handleSessionCreate: (@Sendable (String?, AutomationSessionType, Bool) -> Result<SessionCreateResponse, AutomationError>)? = nil,
             handleSessionClose: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
-            handleSessionAttach: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
+            handleSessionAttach: (@Sendable (String, Bool) -> Result<Void, AutomationError>)? = nil,
             handleSessionDetach: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
             handlePaneSendText: (@Sendable (String, String) -> Result<Void, AutomationError>)? = nil,
             handlePaneSendKey: (@Sendable (String, KeyEncoder.KeyInput) -> Result<Void, AutomationError>)? = nil,
-            handleTabCreate: (@Sendable (String) -> Result<TabCreateResponse, AutomationError>)? = nil,
+            handleTabCreate: (@Sendable (String, Bool) -> Result<TabCreateResponse, AutomationError>)? = nil,
             handleTabSelect: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
             handleTabClose: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
-            handlePaneSplit: (@Sendable (String, SplitDirection) -> Result<PaneSplitResponse, AutomationError>)? = nil,
+            handlePaneSplit: (@Sendable (String, SplitDirection, Bool) -> Result<PaneSplitResponse, AutomationError>)? = nil,
             handlePaneFocus: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
             handlePaneClose: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
             handlePaneResize: (@Sendable (String, Double) -> Result<Void, AutomationError>)? = nil,
-            handleFloatPaneCreate: (@Sendable (String) -> Result<FloatPaneCreateResponse, AutomationError>)? = nil,
+            handleFloatPaneCreate: (@Sendable (String, Bool) -> Result<FloatPaneCreateResponse, AutomationError>)? = nil,
             handleFloatPaneFocus: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
             handleFloatPaneClose: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
             handleFloatPanePin: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
@@ -423,7 +434,9 @@ public final class GUIAutomationServer: @unchecked Sendable {
             return .error(code: "INVALID_PARAMS", message: "`type` must be 'local' or 'remote'")
         }
 
-        switch handler(name, type) {
+        let focus = boolParam(request.params["focus"])
+
+        switch handler(name, type, focus) {
         case .success(let payload):
             return encodeCodableResult(payload)
         case .failure(let error):
@@ -459,7 +472,8 @@ public final class GUIAutomationServer: @unchecked Sendable {
         guard let ref = request.params["ref"] as? String, !ref.isEmpty else {
             return .error(code: "INVALID_PARAMS", message: "`ref` is required")
         }
-        switch handler(ref) {
+        let focus = boolParam(request.params["focus"])
+        switch handler(ref, focus) {
         case .success:
             return .success(.null)
         case .failure(let error):
@@ -546,7 +560,8 @@ public final class GUIAutomationServer: @unchecked Sendable {
         guard let ref = request.params["ref"] as? String, !ref.isEmpty else {
             return .error(code: "INVALID_PARAMS", message: "`ref` is required")
         }
-        switch handler(ref) {
+        let focus = boolParam(request.params["focus"])
+        switch handler(ref, focus) {
         case .success(let payload):
             return encodeCodableResult(payload)
         case .failure(let error):
@@ -611,7 +626,8 @@ public final class GUIAutomationServer: @unchecked Sendable {
                 message: "`direction` must be 'vertical' or 'horizontal'"
             )
         }
-        switch handler(ref, direction) {
+        let focus = boolParam(request.params["focus"])
+        switch handler(ref, direction, focus) {
         case .success(let payload):
             return encodeCodableResult(payload)
         case .failure(let error):
@@ -699,7 +715,8 @@ public final class GUIAutomationServer: @unchecked Sendable {
         guard let ref = request.params["ref"] as? String, !ref.isEmpty else {
             return .error(code: "INVALID_PARAMS", message: "`ref` is required")
         }
-        switch handler(ref) {
+        let focus = boolParam(request.params["focus"])
+        switch handler(ref, focus) {
         case .success(let payload):
             return encodeCodableResult(payload)
         case .failure(let error):
@@ -807,6 +824,15 @@ public final class GUIAutomationServer: @unchecked Sendable {
         case .failure(let error):
             return .error(code: error.code, message: error.message)
         }
+    }
+
+    /// Parse a boolean parameter from a ParsedRequest params dict. Accepts
+    /// JSON `true` / `false` as well as NSNumber-wrapped values; missing
+    /// or non-boolean values default to `false`.
+    private static func boolParam(_ value: Any?) -> Bool {
+        if let b = value as? Bool { return b }
+        if let n = value as? NSNumber { return n.boolValue }
+        return false
     }
 
     private static func handleWindowFocusCommand(config: Configuration) -> JSONResponse {

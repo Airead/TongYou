@@ -74,7 +74,16 @@ final class SessionManager {
     /// remote session first lands in `sessions`. Used by automation to
     /// await remote-create completion synchronously. Handlers receive the
     /// local session UUID on success or `nil` on disconnect/timeout.
-    private var pendingRemoteCreateHandlers: [String: (UUID?) -> Void] = [:]
+    /// A completion handler for a remote-create round-trip, plus the
+    /// caller's view-focus preference (from Phase 7 focus policy). User
+    /// actions default to `takeViewFocus: true`; automation callers pass
+    /// `false` unless they explicitly want to switch to the new session.
+    private struct PendingRemoteCreate {
+        let takeViewFocus: Bool
+        let completion: (UUID?) -> Void
+    }
+
+    private var pendingRemoteCreateHandlers: [String: PendingRemoteCreate] = [:]
 
     /// FIFO queues of completions awaiting the next newly-materialized tab
     /// in a remote session's layoutUpdate. Keyed by local session UUID.
@@ -286,7 +295,9 @@ final class SessionManager {
             applySessionOrder()
             scheduleLocalSaveIfNeeded(sessionID: newSessionID)
         }
-        activeSessionIndex = sessions.firstIndex(where: { $0.id == newSessionID }) ?? sessions.count - 1
+        if GUIAutomationPolicy.shouldTakeViewFocus() {
+            activeSessionIndex = sessions.firstIndex(where: { $0.id == newSessionID }) ?? sessions.count - 1
+        }
         attachedLocalSessionIDs.insert(newSessionID)
         rebuildAllAttachedSessionIDs()
         return newSessionID
@@ -485,7 +496,9 @@ final class SessionManager {
 
         let tab = TerminalTab(title: title, initialWorkingDirectory: initialWorkingDirectory)
         sessions[targetIndex].tabs.append(tab)
-        sessions[targetIndex].activeTabIndex = sessions[targetIndex].tabs.count - 1
+        if GUIAutomationPolicy.shouldTakeViewFocus() {
+            sessions[targetIndex].activeTabIndex = sessions[targetIndex].tabs.count - 1
+        }
         if attachedLocalSessionIDs.contains(session.id) {
             for paneID in tab.allPaneIDsIncludingFloating {
                 _ = ensureLocalController(for: paneID)
@@ -1102,8 +1115,8 @@ final class SessionManager {
     private func failPendingRemoteCreateHandlers() {
         let handlers = pendingRemoteCreateHandlers
         pendingRemoteCreateHandlers.removeAll()
-        for handler in handlers.values {
-            handler(nil)
+        for pending in handlers.values {
+            pending.completion(nil)
         }
 
         let tabQueues = pendingRemoteTabCreates
@@ -1252,10 +1265,17 @@ final class SessionManager {
     /// matching remote session is first registered locally (via
     /// `handleRemoteSessionCreated`). On disconnect before completion the
     /// handler is called with `nil`.
-    func createRemoteSession(name: String? = nil, completion: ((UUID?) -> Void)? = nil) {
+    func createRemoteSession(
+        name: String? = nil,
+        takeViewFocus: Bool = true,
+        completion: ((UUID?) -> Void)? = nil
+    ) {
         let sessionName = name ?? nextAvailableName(prefix: "RSession")
         if let completion {
-            pendingRemoteCreateHandlers[sessionName] = completion
+            pendingRemoteCreateHandlers[sessionName] = PendingRemoteCreate(
+                takeViewFocus: takeViewFocus,
+                completion: completion
+            )
         }
         ensureConnected {
             self.remoteClient?.createSession(name: sessionName)
@@ -1391,16 +1411,21 @@ final class SessionManager {
 
     private func handleRemoteSessionCreated(_ info: SessionInfo) {
         addOrUpdateRemoteSession(info)
-        // Auto-attach and select newly created remote sessions.
+        // Auto-attach newly created remote sessions. The "select" part is
+        // gated on the caller's view-focus preference (Phase 7): UI flows
+        // default to true so user gets jumped to the new session; automation
+        // flows default to false so scripts don't disturb the user's view.
         let sessionUUID = info.id.uuid
         attachRemoteSession(serverSessionID: sessionUUID)
-        if let index = sessionIndex(forServerSessionID: sessionUUID) {
+        let pending = pendingRemoteCreateHandlers[info.name]
+        let takeFocus = pending?.takeViewFocus ?? true
+        if takeFocus, let index = sessionIndex(forServerSessionID: sessionUUID) {
             activeSessionIndex = index
         }
         // Fire any automation create-completion handler waiting on this name.
-        if let handler = pendingRemoteCreateHandlers.removeValue(forKey: info.name) {
+        if let pending = pendingRemoteCreateHandlers.removeValue(forKey: info.name) {
             let localID = sessionIndex(forServerSessionID: sessionUUID).map { sessions[$0].id }
-            handler(localID)
+            pending.completion(localID)
         }
     }
 

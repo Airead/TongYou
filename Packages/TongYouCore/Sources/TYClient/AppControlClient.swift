@@ -147,8 +147,11 @@ public final class AppControlClient {
     }
 
     /// Send `session.create` and return the allocated ref.
-    public func createSession(name: String?, type: AutomationSessionType) throws -> String {
-        var params: [String: Any] = ["type": type.rawValue]
+    /// When `focus` is true, the GUI switches its active session to the
+    /// newly created one (Phase 7 view-focus opt-in); otherwise the user's
+    /// current view stays put.
+    public func createSession(name: String?, type: AutomationSessionType, focus: Bool = false) throws -> String {
+        var params: [String: Any] = ["type": type.rawValue, "focus": focus]
         if let name { params["name"] = name }
         let response = try sendCommand("session.create", params: params)
         switch response {
@@ -175,9 +178,11 @@ public final class AppControlClient {
         }
     }
 
-    /// Send `session.attach` for the given ref. Throws on server error.
-    public func attachSession(ref: String) throws {
-        let response = try sendCommand("session.attach", params: ["ref": ref])
+    /// Send `session.attach` for the given ref. When `focus` is true, the
+    /// GUI also switches its active session to the attached one (Phase 7
+    /// view-focus opt-in). Throws on server error.
+    public func attachSession(ref: String, focus: Bool = false) throws {
+        let response = try sendCommand("session.attach", params: ["ref": ref, "focus": focus])
         if case .error(let code, let message) = response {
             throw AppControlError.serverError(code: code, message: message)
         }
@@ -211,9 +216,10 @@ public final class AppControlClient {
     }
 
     /// Send `tab.create` — create a new tab in the session resolved from
-    /// `ref` and return the newly allocated tab ref.
-    public func createTab(sessionRef: String) throws -> String {
-        let response = try sendCommand("tab.create", params: ["ref": sessionRef])
+    /// `ref` and return the newly allocated tab ref. When `focus` is true,
+    /// the new tab becomes the active tab (Phase 7 view-focus opt-in).
+    public func createTab(sessionRef: String, focus: Bool = false) throws -> String {
+        let response = try sendCommand("tab.create", params: ["ref": sessionRef, "focus": focus])
         switch response {
         case .success(let value):
             guard case .raw(let data) = value else {
@@ -248,10 +254,11 @@ public final class AppControlClient {
 
     /// Send `pane.split` — split the target pane and return the new pane ref.
     /// `ref` may be a session / tab / pane ref; when session- or tab-level,
-    /// the focused pane (or first tree pane) is split.
-    public func splitPane(ref: String, direction: SplitDirection) throws -> String {
+    /// the focused pane (or first tree pane) is split. When `focus` is true,
+    /// the new pane receives view focus (Phase 7 view-focus opt-in).
+    public func splitPane(ref: String, direction: SplitDirection, focus: Bool = false) throws -> String {
         let dir: String = direction == .vertical ? "vertical" : "horizontal"
-        let response = try sendCommand("pane.split", params: ["ref": ref, "direction": dir])
+        let response = try sendCommand("pane.split", params: ["ref": ref, "direction": dir, "focus": focus])
         switch response {
         case .success(let value):
             guard case .raw(let data) = value else {
@@ -296,9 +303,11 @@ public final class AppControlClient {
     }
 
     /// Send `floatPane.create` — create a new floating pane in the session
-    /// resolved from `ref` and return the newly allocated float ref.
-    public func createFloatingPane(sessionRef: String) throws -> String {
-        let response = try sendCommand("floatPane.create", params: ["ref": sessionRef])
+    /// resolved from `ref` and return the newly allocated float ref. When
+    /// `focus` is true, the GUI switches its active session to the float's
+    /// host session (Phase 7 view-focus opt-in).
+    public func createFloatingPane(sessionRef: String, focus: Bool = false) throws -> String {
+        let response = try sendCommand("floatPane.create", params: ["ref": sessionRef, "focus": focus])
         switch response {
         case .success(let value):
             guard case .raw(let data) = value else {
