@@ -1,5 +1,6 @@
 import Foundation
 import TYAutomation
+import TYCLIUtils
 import TYClient
 import TYProtocol
 import TYServer
@@ -27,14 +28,14 @@ enum Command {
     case appDetach(ref: String, json: Bool)
     case appSend(ref: String, text: String, json: Bool)
     case appKey(ref: String, key: String, json: Bool)
-    case appNewTab(sessionRef: String, focus: Bool, json: Bool)
+    case appNewTab(sessionRef: String, focus: Bool, profile: String?, overrides: [String], json: Bool)
     case appSelectTab(sessionRef: String, index: UInt, json: Bool)
     case appCloseTab(sessionRef: String, index: UInt, json: Bool)
-    case appSplit(ref: String, direction: SplitDirection, focus: Bool, json: Bool)
+    case appSplit(ref: String, direction: SplitDirection, focus: Bool, profile: String?, overrides: [String], json: Bool)
     case appFocusPane(ref: String, json: Bool)
     case appClosePane(ref: String, json: Bool)
     case appResizePane(ref: String, ratio: Double, json: Bool)
-    case appFloatPaneCreate(sessionRef: String, focus: Bool, json: Bool)
+    case appFloatPaneCreate(sessionRef: String, focus: Bool, profile: String?, overrides: [String], json: Bool)
     case appFloatPaneFocus(ref: String, json: Bool)
     case appFloatPaneClose(ref: String, json: Bool)
     case appFloatPanePin(ref: String, json: Bool)
@@ -181,6 +182,29 @@ func parseAppArgs(_ args: [String]) -> Command {
     }
 }
 
+/// Run `extractProfileAndSet` against a command's arg slice; on failure
+/// print a stderr message in the form `tongyou: app <command>: …` and exit.
+private func runExtractProfileAndSet(
+    _ args: [String],
+    command: String
+) -> ParsedProfileAndSet {
+    do {
+        return try extractProfileAndSet(args)
+    } catch ArgParseError.profileFlagMissingValue {
+        fputs("tongyou: app \(command): --profile expects a name\n", stderr)
+        exit(1)
+    } catch ArgParseError.setFlagMissingValue {
+        fputs("tongyou: app \(command): --set expects key=value\n", stderr)
+        exit(1)
+    } catch ArgParseError.setFlagMissingEquals(let value) {
+        fputs("tongyou: app \(command): --set expects key=value (got '\(value)')\n", stderr)
+        exit(1)
+    } catch {
+        fputs("tongyou: app \(command): \(error)\n", stderr)
+        exit(1)
+    }
+}
+
 private enum TabIndexAction { case selectTab, closeTab }
 
 private func parseAppTabIndex(_ action: TabIndexAction, rest: [String], json: Bool) -> Command {
@@ -198,10 +222,11 @@ private func parseAppTabIndex(_ action: TabIndexAction, rest: [String], json: Bo
 }
 
 func parseAppSplit(_ args: [String], json: Bool) -> Command {
+    let parsed = runExtractProfileAndSet(args, command: "split")
     var ref: String?
     var direction: SplitDirection = .vertical
     var focus = false
-    for arg in args {
+    for arg in parsed.remaining {
         switch arg {
         case "--vertical":
             direction = .vertical
@@ -225,7 +250,14 @@ func parseAppSplit(_ args: [String], json: Bool) -> Command {
         fputs("tongyou: app split requires a ref\n", stderr)
         exit(1)
     }
-    return .appSplit(ref: ref, direction: direction, focus: focus, json: json)
+    return .appSplit(
+        ref: ref,
+        direction: direction,
+        focus: focus,
+        profile: parsed.profile,
+        overrides: parsed.overrides,
+        json: json
+    )
 }
 
 func parseAppAttach(_ args: [String], json: Bool) -> Command {
@@ -255,9 +287,10 @@ func parseAppAttach(_ args: [String], json: Bool) -> Command {
 }
 
 func parseAppNewTab(_ args: [String], json: Bool) -> Command {
+    let parsed = runExtractProfileAndSet(args, command: "new-tab")
     var ref: String?
     var focus = false
-    for arg in args {
+    for arg in parsed.remaining {
         switch arg {
         case "--focus":
             focus = true
@@ -277,7 +310,13 @@ func parseAppNewTab(_ args: [String], json: Bool) -> Command {
         fputs("tongyou: app new-tab requires a session ref\n", stderr)
         exit(1)
     }
-    return .appNewTab(sessionRef: ref, focus: focus, json: json)
+    return .appNewTab(
+        sessionRef: ref,
+        focus: focus,
+        profile: parsed.profile,
+        overrides: parsed.overrides,
+        json: json
+    )
 }
 
 func parseAppFloatPane(_ args: [String], json: Bool) -> Command {
@@ -316,9 +355,10 @@ func parseAppFloatPane(_ args: [String], json: Bool) -> Command {
 }
 
 func parseAppFloatPaneCreate(_ args: [String], json: Bool) -> Command {
+    let parsed = runExtractProfileAndSet(args, command: "float-pane create")
     var ref: String?
     var focus = false
-    for arg in args {
+    for arg in parsed.remaining {
         switch arg {
         case "--focus":
             focus = true
@@ -338,7 +378,13 @@ func parseAppFloatPaneCreate(_ args: [String], json: Bool) -> Command {
         fputs("tongyou: app float-pane create requires a session ref\n", stderr)
         exit(1)
     }
-    return .appFloatPaneCreate(sessionRef: ref, focus: focus, json: json)
+    return .appFloatPaneCreate(
+        sessionRef: ref,
+        focus: focus,
+        profile: parsed.profile,
+        overrides: parsed.overrides,
+        json: json
+    )
 }
 
 func parseAppFloatPaneMove(_ args: [String], json: Bool) -> Command {
@@ -462,16 +508,23 @@ func printAppUsage() {
       detach <ref>                         Detach the session identified by ref (stops rendering / receiving input).
       send <ref> <text>                    Send raw UTF-8 text to the target pane (no trailing newline).
       key <ref> <key>                      Send a key event (e.g. Enter, Ctrl+C, Alt+Left) to the target pane.
-      new-tab <session-ref> [--focus]      Create a new tab. --focus switches to the new tab.
+      new-tab <session-ref> [--focus] [--profile <name>] [--set key=value ...]
+                                           Create a new tab. --focus switches to the new tab.
+                                           --profile picks a profile for the tab's root pane;
+                                           --set layers on inline overrides (repeatable).
       select-tab <session-ref> <index>     Select the tab at the given 0-based position.
       close-tab <session-ref> <index>      Close the tab at the given 0-based position.
-      split <ref> [--vertical|--horizontal] [--focus]
+      split <ref> [--vertical|--horizontal] [--focus] [--profile <name>] [--set key=value ...]
                                            Split the target pane (default: vertical). --focus focuses new pane.
+                                           --profile picks a profile for the new pane;
+                                           --set layers on inline overrides (repeatable).
       focus-pane <pane-ref>                Focus the given pane (brings window forward).
       close-pane <pane-ref>                Close the given pane.
       resize-pane <pane-ref> --ratio <v>   Resize the pane by setting its parent split ratio (0 < v < 1).
-      float-pane create <session-ref> [--focus]
+      float-pane create <session-ref> [--focus] [--profile <name>] [--set key=value ...]
                                            Create a new floating pane. --focus switches to the host session.
+                                           --profile picks a profile for the float;
+                                           --set layers on inline overrides (repeatable).
       float-pane focus <float-ref>         Focus a floating pane (brings window forward).
       float-pane close <float-ref>         Close a floating pane.
       float-pane pin <float-ref>           Toggle the pinned flag on a floating pane.
@@ -535,14 +588,17 @@ func printUsage() {
       app detach <ref>               Detach a session by ref (stop rendering / receiving input)
       app send <ref> <text>          Send text to the target pane (no trailing newline)
       app key <ref> <key>            Send a key event (Enter, Ctrl+C, …) to the target pane
-      app new-tab <session-ref> [--focus]  Create a new tab; --focus to switch to it
+      app new-tab <session-ref> [--focus] [--profile <name>] [--set k=v ...]
+                                     Create a new tab; --profile/--set layer profile + inline overrides
       app select-tab <ref> <index>   Select a tab by 0-based position
       app close-tab <ref> <index>    Close a tab by 0-based position
-      app split <ref> [--horizontal] [--focus]  Split the target pane; --focus to focus the new pane
+      app split <ref> [--horizontal] [--focus] [--profile <name>] [--set k=v ...]
+                                     Split the target pane; --profile/--set layer profile + inline overrides
       app focus-pane <pane-ref>      Focus a pane (brings window forward)
       app close-pane <pane-ref>      Close a pane
       app resize-pane <pane-ref> --ratio <v>  Resize a pane by setting its parent split ratio (0 < v < 1)
-      app float-pane create <session-ref> [--focus]  Create a floating pane; --focus to switch to host session
+      app float-pane create <session-ref> [--focus] [--profile <name>] [--set k=v ...]
+                                     Create a floating pane; --profile/--set layer profile + inline overrides
       app float-pane focus <float-ref>     Focus a floating pane (brings window forward)
       app float-pane close <float-ref>     Close a floating pane
       app float-pane pin <float-ref>       Toggle the pinned flag on a floating pane
@@ -1001,11 +1057,16 @@ private func handleCommandResult(
     if json { printJSONResult(successJSON) }
 }
 
-func appNewTab(sessionRef: String, focus: Bool, json: Bool) {
+func appNewTab(sessionRef: String, focus: Bool, profile: String?, overrides: [String], json: Bool) {
     let client = connectToGUIOrExit()
     let ref: String
     do {
-        ref = try client.createTab(sessionRef: sessionRef, focus: focus)
+        ref = try client.createTab(
+            sessionRef: sessionRef,
+            focus: focus,
+            profile: profile,
+            overrides: overrides.isEmpty ? nil : overrides
+        )
     } catch AppControlError.serverError(let code, let message) {
         if json {
             printJSONError(code: code, message: message)
@@ -1068,11 +1129,24 @@ func appCloseTab(sessionRef: String, index: UInt, json: Bool) {
     handleCommandResult({ try client.closeTab(ref: tabRef) }, json: json, verb: "close-tab")
 }
 
-func appSplit(ref: String, direction: SplitDirection, focus: Bool, json: Bool) {
+func appSplit(
+    ref: String,
+    direction: SplitDirection,
+    focus: Bool,
+    profile: String?,
+    overrides: [String],
+    json: Bool
+) {
     let client = connectToGUIOrExit()
     let newRef: String
     do {
-        newRef = try client.splitPane(ref: ref, direction: direction, focus: focus)
+        newRef = try client.splitPane(
+            ref: ref,
+            direction: direction,
+            focus: focus,
+            profile: profile,
+            overrides: overrides.isEmpty ? nil : overrides
+        )
     } catch AppControlError.serverError(let code, let message) {
         if json {
             printJSONError(code: code, message: message)
@@ -1106,11 +1180,16 @@ func appResizePane(ref: String, ratio: Double, json: Bool) {
     handleCommandResult({ try client.resizePane(ref: ref, ratio: ratio) }, json: json, verb: "resize-pane")
 }
 
-func appFloatPaneCreate(sessionRef: String, focus: Bool, json: Bool) {
+func appFloatPaneCreate(sessionRef: String, focus: Bool, profile: String?, overrides: [String], json: Bool) {
     let client = connectToGUIOrExit()
     let ref: String
     do {
-        ref = try client.createFloatingPane(sessionRef: sessionRef, focus: focus)
+        ref = try client.createFloatingPane(
+            sessionRef: sessionRef,
+            focus: focus,
+            profile: profile,
+            overrides: overrides.isEmpty ? nil : overrides
+        )
     } catch AppControlError.serverError(let code, let message) {
         if json {
             printJSONError(code: code, message: message)
@@ -1263,22 +1342,22 @@ case .appSend(let ref, let text, let json):
     appSend(ref: ref, text: text, json: json)
 case .appKey(let ref, let key, let json):
     appKey(ref: ref, key: key, json: json)
-case .appNewTab(let sessionRef, let focus, let json):
-    appNewTab(sessionRef: sessionRef, focus: focus, json: json)
+case .appNewTab(let sessionRef, let focus, let profile, let overrides, let json):
+    appNewTab(sessionRef: sessionRef, focus: focus, profile: profile, overrides: overrides, json: json)
 case .appSelectTab(let sessionRef, let index, let json):
     appSelectTab(sessionRef: sessionRef, index: index, json: json)
 case .appCloseTab(let sessionRef, let index, let json):
     appCloseTab(sessionRef: sessionRef, index: index, json: json)
-case .appSplit(let ref, let direction, let focus, let json):
-    appSplit(ref: ref, direction: direction, focus: focus, json: json)
+case .appSplit(let ref, let direction, let focus, let profile, let overrides, let json):
+    appSplit(ref: ref, direction: direction, focus: focus, profile: profile, overrides: overrides, json: json)
 case .appFocusPane(let ref, let json):
     appFocusPane(ref: ref, json: json)
 case .appClosePane(let ref, let json):
     appClosePane(ref: ref, json: json)
 case .appResizePane(let ref, let ratio, let json):
     appResizePane(ref: ref, ratio: ratio, json: json)
-case .appFloatPaneCreate(let sessionRef, let focus, let json):
-    appFloatPaneCreate(sessionRef: sessionRef, focus: focus, json: json)
+case .appFloatPaneCreate(let sessionRef, let focus, let profile, let overrides, let json):
+    appFloatPaneCreate(sessionRef: sessionRef, focus: focus, profile: profile, overrides: overrides, json: json)
 case .appFloatPaneFocus(let ref, let json):
     appFloatPaneFocus(ref: ref, json: json)
 case .appFloatPaneClose(let ref, let json):

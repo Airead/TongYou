@@ -14,6 +14,7 @@ let package = Package(
         .library(name: "TYServer", targets: ["TYServer"]),
         .library(name: "TYClient", targets: ["TYClient"]),
         .library(name: "TYAutomation", targets: ["TYAutomation"]),
+        .library(name: "TYCLIUtils", targets: ["TYCLIUtils"]),
         .executable(name: "tongyou", targets: ["tongyou"]),
     ],
     targets: [
@@ -82,10 +83,17 @@ let package = Package(
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 
+        // CLI-side utilities (argument parsing helpers shared by the
+        // `tongyou` executable). Lives as a library so it can be unit-tested.
+        .target(
+            name: "TYCLIUtils",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+
         // tongyou executable: unified CLI for daemon and session management.
         .executableTarget(
             name: "tongyou",
-            dependencies: ["TYClient", "TYProtocol", "TYServer", "TYAutomation"],
+            dependencies: ["TYClient", "TYProtocol", "TYServer", "TYAutomation", "TYCLIUtils"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 
@@ -128,6 +136,12 @@ let package = Package(
         .testTarget(
             name: "TYPTYTests",
             dependencies: ["TYPTY", "TYTerminal"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+
+        .testTarget(
+            name: "TYCLIUtilsTests",
+            dependencies: ["TYCLIUtils"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 
