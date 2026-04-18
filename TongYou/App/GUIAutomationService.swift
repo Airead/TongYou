@@ -651,17 +651,19 @@ final class GUIAutomationService {
     private struct RemoteTabCreateRequest {
         let originalRef: String
         let sessionID: UUID
+        let profile: String?
+        let overrides: [String]
     }
 
     /// Parse/resolve the ref and, for local sessions, perform the tab
     /// create inline. For remote sessions, fall through to the caller so
     /// it can dispatch a blocking wait without holding the main actor.
     ///
-    /// Phase 5: `profile` / `overrides` are validated here (unknown profile
-    /// → `PROFILE_NOT_FOUND`, malformed override → `INVALID_PARAMS`) and
-    /// then forwarded to `SessionManager.createTab`. Remote sessions with
-    /// non-nil profile/overrides return `UNSUPPORTED_OPERATION` because
-    /// the daemon-side RPC does not yet carry these fields.
+    /// `profile` / `overrides` are validated here (unknown profile →
+    /// `PROFILE_NOT_FOUND`, malformed override → `INVALID_PARAMS`) for both
+    /// local *and* remote sessions; Phase 7.3 introduced client-side
+    /// resolution so the daemon never sees the profile name, only the
+    /// resolved `StartupSnapshot`.
     private func resolveTabCreateTarget(
         ref: String,
         profile: String?,
@@ -698,6 +700,19 @@ final class GUIAutomationService {
             return .failure(.sessionNotFound(ref))
         }
 
+        // Pre-flight the profile (for both local and remote) so callers
+        // get PROFILE_NOT_FOUND / INVALID_PARAMS *before* the create call,
+        // which would otherwise silently rewrite an unknown profile to
+        // `default`. For remote sessions this also means we never ship a
+        // bad profile name over the wire.
+        if let profile = profile {
+            if let err = Self.validateProfile(
+                manager: manager, id: profile, overrides: overrides ?? []
+            ) {
+                return .failure(err)
+            }
+        }
+
         if session.source.serverSessionID != nil {
             // Remote session: the server owns tab allocation. Verify it's
             // attached — sending createTab to the daemon for a detached
@@ -708,28 +723,12 @@ final class GUIAutomationService {
                     "session is detached; attach it first with 'tongyou app attach'"
                 ))
             }
-            // The daemon protocol does not yet thread profile/overrides
-            // through to remote pane creation; fail explicitly so scripts
-            // don't silently lose their configuration.
-            if profile != nil || !(overrides ?? []).isEmpty {
-                return .failure(.unsupportedOperation(
-                    "profile/overrides not yet supported for remote sessions"
-                ))
-            }
             return .success(.remote(RemoteTabCreateRequest(
-                originalRef: ref, sessionID: target.sessionID
+                originalRef: ref,
+                sessionID: target.sessionID,
+                profile: profile,
+                overrides: overrides ?? []
             )))
-        }
-
-        // Local: pre-flight the profile so callers get PROFILE_NOT_FOUND
-        // / INVALID_PARAMS *before* the pane-construction fallback path
-        // silently rewrites an unknown profile to `default`.
-        if let profile = profile {
-            if let err = Self.validateProfile(
-                manager: manager, id: profile, overrides: overrides ?? []
-            ) {
-                return .failure(err)
-            }
         }
 
         guard let newTabID = manager.createTab(
@@ -781,6 +780,8 @@ final class GUIAutomationService {
         let sessionID: UUID
         let paneID: UUID
         let direction: SplitDirection
+        let profile: String?
+        let overrides: [String]
     }
 
     /// Parse/resolve the ref and pick the target pane. For local sessions,
@@ -834,6 +835,14 @@ final class GUIAutomationService {
             }
         }
 
+        if let profile = profile {
+            if let err = Self.validateProfile(
+                manager: manager, id: profile, overrides: overrides ?? []
+            ) {
+                return .failure(err)
+            }
+        }
+
         if session.source.serverSessionID != nil {
             if let serverID = session.source.serverSessionID,
                !manager.attachedRemoteSessionIDs.contains(serverID) {
@@ -841,25 +850,14 @@ final class GUIAutomationService {
                     "session is detached; attach it first with 'tongyou app attach'"
                 ))
             }
-            if profile != nil || !(overrides ?? []).isEmpty {
-                return .failure(.unsupportedOperation(
-                    "profile/overrides not yet supported for remote sessions"
-                ))
-            }
             return .success(.remote(RemotePaneSplitRequest(
                 originalRef: ref,
                 sessionID: target.sessionID,
                 paneID: paneID,
-                direction: direction
+                direction: direction,
+                profile: profile,
+                overrides: overrides ?? []
             )))
-        }
-
-        if let profile = profile {
-            if let err = Self.validateProfile(
-                manager: manager, id: profile, overrides: overrides ?? []
-            ) {
-                return .failure(err)
-            }
         }
 
         guard let newPaneID = manager.splitPane(
@@ -928,6 +926,8 @@ final class GUIAutomationService {
     private struct RemoteFloatCreateRequest {
         let originalRef: String
         let sessionID: UUID
+        let profile: String?
+        let overrides: [String]
     }
 
     /// Parse/resolve the session ref and, for local sessions, create the
@@ -969,6 +969,14 @@ final class GUIAutomationService {
             return .failure(.sessionNotFound(ref))
         }
 
+        if let profile = profile {
+            if let err = Self.validateProfile(
+                manager: manager, id: profile, overrides: overrides ?? []
+            ) {
+                return .failure(err)
+            }
+        }
+
         if session.source.serverSessionID != nil {
             if let serverID = session.source.serverSessionID,
                !manager.attachedRemoteSessionIDs.contains(serverID) {
@@ -976,22 +984,12 @@ final class GUIAutomationService {
                     "session is detached; attach it first with 'tongyou app attach'"
                 ))
             }
-            if profile != nil || !(overrides ?? []).isEmpty {
-                return .failure(.unsupportedOperation(
-                    "profile/overrides not yet supported for remote sessions"
-                ))
-            }
             return .success(.remote(RemoteFloatCreateRequest(
-                originalRef: ref, sessionID: target.sessionID
+                originalRef: ref,
+                sessionID: target.sessionID,
+                profile: profile,
+                overrides: overrides ?? []
             )))
-        }
-
-        if let profile = profile {
-            if let err = Self.validateProfile(
-                manager: manager, id: profile, overrides: overrides ?? []
-            ) {
-                return .failure(err)
-            }
         }
 
         // Local: createFloatingPane operates on the active session — make
@@ -1448,7 +1446,11 @@ final class GUIAutomationService {
             }
             signal()
         }
-        _ = manager.createTab(inSessionID: sessionID)
+        _ = manager.createTab(
+            inSessionID: sessionID,
+            profileID: request.profile,
+            overrides: request.overrides
+        )
     }
 
     nonisolated private func splitRemotePaneBlocking(
@@ -1510,7 +1512,9 @@ final class GUIAutomationService {
         _ = manager.splitPane(
             inSessionID: sessionID,
             parentPaneID: request.paneID,
-            direction: request.direction
+            direction: request.direction,
+            profileID: request.profile,
+            overrides: request.overrides
         )
     }
 
@@ -1578,7 +1582,10 @@ final class GUIAutomationService {
            idx != manager.activeSessionIndex {
             manager.selectSession(at: idx)
         }
-        _ = manager.createFloatingPane()
+        _ = manager.createFloatingPane(
+            profileID: request.profile,
+            overrides: request.overrides
+        )
         if !GUIAutomationPolicy.shouldTakeViewFocus(),
            manager.activeSessionIndex != prevActiveIndex {
             manager.selectSession(at: prevActiveIndex)

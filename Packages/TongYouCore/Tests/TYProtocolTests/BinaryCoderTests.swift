@@ -684,10 +684,6 @@ struct BinaryCoderTests {
         #expect(decoded.cwd == nil)
         #expect(decoded.env.isEmpty)
         #expect(decoded.closeOnExit == nil)
-        #expect(decoded.initialX == nil)
-        #expect(decoded.initialY == nil)
-        #expect(decoded.initialWidth == nil)
-        #expect(decoded.initialHeight == nil)
         #expect(decoder.remaining == 0)
     }
 
@@ -701,11 +697,7 @@ struct BinaryCoderTests {
                 EnvVar(key: "LANG", value: "zh_CN.UTF-8"),
                 EnvVar(key: "EMOJI", value: "👨‍👩‍👧‍👦"),
             ],
-            closeOnExit: false,
-            initialX: 100,
-            initialY: -50,
-            initialWidth: 800,
-            initialHeight: 600
+            closeOnExit: false
         )
 
         var encoder = BinaryEncoder()
@@ -781,6 +773,53 @@ struct BinaryCoderTests {
         var decoder = BinaryDecoder(encoder.data)
         #expect(try decoder.readOptionalFloatFrameHint() == nil)
         #expect(try decoder.readOptionalFloatFrameHint() == hint)
+    }
+
+    // MARK: - FloatFrameHint <- ResolvedStartupFields
+
+    @Test func frameHintFromResolvedFieldsHappyPath() throws {
+        let fields = ResolvedStartupFields(
+            initialX: "0.25",
+            initialY: "0.3",
+            initialWidth: "0.5",
+            initialHeight: "0.4"
+        )
+        var warnings: [String] = []
+        let hint = FloatFrameHint(from: fields, warnings: &warnings)
+        #expect(hint == FloatFrameHint(x: 0.25, y: 0.3, width: 0.5, height: 0.4))
+        #expect(warnings.isEmpty)
+    }
+
+    @Test func frameHintFromResolvedFieldsReturnsNilWhenAllAbsent() throws {
+        let fields = ResolvedStartupFields()
+        var warnings: [String] = []
+        let hint = FloatFrameHint(from: fields, warnings: &warnings)
+        #expect(hint == nil)
+        #expect(warnings.isEmpty)
+    }
+
+    @Test func frameHintFromResolvedFieldsNilOnPartial() throws {
+        let fields = ResolvedStartupFields(
+            initialX: "0.1",
+            initialY: "0.1"
+        )
+        var warnings: [String] = []
+        let hint = FloatFrameHint(from: fields, warnings: &warnings)
+        #expect(hint == nil)
+        #expect(warnings.isEmpty)
+    }
+
+    @Test func frameHintFromResolvedFieldsNilAndWarnsOnMalformed() throws {
+        let fields = ResolvedStartupFields(
+            initialX: "wide",
+            initialY: "0.3",
+            initialWidth: "0.5",
+            initialHeight: "0.4"
+        )
+        var warnings: [String] = []
+        let hint = FloatFrameHint(from: fields, warnings: &warnings)
+        #expect(hint == nil)
+        #expect(warnings.contains { $0.contains("initial-x") && $0.contains("wide") })
     }
 
     // MARK: - Create-class messages (profileID + snapshot + frameHint)
@@ -889,9 +928,7 @@ struct BinaryCoderTests {
             command: "/usr/bin/env",
             args: ["sh", "-c", "true"],
             env: [EnvVar(key: "K", value: "V")],
-            closeOnExit: true,
-            initialX: 10,
-            initialWidth: 200
+            closeOnExit: true
         )
 
         var encoder = BinaryEncoder()

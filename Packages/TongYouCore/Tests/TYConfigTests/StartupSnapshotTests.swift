@@ -14,10 +14,6 @@ struct StartupSnapshotTests {
         #expect(snap.cwd == nil)
         #expect(snap.env.isEmpty)
         #expect(snap.closeOnExit == nil)
-        #expect(snap.initialX == nil)
-        #expect(snap.initialY == nil)
-        #expect(snap.initialWidth == nil)
-        #expect(snap.initialHeight == nil)
     }
 
     // MARK: - Factory from ResolvedStartupFields
@@ -89,45 +85,13 @@ struct StartupSnapshotTests {
         #expect(warnings.isEmpty)
     }
 
-    // MARK: - Int parsing
-
-    @Test func initialGeometryParsedAsInt() {
-        var warnings: [String] = []
-        let resolved = ResolvedStartupFields(
-            initialX: "100",
-            initialY: "-50",
-            initialWidth: "800",
-            initialHeight: "600"
-        )
-        let snap = StartupSnapshot(from: resolved, warnings: &warnings)
-        #expect(snap.initialX == 100)
-        #expect(snap.initialY == -50)
-        #expect(snap.initialWidth == 800)
-        #expect(snap.initialHeight == 600)
-        #expect(warnings.isEmpty)
-    }
-
-    @Test func nonIntegerInitialValuesProduceWarnings() {
-        var warnings: [String] = []
-        let resolved = ResolvedStartupFields(
-            initialX: "wide",
-            initialWidth: "12.5"
-        )
-        let snap = StartupSnapshot(from: resolved, warnings: &warnings)
-        #expect(snap.initialX == nil)
-        #expect(snap.initialWidth == nil)
-        #expect(warnings.contains { $0.contains("initial-x") && $0.contains("wide") })
-        #expect(warnings.contains { $0.contains("initial-width") && $0.contains("12.5") })
-    }
-
     // MARK: - Equality
 
     @Test func equalityCheckCoversAllFields() {
         let a = StartupSnapshot(
             command: "bash", args: ["-c", "echo"], cwd: "/tmp",
             env: [EnvVar(key: "K", value: "v")],
-            closeOnExit: true,
-            initialX: 1, initialY: 2, initialWidth: 3, initialHeight: 4
+            closeOnExit: true
         )
         var b = a
         #expect(a == b)
@@ -138,17 +102,14 @@ struct StartupSnapshotTests {
     // MARK: - Combined end-to-end
 
     @Test func endToEndFromResolvedProfile() throws {
-        // Simulate what ProfileMerger.resolve would return.
+        // Simulate what ProfileMerger.resolve would return for PTY fields;
+        // float-only `initial-*` fields no longer land in the snapshot.
         let resolved = ResolvedStartupFields(
             command: "/bin/bash",
             args: ["-l"],
             cwd: "~",
             env: [(key: "LANG", value: "en_US.UTF-8")],
-            closeOnExit: "false",
-            initialX: "10",
-            initialY: "20",
-            initialWidth: "100",
-            initialHeight: "200"
+            closeOnExit: "false"
         )
         var warnings: [String] = []
         let snap = StartupSnapshot(from: resolved, warnings: &warnings)
@@ -158,10 +119,6 @@ struct StartupSnapshotTests {
         #expect(snap.cwd == "~")
         #expect(snap.env == [EnvVar(key: "LANG", value: "en_US.UTF-8")])
         #expect(snap.closeOnExit == false)
-        #expect(snap.initialX == 10)
-        #expect(snap.initialY == 20)
-        #expect(snap.initialWidth == 100)
-        #expect(snap.initialHeight == 200)
         #expect(warnings.isEmpty)
     }
 }

@@ -297,20 +297,6 @@ public struct BinaryDecoder: Sendable {
         return EnvVar(key: key, value: value)
     }
 
-    /// Read a nilable `Int` field written as presence byte + `Int32` payload.
-    private mutating func readOptionalInt32() throws -> Int? {
-        let hasValue = try readUInt8()
-        switch hasValue {
-        case 0: return nil
-        case 1: return Int(try readInt32())
-        default:
-            throw BinaryDecoderError.invalidEnumValue(
-                type: "OptionalInt32.hasValue",
-                rawValue: UInt64(hasValue)
-            )
-        }
-    }
-
     /// Decode a `StartupSnapshot` written by `writeStartupSnapshot`.
     public mutating func readStartupSnapshot() throws -> StartupSnapshot {
         let hasCommand = try readBool()
@@ -341,21 +327,12 @@ public struct BinaryDecoder: Sendable {
             )
         }
 
-        let initialX = try readOptionalInt32()
-        let initialY = try readOptionalInt32()
-        let initialWidth = try readOptionalInt32()
-        let initialHeight = try readOptionalInt32()
-
         return StartupSnapshot(
             command: command,
             args: args,
             cwd: cwd,
             env: env,
-            closeOnExit: closeOnExit,
-            initialX: initialX,
-            initialY: initialY,
-            initialWidth: initialWidth,
-            initialHeight: initialHeight
+            closeOnExit: closeOnExit
         )
     }
 

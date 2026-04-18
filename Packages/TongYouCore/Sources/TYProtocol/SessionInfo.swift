@@ -1,4 +1,5 @@
 import Foundation
+import TYConfig
 import TYTerminal
 
 /// Per-pane metadata sent alongside session info from the server.
@@ -102,6 +103,33 @@ public struct FloatFrameHint: Equatable, Sendable, Codable {
         self.y = y
         self.width = width
         self.height = height
+    }
+
+    /// Build a `FloatFrameHint` from the raw float-only `initial-*` strings
+    /// on a `ResolvedStartupFields`. All four must be present and parse as
+    /// `Float`; otherwise returns `nil`. Partial / malformed inputs append
+    /// entries to `warnings` so callers can surface them (matching the
+    /// contract of `StartupSnapshot.init(from:warnings:)`).
+    public init?(from fields: ResolvedStartupFields, warnings: inout [String]) {
+        let x = Self.parseFloat(fields.initialX, fieldName: "initial-x", warnings: &warnings)
+        let y = Self.parseFloat(fields.initialY, fieldName: "initial-y", warnings: &warnings)
+        let w = Self.parseFloat(fields.initialWidth, fieldName: "initial-width", warnings: &warnings)
+        let h = Self.parseFloat(fields.initialHeight, fieldName: "initial-height", warnings: &warnings)
+        guard let x, let y, let w, let h else { return nil }
+        self.init(x: x, y: y, width: w, height: h)
+    }
+
+    private static func parseFloat(
+        _ raw: String?,
+        fieldName: String,
+        warnings: inout [String]
+    ) -> Float? {
+        guard let raw else { return nil }
+        if let value = Float(raw) {
+            return value
+        }
+        warnings.append("Invalid float for '\(fieldName)': '\(raw)'")
+        return nil
     }
 }
 

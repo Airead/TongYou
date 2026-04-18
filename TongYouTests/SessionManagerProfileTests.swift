@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import TYConfig
+import TYProtocol
 import TYServer
 import TYTerminal
 @testable import TongYou
@@ -316,5 +317,85 @@ struct SessionManagerProfileTests {
         let floatPane = try #require(mgr.findPane(id: floatID))
         #expect(floatPane.profileID == "custom")
         #expect(floatPane.startupSnapshot.command == "/bin/bash")
+    }
+
+    // MARK: - Phase 7.3: resolveRemoteStartupBundle
+
+    @Test func remoteBundlePackagesCommandAndEnv() throws {
+        let mgr = try makeManager(profiles: [
+            "ci": """
+            command = /usr/bin/env
+            args = -i
+            env = TY_CI=1
+            close-on-exit = false
+            """
+        ])
+        let bundle = mgr.resolveRemoteStartupBundle(
+            profileID: "ci",
+            overrides: [],
+            initialWorkingDirectory: nil
+        )
+        #expect(bundle.profileID == "ci")
+        #expect(bundle.snapshot?.command == "/usr/bin/env")
+        #expect(bundle.snapshot?.args == ["-i"])
+        #expect(bundle.snapshot?.closeOnExit == false)
+        let env = Dictionary(uniqueKeysWithValues: bundle.snapshot?.envTuples ?? [])
+        #expect(env["TY_CI"] == "1")
+        #expect(bundle.frameHint == nil)
+    }
+
+    @Test func remoteBundleProducesFrameHintFromInitialFields() throws {
+        let mgr = try makeManager(profiles: [
+            "floaty": """
+            command = /bin/bash
+            initial-x = 0.1
+            initial-y = 0.2
+            initial-width = 0.5
+            initial-height = 0.3
+            """
+        ])
+        let bundle = mgr.resolveRemoteStartupBundle(
+            profileID: "floaty",
+            overrides: [],
+            initialWorkingDirectory: nil
+        )
+        #expect(bundle.frameHint == FloatFrameHint(x: 0.1, y: 0.2, width: 0.5, height: 0.3))
+    }
+
+    @Test func remoteBundleOverridesFoldIntoSnapshot() throws {
+        let mgr = try makeManager(profiles: [
+            "ci": "command = /bin/bash"
+        ])
+        let bundle = mgr.resolveRemoteStartupBundle(
+            profileID: "ci",
+            overrides: ["env=EXTRA=yes"],
+            initialWorkingDirectory: nil
+        )
+        let env = Dictionary(uniqueKeysWithValues: bundle.snapshot?.envTuples ?? [])
+        #expect(env["EXTRA"] == "yes")
+    }
+
+    @Test func remoteBundleCwdFallsBackToCallerSupplied() throws {
+        let mgr = try makeManager(profiles: [
+            "ci": "command = /bin/bash"
+        ])
+        let bundle = mgr.resolveRemoteStartupBundle(
+            profileID: "ci",
+            overrides: [],
+            initialWorkingDirectory: "/tmp/remote-test"
+        )
+        #expect(bundle.snapshot?.cwd == "/tmp/remote-test")
+    }
+
+    @Test func remoteBundleFallsBackToNilOnUnknownProfile() throws {
+        let mgr = try makeManager()
+        let bundle = mgr.resolveRemoteStartupBundle(
+            profileID: "does-not-exist",
+            overrides: [],
+            initialWorkingDirectory: nil
+        )
+        #expect(bundle.profileID == nil)
+        #expect(bundle.snapshot == nil)
+        #expect(bundle.frameHint == nil)
     }
 }

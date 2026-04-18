@@ -68,8 +68,10 @@ final class SessionManager {
     /// Maps pane ID to the process exit code.
     private(set) var exitedFloatingPanes: [UUID: Int32] = [:]
 
-    /// Command info for floating panes created via `createFloatingPaneWithCommand`.
-    /// Keyed by local pane ID. Used to determine exit behavior and re-run commands.
+    /// Command info for floating panes created by `runCommand` (local
+    /// `createLocalCommandFloat`) or by the remote round-trip populated in
+    /// `buildFloatingPane`. Keyed by local pane ID. Used to determine exit
+    /// behavior (zombie keep-alive vs. tear-down) and to re-run commands.
     private(set) var floatingPaneCommands: [UUID: FloatingPaneCommandInfo] = [:]
 
     /// Tree panes whose process has exited but are kept open per
@@ -545,7 +547,16 @@ final class SessionManager {
         let session = sessions[targetIndex]
 
         if let serverSessionID = session.source.serverSessionID {
-            remoteClient?.createTab(sessionID: SessionID(serverSessionID))
+            let bundle = resolveRemoteStartupBundle(
+                profileID: profileID ?? TerminalPane.defaultProfileID,
+                overrides: overrides,
+                initialWorkingDirectory: initialWorkingDirectory
+            )
+            remoteClient?.createTab(
+                sessionID: SessionID(serverSessionID),
+                profileID: bundle.profileID,
+                snapshot: bundle.snapshot
+            )
             return nil
         }
 
@@ -770,10 +781,15 @@ final class SessionManager {
 
         if let sid = session.source.serverSessionID,
            let serverPaneUUID = serverPaneUUID(for: paneID) {
+            // Overload-1 lacks a profile context; pass nil so the server
+            // falls back to parent-pane inheritance. Profile-aware callers
+            // use the `parentPaneID:` overload below.
             remoteClient?.splitPane(
                 sessionID: SessionID(sid),
                 paneID: PaneID(serverPaneUUID),
-                direction: direction
+                direction: direction,
+                profileID: nil,
+                snapshot: nil
             )
             return false
         }
@@ -819,16 +835,26 @@ final class SessionManager {
         }
         let session = sessions[targetIndex]
 
-        // Remote sessions: the server owns allocation. Dispatch the RPC
-        // and let layoutUpdate materialize the new pane. `newPane` is a
-        // placeholder the local SessionManager discards on the remote
-        // branch of the existing overload.
+        // Remote sessions: the server owns allocation. Resolve the profile
+        // client-side and ship the snapshot over the wire; the server
+        // launches the PTY with those fields. layoutUpdate materializes
+        // the new pane locally.
         if let sid = session.source.serverSessionID,
            let serverPaneUUID = serverPaneUUID(for: parentPaneID) {
+            let inheritedProfileID = profileID
+                ?? self.profileID(ofPane: parentPaneID)
+                ?? TerminalPane.defaultProfileID
+            let bundle = resolveRemoteStartupBundle(
+                profileID: inheritedProfileID,
+                overrides: overrides,
+                initialWorkingDirectory: initialWorkingDirectory
+            )
             remoteClient?.splitPane(
                 sessionID: SessionID(sid),
                 paneID: PaneID(serverPaneUUID),
-                direction: direction
+                direction: direction,
+                profileID: bundle.profileID,
+                snapshot: bundle.snapshot
             )
             return nil
         }
@@ -987,9 +1013,23 @@ final class SessionManager {
         if let serverSessionID = session.source.serverSessionID,
            let tabIDs = serverTabIDs[session.id],
            tabIDs.indices.contains(session.activeTabIndex) {
+            let activeTab = session.activeTab
+            let parentProfileID = activeTab?.focusedPaneID.flatMap { self.profileID(ofPane: $0) }
+                ?? activeTab?.paneTree.firstPane.profileID
+            let effectiveProfileID = profileID
+                ?? parentProfileID
+                ?? TerminalPane.defaultProfileID
+            let bundle = resolveRemoteStartupBundle(
+                profileID: effectiveProfileID,
+                overrides: overrides,
+                initialWorkingDirectory: initialWorkingDirectory
+            )
             remoteClient?.createFloatingPane(
                 sessionID: SessionID(serverSessionID),
-                tabID: tabIDs[session.activeTabIndex]
+                tabID: tabIDs[session.activeTabIndex],
+                profileID: bundle.profileID,
+                snapshot: bundle.snapshot,
+                frameHint: bundle.frameHint
             )
             return nil
         }
@@ -1077,6 +1117,76 @@ final class SessionManager {
     /// appropriate transport-layer error.
     func tryResolveProfile(id: String, overrides: [String] = []) throws {
         _ = try profileMerger.resolve(profileID: id, overrides: overrides)
+    }
+
+    /// Resolved pieces the remote-create path needs to send over the wire.
+    /// `profileID` is the id the server should record as a label (may fall
+    /// back to `default` if the requested id could not be resolved);
+    /// `snapshot` is the PTY startup bundle; `frameHint` is the optional
+    /// float-only geometry. All three are `nil` when resolution failed and
+    /// we want to fall back to the server's inheritance behavior.
+    struct RemoteStartupBundle {
+        let profileID: String?
+        let snapshot: StartupSnapshot?
+        let frameHint: FloatFrameHint?
+    }
+
+    /// Resolve a profile + overrides for the remote-create path. Mirrors the
+    /// logic of `createPane`, but produces a `(profileID, snapshot,
+    /// frameHint)` triple suitable for wire transmission instead of a local
+    /// `TerminalPane`. GUI callers (Phase 7.3) pre-validate via
+    /// `tryResolveProfile`, so a failure here indicates a race (profile
+    /// deleted between validate and create) — we log and send a bare
+    /// request, preserving the server's inheritance fallback.
+    func resolveRemoteStartupBundle(
+        profileID: String?,
+        overrides: [String],
+        initialWorkingDirectory: String?
+    ) -> RemoteStartupBundle {
+        let requestedID: String = {
+            if let explicit = profileID {
+                return explicit
+            }
+            if let forced = ProcessInfo.processInfo.environment[Self.testProfileEnvVar],
+               !forced.isEmpty {
+                return forced
+            }
+            return TerminalPane.defaultProfileID
+        }()
+
+        let resolved: ResolvedProfile
+        do {
+            resolved = try profileMerger.resolve(profileID: requestedID, overrides: overrides)
+        } catch {
+            NSLog("SessionManager: remote profile '%@' resolve failed (%@); sending bare request",
+                  requestedID, String(describing: error))
+            return RemoteStartupBundle(profileID: nil, snapshot: nil, frameHint: nil)
+        }
+
+        for warning in resolved.warnings {
+            NSLog("SessionManager: profile '%@' warning: %@", requestedID, warning)
+        }
+
+        var snapshotWarnings: [String] = []
+        var snapshot = StartupSnapshot(from: resolved.startup, warnings: &snapshotWarnings)
+        for warning in snapshotWarnings {
+            NSLog("SessionManager: profile '%@' snapshot warning: %@", requestedID, warning)
+        }
+        if snapshot.cwd == nil, let cwd = initialWorkingDirectory {
+            snapshot.cwd = cwd
+        }
+
+        var hintWarnings: [String] = []
+        let frameHint = FloatFrameHint(from: resolved.startup, warnings: &hintWarnings)
+        for warning in hintWarnings {
+            NSLog("SessionManager: profile '%@' frame-hint warning: %@", requestedID, warning)
+        }
+
+        return RemoteStartupBundle(
+            profileID: resolved.profileID,
+            snapshot: snapshot,
+            frameHint: frameHint
+        )
     }
 
     /// Resolve `profileID` and call-site `overrides` into a `TerminalPane`
@@ -2298,7 +2408,7 @@ final class SessionManager {
                 let cwd = activeController(for: paneID)?.currentWorkingDirectory
                 let resolvedCommand = await resolveCommandPath(command, workingDirectory: cwd)
                 let wrapped = wrapCommandInLoginShell(resolvedCommand, arguments: arguments)
-                return createFloatingPaneWithCommand(workingDirectory: cwd, command: wrapped.command, arguments: wrapped.arguments, closeOnExit: options.closeOnExit, customFrame: options.paneFrame)
+                return createLocalCommandFloat(workingDirectory: cwd, command: wrapped.command, arguments: wrapped.arguments, closeOnExit: options.closeOnExit, customFrame: options.paneFrame)
             } else {
                 await runCommandInFloatingPane(at: paneID, command: command, arguments: arguments, closeOnExit: options.closeOnExit, customFrame: options.paneFrame)
             }
@@ -2331,41 +2441,50 @@ final class SessionManager {
         return nil
     }
 
-    /// Run a command in a new floating pane. Output is visible; ESC closes after exit.
-    /// Automatically uses the remote or local path based on the active session.
+    /// Run a command in a new floating pane on a remote session. Output is
+    /// visible; ESC closes after exit. `runCommand` already dispatches the
+    /// local path inline, so this is remote-only.
     private func runCommandInFloatingPane(at paneID: UUID, command: String, arguments: [String], closeOnExit: Bool, customFrame: CGRect? = nil) async {
         guard sessions.indices.contains(activeSessionIndex) else { return }
         let session = sessions[activeSessionIndex]
+        guard let serverSessionID = session.source.serverSessionID,
+              let tabIDs = serverTabIDs[session.id],
+              tabIDs.indices.contains(session.activeTabIndex) else { return }
 
-        if let serverSessionID = session.source.serverSessionID {
-            guard let tabIDs = serverTabIDs[session.id],
-                  tabIDs.indices.contains(session.activeTabIndex) else { return }
-            pendingRemoteCommandInfos.append(FloatingPaneCommandInfo(
-                command: command, arguments: arguments,
-                workingDirectory: nil, closeOnExit: closeOnExit
-            ))
-            remoteClient?.createFloatingPaneWithCommand(
-                sessionID: SessionID(serverSessionID),
-                tabID: tabIDs[session.activeTabIndex],
-                command: command,
-                arguments: arguments,
-                frameX: customFrame.map { Float($0.origin.x) },
-                frameY: customFrame.map { Float($0.origin.y) },
-                frameWidth: customFrame.map { Float($0.width) },
-                frameHeight: customFrame.map { Float($0.height) }
+        pendingRemoteCommandInfos.append(FloatingPaneCommandInfo(
+            command: command, arguments: arguments,
+            workingDirectory: nil, closeOnExit: closeOnExit
+        ))
+        let snapshot = StartupSnapshot(
+            command: command,
+            args: arguments,
+            closeOnExit: closeOnExit
+        )
+        let frameHint = customFrame.map {
+            FloatFrameHint(
+                x: Float($0.origin.x),
+                y: Float($0.origin.y),
+                width: Float($0.width),
+                height: Float($0.height)
             )
-        } else {
-            guard let active = activeController(for: paneID) as? TerminalController else { return }
-            let cwd = active.currentWorkingDirectory
-            let resolvedCommand = await resolveCommandPath(command, workingDirectory: cwd)
-            let wrapped = wrapCommandInLoginShell(resolvedCommand, arguments: arguments)
-            createFloatingPaneWithCommand(workingDirectory: cwd, command: wrapped.command, arguments: wrapped.arguments, closeOnExit: closeOnExit, customFrame: customFrame)
         }
+        remoteClient?.createFloatingPane(
+            sessionID: SessionID(serverSessionID),
+            tabID: tabIDs[session.activeTabIndex],
+            profileID: nil,
+            snapshot: snapshot,
+            frameHint: frameHint
+        )
     }
 
-    /// Create a local floating pane that runs a command directly (no shell spawned first).
+    /// Create a local floating pane that runs a command directly (no shell
+    /// spawned first). The command/closeOnExit pair is stashed in
+    /// `floatingPaneCommands` so exit handling and Enter-to-rerun still
+    /// work. Local-only: remote sessions go through
+    /// `runCommandInFloatingPane`, which ships a `StartupSnapshot` over the
+    /// wire instead.
     @discardableResult
-    private func createFloatingPaneWithCommand(workingDirectory: String?, command: String, arguments: [String], closeOnExit: Bool, customFrame: CGRect? = nil) -> UUID? {
+    private func createLocalCommandFloat(workingDirectory: String?, command: String, arguments: [String], closeOnExit: Bool, customFrame: CGRect? = nil) -> UUID? {
         guard sessions.indices.contains(activeSessionIndex),
               sessions[activeSessionIndex].tabs.indices.contains(
                   sessions[activeSessionIndex].activeTabIndex) else { return nil }

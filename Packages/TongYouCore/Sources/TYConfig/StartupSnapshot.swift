@@ -27,31 +27,19 @@ public struct StartupSnapshot: Sendable, Equatable {
     /// user can read the output; the pane is marked exited and can be
     /// dismissed manually.
     public var closeOnExit: Bool?
-    public var initialX: Int?
-    public var initialY: Int?
-    public var initialWidth: Int?
-    public var initialHeight: Int?
 
     public init(
         command: String? = nil,
         args: [String] = [],
         cwd: String? = nil,
         env: [EnvVar] = [],
-        closeOnExit: Bool? = nil,
-        initialX: Int? = nil,
-        initialY: Int? = nil,
-        initialWidth: Int? = nil,
-        initialHeight: Int? = nil
+        closeOnExit: Bool? = nil
     ) {
         self.command = command
         self.args = args
         self.cwd = cwd
         self.env = env
         self.closeOnExit = closeOnExit
-        self.initialX = initialX
-        self.initialY = initialY
-        self.initialWidth = initialWidth
-        self.initialHeight = initialHeight
     }
 
     /// Convenience accessor: env as `(key, value)` tuples in insertion order.
@@ -65,8 +53,9 @@ public struct StartupSnapshot: Sendable, Equatable {
 extension StartupSnapshot {
 
     /// Build a snapshot from resolved profile startup fields. Any invalid
-    /// string values (e.g. non-integer `initial-x`) are dropped and appended
-    /// to `warnings`.
+    /// string values (e.g. non-boolean `close-on-exit`) are dropped and
+    /// appended to `warnings`. Float-only `initial-*` fields are not PTY
+    /// startup parameters and live on `FloatFrameHint` instead.
     public init(
         from resolved: ResolvedStartupFields,
         warnings: inout [String]
@@ -79,26 +68,6 @@ extension StartupSnapshot {
         self.closeOnExit = Self.parseBool(
             resolved.closeOnExit,
             fieldName: "close-on-exit",
-            warnings: &warnings
-        )
-        self.initialX = Self.parseInt(
-            resolved.initialX,
-            fieldName: "initial-x",
-            warnings: &warnings
-        )
-        self.initialY = Self.parseInt(
-            resolved.initialY,
-            fieldName: "initial-y",
-            warnings: &warnings
-        )
-        self.initialWidth = Self.parseInt(
-            resolved.initialWidth,
-            fieldName: "initial-width",
-            warnings: &warnings
-        )
-        self.initialHeight = Self.parseInt(
-            resolved.initialHeight,
-            fieldName: "initial-height",
             warnings: &warnings
         )
     }
@@ -127,18 +96,5 @@ extension StartupSnapshot {
             )
             return nil
         }
-    }
-
-    private static func parseInt(
-        _ raw: String?,
-        fieldName: String,
-        warnings: inout [String]
-    ) -> Int? {
-        guard let raw else { return nil }
-        if let value = Int(raw) {
-            return value
-        }
-        warnings.append("Invalid integer for '\(fieldName)': '\(raw)'")
-        return nil
     }
 }
