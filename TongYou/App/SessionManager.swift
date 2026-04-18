@@ -76,6 +76,18 @@ final class SessionManager {
     /// local session UUID on success or `nil` on disconnect/timeout.
     private var pendingRemoteCreateHandlers: [String: (UUID?) -> Void] = [:]
 
+    /// FIFO queues of completions awaiting the next newly-materialized tab
+    /// in a remote session's layoutUpdate. Keyed by local session UUID.
+    /// Each arriving tab (identified by a server TabID not previously seen)
+    /// pops one completion and delivers the corresponding local tab UUID.
+    /// On disconnect, pending completions fire with `nil`.
+    private var pendingRemoteTabCreates: [UUID: [(UUID?) -> Void]] = [:]
+
+    /// FIFO queues of completions awaiting the next newly-materialized tree
+    /// pane in a remote session's layoutUpdate. Keyed by local session UUID.
+    /// See `pendingRemoteTabCreates` for semantics.
+    private var pendingRemotePaneSplits: [UUID: [(UUID?) -> Void]] = [:]
+
     /// Local session persistence store.
     private let localSessionStore: SessionStore
 
@@ -1077,6 +1089,58 @@ final class SessionManager {
         for handler in handlers.values {
             handler(nil)
         }
+
+        let tabQueues = pendingRemoteTabCreates
+        pendingRemoteTabCreates.removeAll()
+        for queue in tabQueues.values { for completion in queue { completion(nil) } }
+
+        let paneQueues = pendingRemotePaneSplits
+        pendingRemotePaneSplits.removeAll()
+        for queue in paneQueues.values { for completion in queue { completion(nil) } }
+    }
+
+    /// Register a one-shot FIFO listener for the next tab that appears in
+    /// the given remote session via a `layoutUpdate`. `completion` fires
+    /// with the local tab UUID on success, or `nil` if the connection
+    /// drops before a matching update arrives.
+    ///
+    /// Intended for automation flows that need to bridge the daemon's
+    /// async layoutUpdate to a synchronous CLI response. Each newly-
+    /// observed server TabID pops one completion off the queue, in order.
+    func onNextRemoteTabCreated(
+        inSessionID sessionID: UUID,
+        completion: @escaping (UUID?) -> Void
+    ) {
+        pendingRemoteTabCreates[sessionID, default: []].append(completion)
+    }
+
+    /// Register a one-shot FIFO listener for the next tree pane that
+    /// appears in the given remote session via a `layoutUpdate`. See
+    /// `onNextRemoteTabCreated` for semantics.
+    func onNextRemotePaneCreated(
+        inSessionID sessionID: UUID,
+        completion: @escaping (UUID?) -> Void
+    ) {
+        pendingRemotePaneSplits[sessionID, default: []].append(completion)
+    }
+
+    /// Pop completions from the per-session FIFO queue and deliver the
+    /// newly-materialized IDs one-for-one. When the queue key exists and
+    /// becomes empty, it is removed to keep the dictionary tidy.
+    ///
+    /// Exposed as internal so the drain semantics can be unit-tested
+    /// without materializing a full remote session.
+    static func drainRemoteCreateListeners(
+        queue: inout [(UUID?) -> Void]?,
+        ids: [UUID]
+    ) {
+        guard var pending = queue, !pending.isEmpty, !ids.isEmpty else { return }
+        var idIterator = ids.makeIterator()
+        while let id = idIterator.next(), !pending.isEmpty {
+            let completion = pending.removeFirst()
+            completion(id)
+        }
+        queue = pending.isEmpty ? nil : pending
     }
 
     /// Remove all remote sessions, controllers, and mappings.
@@ -1379,7 +1443,9 @@ final class SessionManager {
             sessions[sessionIndex].name = resolvedName
         }
 
+        let localSessionID = sessions[sessionIndex].id
         let oldPaneIDs = Set(sessions[sessionIndex].allPaneIDs)
+        let oldServerTabIDs = Set(serverTabIDs[localSessionID] ?? [])
 
         let newTabs = buildTabs(from: info)
 
@@ -1387,7 +1453,7 @@ final class SessionManager {
         if newTabs.isEmpty {
             let removedPaneIDs = Array(oldPaneIDs)
             teardownRemotePanes(oldPaneIDs)
-            onRemoteSessionEmpty?(sessions[sessionIndex].id, removedPaneIDs)
+            onRemoteSessionEmpty?(localSessionID, removedPaneIDs)
             return removedPaneIDs
         }
 
@@ -1395,12 +1461,32 @@ final class SessionManager {
         sessions[sessionIndex].activeTabIndex = min(
             info.activeTabIndex, max(sessions[sessionIndex].tabs.count - 1, 0)
         )
-        serverTabIDs[sessions[sessionIndex].id] = info.tabs.map(\.id)
+        serverTabIDs[localSessionID] = info.tabs.map(\.id)
 
         let newPaneIDs = Set(sessions[sessionIndex].allPaneIDs)
         let removedPaneIDs = oldPaneIDs.subtracting(newPaneIDs)
         let addedPaneIDs = newPaneIDs.subtracting(oldPaneIDs)
         teardownRemotePanes(removedPaneIDs)
+
+        // Automation bridge: drain pending tab/pane-create listeners in the
+        // order that new entries appear. Tabs are identified by server
+        // TabID (local tab UUIDs regenerate on every layoutUpdate) while
+        // panes reuse stable local UUIDs via `serverToLocalPaneID`.
+        let addedLocalTabIDs = zip(info.tabs, sessions[sessionIndex].tabs).compactMap {
+            tabInfo, localTab -> UUID? in
+            oldServerTabIDs.contains(tabInfo.id) ? nil : localTab.id
+        }
+        Self.drainRemoteCreateListeners(
+            queue: &pendingRemoteTabCreates[localSessionID],
+            ids: addedLocalTabIDs
+        )
+        // Pane IDs come from a Set — order isn't meaningful for split-result
+        // matching, so pass through as-is. In practice only one pane is added
+        // per layoutUpdate in response to a split request.
+        Self.drainRemoteCreateListeners(
+            queue: &pendingRemotePaneSplits[localSessionID],
+            ids: Array(addedPaneIDs)
+        )
 
         applyPaneMetadata(info.paneMetadata)
 

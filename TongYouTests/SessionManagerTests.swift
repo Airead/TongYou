@@ -835,4 +835,74 @@ struct SessionManagerOverlayStackTests {
 
         #expect(mgr.activeController(for: paneID) == nil)
     }
+
+    // MARK: - Remote create-listener FIFO
+
+    @Test func drainListenersDeliversIDsInFIFOOrder() {
+        var queue: [(UUID?) -> Void]? = []
+        var delivered: [UUID?] = []
+        queue?.append { delivered.append($0) }
+        queue?.append { delivered.append($0) }
+
+        let a = UUID(), b = UUID()
+        SessionManager.drainRemoteCreateListeners(queue: &queue, ids: [a, b])
+
+        #expect(delivered == [a, b])
+        #expect(queue == nil)
+    }
+
+    @Test func drainListenersKeepsUnmatchedPending() {
+        var queue: [(UUID?) -> Void]? = []
+        var delivered: [UUID?] = []
+        queue?.append { delivered.append($0) }
+        queue?.append { delivered.append($0) }
+
+        let a = UUID()
+        // Only one new ID but two pending — first satisfied, second stays.
+        SessionManager.drainRemoteCreateListeners(queue: &queue, ids: [a])
+
+        #expect(delivered == [a])
+        #expect(queue?.count == 1)
+    }
+
+    @Test func drainListenersIgnoresExtraIDs() {
+        var queue: [(UUID?) -> Void]? = []
+        var delivered: [UUID?] = []
+        queue?.append { delivered.append($0) }
+
+        let a = UUID(), b = UUID()
+        // Two IDs but only one pending listener — second ID is dropped
+        // (it belongs to no waiting caller).
+        SessionManager.drainRemoteCreateListeners(queue: &queue, ids: [a, b])
+
+        #expect(delivered == [a])
+        #expect(queue == nil)
+    }
+
+    @Test func drainListenersNoOpOnEmptyInputs() {
+        var emptyQueue: [(UUID?) -> Void]? = nil
+        SessionManager.drainRemoteCreateListeners(queue: &emptyQueue, ids: [UUID()])
+        #expect(emptyQueue == nil)
+
+        var queueWithOne: [(UUID?) -> Void]? = [{ _ in Issue.record("should not fire") }]
+        SessionManager.drainRemoteCreateListeners(queue: &queueWithOne, ids: [])
+        #expect(queueWithOne?.count == 1)
+    }
+
+    @Test func onNextRemoteTabCreatedIsNoOpWithoutRemoteInfra() {
+        // The public registration API should accept listeners even before
+        // any remote session exists — they simply stay pending. Nothing to
+        // drain them here, but the call itself must not crash.
+        let mgr = makeManager()
+        var fired = false
+        mgr.onNextRemoteTabCreated(inSessionID: UUID()) { _ in fired = true }
+        #expect(fired == false)
+    }
+
+    @Test func onNextRemotePaneCreatedIsNoOpWithoutRemoteInfra() {
+        let mgr = makeManager()
+        var fired = false
+        mgr.onNextRemotePaneCreated(inSessionID: UUID()) { _ in fired = true }
+        #expect(fired == false)
+    }
 }

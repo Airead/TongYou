@@ -208,7 +208,18 @@ final class GUIAutomationService {
     // mutate model state without activating the window.
 
     nonisolated private func handleTabCreate(ref: String) -> Result<TabCreateResponse, AutomationError> {
-        Self.runOnMain { self.tabCreateOnMain(ref: ref) }
+        let remote: RemoteTabCreateRequest?
+        switch (Self.runOnMain { self.resolveTabCreateTarget(ref: ref) }) {
+        case .failure(let err): return .failure(err)
+        case .success(let decision):
+            switch decision {
+            case .local(let response): return .success(response)
+            case .failed(let err): return .failure(err)
+            case .remote(let req): remote = req
+            }
+        }
+        guard let remote else { return .failure(.internal("tab.create decision missing")) }
+        return createRemoteTabBlocking(request: remote)
     }
 
     nonisolated private func handleTabSelect(ref: String) -> Result<Void, AutomationError> {
@@ -223,7 +234,18 @@ final class GUIAutomationService {
         ref: String,
         direction: SplitDirection
     ) -> Result<PaneSplitResponse, AutomationError> {
-        Self.runOnMain { self.paneSplitOnMain(ref: ref, direction: direction) }
+        let remote: RemotePaneSplitRequest?
+        switch (Self.runOnMain { self.resolvePaneSplitTarget(ref: ref, direction: direction) }) {
+        case .failure(let err): return .failure(err)
+        case .success(let decision):
+            switch decision {
+            case .local(let response): return .success(response)
+            case .failed(let err): return .failure(err)
+            case .remote(let req): remote = req
+            }
+        }
+        guard let remote else { return .failure(.internal("pane.split decision missing")) }
+        return splitRemotePaneBlocking(request: remote)
     }
 
     nonisolated private func handlePaneFocus(ref: String) -> Result<Void, AutomationError> {
@@ -347,7 +369,24 @@ final class GUIAutomationService {
 
     // MARK: - Phase 5 main-actor operations
 
-    private func tabCreateOnMain(ref: String) -> Result<TabCreateResponse, AutomationError> {
+    /// Outcome of `resolveTabCreateTarget` — either the operation fully
+    /// completed locally, or a remote request is ready to dispatch.
+    private enum TabCreateDecision {
+        case local(TabCreateResponse)
+        case remote(RemoteTabCreateRequest)
+        case failed(AutomationError)
+    }
+
+    /// Parameters threaded to the connection-thread blocking waiter.
+    private struct RemoteTabCreateRequest {
+        let originalRef: String
+        let sessionID: UUID
+    }
+
+    /// Parse/resolve the ref and, for local sessions, perform the tab
+    /// create inline. For remote sessions, fall through to the caller so
+    /// it can dispatch a blocking wait without holding the main actor.
+    private func resolveTabCreateTarget(ref: String) -> Result<TabCreateDecision, AutomationError> {
         let snapshots = Self.collectSnapshots()
         refStore.refreshRefs(snapshots: snapshots)
 
@@ -378,20 +417,31 @@ final class GUIAutomationService {
         guard let session = manager.sessions.first(where: { $0.id == target.sessionID }) else {
             return .failure(.sessionNotFound(ref))
         }
+
         if session.source.serverSessionID != nil {
-            return .failure(.unsupportedOperation(
-                "tab.create is not yet supported for remote sessions"
-            ))
+            // Remote session: the server owns tab allocation. Verify it's
+            // attached — sending createTab to the daemon for a detached
+            // session would silently no-op, so report it explicitly.
+            if let serverID = session.source.serverSessionID,
+               !manager.attachedRemoteSessionIDs.contains(serverID) {
+                return .failure(.unsupportedOperation(
+                    "session is detached; attach it first with 'tongyou app attach'"
+                ))
+            }
+            return .success(.remote(RemoteTabCreateRequest(
+                originalRef: ref, sessionID: target.sessionID
+            )))
         }
+
         guard let newTabID = manager.createTab(inSessionID: target.sessionID) else {
-            return .failure(.internal("tab.create failed"))
+            return .success(.failed(.internal("tab.create failed")))
         }
         let postSnapshots = Self.collectSnapshots()
         refStore.refreshRefs(snapshots: postSnapshots)
         guard let newRef = refStore.tabRef(sessionID: target.sessionID, tabID: newTabID) else {
-            return .failure(.internal("ref allocation failed for new tab"))
+            return .success(.failed(.internal("ref allocation failed for new tab")))
         }
-        return .success(TabCreateResponse(ref: newRef))
+        return .success(.local(TabCreateResponse(ref: newRef)))
     }
 
     private func tabSelectOnMain(ref: String) -> Result<Void, AutomationError> {
@@ -414,10 +464,29 @@ final class GUIAutomationService {
         }
     }
 
-    private func paneSplitOnMain(
+    /// Outcome of `resolvePaneSplitTarget` — either the split fully
+    /// completed locally, or a remote request is ready to dispatch.
+    private enum PaneSplitDecision {
+        case local(PaneSplitResponse)
+        case remote(RemotePaneSplitRequest)
+        case failed(AutomationError)
+    }
+
+    /// Parameters threaded to the connection-thread blocking waiter.
+    private struct RemotePaneSplitRequest {
+        let originalRef: String
+        let sessionID: UUID
+        let paneID: UUID
+        let direction: SplitDirection
+    }
+
+    /// Parse/resolve the ref and pick the target pane. For local sessions,
+    /// run the split inline. For remote, package the request so the caller
+    /// can block-wait on the server's layoutUpdate.
+    private func resolvePaneSplitTarget(
         ref: String,
         direction: SplitDirection
-    ) -> Result<PaneSplitResponse, AutomationError> {
+    ) -> Result<PaneSplitDecision, AutomationError> {
         let snapshots = Self.collectSnapshots()
         refStore.refreshRefs(snapshots: snapshots)
 
@@ -435,11 +504,6 @@ final class GUIAutomationService {
         }
         guard let session = manager.sessions.first(where: { $0.id == target.sessionID }) else {
             return .failure(.sessionNotFound(ref))
-        }
-        if session.source.serverSessionID != nil {
-            return .failure(.unsupportedOperation(
-                "pane.split is not yet supported for remote sessions"
-            ))
         }
         // Float panes cannot be split.
         if target.floatID != nil {
@@ -465,6 +529,21 @@ final class GUIAutomationService {
             }
         }
 
+        if session.source.serverSessionID != nil {
+            if let serverID = session.source.serverSessionID,
+               !manager.attachedRemoteSessionIDs.contains(serverID) {
+                return .failure(.unsupportedOperation(
+                    "session is detached; attach it first with 'tongyou app attach'"
+                ))
+            }
+            return .success(.remote(RemotePaneSplitRequest(
+                originalRef: ref,
+                sessionID: target.sessionID,
+                paneID: paneID,
+                direction: direction
+            )))
+        }
+
         let newPane = TerminalPane()
         guard manager.splitPane(
             inSessionID: target.sessionID,
@@ -472,14 +551,14 @@ final class GUIAutomationService {
             direction: direction,
             newPane: newPane
         ) else {
-            return .failure(.paneNotFound(ref))
+            return .success(.failed(.paneNotFound(ref)))
         }
         let postSnapshots = Self.collectSnapshots()
         refStore.refreshRefs(snapshots: postSnapshots)
         guard let newRef = refStore.paneRef(sessionID: target.sessionID, paneID: newPane.id) else {
-            return .failure(.internal("ref allocation failed for new pane"))
+            return .success(.failed(.internal("ref allocation failed for new pane")))
         }
-        return .success(PaneSplitResponse(ref: newRef))
+        return .success(.local(PaneSplitResponse(ref: newRef)))
     }
 
     private func paneFocusOnMain(ref: String) -> Result<Void, AutomationError> {
@@ -741,6 +820,125 @@ final class GUIAutomationService {
             }
             signal()
         }
+    }
+
+    // MARK: - Remote tab.create / pane.split: blocking wait
+    //
+    // Same pattern as `createRemoteSessionBlocking`: hop to MainActor,
+    // register a one-shot layoutUpdate listener, fire the RPC to the
+    // daemon, then block the connection thread on a semaphore until the
+    // next layoutUpdate materializes the new entity.
+
+    nonisolated private func createRemoteTabBlocking(
+        request: RemoteTabCreateRequest
+    ) -> Result<TabCreateResponse, AutomationError> {
+        let semaphore = DispatchSemaphore(value: 0)
+        let box = ResultBox<TabCreateResponse>()
+
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                self.startRemoteTabCreate(request: request, box: box, signal: { semaphore.signal() })
+            }
+        }
+
+        let waitResult = semaphore.wait(timeout: .now() + Self.blockingWaitTimeout)
+        if waitResult == .timedOut { return .failure(.mainThreadTimeout) }
+        if let success = box.success { return .success(success) }
+        if let error = box.error { return .failure(error) }
+        return .failure(.internal("remote tab.create completed with no result"))
+    }
+
+    private func startRemoteTabCreate(
+        request: RemoteTabCreateRequest,
+        box: ResultBox<TabCreateResponse>,
+        signal: @escaping @Sendable () -> Void
+    ) {
+        guard let manager = SessionManagerRegistry.shared.manager(owning: request.sessionID) else {
+            box.error = .sessionNotFound(request.originalRef)
+            signal()
+            return
+        }
+        let sessionID = request.sessionID
+        manager.onNextRemoteTabCreated(inSessionID: sessionID) { [weak self] newTabID in
+            guard let self else {
+                box.error = .internal("GUIAutomationService deallocated")
+                signal()
+                return
+            }
+            guard let newTabID else {
+                box.error = .internal("remote tab.create failed or connection dropped")
+                signal()
+                return
+            }
+            let snapshots = Self.collectSnapshots()
+            self.refStore.refreshRefs(snapshots: snapshots)
+            if let ref = self.refStore.tabRef(sessionID: sessionID, tabID: newTabID) {
+                box.success = TabCreateResponse(ref: ref)
+            } else {
+                box.error = .internal("ref allocation failed for new tab")
+            }
+            signal()
+        }
+        _ = manager.createTab(inSessionID: sessionID)
+    }
+
+    nonisolated private func splitRemotePaneBlocking(
+        request: RemotePaneSplitRequest
+    ) -> Result<PaneSplitResponse, AutomationError> {
+        let semaphore = DispatchSemaphore(value: 0)
+        let box = ResultBox<PaneSplitResponse>()
+
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                self.startRemotePaneSplit(request: request, box: box, signal: { semaphore.signal() })
+            }
+        }
+
+        let waitResult = semaphore.wait(timeout: .now() + Self.blockingWaitTimeout)
+        if waitResult == .timedOut { return .failure(.mainThreadTimeout) }
+        if let success = box.success { return .success(success) }
+        if let error = box.error { return .failure(error) }
+        return .failure(.internal("remote pane.split completed with no result"))
+    }
+
+    private func startRemotePaneSplit(
+        request: RemotePaneSplitRequest,
+        box: ResultBox<PaneSplitResponse>,
+        signal: @escaping @Sendable () -> Void
+    ) {
+        guard let manager = SessionManagerRegistry.shared.manager(owning: request.sessionID) else {
+            box.error = .sessionNotFound(request.originalRef)
+            signal()
+            return
+        }
+        let sessionID = request.sessionID
+        manager.onNextRemotePaneCreated(inSessionID: sessionID) { [weak self] newPaneID in
+            guard let self else {
+                box.error = .internal("GUIAutomationService deallocated")
+                signal()
+                return
+            }
+            guard let newPaneID else {
+                box.error = .internal("remote pane.split failed or connection dropped")
+                signal()
+                return
+            }
+            let snapshots = Self.collectSnapshots()
+            self.refStore.refreshRefs(snapshots: snapshots)
+            if let ref = self.refStore.paneRef(sessionID: sessionID, paneID: newPaneID) {
+                box.success = PaneSplitResponse(ref: ref)
+            } else {
+                box.error = .internal("ref allocation failed for new pane")
+            }
+            signal()
+        }
+        // `newPane` is ignored on the remote path (server owns allocation).
+        _ = manager.splitPane(
+            inSessionID: sessionID,
+            id: request.paneID,
+            direction: request.direction,
+            newPane: TerminalPane()
+        )
     }
 
     @MainActor
