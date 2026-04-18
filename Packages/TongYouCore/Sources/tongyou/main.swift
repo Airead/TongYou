@@ -208,18 +208,21 @@ func runServer(daemonize: Bool, debug: Bool) {
     Log.info("Config loaded: scrollback=\(config.maxScrollback), coalesce=\(config.minCoalesceDelay)...\(config.maxCoalesceDelay)s")
 
     let lifecycle = DaemonLifecycle()
+
+    let authToken: String
+    do {
+        try lifecycle.writePIDFile()
+        authToken = try lifecycle.generateAuthToken()
+    } catch {
+        Log.error("Failed to write PID/token file: \(error)")
+        exit(1)
+    }
+
     let sessionManager = ServerSessionManager(config: config)
-    let server = SocketServer(config: config, sessionManager: sessionManager)
+    let server = SocketServer(config: config, sessionManager: sessionManager, authToken: authToken)
 
     configLoader.onConfigChanged = { [weak server] newConfig in
         server?.updateConfig(newConfig)
-    }
-
-    do {
-        try lifecycle.writePIDFile()
-    } catch {
-        Log.error("Failed to write PID file: \(error)")
-        exit(1)
     }
 
     lifecycle.onShutdown = {

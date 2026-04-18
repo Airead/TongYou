@@ -41,6 +41,13 @@ public final class TYDConnectionManager: @unchecked Sendable {
         print("[TYDClient] Socket connected successfully")
         let conn = TYDConnection(socket: socket)
 
+        // Perform token handshake before starting the read loop.
+        if let token = DaemonLifecycle.readAuthToken() {
+            print("[TYDClient] Performing handshake")
+            try conn.performHandshake(token: token)
+            print("[TYDClient] Handshake successful")
+        }
+
         conn.onDisconnect = { [weak self] in
             self?.handleDisconnect()
         }
@@ -164,4 +171,5 @@ public enum TYDConnectionError: Error, Sendable {
     case tydNotFound
     case startTimeout
     case notConnected
+    case handshakeFailed
 }

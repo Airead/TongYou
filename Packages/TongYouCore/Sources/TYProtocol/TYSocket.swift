@@ -29,6 +29,7 @@ public enum TYSocketError: Error, Sendable {
     case receiveFailed(errno: Int32)
     case connectionClosed
     case pathTooLong(path: String, maxLength: Int)
+    case peerCredentialsFailed(errno: Int32)
 }
 
 /// Unix domain socket wrapper for TongYou protocol communication.
@@ -73,6 +74,9 @@ public final class TYSocket: @unchecked Sendable {
             _ = sysClose(fd)
             throw TYSocketError.bindFailed(path: path, errno: errno)
         }
+
+        // Restrict socket file to owner-only access (0600).
+        chmod(path, 0o600)
 
         guard sysListen(fd, backlog) == 0 else {
             _ = sysClose(fd)
@@ -157,6 +161,17 @@ public final class TYSocket: @unchecked Sendable {
     public func receiveClientMessage() throws -> ClientMessage {
         let frame = try receiveFrame()
         return try WireFormat.decodeClientMessage(frame)
+    }
+
+    /// Return the effective UID and GID of the connected peer.
+    /// Only valid on accepted client sockets (Unix domain).
+    public func peerCredentials() throws -> (uid: uid_t, gid: gid_t) {
+        var uid: uid_t = 0
+        var gid: gid_t = 0
+        guard getpeereid(fileDescriptor, &uid, &gid) == 0 else {
+            throw TYSocketError.peerCredentialsFailed(errno: errno)
+        }
+        return (uid, gid)
     }
 
     /// Close the socket. Safe to call multiple times.

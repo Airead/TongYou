@@ -264,6 +264,10 @@ public final class RemoteSessionClient: @unchecked Sendable {
 
     private func handleServerMessage(_ message: ServerMessage) {
         switch message {
+        case .handshakeResult:
+            // Handshake is handled synchronously before the read loop starts.
+            break
+
         case .sessionList(let sessions):
             DispatchQueue.main.async { [weak self] in
                 self?.onSessionList?(sessions)

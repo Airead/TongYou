@@ -12,6 +12,9 @@ private func truncate(_ string: String, maxLength: Int) -> String {
 
 /// Wire type codes for server-to-client messages (0x01xx).
 public enum ServerMessageType: UInt16, Sendable {
+    // Authentication
+    case handshakeResult = 0x0180
+
     // Session lifecycle
     case sessionList     = 0x0100
     case sessionCreated  = 0x0101
@@ -32,6 +35,9 @@ public enum ServerMessageType: UInt16, Sendable {
 
 /// Wire type codes for client-to-server messages (0x02xx).
 public enum ClientMessageType: UInt16, Sendable {
+    // Authentication
+    case handshake       = 0x0280
+
     // Session management
     case listSessions    = 0x0200
     case createSession   = 0x0201
@@ -74,6 +80,9 @@ public enum ClientMessageType: UInt16, Sendable {
 
 /// Messages sent from server to client (GUI).
 public enum ServerMessage: Sendable {
+    // Authentication
+    case handshakeResult(success: Bool)
+
     // Session lifecycle
     case sessionList([SessionInfo])
     case sessionCreated(SessionInfo)
@@ -104,6 +113,8 @@ public enum ServerMessage: Sendable {
     /// Human-readable summary for debug logging. Long payloads are truncated.
     public var debugDescription: String {
         switch self {
+        case .handshakeResult(let success):
+            return "handshakeResult(success=\(success))"
         case .sessionList(let sessions):
             return "sessionList(count=\(sessions.count))"
         case .sessionCreated(let info):
@@ -132,6 +143,7 @@ public enum ServerMessage: Sendable {
     /// The wire type code for this message.
     public var typeCode: ServerMessageType {
         switch self {
+        case .handshakeResult: return .handshakeResult
         case .sessionList:    return .sessionList
         case .sessionCreated: return .sessionCreated
         case .sessionClosed:  return .sessionClosed
@@ -151,6 +163,9 @@ public enum ServerMessage: Sendable {
 
 /// Messages sent from client (GUI) to server.
 public enum ClientMessage: Sendable {
+    // Authentication
+    case handshake(token: String)
+
     // Session management
     case listSessions
     case createSession(name: String?)
@@ -197,6 +212,8 @@ public enum ClientMessage: Sendable {
     /// Human-readable summary for debug logging. Long payloads are truncated.
     public var debugDescription: String {
         switch self {
+        case .handshake:
+            return "handshake(token=***)"
         case .listSessions:
             return "listSessions"
         case .createSession(let name):
@@ -258,6 +275,7 @@ public enum ClientMessage: Sendable {
     /// The wire type code for this message.
     public var typeCode: ClientMessageType {
         switch self {
+        case .handshake:      return .handshake
         case .listSessions:   return .listSessions
         case .createSession:  return .createSession
         case .attachSession:  return .attachSession

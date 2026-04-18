@@ -268,6 +268,9 @@ public struct BinaryEncoder: Sendable {
     /// Encode a `ServerMessage` payload (without frame header).
     public mutating func writeServerMessage(_ message: ServerMessage) {
         switch message {
+        case .handshakeResult(let success):
+            writeBool(success)
+
         case .sessionList(let sessions):
             writeUInt16(UInt16(sessions.count))
             for session in sessions { writeSessionInfo(session) }
@@ -318,6 +321,9 @@ public struct BinaryEncoder: Sendable {
     /// Encode a `ClientMessage` payload (without frame header).
     public mutating func writeClientMessage(_ message: ClientMessage) {
         switch message {
+        case .handshake(let token):
+            writeString(token)
+
         case .listSessions:
             break  // No payload.
 

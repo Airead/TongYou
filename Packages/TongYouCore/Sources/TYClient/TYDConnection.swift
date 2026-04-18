@@ -71,6 +71,19 @@ public final class TYDConnection: @unchecked Sendable {
         try socket.receiveServerMessage()
     }
 
+    // MARK: - Handshake
+
+    /// Perform the authentication handshake synchronously.
+    /// Sends the token and waits for the server's handshakeResult.
+    /// Throws on failure or if the server rejects the token.
+    public func performHandshake(token: String) throws {
+        try sendSync(ClientMessage.handshake(token: token))
+        let response = try receiveSync()
+        guard case .handshakeResult(let success) = response, success else {
+            throw TYDConnectionError.handshakeFailed
+        }
+    }
+
     // MARK: - Private
 
     private func readLoop() {

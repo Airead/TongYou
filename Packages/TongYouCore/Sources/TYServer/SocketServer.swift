@@ -18,6 +18,7 @@ public final class SocketServer: @unchecked Sendable {
     private let clientsLock = NSLock()
     private var running = false
     private let runningLock = NSLock()
+    private let authToken: String?
 
     /// Global set of dirty (sessionID, paneID) pairs, populated by onScreenDirty callbacks.
     /// Protected by `dirtyLock`.
@@ -54,13 +55,12 @@ public final class SocketServer: @unchecked Sendable {
     public var onReady: (() -> Void)?
     public var onAllSessionsClosed: (() -> Void)?
 
-    public init(config: ServerConfig, sessionManager: ServerSessionManager) {
+    public init(config: ServerConfig, sessionManager: ServerSessionManager, authToken: String? = nil) {
         self.config = config
         self.sessionManager = sessionManager
+        self.authToken = authToken
         wireSessionManagerCallbacks()
     }
-
-    // MARK: - Server Lifecycle
 
     public func start() throws {
         try ServerConfig.ensureParentDirectory(for: config.socketPath)
@@ -182,9 +182,25 @@ public final class SocketServer: @unchecked Sendable {
 
             do {
                 let clientSocket = try socket.accept()
+
+                // Verify the connecting process belongs to the same user.
+                do {
+                    let (peerUID, _) = try clientSocket.peerCredentials()
+                    if peerUID != getuid() {
+                        Log.warning("Rejected connection from UID \(peerUID) (expected \(getuid()))")
+                        clientSocket.closeSocket()
+                        continue
+                    }
+                } catch {
+                    Log.warning("Failed to get peer credentials, rejecting: \(error)")
+                    clientSocket.closeSocket()
+                    continue
+                }
+
                 let connection = ClientConnection(
                     socket: clientSocket,
-                    maxPendingScreenUpdates: config.maxPendingScreenUpdates
+                    maxPendingScreenUpdates: config.maxPendingScreenUpdates,
+                    expectedToken: authToken
                 )
 
                 connection.onMessage = { [weak self, weak connection] message in
@@ -404,6 +420,10 @@ public final class SocketServer: @unchecked Sendable {
     private func handleClientMessage(_ message: ClientMessage, from client: ClientConnection) {
         Log.debug("RECV [\(client.id.uuidString.prefix(8))] \(message.debugDescription)")
         switch message {
+        case .handshake:
+            // Handled by ClientConnection's readLoop before reaching here.
+            break
+
         case .listSessions:
             client.send(.sessionList(sessionManager.listSessions()))
 

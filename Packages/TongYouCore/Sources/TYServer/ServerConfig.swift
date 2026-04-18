@@ -78,6 +78,10 @@ public struct ServerConfig: Sendable, Equatable {
         runtimeDirectory().appending("/tongyou.pid")
     }
 
+    public static func defaultTokenPath() -> String {
+        runtimeDirectory().appending("/auth-token")
+    }
+
     public static func defaultPersistenceDirectory() -> String {
         persistenceDirectory(subpath: "remote")
     }
@@ -93,12 +97,16 @@ public struct ServerConfig: Sendable, Equatable {
     }
 
     /// Ensure the parent directory of the given path exists, creating it if needed.
+    /// Sets directory permissions to 0700 (owner-only access).
     static func ensureParentDirectory(for path: String) throws {
         let dir = (path as NSString).deletingLastPathComponent
         try FileManager.default.createDirectory(
             atPath: dir,
-            withIntermediateDirectories: true
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
         )
+        // Enforce permissions even if the directory already existed.
+        chmod(dir, 0o700)
     }
 
     private static func runtimeDirectory() -> String {

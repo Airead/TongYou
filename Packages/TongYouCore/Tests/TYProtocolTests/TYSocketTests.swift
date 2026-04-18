@@ -131,4 +131,45 @@ struct TYSocketTests {
         }
         #expect(id == sid)
     }
+
+    @Test func peerCredentialsReturnsCurrentUID() throws {
+        let socketPath = NSTemporaryDirectory() + "typeer_\(UUID().uuidString.prefix(8)).sock"
+        defer { unlink(socketPath) }
+
+        let server = try TYSocket.listen(path: socketPath)
+        defer { server.closeSocket() }
+
+        nonisolated(unsafe) var acceptedClient: TYSocket?
+        let acceptThread = Thread {
+            acceptedClient = try? server.accept()
+        }
+        acceptThread.start()
+        Thread.sleep(forTimeInterval: 0.05)
+
+        let client = try TYSocket.connect(path: socketPath)
+        defer { client.closeSocket() }
+        Thread.sleep(forTimeInterval: 0.05)
+
+        guard let serverSide = acceptedClient else {
+            Issue.record("Server failed to accept connection")
+            return
+        }
+        defer { serverSide.closeSocket() }
+
+        let (uid, _) = try serverSide.peerCredentials()
+        #expect(uid == getuid(), "Peer UID should match current process UID")
+    }
+
+    @Test func socketFilePermissionsAreOwnerOnly() throws {
+        let socketPath = NSTemporaryDirectory() + "typerm_\(UUID().uuidString.prefix(8)).sock"
+        defer { unlink(socketPath) }
+
+        let server = try TYSocket.listen(path: socketPath)
+        defer { server.closeSocket() }
+
+        // Verify socket file has 0600 permissions
+        let attrs = try FileManager.default.attributesOfItem(atPath: socketPath)
+        let perms = (attrs[.posixPermissions] as! NSNumber).uint16Value
+        #expect(perms == 0o600, "Socket file should have 0600 permissions, got \(String(perms, radix: 8))")
+    }
 }

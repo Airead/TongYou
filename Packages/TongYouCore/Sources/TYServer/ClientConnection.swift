@@ -13,9 +13,16 @@ import TYTerminal
 /// pending. Non-screen messages are always delivered.
 public final class ClientConnection: @unchecked Sendable {
 
+    private enum State {
+        case awaitingHandshake
+        case authenticated
+    }
+
     let id: UUID
     private let socket: TYSocket
     private let maxPendingScreenUpdates: Int
+    private let expectedToken: String?
+    private var state: State
 
     private var attachedSessions: Set<SessionID> = []
     private let sessionsLock = NSLock()
@@ -31,10 +38,12 @@ public final class ClientConnection: @unchecked Sendable {
     var onMessage: ((ClientMessage) -> Void)?
     var onDisconnect: (() -> Void)?
 
-    init(socket: TYSocket, maxPendingScreenUpdates: Int = 3) {
+    init(socket: TYSocket, maxPendingScreenUpdates: Int = 3, expectedToken: String? = nil) {
         self.id = UUID()
         self.socket = socket
         self.maxPendingScreenUpdates = maxPendingScreenUpdates
+        self.expectedToken = expectedToken
+        self.state = expectedToken != nil ? .awaitingHandshake : .authenticated
         self.readQueue = DispatchQueue(
             label: "io.github.airead.tongyou.client.\(id.uuidString.prefix(8)).read",
             qos: .userInteractive
@@ -137,7 +146,26 @@ public final class ClientConnection: @unchecked Sendable {
         while true {
             do {
                 let message = try socket.receiveClientMessage()
-                onMessage?(message)
+
+                switch state {
+                case .awaitingHandshake:
+                    if case .handshake(let token) = message, token == expectedToken {
+                        state = .authenticated
+                        try socket.send(ServerMessage.handshakeResult(success: true))
+                        Log.info("Client \(id.uuidString.prefix(8)) authenticated", category: .client)
+                    } else {
+                        Log.warning(
+                            "Client \(id.uuidString.prefix(8)) handshake rejected",
+                            category: .client
+                        )
+                        try socket.send(ServerMessage.handshakeResult(success: false))
+                        handleDisconnect()
+                        return
+                    }
+
+                case .authenticated:
+                    onMessage?(message)
+                }
             } catch {
                 handleDisconnect()
                 return

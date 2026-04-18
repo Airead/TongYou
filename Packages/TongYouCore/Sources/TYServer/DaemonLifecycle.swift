@@ -5,6 +5,7 @@ import Glibc
 #endif
 
 import Foundation
+import Security
 
 // fork() is marked unavailable in Swift's Darwin overlay.
 // We call it via @_silgen_name to bypass the restriction for daemon mode.
@@ -16,15 +17,17 @@ public final class DaemonLifecycle {
 
     private let pidPath: String
     private let socketPath: String
+    private let tokenPath: String
 
     /// Callback invoked when SIGTERM/SIGINT is received. The server should shut down gracefully.
     public var onShutdown: (() -> Void)?
 
     private var signalSources: [DispatchSourceSignal] = []
 
-    public init(pidPath: String? = nil, socketPath: String? = nil) {
+    public init(pidPath: String? = nil, socketPath: String? = nil, tokenPath: String? = nil) {
         self.pidPath = pidPath ?? ServerConfig.defaultPIDPath()
         self.socketPath = socketPath ?? ServerConfig.defaultSocketPath()
+        self.tokenPath = tokenPath ?? ServerConfig.defaultTokenPath()
     }
 
     // MARK: - PID File
@@ -45,6 +48,34 @@ public final class DaemonLifecycle {
     /// Remove the socket file on shutdown.
     public func removeSocketFile() {
         try? FileManager.default.removeItem(atPath: socketPath)
+    }
+
+    // MARK: - Auth Token
+
+    /// Generate a random auth token, write it to the token file with 0600 permissions.
+    /// Returns the generated token string.
+    @discardableResult
+    public func generateAuthToken() throws -> String {
+        try ServerConfig.ensureParentDirectory(for: tokenPath)
+        var bytes = [UInt8](repeating: 0, count: 32)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        precondition(status == errSecSuccess, "SecRandomCopyBytes failed")
+        let token = bytes.map { String(format: "%02x", $0) }.joined()
+        try token.write(toFile: tokenPath, atomically: true, encoding: .utf8)
+        chmod(tokenPath, 0o600)
+        return token
+    }
+
+    /// Read the auth token from the token file.
+    public static func readAuthToken(from path: String? = nil) -> String? {
+        let tokenPath = path ?? ServerConfig.defaultTokenPath()
+        return try? String(contentsOfFile: tokenPath, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Remove the token file on shutdown.
+    public func removeTokenFile() {
+        try? FileManager.default.removeItem(atPath: tokenPath)
     }
 
     /// Read the PID from an existing PID file, or nil if not found.
@@ -118,6 +149,7 @@ public final class DaemonLifecycle {
         signalSources.removeAll()
         removePIDFile()
         removeSocketFile()
+        removeTokenFile()
     }
 
     // MARK: - Daemon Mode

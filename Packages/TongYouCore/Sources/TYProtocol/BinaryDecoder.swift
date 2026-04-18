@@ -403,6 +403,10 @@ public struct BinaryDecoder: Sendable {
     /// Decode a `ServerMessage` payload given its type code.
     public mutating func readServerMessage(type: ServerMessageType) throws -> ServerMessage {
         switch type {
+        case .handshakeResult:
+            let success = try readBool()
+            return .handshakeResult(success: success)
+
         case .sessionList:
             let count = Int(try readUInt16())
             var sessions: [SessionInfo] = []
@@ -464,6 +468,10 @@ public struct BinaryDecoder: Sendable {
     /// Decode a `ClientMessage` payload given its type code.
     public mutating func readClientMessage(type: ClientMessageType) throws -> ClientMessage {
         switch type {
+        case .handshake:
+            let token = try readString()
+            return .handshake(token: token)
+
         case .listSessions:
             return .listSessions
 
