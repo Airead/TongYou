@@ -18,7 +18,7 @@ import TYTerminal
 /// ```
 struct TerminalWindowView: View {
 
-    @State private var sessionManager = SessionManager()
+    @State private var sessionManager: SessionManager
     @State private var tabBarVisibility: TabBarVisibility = .auto
     @State private var focusManager = FocusManager()
     @State private var windowBackgroundColor: NSColor = .black
@@ -34,9 +34,19 @@ struct TerminalWindowView: View {
 
     @State private var notificationStore = NotificationStore.shared
 
-    /// Loads config to derive the window background color.
-    /// Each MetalView also has its own ConfigLoader for rendering.
-    @State private var configLoader = ConfigLoader()
+    /// Loads config + profiles. Owned here and shared with SessionManager
+    /// (for startup resolution) and every MetalView (for live-field rendering
+    /// + hot reload).
+    @State private var configLoader: ConfigLoader
+
+    @MainActor
+    init() {
+        let loader = ConfigLoader()
+        _configLoader = State(initialValue: loader)
+        _sessionManager = State(initialValue: SessionManager(
+            profileLoader: loader.profileLoader
+        ))
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -285,6 +295,7 @@ struct TerminalWindowView: View {
                 viewStore: viewStore,
                 focusManager: focusManager,
                 focusColor: paneFocusColor,
+                configLoader: configLoader,
                 controllerForPane: { paneID in
                     sessionManager.activeController(for: paneID)
                 },
@@ -303,6 +314,7 @@ struct TerminalWindowView: View {
                 viewStore: viewStore,
                 focusManager: focusManager,
                 focusColor: paneFocusColor,
+                configLoader: configLoader,
                 controllerForPane: { paneID in
                     sessionManager.activeController(for: paneID)
                 },

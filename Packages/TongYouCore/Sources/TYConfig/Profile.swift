@@ -244,6 +244,33 @@ public struct ResolvedLiveFields: Sendable, Equatable {
         self.lists = lists
         self.maps = maps
     }
+
+    /// Flatten the Live fields into a list of `ConfigParser.Entry` values so
+    /// they can be re-parsed by existing `Config.from(entries:)` pipelines.
+    /// Map fields whose sub-keys derive from the entry-key suffix (e.g.
+    /// `palette-0`) are expanded; value-before-equals maps are not live
+    /// fields today, so they're not handled here.
+    public func asEntries() -> [ConfigParser.Entry] {
+        var entries: [ConfigParser.Entry] = []
+        for (key, value) in scalars {
+            entries.append(ConfigParser.Entry(key: key, value: value))
+        }
+        for (key, list) in lists {
+            for v in list {
+                entries.append(ConfigParser.Entry(key: key, value: v))
+            }
+        }
+        for (canonicalKey, table) in maps {
+            guard let desc = FieldRegistry.descriptors[canonicalKey],
+                  case .fromEntryKeySuffix(let prefix) = desc.mapSubKeySource else {
+                continue
+            }
+            for (subKey, v) in table {
+                entries.append(ConfigParser.Entry(key: "\(prefix)\(subKey)", value: v))
+            }
+        }
+        return entries
+    }
 }
 
 /// Output of `ProfileMerger.resolve`.

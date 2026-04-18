@@ -143,6 +143,113 @@ struct ProfileLoaderTests {
         #expect(Set(all.keys) == Set(["a", "b", ProfileLoader.defaultProfileID]))
     }
 
+    // MARK: - Live field cache + invalidation (Phase 3)
+
+    @Test func resolvedLiveCachesByProfileID() throws {
+        let dir = try makeTempProfilesDir()
+        try writeProfile(dir: dir, id: "a", """
+        font-size = 18
+        palette-0 = ffffff
+        """)
+        let loader = ProfileLoader(directory: dir)
+        try loader.reload()
+
+        let first = loader.resolvedLive(id: "a")
+        let second = loader.resolvedLive(id: "a")
+        #expect(first == second)
+        #expect(first.scalars["font-size"] == "18")
+        #expect(first.maps["palette"]?["0"] == "ffffff")
+    }
+
+    @Test func invalidatePropagatesToExtendsDownstream() throws {
+        let dir = try makeTempProfilesDir()
+        try writeProfile(dir: dir, id: "base", "font-size = 12")
+        try writeProfile(dir: dir, id: "mid", """
+        extends = base
+        theme = iterm2-dark-background
+        """)
+        try writeProfile(dir: dir, id: "leaf", """
+        extends = mid
+        palette-0 = 111111
+        """)
+
+        let loader = ProfileLoader(directory: dir)
+        try loader.reload()
+        _ = loader.resolvedLive(id: "base")
+        _ = loader.resolvedLive(id: "mid")
+        _ = loader.resolvedLive(id: "leaf")
+
+        let affected = loader.invalidate(profileIDs: ["base"])
+        #expect(affected.contains("base"))
+        #expect(affected.contains("mid"))
+        #expect(affected.contains("leaf"))
+    }
+
+    @Test func onProfilesChangedFiresWithFullDownstream() throws {
+        let dir = try makeTempProfilesDir()
+        try writeProfile(dir: dir, id: "base", "font-size = 12")
+        try writeProfile(dir: dir, id: "mid", """
+        extends = base
+        font-size = 14
+        """)
+        try writeProfile(dir: dir, id: "leaf", """
+        extends = mid
+        font-size = 16
+        """)
+
+        let loader = ProfileLoader(directory: dir)
+        try loader.reload()
+
+        var received: Set<String>?
+        loader.onProfilesChanged = { ids in
+            received = ids
+        }
+
+        _ = loader.invalidate(profileIDs: ["base"])
+
+        let got = try #require(received)
+        #expect(got == Set(["base", "mid", "leaf"]))
+    }
+
+    @Test func invalidatedProfileResolvesFreshAfterReload() throws {
+        let dir = try makeTempProfilesDir()
+        try writeProfile(dir: dir, id: "x", "font-size = 14")
+        let loader = ProfileLoader(directory: dir)
+        try loader.reload()
+        #expect(loader.resolvedLive(id: "x").scalars["font-size"] == "14")
+
+        try writeProfile(dir: dir, id: "x", "font-size = 22")
+        try loader.reload()
+        // reload() clears the cache; the next lookup should see the new value
+        // without needing an explicit invalidate call.
+        #expect(loader.resolvedLive(id: "x").scalars["font-size"] == "22")
+    }
+
+    @Test func resolvedLiveReturnsEmptyForUnknownProfile() throws {
+        let dir = try makeTempProfilesDir()
+        let loader = ProfileLoader(directory: dir)
+        try loader.reload()
+
+        let live = loader.resolvedLive(id: "never-existed")
+        #expect(live.scalars.isEmpty)
+        #expect(live.lists.isEmpty)
+        #expect(live.maps.isEmpty)
+    }
+
+    @Test func liveFieldsAsEntriesRoundTripsScalarsAndPalette() throws {
+        let live = ResolvedLiveFields(
+            scalars: ["font-size": "18", "theme": "iterm2-dark-background"],
+            lists: [:],
+            maps: ["palette": ["0": "111111", "1": "222222"]]
+        )
+        let entries = live.asEntries()
+
+        #expect(entries.contains { $0.key == "font-size" && $0.value == "18" })
+        #expect(entries.contains { $0.key == "theme" && $0.value == "iterm2-dark-background" })
+        #expect(entries.contains { $0.key == "palette-0" && $0.value == "111111" })
+        #expect(entries.contains { $0.key == "palette-1" && $0.value == "222222" })
+    }
+
     // MARK: - Helpers
 
     private func makeTempProfilesDir() throws -> URL {

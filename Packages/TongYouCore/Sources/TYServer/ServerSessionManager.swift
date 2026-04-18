@@ -11,6 +11,11 @@ struct ServerTab {
     var terminalCores: [PaneID: TerminalCore]
     var floatingPanes: [FloatingPaneInfo] = []
     var floatingPaneCores: [PaneID: TerminalCore] = [:]
+    /// Profile id associated with each floating pane, keyed by paneID.
+    /// Tree panes carry their own `profileID` inside `TerminalPane`; floating
+    /// panes only exist as `FloatingPaneInfo` (id + geometry), so we keep the
+    /// profile association here and surface it through `toSessionInfo`.
+    var floatingPaneProfileIDs: [PaneID: String] = [:]
     /// The pane that was last focused in this tab by any client.
     var focusedPaneID: PaneID?
 
@@ -46,15 +51,24 @@ struct ServerSession {
         // Collect pane metadata from all tree panes and floating panes.
         var metadata: [PaneID: RemotePaneMetadata] = [:]
         for tab in tabs {
+            // Tree panes carry profileID directly on the TerminalPane.
+            var treeProfileIDs: [PaneID: String] = [:]
+            for pane in tab.paneTree.allPanes {
+                treeProfileIDs[PaneID(pane.id)] = pane.profileID
+            }
             for paneUUID in tab.paneTree.allPaneIDs {
                 let pid = PaneID(paneUUID)
-                if let cwd = coreLookup[pid]?.currentWorkingDirectory {
-                    metadata[pid] = RemotePaneMetadata(cwd: cwd)
+                let cwd = coreLookup[pid]?.currentWorkingDirectory
+                let profileID = treeProfileIDs[pid]
+                if cwd != nil || profileID != nil {
+                    metadata[pid] = RemotePaneMetadata(cwd: cwd, profileID: profileID)
                 }
             }
             for fp in tab.floatingPanes {
-                if let cwd = coreLookup[fp.paneID]?.currentWorkingDirectory {
-                    metadata[fp.paneID] = RemotePaneMetadata(cwd: cwd)
+                let cwd = coreLookup[fp.paneID]?.currentWorkingDirectory
+                let profileID = tab.floatingPaneProfileIDs[fp.paneID]
+                if cwd != nil || profileID != nil {
+                    metadata[fp.paneID] = RemotePaneMetadata(cwd: cwd, profileID: profileID)
                 }
             }
         }
@@ -459,12 +473,13 @@ public final class ServerSessionManager {
         // Inherit cwd from the focused pane of the target tab.
         let focusedCwd = session.tabs[tabIndex].focusedPaneCwd(coreLookup: coreLookup)
 
-        let (paneID, _, core) = createAndStartPane(sessionID: sessionID, workingDirectory: focusedCwd)
+        let (paneID, pane, core) = createAndStartPane(sessionID: sessionID, workingDirectory: focusedCwd)
         let nextZ = (session.tabs[tabIndex].floatingPanes.max(by: { $0.zIndex < $1.zIndex })?.zIndex ?? -1) + 1
         let fp = FloatingPaneInfo(paneID: paneID, zIndex: nextZ)
 
         session.tabs[tabIndex].floatingPanes.append(fp)
         session.tabs[tabIndex].floatingPaneCores[paneID] = core
+        session.tabs[tabIndex].floatingPaneProfileIDs[paneID] = pane.profileID
         sessions[sessionID] = session
         saveSession(id: sessionID)
         Log.info("Floating pane created: \(paneID) in tab \(tabID)", category: .session)
@@ -479,6 +494,7 @@ public final class ServerSessionManager {
             teardownPane(paneID, core: core)
         }
         session.tabs[tabIndex].floatingPanes.removeAll { $0.paneID == paneID }
+        session.tabs[tabIndex].floatingPaneProfileIDs.removeValue(forKey: paneID)
         sessions[sessionID] = session
         saveSession(id: sessionID)
         Log.info("Floating pane closed: \(paneID) in session \(sessionID)", category: .session)
@@ -618,13 +634,15 @@ public final class ServerSessionManager {
             )
             let floatingPanes = tabInfo.floatingPanes
             var floatingCores: [PaneID: TerminalCore] = [:]
+            var floatingProfileIDs: [PaneID: String] = [:]
             for fp in floatingPanes {
-                let (_, _, core) = createAndStartPane(
+                let (_, pane, core) = createAndStartPane(
                     sessionID: info.id,
                     workingDirectory: contexts[fp.paneID]?.cwd,
                     paneID: fp.paneID
                 )
                 floatingCores[fp.paneID] = core
+                floatingProfileIDs[fp.paneID] = pane.profileID
             }
             let tab = ServerTab(
                 id: tabInfo.id,
@@ -633,6 +651,7 @@ public final class ServerSessionManager {
                 terminalCores: treeCores,
                 floatingPanes: floatingPanes,
                 floatingPaneCores: floatingCores,
+                floatingPaneProfileIDs: floatingProfileIDs,
                 focusedPaneID: tabInfo.focusedPaneID
             )
             tabs.append(tab)
@@ -823,6 +842,7 @@ public final class ServerSessionManager {
         if let h = frameHeight { fp.frameHeight = min(max(h, 0.1), 1.0) }
         session.tabs[tabIndex].floatingPanes.append(fp)
         session.tabs[tabIndex].floatingPaneCores[paneID] = core
+        session.tabs[tabIndex].floatingPaneProfileIDs[paneID] = TerminalPane.defaultProfileID
         sessions[sessionID] = session
         Log.info("Floating pane with command created: \(paneID), cmd=\(command)", category: .session)
         return paneID

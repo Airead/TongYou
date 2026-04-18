@@ -381,7 +381,9 @@ public struct BinaryDecoder: Sendable {
     public mutating func readPaneMetadata() throws -> RemotePaneMetadata {
         let hasCwd = try readBool()
         let cwd = hasCwd ? try readString() : nil
-        return RemotePaneMetadata(cwd: cwd)
+        let hasProfileID = try readBool()
+        let profileID = hasProfileID ? try readString() : nil
+        return RemotePaneMetadata(cwd: cwd, profileID: profileID)
     }
 
     /// Decode a `TabInfo` from the buffer.

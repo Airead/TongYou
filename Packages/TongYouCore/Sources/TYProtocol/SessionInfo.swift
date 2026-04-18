@@ -6,9 +6,14 @@ import TYTerminal
 public struct RemotePaneMetadata: Equatable, Sendable, Codable {
     /// Current working directory of the pane's shell process.
     public var cwd: String?
+    /// Profile id the pane was created with. Lets the client resolve the
+    /// profile's Live fields locally for rendering (theme/palette/etc.).
+    /// Optional for backwards compatibility with older servers.
+    public var profileID: String?
 
-    public init(cwd: String? = nil) {
+    public init(cwd: String? = nil, profileID: String? = nil) {
         self.cwd = cwd
+        self.profileID = profileID
     }
 }
 

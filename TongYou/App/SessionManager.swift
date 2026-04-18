@@ -51,6 +51,10 @@ final class SessionManager {
     private var remoteControllers: [UUID: ClientTerminalController] = [:]
     /// Bidirectional mapping between server pane UUID and local pane UUID.
     private var serverToLocalPaneID: [UUID: UUID] = [:]
+    /// Profile id declared by the server for each remote pane, keyed by
+    /// local pane UUID. Remembered on first sighting and preserved across
+    /// layoutUpdate rebuilds (which recreate value-type `TerminalPane`s).
+    private var remotePaneProfileIDs: [UUID: String] = [:]
     /// Maps session UUID → ordered list of server TabIDs (parallel to session.tabs).
     private var serverTabIDs: [UUID: [TabID]] = [:]
 
@@ -1499,6 +1503,7 @@ final class SessionManager {
         for paneID in paneIDs {
             remoteControllers.removeValue(forKey: paneID)?.stop()
             floatingPaneCommands.removeValue(forKey: paneID)
+            remotePaneProfileIDs.removeValue(forKey: paneID)
             if let serverUUID = serverPaneUUID(for: paneID) {
                 serverToLocalPaneID.removeValue(forKey: serverUUID)
             }
@@ -1512,9 +1517,13 @@ final class SessionManager {
     private func buildTabs(from info: SessionInfo) -> [TerminalTab] {
         info.tabs.map { tabInfo -> TerminalTab in
             var tab = TerminalTab(title: tabInfo.title)
-            tab.paneTree = buildPaneNode(from: tabInfo.layout, sessionID: info.id)
+            tab.paneTree = buildPaneNode(
+                from: tabInfo.layout,
+                sessionID: info.id,
+                metadata: info.paneMetadata
+            )
             tab.floatingPanes = tabInfo.floatingPanes.map { fpInfo in
-                buildFloatingPane(from: fpInfo, sessionID: info.id)
+                buildFloatingPane(from: fpInfo, sessionID: info.id, metadata: info.paneMetadata)
             }
             if let serverFocusedID = tabInfo.focusedPaneID {
                 tab.focusedPaneID = serverToLocalPaneID[serverFocusedID.uuid]
@@ -1524,9 +1533,17 @@ final class SessionManager {
     }
 
     /// Build a FloatingPane from a server FloatingPaneInfo.
-    private func buildFloatingPane(from info: FloatingPaneInfo, sessionID: SessionID) -> FloatingPane {
+    private func buildFloatingPane(
+        from info: FloatingPaneInfo,
+        sessionID: SessionID,
+        metadata: [PaneID: RemotePaneMetadata]
+    ) -> FloatingPane {
         let isNew = serverToLocalPaneID[info.paneID.uuid] == nil
-        let localPane = getOrCreateRemotePane(serverPaneID: info.paneID, sessionID: sessionID)
+        let localPane = getOrCreateRemotePane(
+            serverPaneID: info.paneID,
+            sessionID: sessionID,
+            profileID: metadata[info.paneID]?.profileID
+        )
 
         // Associate pending remote command info with newly created floating panes.
         if isNew, !pendingRemoteCommandInfos.isEmpty {
@@ -1623,6 +1640,11 @@ final class SessionManager {
     /// Apply pane metadata (cwd, etc.) from a SessionInfo to the corresponding controllers.
     private func applyPaneMetadata(_ metadata: [PaneID: RemotePaneMetadata]) {
         for (serverPaneID, meta) in metadata {
+            if let profileID = meta.profileID,
+               let localID = serverToLocalPaneID[serverPaneID.uuid],
+               remotePaneProfileIDs[localID] == nil {
+                remotePaneProfileIDs[localID] = profileID
+            }
             guard let controller = controllerForServerPane(serverPaneID) else { continue }
             if let cwd = meta.cwd {
                 controller.handleCwdChanged(cwd)
@@ -1748,11 +1770,43 @@ final class SessionManager {
 
     /// Get or create a local TerminalPane for a server pane ID,
     /// reusing existing controllers when a mapping already exists.
-    private func getOrCreateRemotePane(serverPaneID: PaneID, sessionID: SessionID) -> TerminalPane {
+    ///
+    /// `profileID` is the server-declared profile for this pane. It is
+    /// remembered the first time the pane appears so subsequent rebuilds of
+    /// the layout (which create fresh `TerminalPane` value types) keep the
+    /// same profile association — needed for live-field resolution on the
+    /// client.
+    private func getOrCreateRemotePane(
+        serverPaneID: PaneID,
+        sessionID: SessionID,
+        profileID: String?
+    ) -> TerminalPane {
+        // Same test-profile override as `createPane` so TY_TEST_PROFILE also
+        // affects remote panes during Phase 3 verification. Protocol-level
+        // profile propagation lands with Phase 5.
+        let resolvedProfileID: String = {
+            if let forced = ProcessInfo.processInfo.environment[Self.testProfileEnvVar],
+               !forced.isEmpty {
+                return forced
+            }
+            return profileID ?? TerminalPane.defaultProfileID
+        }()
         if let existingLocalID = serverToLocalPaneID[serverPaneID.uuid] {
-            return TerminalPane(id: existingLocalID)
+            let preservedProfileID = remotePaneProfileIDs[existingLocalID]
+                ?? resolvedProfileID
+            if remotePaneProfileIDs[existingLocalID] == nil {
+                remotePaneProfileIDs[existingLocalID] = resolvedProfileID
+            }
+            return TerminalPane(
+                id: existingLocalID,
+                profileID: preservedProfileID,
+                startupSnapshot: StartupSnapshot()
+            )
         }
-        let pane = TerminalPane()
+        let pane = TerminalPane(
+            profileID: resolvedProfileID,
+            startupSnapshot: StartupSnapshot()
+        )
         if let client = remoteClient {
             let controller = ClientTerminalController(
                 remoteClient: client,
@@ -1761,22 +1815,31 @@ final class SessionManager {
             )
             remoteControllers[pane.id] = controller
             serverToLocalPaneID[serverPaneID.uuid] = pane.id
+            remotePaneProfileIDs[pane.id] = resolvedProfileID
         }
         return pane
     }
 
     /// Recursively build a PaneNode from a server LayoutTree.
-    private func buildPaneNode(from layout: LayoutTree, sessionID: SessionID) -> PaneNode {
+    private func buildPaneNode(
+        from layout: LayoutTree,
+        sessionID: SessionID,
+        metadata: [PaneID: RemotePaneMetadata]
+    ) -> PaneNode {
         switch layout {
         case .leaf(let paneID):
-            return .leaf(getOrCreateRemotePane(serverPaneID: paneID, sessionID: sessionID))
+            return .leaf(getOrCreateRemotePane(
+                serverPaneID: paneID,
+                sessionID: sessionID,
+                profileID: metadata[paneID]?.profileID
+            ))
 
         case .split(let direction, let ratio, let first, let second):
             return .split(
                 direction: direction,
                 ratio: CGFloat(ratio),
-                first: buildPaneNode(from: first, sessionID: sessionID),
-                second: buildPaneNode(from: second, sessionID: sessionID)
+                first: buildPaneNode(from: first, sessionID: sessionID, metadata: metadata),
+                second: buildPaneNode(from: second, sessionID: sessionID, metadata: metadata)
             )
         }
     }

@@ -8,6 +8,7 @@ struct PaneSplitView: View {
     let viewStore: MetalViewStore
     let focusManager: FocusManager
     let focusColor: Color
+    let configLoader: ConfigLoader
     /// Returns a pre-built controller for remote panes, or nil for local panes.
     let controllerForPane: (UUID) -> (any TerminalControlling)?
     let onTabAction: (TabAction) -> Void
@@ -29,6 +30,7 @@ struct PaneSplitView: View {
                 viewStore: viewStore,
                 focusManager: focusManager,
                 focusColor: focusColor,
+                configLoader: configLoader,
                 controllerForPane: controllerForPane,
                 onTabAction: onTabAction,
                 onTitleChanged: onTitleChanged,
@@ -43,8 +45,10 @@ struct PaneSplitView: View {
         let isFocused = focusManager.focusedPaneID == pane.id
         TerminalPaneContainerView(
             paneID: pane.id,
+            profileID: pane.profileID,
             viewStore: viewStore,
             initialWorkingDirectory: pane.initialWorkingDirectory,
+            configLoader: configLoader,
             externalController: controllerForPane(pane.id),
             onTabAction: onTabAction,
             onTitleChanged: onTitleChanged,
@@ -80,6 +84,7 @@ private struct SplitContainerView: View {
     let viewStore: MetalViewStore
     let focusManager: FocusManager
     let focusColor: Color
+    let configLoader: ConfigLoader
     let controllerForPane: (UUID) -> (any TerminalControlling)?
     let onTabAction: (TabAction) -> Void
     let onTitleChanged: (String) -> Void
@@ -150,6 +155,7 @@ private struct SplitContainerView: View {
             viewStore: viewStore,
             focusManager: focusManager,
             focusColor: focusColor,
+            configLoader: configLoader,
             controllerForPane: controllerForPane,
             onTabAction: onTabAction,
             onTitleChanged: onTitleChanged,
@@ -166,6 +172,7 @@ private struct SplitContainerView: View {
             viewStore: viewStore,
             focusManager: focusManager,
             focusColor: focusColor,
+            configLoader: configLoader,
             controllerForPane: controllerForPane,
             onTabAction: onTabAction,
             onTitleChanged: onTitleChanged,

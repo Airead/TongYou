@@ -1,6 +1,7 @@
 import AppKit
 import Metal
 import QuartzCore
+import TYConfig
 import TYTerminal
 
 /// NSView subclass hosting a CAMetalLayer for GPU rendering.
@@ -26,8 +27,38 @@ final class MetalView: NSView {
     /// When set, MetalView skips creating a local TerminalController.
     var externalController: (any TerminalControlling)?
 
-    /// Configuration loader with hot reload support.
-    private let configLoader = ConfigLoader()
+    /// Shared configuration loader (global + profile live fields).
+    /// Injected by `TerminalPaneContainerView`; non-nil after wiring.
+    var configLoader: ConfigLoader?
+
+    /// Profile id for this pane. Drives live-field resolution on top of the
+    /// global Config. Set by `TerminalPaneContainerView`.
+    var profileID: String?
+
+    /// Observer tokens so we can unsubscribe from ConfigLoader on teardown.
+    private var configObserverToken: UUID?
+    private var profileObserverToken: UUID?
+
+    /// Global config snapshot falling back to built-in defaults when the
+    /// loader has not been injected yet (only happens in unit-test surfaces
+    /// that construct MetalView before the container view wires it).
+    private var globalConfig: Config {
+        configLoader?.config ?? .default
+    }
+
+    /// Global Config + this pane's profile Live fields applied on top. When
+    /// no profile is wired up (or the profile resolves to nothing) this is
+    /// identical to `globalConfig`.
+    private var effectiveConfig: Config {
+        guard let loader = configLoader else { return .default }
+        guard let pid = profileID, !pid.isEmpty else { return loader.config }
+        let live = loader.profileLoader.resolvedLive(id: pid)
+        if live.scalars.isEmpty && live.lists.isEmpty && live.maps.isEmpty {
+            return loader.config
+        }
+        let merged = loader.globalEntries + live.asEntries()
+        return Config.from(entries: merged)
+    }
 
     /// Accumulated sub-cell scroll delta for precise (trackpad) scrolling.
     private var pendingScrollY: Double = 0
@@ -179,7 +210,7 @@ final class MetalView: NSView {
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if mods.contains(.option) && !mods.contains(.command)
             && !shouldPassthrough(modifiers: mods) {
-            let bindings = configLoader.config.keybindings
+            let bindings = globalConfig.keybindings
             if let action = Keybinding.match(event: event, in: bindings),
                performAction(action) {
                 return
@@ -189,7 +220,7 @@ final class MetalView: NSView {
         // Bypass interpretKeyEvents for Option+key when optionAsAlt is on,
         // otherwise macOS turns e.g. Option+F into "ƒ" instead of ESC f.
         // Still route through interpretKeyEvents when IME has marked text.
-        let optionAsAlt = configLoader.config.optionAsAlt
+        let optionAsAlt = effectiveConfig.optionAsAlt
         if optionAsAlt
             && mods.contains(.option)
             && !mods.contains(.command)
@@ -234,7 +265,7 @@ final class MetalView: NSView {
             return false
         }
 
-        let bindings = configLoader.config.keybindings
+        let bindings = globalConfig.keybindings
         if let action = Keybinding.match(event: event, in: bindings) {
             return performAction(action)
         }
@@ -277,7 +308,7 @@ final class MetalView: NSView {
     /// and the local foreground process name (fallback).
     private func shouldPassthrough(modifiers: NSEvent.ModifierFlags) -> Bool {
         guard !modifiers.contains(.command) else { return false }
-        let programs = configLoader.config.autoPassthroughPrograms
+        let programs = globalConfig.autoPassthroughPrograms
         guard !programs.isEmpty else { return false }
 
         // Shell integration: running command reported via OSC 7727.
@@ -318,8 +349,8 @@ final class MetalView: NSView {
         }
         let bar = SearchBarView(
             frame: .zero,
-            themeBackground: configLoader.config.background.nsColor,
-            themeForeground: configLoader.config.foreground.nsColor
+            themeBackground: effectiveConfig.background.nsColor,
+            themeForeground: effectiveConfig.foreground.nsColor
         )
         bar.translatesAutoresizingMaskIntoConstraints = false
         addSubview(bar)
@@ -748,8 +779,9 @@ final class MetalView: NSView {
         updateDrawableSize()
 
         if renderer == nil {
-            configLoader.load()
-            let config = configLoader.config
+            // Config is pre-loaded by TerminalWindowView before any MetalView
+            // is first displayed; nothing to do here besides snapshot it.
+            let config = effectiveConfig
 
             updateLayerBackground(config.background)
 
@@ -763,8 +795,16 @@ final class MetalView: NSView {
             renderer = MetalRenderer(device: device, fontSystem: fs, config: config,
                                      glyphAtlas: shared.glyphAtlas, emojiAtlas: shared.emojiAtlas)
 
-            configLoader.onConfigChanged = { [weak self] newConfig in
-                self?.applyConfigChange(newConfig)
+            configObserverToken = configLoader?.addConfigChangeObserver {
+                [weak self] _ in
+                guard let self else { return }
+                self.applyConfigChange(self.effectiveConfig)
+            }
+            profileObserverToken = configLoader?.addProfileChangeObserver {
+                [weak self] changedIDs in
+                guard let self, let pid = self.profileID,
+                      changedIDs.contains(pid) else { return }
+                self.applyConfigChange(self.effectiveConfig)
             }
         }
 
@@ -779,7 +819,7 @@ final class MetalView: NSView {
                 cellWidth: 0, cellHeight: 0
             )
         }
-        controller.applyConfig(configLoader.config)
+        controller.applyConfig(effectiveConfig)
     }
 
     private func wireDisplayCallbacks(_ controller: any TerminalControlling) {
@@ -871,7 +911,7 @@ final class MetalView: NSView {
 
     private func startCursorBlinkTimer() {
         stopCursorBlinkTimer()
-        guard configLoader.config.cursorBlink else {
+        guard effectiveConfig.cursorBlink else {
             renderer?.cursorBlinkOn = true
             renderer?.markCursorDirty()
             wakeDisplayLink()
@@ -912,6 +952,14 @@ final class MetalView: NSView {
 
     func tearDown() {
         stopDisplayLink()
+        if let token = configObserverToken {
+            configLoader?.removeConfigChangeObserver(token)
+            configObserverToken = nil
+        }
+        if let token = profileObserverToken {
+            configLoader?.removeProfileChangeObserver(token)
+            profileObserverToken = nil
+        }
         // Do NOT stop the terminalController here — its lifecycle is managed
         // by SessionManager (local) or the remote client (remote).
         terminalController = nil
@@ -1043,7 +1091,7 @@ final class MetalView: NSView {
             configureController(external)
             controller = external
         } else {
-            let config = configLoader.config
+            let config = effectiveConfig
             let tc = TerminalController(
                 columns: Int(grid.columns),
                 rows: Int(grid.rows),

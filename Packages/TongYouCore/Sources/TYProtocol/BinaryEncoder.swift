@@ -248,6 +248,10 @@ public struct BinaryEncoder: Sendable {
         if let cwd = meta.cwd {
             writeString(cwd)
         }
+        writeBool(meta.profileID != nil)
+        if let profileID = meta.profileID {
+            writeString(profileID)
+        }
     }
 
     /// Encode a `TabInfo` into the buffer.
