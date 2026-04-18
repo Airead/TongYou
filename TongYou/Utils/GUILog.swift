@@ -2,14 +2,14 @@ import Foundation
 
 /// File-based logging for the TongYou GUI client.
 ///
-/// - Disabled by default; enable via `debug-log = true` in the config file.
+/// - Disabled by default; enable via `debug-log-level` in the config file.
 /// - When disabled, each call is a single boolean check — no string formatting,
 ///   no I/O, no allocation.
 /// - When enabled, writes to `~/.local/share/TongYou/logs/gui-YYYY-MM-DD.log`.
 /// - Thread-safe: all file I/O is serialized on a dedicated dispatch queue.
 enum GUILog {
 
-    enum Category: String, Sendable {
+    enum Category: String, CaseIterable, Sendable {
         case renderer
         case session
         case config
@@ -17,7 +17,7 @@ enum GUILog {
         case general
     }
 
-    enum Level: Int, Sendable {
+    enum Level: Int, Comparable, Sendable {
         case debug = 0
         case info = 1
         case warning = 2
@@ -31,11 +31,32 @@ enum GUILog {
             case .error:   return "ERROR"
             }
         }
+
+        /// Parse from config string. Returns nil for unrecognized values.
+        init?(configValue: String) {
+            switch configValue.lowercased() {
+            case "debug":   self = .debug
+            case "info":    self = .info
+            case "warning", "warn": self = .warning
+            case "error":   self = .error
+            default: return nil
+            }
+        }
+
+        static func < (lhs: Level, rhs: Level) -> Bool {
+            lhs.rawValue < rhs.rawValue
+        }
     }
 
     // MARK: - State
 
     nonisolated(unsafe) private static var _enabled = false
+
+    /// Minimum level to emit. Messages below this level are discarded.
+    nonisolated(unsafe) private static var _minimumLevel: Level = .debug
+
+    /// When non-nil, only these categories are logged. Nil means all categories.
+    nonisolated(unsafe) private static var _enabledCategories: Set<Category>?
 
     /// Serial queue for all file I/O.
     private static let queue = DispatchQueue(
@@ -73,8 +94,13 @@ enum GUILog {
 
     // MARK: - Public API
 
-    /// Enable file logging. Opens (or creates) today's log file.
-    static func enable() {
+    /// Enable file logging with optional filtering.
+    /// - Parameters:
+    ///   - level: Minimum log level (default: .debug).
+    ///   - categories: Categories to log. Nil means all categories.
+    static func enable(level: Level = .debug, categories: Set<Category>? = nil) {
+        _minimumLevel = level
+        _enabledCategories = categories
         _enabled = true
         queue.async {
             openLogFileIfNeeded()
@@ -84,6 +110,7 @@ enum GUILog {
     /// Disable file logging. Closes the file handle and releases resources.
     static func disable() {
         _enabled = false
+        _enabledCategories = nil
         queue.async {
             closeLogFile()
         }
@@ -92,32 +119,45 @@ enum GUILog {
     /// Whether logging is currently enabled.
     static var isEnabled: Bool { _enabled }
 
+    /// Current minimum log level.
+    static var minimumLevel: Level { _minimumLevel }
+
+    /// Currently enabled categories. Nil means all.
+    static var enabledCategories: Set<Category>? { _enabledCategories }
+
     /// Block until all pending log writes are flushed. For testing only.
     static func flush() {
         queue.sync {}
     }
 
     static func debug(_ message: @autoclosure () -> String, category: Category = .general) {
-        guard _enabled else { return }
+        guard _enabled, shouldEmit(level: .debug, category: category) else { return }
         emit(level: .debug, category: category, message: message())
     }
 
     static func info(_ message: @autoclosure () -> String, category: Category = .general) {
-        guard _enabled else { return }
+        guard _enabled, shouldEmit(level: .info, category: category) else { return }
         emit(level: .info, category: category, message: message())
     }
 
     static func warning(_ message: @autoclosure () -> String, category: Category = .general) {
-        guard _enabled else { return }
+        guard _enabled, shouldEmit(level: .warning, category: category) else { return }
         emit(level: .warning, category: category, message: message())
     }
 
     static func error(_ message: @autoclosure () -> String, category: Category = .general) {
-        guard _enabled else { return }
+        guard _enabled, shouldEmit(level: .error, category: category) else { return }
         emit(level: .error, category: category, message: message())
     }
 
     // MARK: - Private
+
+    /// Check whether a message should be emitted based on level and category filters.
+    private static func shouldEmit(level: Level, category: Category) -> Bool {
+        if level < _minimumLevel { return false }
+        if let cats = _enabledCategories, !cats.contains(category) { return false }
+        return true
+    }
 
     private static func emit(level: Level, category: Category, message: String) {
         let now = Date()

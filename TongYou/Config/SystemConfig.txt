@@ -245,6 +245,20 @@ auto-passthrough-programs = zellij
 # Show frame time metrics overlay.
 debug-metrics = false
 
+# Log level: off, debug, info, warning, error. Default is off.
+# Examples:
+#   debug-log-level = debug              # all levels
+#   debug-log-level = warning            # warning and error only
+debug-log-level = off
+
+# Comma-separated list of log categories to include.
+# Available: renderer, session, config, input, general.
+# Empty means all categories.
+# Examples:
+#   debug-log-categories = renderer           # renderer only
+#   debug-log-categories = renderer,input     # renderer and input
+debug-log-categories =
+
 # ── User Config Include ──────────────────────────────────────────
 # Include user config file. Settings in user_config.txt override
 # all system defaults above.

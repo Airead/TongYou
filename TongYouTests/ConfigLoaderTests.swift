@@ -207,16 +207,28 @@ struct ConfigTests {
         #expect(config.debugMetrics == true)
     }
 
-    @Test func debugLog() {
+    @Test func debugLogLevel() {
         let config = Config.from(entries: [
-            .init(key: "debug-log", value: "true"),
+            .init(key: "debug-log-level", value: "info"),
         ])
-        #expect(config.debugLog == true)
+        #expect(config.debugLogLevel == "info")
     }
 
-    @Test func debugLogDefault() {
+    @Test func debugLogLevelDefault() {
         let config = Config.default
-        #expect(config.debugLog == false)
+        #expect(config.debugLogLevel == "off")
+    }
+
+    @Test func debugLogCategories() {
+        let config = Config.from(entries: [
+            .init(key: "debug-log-categories", value: "renderer,session"),
+        ])
+        #expect(config.debugLogCategories == ["renderer", "session"])
+    }
+
+    @Test func debugLogCategoriesDefault() {
+        let config = Config.default
+        #expect(config.debugLogCategories.isEmpty)
     }
 
     @Test func draftEnabledDefault() {

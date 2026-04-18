@@ -43,9 +43,7 @@ final class ConfigLoader {
         setupWatchers(for: paths)
 
         // Apply initial GUILog state from config
-        if newConfig.debugLog {
-            GUILog.enable()
-        }
+        applyGUILogConfig(newConfig)
     }
 
     deinit {
@@ -217,17 +215,28 @@ final class ConfigLoader {
         setupWatchers(for: paths)
 
         // Toggle GUILog on config hot-reload
-        if oldConfig.debugLog != newConfig.debugLog {
-            if newConfig.debugLog {
-                GUILog.enable()
-            } else {
-                GUILog.disable()
-            }
+        if oldConfig.debugLogLevel != newConfig.debugLogLevel
+            || oldConfig.debugLogCategories != newConfig.debugLogCategories {
+            applyGUILogConfig(newConfig)
         }
 
         onConfigChanged?(newConfig)
 
         logConfigDiff(old: oldConfig, new: newConfig)
+    }
+
+    private func applyGUILogConfig(_ config: Config) {
+        guard let level = GUILog.Level(configValue: config.debugLogLevel) else {
+            GUILog.disable()
+            return
+        }
+        let categories: Set<GUILog.Category>?
+        if config.debugLogCategories.isEmpty {
+            categories = nil
+        } else {
+            categories = Set(config.debugLogCategories.compactMap { GUILog.Category(rawValue: $0) })
+        }
+        GUILog.enable(level: level, categories: categories)
     }
 
     private func logConfigDiff(old: Config, new: Config) {
@@ -245,7 +254,8 @@ final class ConfigLoader {
         if old.draftEnabled != new.draftEnabled { changes.append("draft-enabled") }
         if old.autoConnectDaemon != new.autoConnectDaemon { changes.append("auto-connect-daemon") }
         if old.debugMetrics != new.debugMetrics { changes.append("debug-metrics") }
-        if old.debugLog != new.debugLog { changes.append("debug-log") }
+        if old.debugLogLevel != new.debugLogLevel { changes.append("debug-log-level") }
+        if old.debugLogCategories != new.debugLogCategories { changes.append("debug-log-categories") }
         if !changes.isEmpty {
             print("[config] reloaded: \(changes.joined(separator: ", ")) changed")
         }

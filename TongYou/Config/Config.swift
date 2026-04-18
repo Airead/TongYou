@@ -62,7 +62,10 @@ struct Config: Equatable {
     // MARK: - Debug
 
     var debugMetrics: Bool = false
-    var debugLog: Bool = false
+    /// Log level: "off", "debug", "info", "warning", "error". Default is "off".
+    var debugLogLevel: String = "off"
+    /// Comma-separated category filter. Empty means all categories.
+    var debugLogCategories: Set<String> = []
 
     // MARK: - Static
 
@@ -260,8 +263,26 @@ extension Config {
         // Debug
         case "debug-metrics":
             debugMetrics = value.isEmpty ? false : try parseBool(value, key: key)
-        case "debug-log":
-            debugLog = value.isEmpty ? false : try parseBool(value, key: key)
+        case "debug-log-level":
+            if value.isEmpty {
+                debugLogLevel = "off"
+            } else {
+                let v = value.lowercased()
+                guard ["off", "debug", "info", "warning", "warn", "error"].contains(v) else {
+                    throw ConfigError.invalidValue(key: key, value: value)
+                }
+                debugLogLevel = v == "warn" ? "warning" : v
+            }
+        case "debug-log-categories":
+            if value.isEmpty {
+                debugLogCategories = []
+            } else {
+                debugLogCategories = Set(
+                    value.split(separator: ",")
+                        .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+                        .filter { !$0.isEmpty }
+                )
+            }
 
         default:
             // Unknown keys are silently ignored for forward compatibility
