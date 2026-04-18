@@ -8,12 +8,16 @@ struct PaneSplitView: View {
     let viewStore: MetalViewStore
     let focusManager: FocusManager
     let focusColor: Color
+    let configLoader: ConfigLoader
     /// Returns a pre-built controller for remote panes, or nil for local panes.
     let controllerForPane: (UUID) -> (any TerminalControlling)?
     let onTabAction: (TabAction) -> Void
     let onTitleChanged: (String) -> Void
     let onNodeChanged: (PaneNode) -> Void
     let onUserInteraction: ((UUID) -> Void)?
+    /// Whether a tree pane's PTY process has exited (zombie state). Drives
+    /// ESC-to-dismiss / Enter-to-rerun key handling inside the MetalView.
+    let isTreePaneExited: (UUID) -> Bool
 
     var body: some View {
         switch node {
@@ -29,11 +33,13 @@ struct PaneSplitView: View {
                 viewStore: viewStore,
                 focusManager: focusManager,
                 focusColor: focusColor,
+                configLoader: configLoader,
                 controllerForPane: controllerForPane,
                 onTabAction: onTabAction,
                 onTitleChanged: onTitleChanged,
                 onNodeChanged: onNodeChanged,
-                onUserInteraction: onUserInteraction
+                onUserInteraction: onUserInteraction,
+                isTreePaneExited: isTreePaneExited
             )
         }
     }
@@ -43,8 +49,10 @@ struct PaneSplitView: View {
         let isFocused = focusManager.focusedPaneID == pane.id
         TerminalPaneContainerView(
             paneID: pane.id,
+            profileID: pane.profileID,
             viewStore: viewStore,
             initialWorkingDirectory: pane.initialWorkingDirectory,
+            configLoader: configLoader,
             externalController: controllerForPane(pane.id),
             onTabAction: onTabAction,
             onTitleChanged: onTitleChanged,
@@ -53,7 +61,8 @@ struct PaneSplitView: View {
             },
             onUserInteraction: {
                 onUserInteraction?(pane.id)
-            }
+            },
+            isProcessExited: { isTreePaneExited(pane.id) }
         )
         .id(pane.id)
         .overlay(
@@ -80,11 +89,13 @@ private struct SplitContainerView: View {
     let viewStore: MetalViewStore
     let focusManager: FocusManager
     let focusColor: Color
+    let configLoader: ConfigLoader
     let controllerForPane: (UUID) -> (any TerminalControlling)?
     let onTabAction: (TabAction) -> Void
     let onTitleChanged: (String) -> Void
     let onNodeChanged: (PaneNode) -> Void
     let onUserInteraction: ((UUID) -> Void)?
+    let isTreePaneExited: (UUID) -> Bool
 
     /// Local ratio used during drag. Nil when not dragging (uses modelRatio).
     @State private var liveRatio: CGFloat?
@@ -150,13 +161,15 @@ private struct SplitContainerView: View {
             viewStore: viewStore,
             focusManager: focusManager,
             focusColor: focusColor,
+            configLoader: configLoader,
             controllerForPane: controllerForPane,
             onTabAction: onTabAction,
             onTitleChanged: onTitleChanged,
             onNodeChanged: { newFirst in
                 onNodeChanged(.split(direction: direction, ratio: effectiveRatio, first: newFirst, second: second))
             },
-            onUserInteraction: onUserInteraction
+            onUserInteraction: onUserInteraction,
+            isTreePaneExited: isTreePaneExited
         )
     }
 
@@ -166,13 +179,15 @@ private struct SplitContainerView: View {
             viewStore: viewStore,
             focusManager: focusManager,
             focusColor: focusColor,
+            configLoader: configLoader,
             controllerForPane: controllerForPane,
             onTabAction: onTabAction,
             onTitleChanged: onTitleChanged,
             onNodeChanged: { newSecond in
                 onNodeChanged(.split(direction: direction, ratio: effectiveRatio, first: first, second: newSecond))
             },
-            onUserInteraction: onUserInteraction
+            onUserInteraction: onUserInteraction,
+            isTreePaneExited: isTreePaneExited
         )
     }
 }

@@ -31,6 +31,15 @@ public struct TerminalTab: Identifiable, Sendable {
         self.paneTree = .leaf(TerminalPane(initialWorkingDirectory: initialWorkingDirectory))
     }
 
+    /// Build a tab whose root pane is supplied by the caller. Used when the
+    /// caller (e.g. `SessionManager.createPane`) has already resolved a
+    /// profile and constructed a `TerminalPane` with its `startupSnapshot`.
+    public init(title: String = "shell", initialPane: TerminalPane) {
+        self.id = UUID()
+        self.title = title
+        self.paneTree = .leaf(initialPane)
+    }
+
     public init(id: UUID, title: String, paneTree: PaneNode, floatingPanes: [FloatingPane] = [], focusedPaneID: UUID? = nil) {
         self.id = id
         self.title = title

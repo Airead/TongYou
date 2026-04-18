@@ -2,6 +2,7 @@ import Testing
 import Foundation
 @testable import TYProtocol
 @testable import TYTerminal
+import TYConfig
 
 @Suite("BinaryEncoder/Decoder round-trip tests", .serialized)
 struct BinaryCoderTests {
@@ -360,16 +361,22 @@ struct BinaryCoderTests {
     @Test func roundTripCreateFloatingPaneMessage() throws {
         let sessionID = SessionID()
         let tabID = TabID()
-        let msg = ClientMessage.createFloatingPane(sessionID, tabID)
+        let msg = ClientMessage.createFloatingPane(
+            sessionID, tabID,
+            profileID: nil, snapshot: nil, frameHint: nil
+        )
 
         var encoder = BinaryEncoder()
         encoder.writeClientMessage(msg)
 
         var decoder = BinaryDecoder(encoder.data)
         let decoded = try decoder.readClientMessage(type: .createFloatingPane)
-        if case .createFloatingPane(let sid, let tid) = decoded {
+        if case .createFloatingPane(let sid, let tid, let profileID, let snapshot, let frameHint) = decoded {
             #expect(sid == sessionID)
             #expect(tid == tabID)
+            #expect(profileID == nil)
+            #expect(snapshot == nil)
+            #expect(frameHint == nil)
         } else {
             Issue.record("Expected createFloatingPane, got \(decoded)")
         }
@@ -582,6 +589,60 @@ struct BinaryCoderTests {
         #expect(decoded.activeTabIndex == 0)
     }
 
+    @Test func roundTripSessionInfoWithPaneMetadata() throws {
+        let paneIDKeepAlive = PaneID()
+        let paneIDAutoClose = PaneID()
+        let paneIDUnspecified = PaneID()
+        let tabID = TabID()
+        let sessionID = SessionID()
+        let info = SessionInfo(
+            id: sessionID,
+            name: "meta",
+            tabs: [TabInfo(id: tabID, title: "t", layout: .leaf(paneIDKeepAlive))],
+            activeTabIndex: 0,
+            paneMetadata: [
+                paneIDKeepAlive: RemotePaneMetadata(
+                    cwd: "/tmp/keep", profileID: "profA", closeOnExit: false
+                ),
+                paneIDAutoClose: RemotePaneMetadata(
+                    cwd: nil, profileID: "profB", closeOnExit: true
+                ),
+                paneIDUnspecified: RemotePaneMetadata(
+                    cwd: "/tmp/u", profileID: nil, closeOnExit: nil
+                ),
+            ]
+        )
+
+        var encoder = BinaryEncoder()
+        encoder.writeSessionInfo(info)
+
+        var decoder = BinaryDecoder(encoder.data)
+        let decoded = try decoder.readSessionInfo()
+        #expect(decoded.paneMetadata[paneIDKeepAlive]?.closeOnExit == false)
+        #expect(decoded.paneMetadata[paneIDKeepAlive]?.cwd == "/tmp/keep")
+        #expect(decoded.paneMetadata[paneIDKeepAlive]?.profileID == "profA")
+        #expect(decoded.paneMetadata[paneIDAutoClose]?.closeOnExit == true)
+        #expect(decoded.paneMetadata[paneIDAutoClose]?.cwd == nil)
+        #expect(decoded.paneMetadata[paneIDUnspecified]?.closeOnExit == nil)
+        #expect(decoded.paneMetadata[paneIDUnspecified]?.cwd == "/tmp/u")
+        #expect(decoder.remaining == 0)
+    }
+
+    @Test func paneMetadataRejectsInvalidCloseOnExitByte() throws {
+        let paneID = PaneID()
+        var encoder = BinaryEncoder()
+        encoder.writePaneID(paneID)
+        encoder.writeBool(false) // cwd absent
+        encoder.writeBool(false) // profileID absent
+        encoder.writeUInt8(99)   // invalid closeOnExit byte
+
+        var decoder = BinaryDecoder(encoder.data)
+        _ = try decoder.readPaneID()
+        #expect(throws: BinaryDecoderError.self) {
+            _ = try decoder.readPaneMetadata()
+        }
+    }
+
     // MARK: - Client Message: scrollViewport
 
     @Test func roundTripScrollViewportMessage() throws {
@@ -659,5 +720,278 @@ struct BinaryCoderTests {
 
         var decoder = BinaryDecoder(encoder.data)
         #expect(throws: BinaryDecoderError.self) { try decoder.readCursorState() }
+    }
+
+    // MARK: - StartupSnapshot
+
+    @Test func startupSnapshotRoundTripEmpty() throws {
+        let snapshot = StartupSnapshot()
+
+        var encoder = BinaryEncoder()
+        encoder.writeStartupSnapshot(snapshot)
+
+        var decoder = BinaryDecoder(encoder.data)
+        let decoded = try decoder.readStartupSnapshot()
+        #expect(decoded == snapshot)
+        #expect(decoded.command == nil)
+        #expect(decoded.args.isEmpty)
+        #expect(decoded.cwd == nil)
+        #expect(decoded.env.isEmpty)
+        #expect(decoded.closeOnExit == nil)
+        #expect(decoder.remaining == 0)
+    }
+
+    @Test func startupSnapshotRoundTripFull() throws {
+        let snapshot = StartupSnapshot(
+            command: "/bin/bash",
+            args: ["-l", "-c", "echo 你好 && exec /bin/bash -l"],
+            cwd: "/Users/tester/工作",
+            env: [
+                EnvVar(key: "TY_CI", value: "1"),
+                EnvVar(key: "LANG", value: "zh_CN.UTF-8"),
+                EnvVar(key: "EMOJI", value: "👨‍👩‍👧‍👦"),
+            ],
+            closeOnExit: false
+        )
+
+        var encoder = BinaryEncoder()
+        encoder.writeStartupSnapshot(snapshot)
+
+        var decoder = BinaryDecoder(encoder.data)
+        let decoded = try decoder.readStartupSnapshot()
+        #expect(decoded == snapshot)
+        #expect(decoded.env.map(\.key) == ["TY_CI", "LANG", "EMOJI"])
+        #expect(decoded.env.map(\.value) == ["1", "zh_CN.UTF-8", "👨‍👩‍👧‍👦"])
+        #expect(decoder.remaining == 0)
+    }
+
+    @Test func startupSnapshotCloseOnExitTrinary() throws {
+        let states: [Bool?] = [nil, false, true]
+        for state in states {
+            let snapshot = StartupSnapshot(closeOnExit: state)
+            var encoder = BinaryEncoder()
+            encoder.writeStartupSnapshot(snapshot)
+
+            var decoder = BinaryDecoder(encoder.data)
+            let decoded = try decoder.readStartupSnapshot()
+            #expect(decoded.closeOnExit == state)
+            #expect(decoder.remaining == 0)
+        }
+    }
+
+    @Test func startupSnapshotInvalidCloseOnExitByte() throws {
+        var encoder = BinaryEncoder()
+        encoder.writeUInt8(0)           // has_command = false
+        encoder.writeUInt16(0)          // args count = 0
+        encoder.writeUInt8(0)           // has_cwd = false
+        encoder.writeUInt16(0)          // env count = 0
+        encoder.writeUInt8(3)           // close_on_exit invalid
+
+        var decoder = BinaryDecoder(encoder.data)
+        #expect(throws: BinaryDecoderError.self) {
+            try decoder.readStartupSnapshot()
+        }
+    }
+
+    @Test func optionalStartupSnapshotNil() throws {
+        var encoder = BinaryEncoder()
+        encoder.writeOptionalStartupSnapshot(nil)
+        #expect(encoder.data == [0])
+
+        var decoder = BinaryDecoder(encoder.data)
+        let decoded = try decoder.readOptionalStartupSnapshot()
+        #expect(decoded == nil)
+        #expect(decoder.remaining == 0)
+    }
+
+    // MARK: - FloatFrameHint
+
+    @Test func roundTripFloatFrameHint() throws {
+        let hint = FloatFrameHint(x: 0.1, y: 0.25, width: 0.5, height: 0.75)
+
+        var encoder = BinaryEncoder()
+        encoder.writeFloatFrameHint(hint)
+
+        var decoder = BinaryDecoder(encoder.data)
+        let decoded = try decoder.readFloatFrameHint()
+        #expect(decoded == hint)
+        #expect(decoder.remaining == 0)
+    }
+
+    @Test func optionalFloatFrameHintNilAndPresent() throws {
+        var encoder = BinaryEncoder()
+        encoder.writeOptionalFloatFrameHint(nil)
+        let hint = FloatFrameHint(x: 0.0, y: 0.0, width: 1.0, height: 1.0)
+        encoder.writeOptionalFloatFrameHint(hint)
+
+        var decoder = BinaryDecoder(encoder.data)
+        #expect(try decoder.readOptionalFloatFrameHint() == nil)
+        #expect(try decoder.readOptionalFloatFrameHint() == hint)
+    }
+
+    // MARK: - FloatFrameHint <- ResolvedStartupFields
+
+    @Test func frameHintFromResolvedFieldsHappyPath() throws {
+        let fields = ResolvedStartupFields(
+            initialX: "0.25",
+            initialY: "0.3",
+            initialWidth: "0.5",
+            initialHeight: "0.4"
+        )
+        var warnings: [String] = []
+        let hint = FloatFrameHint(from: fields, warnings: &warnings)
+        #expect(hint == FloatFrameHint(x: 0.25, y: 0.3, width: 0.5, height: 0.4))
+        #expect(warnings.isEmpty)
+    }
+
+    @Test func frameHintFromResolvedFieldsReturnsNilWhenAllAbsent() throws {
+        let fields = ResolvedStartupFields()
+        var warnings: [String] = []
+        let hint = FloatFrameHint(from: fields, warnings: &warnings)
+        #expect(hint == nil)
+        #expect(warnings.isEmpty)
+    }
+
+    @Test func frameHintFromResolvedFieldsNilOnPartial() throws {
+        let fields = ResolvedStartupFields(
+            initialX: "0.1",
+            initialY: "0.1"
+        )
+        var warnings: [String] = []
+        let hint = FloatFrameHint(from: fields, warnings: &warnings)
+        #expect(hint == nil)
+        #expect(warnings.isEmpty)
+    }
+
+    @Test func frameHintFromResolvedFieldsNilAndWarnsOnMalformed() throws {
+        let fields = ResolvedStartupFields(
+            initialX: "wide",
+            initialY: "0.3",
+            initialWidth: "0.5",
+            initialHeight: "0.4"
+        )
+        var warnings: [String] = []
+        let hint = FloatFrameHint(from: fields, warnings: &warnings)
+        #expect(hint == nil)
+        #expect(warnings.contains { $0.contains("initial-x") && $0.contains("wide") })
+    }
+
+    // MARK: - Create-class messages (profileID + snapshot + frameHint)
+
+    private func sampleSnapshot() -> StartupSnapshot {
+        StartupSnapshot(
+            command: "/bin/bash",
+            args: ["-l"],
+            env: [EnvVar(key: "TY", value: "1")],
+            closeOnExit: false
+        )
+    }
+
+    @Test func roundTripCreateTabAllCombinations() throws {
+        let sid = SessionID()
+        let snap = sampleSnapshot()
+        let cases: [(String?, StartupSnapshot?)] = [
+            (nil, nil),
+            ("ci", nil),
+            (nil, snap),
+            ("ci", snap),
+        ]
+        for (profileID, snapshot) in cases {
+            let msg = ClientMessage.createTab(sid, profileID: profileID, snapshot: snapshot)
+            var encoder = BinaryEncoder()
+            encoder.writeClientMessage(msg)
+            var decoder = BinaryDecoder(encoder.data)
+            let decoded = try decoder.readClientMessage(type: .createTab)
+            guard case .createTab(let dSid, let dProfile, let dSnap) = decoded else {
+                Issue.record("Expected .createTab"); continue
+            }
+            #expect(dSid == sid)
+            #expect(dProfile == profileID)
+            #expect(dSnap == snapshot)
+        }
+    }
+
+    @Test func roundTripSplitPaneAllCombinations() throws {
+        let sid = SessionID()
+        let pid = PaneID()
+        let snap = sampleSnapshot()
+        let cases: [(String?, StartupSnapshot?)] = [
+            (nil, nil),
+            ("ci", nil),
+            (nil, snap),
+            ("ci", snap),
+        ]
+        for (profileID, snapshot) in cases {
+            let msg = ClientMessage.splitPane(
+                sid, pid, .vertical,
+                profileID: profileID, snapshot: snapshot
+            )
+            var encoder = BinaryEncoder()
+            encoder.writeClientMessage(msg)
+            var decoder = BinaryDecoder(encoder.data)
+            let decoded = try decoder.readClientMessage(type: .splitPane)
+            guard case .splitPane(let dSid, let dPid, let dDir, let dProfile, let dSnap) = decoded else {
+                Issue.record("Expected .splitPane"); continue
+            }
+            #expect(dSid == sid)
+            #expect(dPid == pid)
+            #expect(dDir == .vertical)
+            #expect(dProfile == profileID)
+            #expect(dSnap == snapshot)
+        }
+    }
+
+    @Test func roundTripCreateFloatingPaneAllCombinations() throws {
+        let sid = SessionID()
+        let tid = TabID()
+        let snap = sampleSnapshot()
+        let hint = FloatFrameHint(x: 0.1, y: 0.2, width: 0.5, height: 0.3)
+        let cases: [(String?, StartupSnapshot?, FloatFrameHint?)] = [
+            (nil, nil, nil),
+            ("ci", nil, nil),
+            (nil, snap, nil),
+            (nil, nil, hint),
+            ("ci", snap, hint),
+        ]
+        for (profileID, snapshot, frameHint) in cases {
+            let msg = ClientMessage.createFloatingPane(
+                sid, tid,
+                profileID: profileID,
+                snapshot: snapshot,
+                frameHint: frameHint
+            )
+            var encoder = BinaryEncoder()
+            encoder.writeClientMessage(msg)
+            var decoder = BinaryDecoder(encoder.data)
+            let decoded = try decoder.readClientMessage(type: .createFloatingPane)
+            guard case .createFloatingPane(let dSid, let dTid, let dProfile, let dSnap, let dHint) = decoded else {
+                Issue.record("Expected .createFloatingPane"); continue
+            }
+            #expect(dSid == sid)
+            #expect(dTid == tid)
+            #expect(dProfile == profileID)
+            #expect(dSnap == snapshot)
+            #expect(dHint == frameHint)
+        }
+    }
+
+    // MARK: - Optional StartupSnapshot presence
+
+    @Test func optionalStartupSnapshotPresent() throws {
+        let snapshot = StartupSnapshot(
+            command: "/usr/bin/env",
+            args: ["sh", "-c", "true"],
+            env: [EnvVar(key: "K", value: "V")],
+            closeOnExit: true
+        )
+
+        var encoder = BinaryEncoder()
+        encoder.writeOptionalStartupSnapshot(snapshot)
+        #expect(encoder.data.first == 1)
+
+        var decoder = BinaryDecoder(encoder.data)
+        let decoded = try decoder.readOptionalStartupSnapshot()
+        #expect(decoded == snapshot)
+        #expect(decoder.remaining == 0)
     }
 }

@@ -63,9 +63,14 @@ public final class PTYProcess {
     // MARK: - Start
 
     /// Open a PTY, fork a child shell process, and start reading.
-    public func start(columns: UInt16, rows: UInt16, cellWidth: UInt16 = 0, cellHeight: UInt16 = 0, workingDirectory: String? = nil) throws {
+    ///
+    /// `extraEnv` entries are applied on top of the default environment; a
+    /// later entry for the same key overrides an earlier one, and any entry
+    /// overrides the default-built value. Used by profile-driven pane
+    /// creation to inject `env = KEY=VAL` declarations.
+    public func start(columns: UInt16, rows: UInt16, cellWidth: UInt16 = 0, cellHeight: UInt16 = 0, workingDirectory: String? = nil, extraEnv: [(String, String)] = []) throws {
         let shellPath = Self.resolveShell()
-        let env = Self.buildEnvironment(shellPath: shellPath)
+        let env = Self.buildEnvironment(shellPath: shellPath, extraEnv: extraEnv)
         try start(
             executablePath: shellPath,
             arguments: [],
@@ -79,9 +84,9 @@ public final class PTYProcess {
     }
 
     /// Open a PTY, fork a child process running the given command, and start reading.
-    public func start(command: String, arguments: [String] = [], columns: UInt16, rows: UInt16, cellWidth: UInt16 = 0, cellHeight: UInt16 = 0, workingDirectory: String? = nil) throws {
+    public func start(command: String, arguments: [String] = [], columns: UInt16, rows: UInt16, cellWidth: UInt16 = 0, cellHeight: UInt16 = 0, workingDirectory: String? = nil, extraEnv: [(String, String)] = []) throws {
         let shellPath = Self.resolveShell()
-        let env = Self.buildEnvironment(shellPath: shellPath)
+        let env = Self.buildEnvironment(shellPath: shellPath, extraEnv: extraEnv)
         try start(
             executablePath: command,
             arguments: arguments,
@@ -418,7 +423,7 @@ public final class PTYProcess {
         return "/bin/zsh"
     }
 
-    private static func buildEnvironment(shellPath: String) -> [String] {
+    private static func buildEnvironment(shellPath: String, extraEnv: [(String, String)] = []) -> [String] {
         var env = ProcessInfo.processInfo.environment
         env["TERM"] = "xterm-256color"
         if env["LANG"] == nil {
@@ -426,6 +431,9 @@ public final class PTYProcess {
         }
         if shellPath.hasSuffix("/zsh") || shellPath.hasSuffix("/zsh5") {
             ShellIntegrationInjector.injectZsh(into: &env)
+        }
+        for (key, value) in extraEnv {
+            env[key] = value
         }
         return env.map { "\($0.key)=\($0.value)" }
     }

@@ -62,7 +62,11 @@ public final class GUIAutomationServer: @unchecked Sendable {
         /// newly allocated tab ref. Not focus-whitelisted at the app level;
         /// the second `Bool` parameter is the caller's view-focus preference
         /// (switch the session's active tab to the new one on success).
-        public let handleTabCreate: (@Sendable (String, Bool) -> Result<TabCreateResponse, AutomationError>)?
+        /// The trailing `profile` / `overrides` parameters carry the Phase 5
+        /// automation fields: `profile` picks the starting profile for the
+        /// tab's root pane (nil means inherit / default); `overrides` is a
+        /// list of `"key = value"` lines applied on top of the profile.
+        public let handleTabCreate: (@Sendable (String, Bool, String?, [String]?) -> Result<TabCreateResponse, AutomationError>)?
         /// Selects (makes active) the tab resolved from `ref`. Not focus-whitelisted.
         public let handleTabSelect: (@Sendable (String) -> Result<Void, AutomationError>)?
         /// Closes the tab resolved from `ref`. Not focus-whitelisted.
@@ -71,7 +75,9 @@ public final class GUIAutomationServer: @unchecked Sendable {
         /// the newly allocated pane ref. Not focus-whitelisted at the app
         /// level; the third `Bool` parameter is the caller's view-focus
         /// preference (focus the new pane on success).
-        public let handlePaneSplit: (@Sendable (String, SplitDirection, Bool) -> Result<PaneSplitResponse, AutomationError>)?
+        /// The trailing `profile` / `overrides` parameters carry the Phase 5
+        /// automation fields (see `handleTabCreate`).
+        public let handlePaneSplit: (@Sendable (String, SplitDirection, Bool, String?, [String]?) -> Result<PaneSplitResponse, AutomationError>)?
         /// Focuses the pane resolved from `ref`. Focus-whitelisted —
         /// implementations bring the GUI to the foreground on success.
         public let handlePaneFocus: (@Sendable (String) -> Result<Void, AutomationError>)?
@@ -87,7 +93,9 @@ public final class GUIAutomationServer: @unchecked Sendable {
         /// Not focus-whitelisted at the app level; the second `Bool`
         /// parameter is the caller's view-focus preference (switch the
         /// active session to the new float's session on success).
-        public let handleFloatPaneCreate: (@Sendable (String, Bool) -> Result<FloatPaneCreateResponse, AutomationError>)?
+        /// The trailing `profile` / `overrides` parameters carry the Phase 5
+        /// automation fields (see `handleTabCreate`).
+        public let handleFloatPaneCreate: (@Sendable (String, Bool, String?, [String]?) -> Result<FloatPaneCreateResponse, AutomationError>)?
         /// Focuses the floating pane resolved from `ref`. Focus-whitelisted —
         /// implementations bring the GUI to the foreground on success.
         public let handleFloatPaneFocus: (@Sendable (String) -> Result<Void, AutomationError>)?
@@ -114,14 +122,14 @@ public final class GUIAutomationServer: @unchecked Sendable {
             handleSessionDetach: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
             handlePaneSendText: (@Sendable (String, String) -> Result<Void, AutomationError>)? = nil,
             handlePaneSendKey: (@Sendable (String, KeyEncoder.KeyInput) -> Result<Void, AutomationError>)? = nil,
-            handleTabCreate: (@Sendable (String, Bool) -> Result<TabCreateResponse, AutomationError>)? = nil,
+            handleTabCreate: (@Sendable (String, Bool, String?, [String]?) -> Result<TabCreateResponse, AutomationError>)? = nil,
             handleTabSelect: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
             handleTabClose: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
-            handlePaneSplit: (@Sendable (String, SplitDirection, Bool) -> Result<PaneSplitResponse, AutomationError>)? = nil,
+            handlePaneSplit: (@Sendable (String, SplitDirection, Bool, String?, [String]?) -> Result<PaneSplitResponse, AutomationError>)? = nil,
             handlePaneFocus: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
             handlePaneClose: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
             handlePaneResize: (@Sendable (String, Double) -> Result<Void, AutomationError>)? = nil,
-            handleFloatPaneCreate: (@Sendable (String, Bool) -> Result<FloatPaneCreateResponse, AutomationError>)? = nil,
+            handleFloatPaneCreate: (@Sendable (String, Bool, String?, [String]?) -> Result<FloatPaneCreateResponse, AutomationError>)? = nil,
             handleFloatPaneFocus: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
             handleFloatPaneClose: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
             handleFloatPanePin: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
@@ -184,6 +192,15 @@ public final class GUIAutomationServer: @unchecked Sendable {
             try GUIAutomationPaths.ensureRuntimeDirectory()
         } catch {
             throw GUIAutomationServerError.runtimeDirectorySetupFailed(underlying: error)
+        }
+
+        // Sweep gui-*.sock / gui-*.token left over from prior GUI runs
+        // that exited without applicationWillTerminate firing (crash,
+        // Xcode Stop, SIGKILL). Runs after ensureRuntimeDirectory so
+        // the directory exists, and before we create our own artifacts.
+        let swept = GUIAutomationPaths.sweepStaleArtifacts()
+        if !swept.isEmpty {
+            Log.info("GUI automation: removed \(swept.count) stale artifact(s) from prior runs")
         }
 
         let generatedToken: String
@@ -561,7 +578,9 @@ public final class GUIAutomationServer: @unchecked Sendable {
             return .error(code: "INVALID_PARAMS", message: "`ref` is required")
         }
         let focus = boolParam(request.params["focus"])
-        switch handler(ref, focus) {
+        let parsed = parseProfileFields(from: request.params)
+        if let error = parsed.error { return error }
+        switch handler(ref, focus, parsed.profile, parsed.overrides) {
         case .success(let payload):
             return encodeCodableResult(payload)
         case .failure(let error):
@@ -627,7 +646,9 @@ public final class GUIAutomationServer: @unchecked Sendable {
             )
         }
         let focus = boolParam(request.params["focus"])
-        switch handler(ref, direction, focus) {
+        let parsed = parseProfileFields(from: request.params)
+        if let error = parsed.error { return error }
+        switch handler(ref, direction, focus, parsed.profile, parsed.overrides) {
         case .success(let payload):
             return encodeCodableResult(payload)
         case .failure(let error):
@@ -716,7 +737,9 @@ public final class GUIAutomationServer: @unchecked Sendable {
             return .error(code: "INVALID_PARAMS", message: "`ref` is required")
         }
         let focus = boolParam(request.params["focus"])
-        switch handler(ref, focus) {
+        let parsed = parseProfileFields(from: request.params)
+        if let error = parsed.error { return error }
+        switch handler(ref, focus, parsed.profile, parsed.overrides) {
         case .success(let payload):
             return encodeCodableResult(payload)
         case .failure(let error):
@@ -833,6 +856,84 @@ public final class GUIAutomationServer: @unchecked Sendable {
         if let b = value as? Bool { return b }
         if let n = value as? NSNumber { return n.boolValue }
         return false
+    }
+
+    /// Parse the shared Phase 5 `profile` + `overrides` fields out of a
+    /// request. `profile` must be a non-empty string (or absent). Each
+    /// entry in `overrides` must be a non-empty string containing a `=`
+    /// — full key/value semantics are left to `ProfileMerger`, we only
+    /// reject malformed shapes here so the CLI gets a definite error
+    /// before hitting the GUI side. Returns `nil` on validation failure
+    /// and fills in `errorResponse`.
+    private static func parseProfileFields(
+        from params: [String: Any]
+    ) -> (profile: String?, overrides: [String]?, error: JSONResponse?) {
+        let profile: String?
+        if let any = params["profile"] {
+            if any is NSNull {
+                profile = nil
+            } else if let s = any as? String {
+                if s.isEmpty {
+                    return (nil, nil, .error(
+                        code: "INVALID_PARAMS",
+                        message: "`profile` must be a non-empty string"
+                    ))
+                }
+                profile = s
+            } else {
+                return (nil, nil, .error(
+                    code: "INVALID_PARAMS",
+                    message: "`profile` must be a string"
+                ))
+            }
+        } else {
+            profile = nil
+        }
+
+        let overrides: [String]?
+        if let any = params["overrides"] {
+            if any is NSNull {
+                overrides = nil
+            } else {
+                guard let array = any as? [Any] else {
+                    return (nil, nil, .error(
+                        code: "INVALID_PARAMS",
+                        message: "`overrides` must be an array of strings"
+                    ))
+                }
+                var lines: [String] = []
+                lines.reserveCapacity(array.count)
+                for (index, element) in array.enumerated() {
+                    guard let line = element as? String else {
+                        return (nil, nil, .error(
+                            code: "INVALID_PARAMS",
+                            message: "`overrides[\(index)]` must be a string"
+                        ))
+                    }
+                    let trimmed = line.trimmingCharacters(in: .whitespaces)
+                    if trimmed.isEmpty {
+                        return (nil, nil, .error(
+                            code: "INVALID_PARAMS",
+                            message: "`overrides[\(index)]` must not be empty"
+                        ))
+                    }
+                    // Allow comments; require `=` for everything else so
+                    // downstream parsing can't mistake a literal for a key.
+                    if !trimmed.hasPrefix("#"), !trimmed.contains("=") {
+                        return (nil, nil, .error(
+                            code: "INVALID_PARAMS",
+                            message: "`overrides[\(index)]` must be 'key = value'"
+                        ))
+                    }
+                    lines.append(line)
+                }
+                overrides = lines
+            }
+        } else {
+            overrides = nil
+        }
+
+        return (profile, overrides, nil)
     }
 
     private static func handleWindowFocusCommand(config: Configuration) -> JSONResponse {

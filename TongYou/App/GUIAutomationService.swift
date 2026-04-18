@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import TYAutomation
+import TYConfig
 import TYTerminal
 
 /// App-level facade over `GUIAutomationServer`.
@@ -62,10 +63,11 @@ final class GUIAutomationService {
                 return service?.handlePaneSendKey(ref: ref, input: input)
                     ?? .failure(.internal("GUIAutomationService deallocated"))
             },
-            handleTabCreate: { [weak self] ref, focus in
+            handleTabCreate: { [weak self] ref, focus, profile, overrides in
                 let service = self
-                return service?.handleTabCreate(ref: ref, focus: focus)
-                    ?? .failure(.internal("GUIAutomationService deallocated"))
+                return service?.handleTabCreate(
+                    ref: ref, focus: focus, profile: profile, overrides: overrides
+                ) ?? .failure(.internal("GUIAutomationService deallocated"))
             },
             handleTabSelect: { [weak self] ref in
                 let service = self
@@ -77,10 +79,15 @@ final class GUIAutomationService {
                 return service?.handleTabClose(ref: ref)
                     ?? .failure(.internal("GUIAutomationService deallocated"))
             },
-            handlePaneSplit: { [weak self] ref, direction, focus in
+            handlePaneSplit: { [weak self] ref, direction, focus, profile, overrides in
                 let service = self
-                return service?.handlePaneSplit(ref: ref, direction: direction, focus: focus)
-                    ?? .failure(.internal("GUIAutomationService deallocated"))
+                return service?.handlePaneSplit(
+                    ref: ref,
+                    direction: direction,
+                    focus: focus,
+                    profile: profile,
+                    overrides: overrides
+                ) ?? .failure(.internal("GUIAutomationService deallocated"))
             },
             handlePaneFocus: { [weak self] ref in
                 let service = self
@@ -97,10 +104,11 @@ final class GUIAutomationService {
                 return service?.handlePaneResize(ref: ref, ratio: ratio)
                     ?? .failure(.internal("GUIAutomationService deallocated"))
             },
-            handleFloatPaneCreate: { [weak self] ref, focus in
+            handleFloatPaneCreate: { [weak self] ref, focus, profile, overrides in
                 let service = self
-                return service?.handleFloatPaneCreate(ref: ref, focus: focus)
-                    ?? .failure(.internal("GUIAutomationService deallocated"))
+                return service?.handleFloatPaneCreate(
+                    ref: ref, focus: focus, profile: profile, overrides: overrides
+                ) ?? .failure(.internal("GUIAutomationService deallocated"))
             },
             handleFloatPaneFocus: { [weak self] ref in
                 let service = self
@@ -145,6 +153,37 @@ final class GUIAutomationService {
         }
         return DispatchQueue.main.sync {
             MainActor.assumeIsolated(work)
+        }
+    }
+
+    /// Validate a profile id + overrides combination against the
+    /// SessionManager-owned `ProfileMerger`. Returns the mapped
+    /// `AutomationError` on failure, or nil when the profile resolves.
+    /// Callers invoke this inside `resolve*Target` so the CLI receives
+    /// `PROFILE_NOT_FOUND` / `INVALID_PARAMS` before the actual create
+    /// call (which would otherwise silently fall back to `default`).
+    @MainActor
+    private static func validateProfile(
+        manager: SessionManager,
+        id: String,
+        overrides: [String]
+    ) -> AutomationError? {
+        do {
+            try manager.tryResolveProfile(id: id, overrides: overrides)
+            return nil
+        } catch let err as ProfileResolveError {
+            switch err {
+            case .profileNotFound(let profileID):
+                return .profileNotFound(profileID)
+            case .circularExtends(let chain):
+                return .invalidParams("circular profile extends: \(chain.joined(separator: " -> "))")
+            case .extendsDepthExceeded(let chain):
+                return .invalidParams("profile extends depth exceeded: \(chain.joined(separator: " -> "))")
+            case .invalidOverrideLine(let index, let line):
+                return .invalidParams("overrides[\(index)] invalid: '\(line)'")
+            }
+        } catch {
+            return .internal("profile resolve failed: \(error)")
         }
     }
 
@@ -273,11 +312,16 @@ final class GUIAutomationService {
     // GUI to the foreground on success. All other tab/pane commands here
     // mutate model state without activating the window.
 
-    nonisolated private func handleTabCreate(ref: String, focus: Bool) -> Result<TabCreateResponse, AutomationError> {
+    nonisolated private func handleTabCreate(
+        ref: String,
+        focus: Bool,
+        profile: String?,
+        overrides: [String]?
+    ) -> Result<TabCreateResponse, AutomationError> {
         let remote: RemoteTabCreateRequest?
         switch (Self.runOnMain {
             GUIAutomationPolicy.withAutomationRequest(command: .tabCreate, viewFocus: focus) {
-                self.resolveTabCreateTarget(ref: ref)
+                self.resolveTabCreateTarget(ref: ref, profile: profile, overrides: overrides)
             }
         }) {
         case .failure(let err): return .failure(err)
@@ -311,12 +355,19 @@ final class GUIAutomationService {
     nonisolated private func handlePaneSplit(
         ref: String,
         direction: SplitDirection,
-        focus: Bool
+        focus: Bool,
+        profile: String?,
+        overrides: [String]?
     ) -> Result<PaneSplitResponse, AutomationError> {
         let remote: RemotePaneSplitRequest?
         switch (Self.runOnMain {
             GUIAutomationPolicy.withAutomationRequest(command: .paneSplit, viewFocus: focus) {
-                self.resolvePaneSplitTarget(ref: ref, direction: direction)
+                self.resolvePaneSplitTarget(
+                    ref: ref,
+                    direction: direction,
+                    profile: profile,
+                    overrides: overrides
+                )
             }
         }) {
         case .failure(let err): return .failure(err)
@@ -369,11 +420,20 @@ final class GUIAutomationService {
     // one-shot listener on `SessionManager`, send the RPC, then wait for
     // the server's layoutUpdate to materialize the new float.
 
-    nonisolated private func handleFloatPaneCreate(ref: String, focus: Bool) -> Result<FloatPaneCreateResponse, AutomationError> {
+    nonisolated private func handleFloatPaneCreate(
+        ref: String,
+        focus: Bool,
+        profile: String?,
+        overrides: [String]?
+    ) -> Result<FloatPaneCreateResponse, AutomationError> {
         let remote: RemoteFloatCreateRequest?
         switch (Self.runOnMain {
             GUIAutomationPolicy.withAutomationRequest(command: .floatPaneCreate, viewFocus: focus) {
-                self.resolveFloatCreateTarget(ref: ref)
+                self.resolveFloatCreateTarget(
+                    ref: ref,
+                    profile: profile,
+                    overrides: overrides
+                )
             }
         }) {
         case .failure(let err): return .failure(err)
@@ -591,12 +651,24 @@ final class GUIAutomationService {
     private struct RemoteTabCreateRequest {
         let originalRef: String
         let sessionID: UUID
+        let profile: String?
+        let overrides: [String]
     }
 
     /// Parse/resolve the ref and, for local sessions, perform the tab
     /// create inline. For remote sessions, fall through to the caller so
     /// it can dispatch a blocking wait without holding the main actor.
-    private func resolveTabCreateTarget(ref: String) -> Result<TabCreateDecision, AutomationError> {
+    ///
+    /// `profile` / `overrides` are validated here (unknown profile →
+    /// `PROFILE_NOT_FOUND`, malformed override → `INVALID_PARAMS`) for both
+    /// local *and* remote sessions; Phase 7.3 introduced client-side
+    /// resolution so the daemon never sees the profile name, only the
+    /// resolved `StartupSnapshot`.
+    private func resolveTabCreateTarget(
+        ref: String,
+        profile: String?,
+        overrides: [String]?
+    ) -> Result<TabCreateDecision, AutomationError> {
         let snapshots = Self.collectSnapshots()
         refStore.refreshRefs(snapshots: snapshots)
 
@@ -628,6 +700,19 @@ final class GUIAutomationService {
             return .failure(.sessionNotFound(ref))
         }
 
+        // Pre-flight the profile (for both local and remote) so callers
+        // get PROFILE_NOT_FOUND / INVALID_PARAMS *before* the create call,
+        // which would otherwise silently rewrite an unknown profile to
+        // `default`. For remote sessions this also means we never ship a
+        // bad profile name over the wire.
+        if let profile = profile {
+            if let err = Self.validateProfile(
+                manager: manager, id: profile, overrides: overrides ?? []
+            ) {
+                return .failure(err)
+            }
+        }
+
         if session.source.serverSessionID != nil {
             // Remote session: the server owns tab allocation. Verify it's
             // attached — sending createTab to the daemon for a detached
@@ -639,11 +724,18 @@ final class GUIAutomationService {
                 ))
             }
             return .success(.remote(RemoteTabCreateRequest(
-                originalRef: ref, sessionID: target.sessionID
+                originalRef: ref,
+                sessionID: target.sessionID,
+                profile: profile,
+                overrides: overrides ?? []
             )))
         }
 
-        guard let newTabID = manager.createTab(inSessionID: target.sessionID) else {
+        guard let newTabID = manager.createTab(
+            inSessionID: target.sessionID,
+            profileID: profile,
+            overrides: overrides ?? []
+        ) else {
             return .success(.failed(.internal("tab.create failed")))
         }
         let postSnapshots = Self.collectSnapshots()
@@ -688,6 +780,8 @@ final class GUIAutomationService {
         let sessionID: UUID
         let paneID: UUID
         let direction: SplitDirection
+        let profile: String?
+        let overrides: [String]
     }
 
     /// Parse/resolve the ref and pick the target pane. For local sessions,
@@ -695,7 +789,9 @@ final class GUIAutomationService {
     /// can block-wait on the server's layoutUpdate.
     private func resolvePaneSplitTarget(
         ref: String,
-        direction: SplitDirection
+        direction: SplitDirection,
+        profile: String?,
+        overrides: [String]?
     ) -> Result<PaneSplitDecision, AutomationError> {
         let snapshots = Self.collectSnapshots()
         refStore.refreshRefs(snapshots: snapshots)
@@ -739,6 +835,14 @@ final class GUIAutomationService {
             }
         }
 
+        if let profile = profile {
+            if let err = Self.validateProfile(
+                manager: manager, id: profile, overrides: overrides ?? []
+            ) {
+                return .failure(err)
+            }
+        }
+
         if session.source.serverSessionID != nil {
             if let serverID = session.source.serverSessionID,
                !manager.attachedRemoteSessionIDs.contains(serverID) {
@@ -750,22 +854,24 @@ final class GUIAutomationService {
                 originalRef: ref,
                 sessionID: target.sessionID,
                 paneID: paneID,
-                direction: direction
+                direction: direction,
+                profile: profile,
+                overrides: overrides ?? []
             )))
         }
 
-        let newPane = TerminalPane()
-        guard manager.splitPane(
+        guard let newPaneID = manager.splitPane(
             inSessionID: target.sessionID,
-            id: paneID,
+            parentPaneID: paneID,
             direction: direction,
-            newPane: newPane
+            profileID: profile,
+            overrides: overrides ?? []
         ) else {
             return .success(.failed(.paneNotFound(ref)))
         }
         let postSnapshots = Self.collectSnapshots()
         refStore.refreshRefs(snapshots: postSnapshots)
-        guard let newRef = refStore.paneRef(sessionID: target.sessionID, paneID: newPane.id) else {
+        guard let newRef = refStore.paneRef(sessionID: target.sessionID, paneID: newPaneID) else {
             return .success(.failed(.internal("ref allocation failed for new pane")))
         }
         return .success(.local(PaneSplitResponse(ref: newRef)))
@@ -820,12 +926,18 @@ final class GUIAutomationService {
     private struct RemoteFloatCreateRequest {
         let originalRef: String
         let sessionID: UUID
+        let profile: String?
+        let overrides: [String]
     }
 
     /// Parse/resolve the session ref and, for local sessions, create the
     /// float inline. Remote sessions fall through so the caller can block-
     /// wait on the server's layoutUpdate without holding the main actor.
-    private func resolveFloatCreateTarget(ref: String) -> Result<FloatCreateDecision, AutomationError> {
+    private func resolveFloatCreateTarget(
+        ref: String,
+        profile: String?,
+        overrides: [String]?
+    ) -> Result<FloatCreateDecision, AutomationError> {
         let snapshots = Self.collectSnapshots()
         refStore.refreshRefs(snapshots: snapshots)
 
@@ -857,6 +969,14 @@ final class GUIAutomationService {
             return .failure(.sessionNotFound(ref))
         }
 
+        if let profile = profile {
+            if let err = Self.validateProfile(
+                manager: manager, id: profile, overrides: overrides ?? []
+            ) {
+                return .failure(err)
+            }
+        }
+
         if session.source.serverSessionID != nil {
             if let serverID = session.source.serverSessionID,
                !manager.attachedRemoteSessionIDs.contains(serverID) {
@@ -865,7 +985,10 @@ final class GUIAutomationService {
                 ))
             }
             return .success(.remote(RemoteFloatCreateRequest(
-                originalRef: ref, sessionID: target.sessionID
+                originalRef: ref,
+                sessionID: target.sessionID,
+                profile: profile,
+                overrides: overrides ?? []
             )))
         }
 
@@ -879,7 +1002,10 @@ final class GUIAutomationService {
            idx != manager.activeSessionIndex {
             manager.selectSession(at: idx)
         }
-        guard let newPaneID = manager.createFloatingPane() else {
+        guard let newPaneID = manager.createFloatingPane(
+            profileID: profile,
+            overrides: overrides ?? []
+        ) else {
             return .success(.failed(.internal("floatPane.create failed")))
         }
         if !GUIAutomationPolicy.shouldTakeViewFocus(),
@@ -1320,7 +1446,11 @@ final class GUIAutomationService {
             }
             signal()
         }
-        _ = manager.createTab(inSessionID: sessionID)
+        _ = manager.createTab(
+            inSessionID: sessionID,
+            profileID: request.profile,
+            overrides: request.overrides
+        )
     }
 
     nonisolated private func splitRemotePaneBlocking(
@@ -1376,12 +1506,15 @@ final class GUIAutomationService {
             }
             signal()
         }
-        // `newPane` is ignored on the remote path (server owns allocation).
+        // Remote path: SessionManager.splitPane returns nil immediately
+        // after dispatching the RPC. The actual new pane id arrives via
+        // `onNextRemotePaneCreated` above.
         _ = manager.splitPane(
             inSessionID: sessionID,
-            id: request.paneID,
+            parentPaneID: request.paneID,
             direction: request.direction,
-            newPane: TerminalPane()
+            profileID: request.profile,
+            overrides: request.overrides
         )
     }
 
@@ -1449,7 +1582,10 @@ final class GUIAutomationService {
            idx != manager.activeSessionIndex {
             manager.selectSession(at: idx)
         }
-        _ = manager.createFloatingPane()
+        _ = manager.createFloatingPane(
+            profileID: request.profile,
+            overrides: request.overrides
+        )
         if !GUIAutomationPolicy.shouldTakeViewFocus(),
            manager.activeSessionIndex != prevActiveIndex {
             manager.selectSession(at: prevActiveIndex)

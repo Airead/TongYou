@@ -6,8 +6,11 @@ import TYTerminal
 struct TerminalPaneContainerView: NSViewRepresentable {
 
     let paneID: UUID
+    let profileID: String
     let viewStore: MetalViewStore
     let initialWorkingDirectory: String?
+    /// Shared configuration loader (global Config + profile live fields).
+    let configLoader: ConfigLoader
     /// External controller for remote sessions. Nil for local sessions.
     let externalController: (any TerminalControlling)?
     let onTabAction: (TabAction) -> Void
@@ -19,6 +22,8 @@ struct TerminalPaneContainerView: NSViewRepresentable {
     func makeNSView(context: Context) -> MetalView {
         if let existing = viewStore.view(for: paneID) {
             existing.paneID = paneID
+            existing.profileID = profileID
+            existing.configLoader = configLoader
             existing.onTabAction = onTabAction
             existing.onTitleChanged = onTitleChanged
             existing.onFocused = onFocused
@@ -28,6 +33,8 @@ struct TerminalPaneContainerView: NSViewRepresentable {
         }
         let view = MetalView()
         view.paneID = paneID
+        view.profileID = profileID
+        view.configLoader = configLoader
         view.initialWorkingDirectory = initialWorkingDirectory
         view.externalController = externalController
         view.onTabAction = onTabAction
@@ -41,6 +48,8 @@ struct TerminalPaneContainerView: NSViewRepresentable {
 
     func updateNSView(_ nsView: MetalView, context: Context) {
         nsView.paneID = paneID
+        nsView.profileID = profileID
+        nsView.configLoader = configLoader
         nsView.onTabAction = onTabAction
         nsView.onTitleChanged = onTitleChanged
         nsView.onFocused = onFocused

@@ -1,4 +1,5 @@
 import Foundation
+import TYConfig
 import TYTerminal
 
 /// Lightweight binary encoder that appends to an internal byte buffer.
@@ -180,6 +181,87 @@ public struct BinaryEncoder: Sendable {
         writeUInt8(modBits)
     }
 
+    // MARK: - Startup Snapshot
+
+    /// Write a single environment variable as two length-prefixed strings.
+    public mutating func writeEnvVar(_ env: EnvVar) {
+        writeString(env.key)
+        writeString(env.value)
+    }
+
+    /// Encode a `StartupSnapshot` into the buffer. Layout:
+    ///   has_command u8 + [command string]
+    ///   args (u16 count + strings)
+    ///   has_cwd u8 + [cwd string]
+    ///   env (u16 count + [string key; string value])
+    ///   close_on_exit u8 (0 = nil, 1 = false, 2 = true)
+    public mutating func writeStartupSnapshot(_ snapshot: StartupSnapshot) {
+        if let command = snapshot.command {
+            writeUInt8(1)
+            writeString(command)
+        } else {
+            writeUInt8(0)
+        }
+
+        writeStringArray(snapshot.args)
+
+        if let cwd = snapshot.cwd {
+            writeUInt8(1)
+            writeString(cwd)
+        } else {
+            writeUInt8(0)
+        }
+
+        writeUInt16(UInt16(clamping: snapshot.env.count))
+        for env in snapshot.env {
+            writeEnvVar(env)
+        }
+
+        switch snapshot.closeOnExit {
+        case .none: writeUInt8(0)
+        case .some(false): writeUInt8(1)
+        case .some(true): writeUInt8(2)
+        }
+    }
+
+    /// Encode an optional `StartupSnapshot` as a presence byte + snapshot body.
+    public mutating func writeOptionalStartupSnapshot(_ snapshot: StartupSnapshot?) {
+        if let snapshot {
+            writeUInt8(1)
+            writeStartupSnapshot(snapshot)
+        } else {
+            writeUInt8(0)
+        }
+    }
+
+    /// Encode an optional length-prefixed UTF-8 string (1-byte presence + body).
+    public mutating func writeOptionalString(_ value: String?) {
+        if let value {
+            writeUInt8(1)
+            writeString(value)
+        } else {
+            writeUInt8(0)
+        }
+    }
+
+    /// Encode a `FloatFrameHint` (4 × Float32 normalized coordinates).
+    public mutating func writeFloatFrameHint(_ hint: FloatFrameHint) {
+        writeFloat(hint.x)
+        writeFloat(hint.y)
+        writeFloat(hint.width)
+        writeFloat(hint.height)
+    }
+
+    /// Encode an optional `FloatFrameHint` (1-byte presence + body).
+    public mutating func writeOptionalFloatFrameHint(_ hint: FloatFrameHint?) {
+        if let hint {
+            writeUInt8(1)
+            writeFloatFrameHint(hint)
+        } else {
+            writeUInt8(0)
+        }
+    }
+
     // MARK: - Protocol Messages
 
     /// Encode a `ScreenDiff` into the buffer.
@@ -243,10 +325,23 @@ public struct BinaryEncoder: Sendable {
     }
 
     /// Encode a `PaneMetadata` into the buffer.
+    ///
+    /// `closeOnExit` is encoded as a trinary byte matching
+    /// `writeStartupSnapshot` (0 = nil, 1 = false, 2 = true) so older
+    /// clients that omit the field are naturally decoded as nil.
     public mutating func writePaneMetadata(_ meta: RemotePaneMetadata) {
         writeBool(meta.cwd != nil)
         if let cwd = meta.cwd {
             writeString(cwd)
+        }
+        writeBool(meta.profileID != nil)
+        if let profileID = meta.profileID {
+            writeString(profileID)
+        }
+        switch meta.closeOnExit {
+        case .none: writeUInt8(0)
+        case .some(false): writeUInt8(1)
+        case .some(true): writeUInt8(2)
         }
     }
 
@@ -370,17 +465,21 @@ public struct BinaryEncoder: Sendable {
             writePaneID(paneID)
             writeMouseEvent(event)
 
-        case .createTab(let sessionID):
+        case .createTab(let sessionID, let profileID, let snapshot):
             writeSessionID(sessionID)
+            writeOptionalString(profileID)
+            writeOptionalStartupSnapshot(snapshot)
 
         case .closeTab(let sessionID, let tabID):
             writeSessionID(sessionID)
             writeTabID(tabID)
 
-        case .splitPane(let sessionID, let paneID, let direction):
+        case .splitPane(let sessionID, let paneID, let direction, let profileID, let snapshot):
             writeSessionID(sessionID)
             writePaneID(paneID)
             writeSplitDirection(direction)
+            writeOptionalString(profileID)
+            writeOptionalStartupSnapshot(snapshot)
 
         case .closePane(let sessionID, let paneID):
             writeSessionID(sessionID)
@@ -399,9 +498,12 @@ public struct BinaryEncoder: Sendable {
             writePaneID(paneID)
             writeFloat(ratio)
 
-        case .createFloatingPane(let sessionID, let tabID):
+        case .createFloatingPane(let sessionID, let tabID, let profileID, let snapshot, let frameHint):
             writeSessionID(sessionID)
             writeTabID(tabID)
+            writeOptionalString(profileID)
+            writeOptionalStartupSnapshot(snapshot)
+            writeOptionalFloatFrameHint(frameHint)
 
         case .closeFloatingPane(let sessionID, let paneID):
             writeSessionID(sessionID)
@@ -435,25 +537,15 @@ public struct BinaryEncoder: Sendable {
             writeString(command)
             writeStringArray(arguments)
 
-        case .createFloatingPaneWithCommand(let sessionID, let tabID, let command, let arguments, let frameX, let frameY, let frameWidth, let frameHeight):
-            writeSessionID(sessionID)
-            writeTabID(tabID)
-            writeString(command)
-            writeStringArray(arguments)
-            let hasFrame = frameX != nil || frameY != nil || frameWidth != nil || frameHeight != nil
-            writeBool(hasFrame)
-            if hasFrame {
-                writeFloat(frameX ?? 0.3)
-                writeFloat(frameY ?? 0.3)
-                writeFloat(frameWidth ?? 0.4)
-                writeFloat(frameHeight ?? 0.4)
-            }
-
         case .restartFloatingPaneCommand(let sessionID, let paneID, let command, let arguments):
             writeSessionID(sessionID)
             writePaneID(paneID)
             writeString(command)
             writeStringArray(arguments)
+
+        case .rerunPane(let sessionID, let paneID):
+            writeSessionID(sessionID)
+            writePaneID(paneID)
         }
     }
 }

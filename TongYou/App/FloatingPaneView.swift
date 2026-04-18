@@ -10,6 +10,7 @@ struct FloatingPaneView: View {
     let viewStore: MetalViewStore
     let focusManager: FocusManager
     let focusColor: Color
+    let configLoader: ConfigLoader
     let controllerForPane: (UUID) -> (any TerminalControlling)?
     let onTabAction: (TabAction) -> Void
     let onTitleChanged: (String) -> Void
@@ -104,8 +105,10 @@ struct FloatingPaneView: View {
     private var terminalContent: some View {
         TerminalPaneContainerView(
             paneID: floatingPane.pane.id,
+            profileID: floatingPane.pane.profileID,
             viewStore: viewStore,
             initialWorkingDirectory: floatingPane.pane.initialWorkingDirectory,
+            configLoader: configLoader,
             externalController: controllerForPane(floatingPane.pane.id),
             onTabAction: onTabAction,
             onTitleChanged: onTitleChanged,

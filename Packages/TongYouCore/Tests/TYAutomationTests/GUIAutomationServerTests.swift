@@ -559,7 +559,7 @@ struct GUIAutomationServerTests {
             socketPath: baseConfig.socketPath,
             tokenPath: baseConfig.tokenPath,
             allowedPeerUID: baseConfig.allowedPeerUID,
-            handleTabCreate: { ref, _ in
+            handleTabCreate: { ref, _, _, _ in
                 captured.ref = ref
                 return .success(TabCreateResponse(ref: "\(ref)/tab:1"))
             }
@@ -592,7 +592,7 @@ struct GUIAutomationServerTests {
             socketPath: baseConfig.socketPath,
             tokenPath: baseConfig.tokenPath,
             allowedPeerUID: baseConfig.allowedPeerUID,
-            handleTabCreate: { _, _ in .success(TabCreateResponse(ref: "x")) }
+            handleTabCreate: { _, _, _, _ in .success(TabCreateResponse(ref: "x")) }
         )
         let server = GUIAutomationServer(configuration: config)
         try server.start()
@@ -688,7 +688,7 @@ struct GUIAutomationServerTests {
             socketPath: baseConfig.socketPath,
             tokenPath: baseConfig.tokenPath,
             allowedPeerUID: baseConfig.allowedPeerUID,
-            handlePaneSplit: { ref, dir, _ in
+            handlePaneSplit: { ref, dir, _, _, _ in
                 captured.ref = ref
                 captured.direction = dir
                 return .success(PaneSplitResponse(ref: "dev/pane:2"))
@@ -723,7 +723,7 @@ struct GUIAutomationServerTests {
             socketPath: baseConfig.socketPath,
             tokenPath: baseConfig.tokenPath,
             allowedPeerUID: baseConfig.allowedPeerUID,
-            handlePaneSplit: { _, _, _ in .success(PaneSplitResponse(ref: "x")) }
+            handlePaneSplit: { _, _, _, _, _ in .success(PaneSplitResponse(ref: "x")) }
         )
         let server = GUIAutomationServer(configuration: config)
         try server.start()
@@ -740,6 +740,270 @@ struct GUIAutomationServerTests {
         try Self.sendLine(socket, #"{"cmd":"pane.split","ref":"dev","direction":"diagonal"}"#)
         let resp = try #require(try Self.readLine(socket))
         #expect(resp.contains("\"code\":\"INVALID_PARAMS\""))
+    }
+
+    // MARK: - Phase 5: profile / overrides plumbing
+
+    /// Exercise the full Phase 5 surface: profile + overrides serialize on
+    /// the wire, deserialize server-side, and reach the handler verbatim.
+    @Test func paneSplitForwardsProfileAndOverrides() throws {
+        let (baseConfig, tmpDir) = Self.isolatedConfig()
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        final class Captured: @unchecked Sendable {
+            var profile: String?
+            var overrides: [String]?
+        }
+        let captured = Captured()
+
+        let config = GUIAutomationServer.Configuration(
+            socketPath: baseConfig.socketPath,
+            tokenPath: baseConfig.tokenPath,
+            allowedPeerUID: baseConfig.allowedPeerUID,
+            handlePaneSplit: { _, _, _, profile, overrides in
+                captured.profile = profile
+                captured.overrides = overrides
+                return .success(PaneSplitResponse(ref: "dev/pane:2"))
+            }
+        )
+        let server = GUIAutomationServer(configuration: config)
+        try server.start()
+        defer { server.stop() }
+        Thread.sleep(forTimeInterval: 0.05)
+
+        let token = try #require(GUIAutomationAuth.read(tokenPath: config.tokenPath))
+        let socket = try TYSocket.connect(path: config.socketPath)
+        defer { socket.closeSocket() }
+
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        _ = try Self.readLine(socket)
+
+        let req = #"""
+        {"cmd":"pane.split","ref":"dev","direction":"horizontal","profile":"ssh-box","overrides":["font-size = 18","env = FOO=bar"]}
+        """#
+        try Self.sendLine(socket, req)
+        let resp = try #require(try Self.readLine(socket))
+        #expect(resp.contains("\"ok\":true"))
+        #expect(captured.profile == "ssh-box")
+        #expect(captured.overrides == ["font-size = 18", "env = FOO=bar"])
+    }
+
+    @Test func tabCreateForwardsProfileAndOverrides() throws {
+        let (baseConfig, tmpDir) = Self.isolatedConfig()
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        final class Captured: @unchecked Sendable {
+            var profile: String?
+            var overrides: [String]?
+        }
+        let captured = Captured()
+
+        let config = GUIAutomationServer.Configuration(
+            socketPath: baseConfig.socketPath,
+            tokenPath: baseConfig.tokenPath,
+            allowedPeerUID: baseConfig.allowedPeerUID,
+            handleTabCreate: { _, _, profile, overrides in
+                captured.profile = profile
+                captured.overrides = overrides
+                return .success(TabCreateResponse(ref: "dev/tab:1"))
+            }
+        )
+        let server = GUIAutomationServer(configuration: config)
+        try server.start()
+        defer { server.stop() }
+        Thread.sleep(forTimeInterval: 0.05)
+
+        let token = try #require(GUIAutomationAuth.read(tokenPath: config.tokenPath))
+        let socket = try TYSocket.connect(path: config.socketPath)
+        defer { socket.closeSocket() }
+
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        _ = try Self.readLine(socket)
+
+        let req = #"""
+        {"cmd":"tab.create","ref":"dev","profile":"ci","overrides":["args = --flag"]}
+        """#
+        try Self.sendLine(socket, req)
+        let resp = try #require(try Self.readLine(socket))
+        #expect(resp.contains("\"ok\":true"))
+        #expect(captured.profile == "ci")
+        #expect(captured.overrides == ["args = --flag"])
+    }
+
+    @Test func floatPaneCreateForwardsProfileAndOverrides() throws {
+        let (baseConfig, tmpDir) = Self.isolatedConfig()
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        final class Captured: @unchecked Sendable {
+            var profile: String?
+            var overrides: [String]?
+        }
+        let captured = Captured()
+
+        let config = GUIAutomationServer.Configuration(
+            socketPath: baseConfig.socketPath,
+            tokenPath: baseConfig.tokenPath,
+            allowedPeerUID: baseConfig.allowedPeerUID,
+            handleFloatPaneCreate: { _, _, profile, overrides in
+                captured.profile = profile
+                captured.overrides = overrides
+                return .success(FloatPaneCreateResponse(ref: "dev/float:1"))
+            }
+        )
+        let server = GUIAutomationServer(configuration: config)
+        try server.start()
+        defer { server.stop() }
+        Thread.sleep(forTimeInterval: 0.05)
+
+        let token = try #require(GUIAutomationAuth.read(tokenPath: config.tokenPath))
+        let socket = try TYSocket.connect(path: config.socketPath)
+        defer { socket.closeSocket() }
+
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        _ = try Self.readLine(socket)
+
+        let req = #"""
+        {"cmd":"floatPane.create","ref":"dev","profile":"scratch","overrides":["palette-0 = ffffff"]}
+        """#
+        try Self.sendLine(socket, req)
+        let resp = try #require(try Self.readLine(socket))
+        #expect(resp.contains("\"ok\":true"))
+        #expect(captured.profile == "scratch")
+        #expect(captured.overrides == ["palette-0 = ffffff"])
+    }
+
+    /// Missing profile/overrides should leave the handler with nil so the
+    /// service layer can apply its usual inheritance/default logic.
+    @Test func paneSplitOmitsProfileFieldsWhenAbsent() throws {
+        let (baseConfig, tmpDir) = Self.isolatedConfig()
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        final class Captured: @unchecked Sendable {
+            var profile: String? = "sentinel"
+            var overrides: [String]? = ["sentinel"]
+        }
+        let captured = Captured()
+
+        let config = GUIAutomationServer.Configuration(
+            socketPath: baseConfig.socketPath,
+            tokenPath: baseConfig.tokenPath,
+            allowedPeerUID: baseConfig.allowedPeerUID,
+            handlePaneSplit: { _, _, _, profile, overrides in
+                captured.profile = profile
+                captured.overrides = overrides
+                return .success(PaneSplitResponse(ref: "dev/pane:2"))
+            }
+        )
+        let server = GUIAutomationServer(configuration: config)
+        try server.start()
+        defer { server.stop() }
+        Thread.sleep(forTimeInterval: 0.05)
+
+        let token = try #require(GUIAutomationAuth.read(tokenPath: config.tokenPath))
+        let socket = try TYSocket.connect(path: config.socketPath)
+        defer { socket.closeSocket() }
+
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        _ = try Self.readLine(socket)
+
+        try Self.sendLine(socket, #"{"cmd":"pane.split","ref":"dev","direction":"vertical"}"#)
+        let resp = try #require(try Self.readLine(socket))
+        #expect(resp.contains("\"ok\":true"))
+        #expect(captured.profile == nil)
+        #expect(captured.overrides == nil)
+    }
+
+    @Test func paneSplitRejectsNonArrayOverrides() throws {
+        let (baseConfig, tmpDir) = Self.isolatedConfig()
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        let config = GUIAutomationServer.Configuration(
+            socketPath: baseConfig.socketPath,
+            tokenPath: baseConfig.tokenPath,
+            allowedPeerUID: baseConfig.allowedPeerUID,
+            handlePaneSplit: { _, _, _, _, _ in .success(PaneSplitResponse(ref: "x")) }
+        )
+        let server = GUIAutomationServer(configuration: config)
+        try server.start()
+        defer { server.stop() }
+        Thread.sleep(forTimeInterval: 0.05)
+
+        let token = try #require(GUIAutomationAuth.read(tokenPath: config.tokenPath))
+        let socket = try TYSocket.connect(path: config.socketPath)
+        defer { socket.closeSocket() }
+
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        _ = try Self.readLine(socket)
+
+        try Self.sendLine(
+            socket,
+            #"{"cmd":"pane.split","ref":"dev","direction":"vertical","overrides":"nope"}"#
+        )
+        let resp = try #require(try Self.readLine(socket))
+        #expect(resp.contains("\"code\":\"INVALID_PARAMS\""))
+        #expect(resp.contains("overrides"))
+    }
+
+    @Test func paneSplitRejectsOverrideLineMissingEquals() throws {
+        let (baseConfig, tmpDir) = Self.isolatedConfig()
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        let config = GUIAutomationServer.Configuration(
+            socketPath: baseConfig.socketPath,
+            tokenPath: baseConfig.tokenPath,
+            allowedPeerUID: baseConfig.allowedPeerUID,
+            handlePaneSplit: { _, _, _, _, _ in .success(PaneSplitResponse(ref: "x")) }
+        )
+        let server = GUIAutomationServer(configuration: config)
+        try server.start()
+        defer { server.stop() }
+        Thread.sleep(forTimeInterval: 0.05)
+
+        let token = try #require(GUIAutomationAuth.read(tokenPath: config.tokenPath))
+        let socket = try TYSocket.connect(path: config.socketPath)
+        defer { socket.closeSocket() }
+
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        _ = try Self.readLine(socket)
+
+        try Self.sendLine(
+            socket,
+            #"{"cmd":"pane.split","ref":"dev","direction":"vertical","overrides":["not-a-key-value"]}"#
+        )
+        let resp = try #require(try Self.readLine(socket))
+        #expect(resp.contains("\"code\":\"INVALID_PARAMS\""))
+        #expect(resp.contains("overrides[0]"))
+    }
+
+    @Test func paneSplitRejectsEmptyProfileString() throws {
+        let (baseConfig, tmpDir) = Self.isolatedConfig()
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        let config = GUIAutomationServer.Configuration(
+            socketPath: baseConfig.socketPath,
+            tokenPath: baseConfig.tokenPath,
+            allowedPeerUID: baseConfig.allowedPeerUID,
+            handlePaneSplit: { _, _, _, _, _ in .success(PaneSplitResponse(ref: "x")) }
+        )
+        let server = GUIAutomationServer(configuration: config)
+        try server.start()
+        defer { server.stop() }
+        Thread.sleep(forTimeInterval: 0.05)
+
+        let token = try #require(GUIAutomationAuth.read(tokenPath: config.tokenPath))
+        let socket = try TYSocket.connect(path: config.socketPath)
+        defer { socket.closeSocket() }
+
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        _ = try Self.readLine(socket)
+
+        try Self.sendLine(
+            socket,
+            #"{"cmd":"pane.split","ref":"dev","direction":"vertical","profile":""}"#
+        )
+        let resp = try #require(try Self.readLine(socket))
+        #expect(resp.contains("\"code\":\"INVALID_PARAMS\""))
+        #expect(resp.contains("profile"))
     }
 
     @Test func paneFocusForwardsRef() throws {
@@ -949,7 +1213,7 @@ struct GUIAutomationServerTests {
             socketPath: baseConfig.socketPath,
             tokenPath: baseConfig.tokenPath,
             allowedPeerUID: baseConfig.allowedPeerUID,
-            handleFloatPaneCreate: { ref, _ in
+            handleFloatPaneCreate: { ref, _, _, _ in
                 captured.ref = ref
                 return .success(FloatPaneCreateResponse(ref: "dev/float:1"))
             }
@@ -1293,5 +1557,49 @@ struct GUIAutomationPathsTests {
         let found = GUIAutomationPaths.discoverSocketPaths(in: tmpDir)
         let names = Set(found.map { ($0 as NSString).lastPathComponent })
         #expect(names == ["gui-1.sock", "gui-2.sock"])
+    }
+
+    @Test func sweepStaleArtifactsRemovesDeadPidFiles() throws {
+        let tmpDir = NSTemporaryDirectory() + "typaths_sweep_\(UUID().uuidString)"
+        try FileManager.default.createDirectory(
+            atPath: tmpDir,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        // Grab a definitely-dead PID by spawning /bin/true and awaiting
+        // its exit. Using the current process's PID guarantees the
+        // alive-PID side of the test.
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/true")
+        try proc.run()
+        proc.waitUntilExit()
+        let deadPid = proc.processIdentifier
+        let alivePid = ProcessInfo.processInfo.processIdentifier
+
+        let deadSock = "gui-\(deadPid).sock"
+        let deadToken = "gui-\(deadPid).token"
+        let aliveSock = "gui-\(alivePid).sock"
+        let aliveToken = "gui-\(alivePid).token"
+        let unrelated = "other.sock"
+        let malformed = "gui-xyz.sock"
+
+        for f in [deadSock, deadToken, aliveSock, aliveToken, unrelated, malformed] {
+            let path = (tmpDir as NSString).appendingPathComponent(f)
+            FileManager.default.createFile(atPath: path, contents: nil)
+        }
+
+        let removed = GUIAutomationPaths.sweepStaleArtifacts(in: tmpDir)
+        let removedNames = Set(removed.map { ($0 as NSString).lastPathComponent })
+        #expect(removedNames == [deadSock, deadToken])
+
+        let remaining = Set(try FileManager.default.contentsOfDirectory(atPath: tmpDir))
+        #expect(remaining == [aliveSock, aliveToken, unrelated, malformed])
+    }
+
+    @Test func sweepStaleArtifactsReturnsEmptyForMissingDirectory() {
+        let tmpDir = NSTemporaryDirectory() + "typaths_missing_\(UUID().uuidString)"
+        let removed = GUIAutomationPaths.sweepStaleArtifacts(in: tmpDir)
+        #expect(removed.isEmpty)
     }
 }

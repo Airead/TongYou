@@ -1,4 +1,5 @@
 import Foundation
+import TYConfig
 import TYProtocol
 import TYTerminal
 
@@ -168,16 +169,30 @@ public final class RemoteSessionClient: @unchecked Sendable {
 
     // MARK: - Tab/Pane Operations
 
-    public func createTab(sessionID: SessionID) {
-        connection?.send(.createTab(sessionID))
+    public func createTab(
+        sessionID: SessionID,
+        profileID: String?,
+        snapshot: StartupSnapshot?
+    ) {
+        connection?.send(.createTab(sessionID, profileID: profileID, snapshot: snapshot))
     }
 
     public func closeTab(sessionID: SessionID, tabID: TabID) {
         connection?.send(.closeTab(sessionID, tabID))
     }
 
-    public func splitPane(sessionID: SessionID, paneID: PaneID, direction: SplitDirection) {
-        connection?.send(.splitPane(sessionID, paneID, direction))
+    public func splitPane(
+        sessionID: SessionID,
+        paneID: PaneID,
+        direction: SplitDirection,
+        profileID: String?,
+        snapshot: StartupSnapshot?
+    ) {
+        connection?.send(.splitPane(
+            sessionID, paneID, direction,
+            profileID: profileID,
+            snapshot: snapshot
+        ))
     }
 
     public func closePane(sessionID: SessionID, paneID: PaneID) {
@@ -201,8 +216,19 @@ public final class RemoteSessionClient: @unchecked Sendable {
 
     // MARK: - Floating Pane Operations
 
-    public func createFloatingPane(sessionID: SessionID, tabID: TabID) {
-        connection?.send(.createFloatingPane(sessionID, tabID))
+    public func createFloatingPane(
+        sessionID: SessionID,
+        tabID: TabID,
+        profileID: String?,
+        snapshot: StartupSnapshot?,
+        frameHint: FloatFrameHint?
+    ) {
+        connection?.send(.createFloatingPane(
+            sessionID, tabID,
+            profileID: profileID,
+            snapshot: snapshot,
+            frameHint: frameHint
+        ))
     }
 
     public func closeFloatingPane(sessionID: SessionID, paneID: PaneID) {
@@ -236,14 +262,16 @@ public final class RemoteSessionClient: @unchecked Sendable {
         connection?.send(.runRemoteCommand(sessionID, paneID, command: command, arguments: arguments))
     }
 
-    /// Ask the server to create a floating pane that runs a command.
-    public func createFloatingPaneWithCommand(sessionID: SessionID, tabID: TabID, command: String, arguments: [String], frameX: Float? = nil, frameY: Float? = nil, frameWidth: Float? = nil, frameHeight: Float? = nil) {
-        connection?.send(.createFloatingPaneWithCommand(sessionID, tabID, command: command, arguments: arguments, frameX: frameX, frameY: frameY, frameWidth: frameWidth, frameHeight: frameHeight))
-    }
-
     /// Ask the server to restart a command in an existing (exited) floating pane.
     public func restartFloatingPaneCommand(sessionID: SessionID, paneID: PaneID, command: String, arguments: [String]) {
         connection?.send(.restartFloatingPaneCommand(sessionID, paneID, command: command, arguments: arguments))
+    }
+
+    /// Re-run the command in a zombie tree pane (Enter on an exited remote
+    /// pane). The server keeps the `PaneID` stable and pushes a fresh
+    /// `screenFull` afterwards to clear the pane visually.
+    public func rerunPane(sessionID: SessionID, paneID: PaneID) {
+        connection?.send(.rerunPane(sessionID, paneID))
     }
 
     // MARK: - Screen Replica Access

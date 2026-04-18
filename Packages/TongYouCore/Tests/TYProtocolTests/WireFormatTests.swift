@@ -2,6 +2,7 @@ import Testing
 import Foundation
 @testable import TYProtocol
 @testable import TYTerminal
+import TYConfig
 
 @Suite("WireFormat tests", .serialized)
 struct WireFormatTests {
@@ -303,13 +304,15 @@ struct WireFormatTests {
 
     @Test func roundTripCreateTab() throws {
         let sid = SessionID()
-        let msg = ClientMessage.createTab(sid)
+        let msg = ClientMessage.createTab(sid, profileID: nil, snapshot: nil)
         let decoded = try encodeAndDecode(clientMessage: msg)
-        guard case .createTab(let id) = decoded else {
+        guard case .createTab(let id, let profileID, let snapshot) = decoded else {
             Issue.record("Expected .createTab")
             return
         }
         #expect(id == sid)
+        #expect(profileID == nil)
+        #expect(snapshot == nil)
     }
 
     @Test func roundTripCloseTab() throws {
@@ -328,13 +331,15 @@ struct WireFormatTests {
     @Test func roundTripSplitPane() throws {
         let sid = SessionID()
         let pid = PaneID()
-        let msg = ClientMessage.splitPane(sid, pid, .horizontal)
+        let msg = ClientMessage.splitPane(sid, pid, .horizontal, profileID: nil, snapshot: nil)
         let decoded = try encodeAndDecode(clientMessage: msg)
-        guard case .splitPane(_, _, let dir) = decoded else {
+        guard case .splitPane(_, _, let dir, let profileID, let snapshot) = decoded else {
             Issue.record("Expected .splitPane")
             return
         }
         #expect(dir == .horizontal)
+        #expect(profileID == nil)
+        #expect(snapshot == nil)
     }
 
     @Test func roundTripClosePane() throws {
@@ -593,6 +598,19 @@ struct WireFormatTests {
         #expect(args == ["status"])
     }
 
+    @Test func roundTripRerunPane() throws {
+        let sid = SessionID()
+        let pid = PaneID()
+        let msg = ClientMessage.rerunPane(sid, pid)
+        let decoded = try encodeAndDecode(clientMessage: msg)
+        guard case .rerunPane(let dSid, let dPid) = decoded else {
+            Issue.record("Expected .rerunPane")
+            return
+        }
+        #expect(dSid == sid)
+        #expect(dPid == pid)
+    }
+
     // MARK: - Unknown Type Codes
 
     @Test func unknownServerTypeThrows() throws {
@@ -620,40 +638,55 @@ struct WireFormatTests {
         return try WireFormat.decodeServerMessage(raw)
     }
 
-    @Test func roundTripCreateFloatingPaneWithCommandNoFrame() throws {
+    @Test func roundTripCreateFloatingPaneWithSnapshotAndFrame() throws {
         let sid = SessionID()
         let tid = TabID()
-        let msg = ClientMessage.createFloatingPaneWithCommand(sid, tid, command: "git", arguments: ["status"], frameX: nil, frameY: nil, frameWidth: nil, frameHeight: nil)
+        let snapshot = StartupSnapshot(
+            command: "htop",
+            args: [],
+            env: [EnvVar(key: "TERM", value: "xterm-256color")],
+            closeOnExit: false
+        )
+        let frameHint = FloatFrameHint(x: 0.1, y: 0.2, width: 0.8, height: 0.6)
+        let msg = ClientMessage.createFloatingPane(
+            sid, tid,
+            profileID: "ci",
+            snapshot: snapshot,
+            frameHint: frameHint
+        )
         let decoded = try encodeAndDecode(clientMessage: msg)
-        guard case .createFloatingPaneWithCommand(let dSid, let dTid, let cmd, let args, let fx, let fy, let fw, let fh) = decoded else {
-            Issue.record("Expected .createFloatingPaneWithCommand")
+        guard case .createFloatingPane(let dSid, let dTid, let profileID, let decodedSnap, let decodedHint) = decoded else {
+            Issue.record("Expected .createFloatingPane")
             return
         }
         #expect(dSid == sid)
         #expect(dTid == tid)
-        #expect(cmd == "git")
-        #expect(args == ["status"])
-        #expect(fx == nil)
-        #expect(fy == nil)
-        #expect(fw == nil)
-        #expect(fh == nil)
+        #expect(profileID == "ci")
+        #expect(decodedSnap == snapshot)
+        #expect(decodedHint == frameHint)
     }
 
-    @Test func roundTripCreateFloatingPaneWithCommandWithFrame() throws {
+    @Test func roundTripCreateFloatingPaneMinimal() throws {
         let sid = SessionID()
         let tid = TabID()
-        let msg = ClientMessage.createFloatingPaneWithCommand(sid, tid, command: "htop", arguments: [], frameX: 0.1, frameY: 0.2, frameWidth: 0.8, frameHeight: 0.6)
+        let msg = ClientMessage.createFloatingPane(sid, tid, profileID: nil, snapshot: nil, frameHint: nil)
         let decoded = try encodeAndDecode(clientMessage: msg)
-        guard case .createFloatingPaneWithCommand(_, _, let cmd, let args, let fx, let fy, let fw, let fh) = decoded else {
-            Issue.record("Expected .createFloatingPaneWithCommand")
+        guard case .createFloatingPane(_, _, let profileID, let snapshot, let frameHint) = decoded else {
+            Issue.record("Expected .createFloatingPane")
             return
         }
-        #expect(cmd == "htop")
-        #expect(args == [])
-        #expect(fx == 0.1)
-        #expect(fy == 0.2)
-        #expect(fw == 0.8)
-        #expect(fh == 0.6)
+        #expect(profileID == nil)
+        #expect(snapshot == nil)
+        #expect(frameHint == nil)
+    }
+
+    /// Guard against silent regression of the deleted `createFloatingPaneWithCommand`
+    /// opcode (0x022D). Decoding a frame with that type code must fail.
+    @Test func decodingRemovedCreateFloatingPaneWithCommandOpcode() throws {
+        let raw = RawFrame(typeCode: 0x022D, payload: [])
+        #expect(throws: WireFormatError.self) {
+            _ = try WireFormat.decodeClientMessage(raw)
+        }
     }
 
     private func encodeAndDecode(clientMessage msg: ClientMessage) throws -> ClientMessage {

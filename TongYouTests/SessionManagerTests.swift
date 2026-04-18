@@ -459,6 +459,43 @@ struct SessionManagerTests {
 
         #expect(!mgr.handleAction(.splitVertical))
         #expect(!mgr.handleAction(.closePane))
+        // Zombie-pane actions dispatched by MetalView also flow through
+        // TerminalWindowView, not TabManager/SessionManager.
+        #expect(!mgr.handleAction(.dismissExitedPane(UUID())))
+        #expect(!mgr.handleAction(.rerunExitedPaneCommand(UUID())))
+    }
+
+    // MARK: - Zombie tree panes (close-on-exit = false)
+
+    @Test func markTreePaneExitedStoresExitCode() {
+        let mgr = makeManager()
+        let paneID = UUID()
+        #expect(mgr.exitedTreePanes[paneID] == nil)
+        mgr.markTreePaneExited(paneID, exitCode: 42)
+        #expect(mgr.exitedTreePanes[paneID] == 42)
+    }
+
+    @Test func rerunTreePaneCommandClearsZombieMarkerForKnownPane() {
+        let mgr = makeManager()
+        _ = mgr.createSession()
+        guard let paneID = mgr.activeTab?.paneTree.firstPane.id else {
+            Issue.record("expected a root pane on the newly created session")
+            return
+        }
+
+        mgr.markTreePaneExited(paneID, exitCode: 1)
+        #expect(mgr.exitedTreePanes[paneID] == 1)
+
+        let controller = mgr.rerunTreePaneCommand(paneID: paneID)
+        #expect(controller != nil)
+        #expect(mgr.exitedTreePanes[paneID] == nil)
+    }
+
+    @Test func rerunTreePaneCommandReturnsNilForUnknownPane() {
+        let mgr = makeManager()
+        _ = mgr.createSession()
+        let controller = mgr.rerunTreePaneCommand(paneID: UUID())
+        #expect(controller == nil)
     }
 
     // MARK: - Local Session Attach / Detach

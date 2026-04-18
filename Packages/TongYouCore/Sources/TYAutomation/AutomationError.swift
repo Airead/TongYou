@@ -7,6 +7,7 @@ public enum AutomationError: Error, Equatable {
     case tabNotFound(String)
     case paneNotFound(String)
     case floatNotFound(String)
+    case profileNotFound(String)
     case invalidRef(String)
     case invalidParams(String)
     case unsupportedOperation(String)
@@ -21,6 +22,7 @@ public enum AutomationError: Error, Equatable {
         case .sessionNotFound: return "SESSION_NOT_FOUND"
         case .tabNotFound: return "TAB_NOT_FOUND"
         case .paneNotFound, .floatNotFound: return "PANE_NOT_FOUND"
+        case .profileNotFound: return "PROFILE_NOT_FOUND"
         case .invalidRef: return "INVALID_REF"
         case .invalidParams: return "INVALID_PARAMS"
         case .unsupportedOperation: return "UNSUPPORTED_OPERATION"
@@ -38,6 +40,7 @@ public enum AutomationError: Error, Equatable {
         case .tabNotFound(let ref): return "no tab matches '\(ref)'"
         case .paneNotFound(let ref): return "no pane matches '\(ref)'"
         case .floatNotFound(let ref): return "no float pane matches '\(ref)'"
+        case .profileNotFound(let id): return "no profile matches '\(id)'"
         case .invalidRef(let raw): return "invalid ref: '\(raw)'"
         case .invalidParams(let msg): return msg
         case .unsupportedOperation(let msg): return msg

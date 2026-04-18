@@ -1,4 +1,5 @@
 import Foundation
+import TYConfig
 import TYTerminal
 
 // MARK: - Debug Helpers
@@ -73,8 +74,13 @@ public enum ClientMessageType: UInt16, Sendable {
     // Command execution (daemon-side)
     case runInPlace               = 0x022B
     case runRemoteCommand         = 0x022C
-    case createFloatingPaneWithCommand = 0x022D
+    // 0x022D was createFloatingPaneWithCommand; removed in Phase 7.2. Decoders
+    // receiving this opcode must report it as an unknown message type.
     case restartFloatingPaneCommand    = 0x022E
+    /// Rerun a tree pane's command in place, reusing the pane's
+    /// `StartupSnapshot`. The server keeps the `PaneID` stable; the
+    /// existing `TerminalCore` is stopped and replaced. Phase 8.2.
+    case rerunPane                     = 0x0230
 }
 
 // MARK: - Server Messages
@@ -186,9 +192,14 @@ public enum ClientMessage: Sendable {
     case mouseEvent(SessionID, PaneID, MouseEncoder.Event)
 
     // Tab/Pane operations
-    case createTab(SessionID)
+    /// Create a new tab. If `profileID` and `snapshot` are nil the server
+    /// inherits the focused pane's cwd (current behavior). When non-nil,
+    /// `snapshot` fully drives PTY launch and `profileID` is stored as a label.
+    case createTab(SessionID, profileID: String?, snapshot: StartupSnapshot?)
     case closeTab(SessionID, TabID)
-    case splitPane(SessionID, PaneID, SplitDirection)
+    /// Split a pane. Same semantics as `createTab`: when `snapshot` is non-nil
+    /// the new pane ignores parent inheritance and uses the snapshot directly.
+    case splitPane(SessionID, PaneID, SplitDirection, profileID: String?, snapshot: StartupSnapshot?)
     case closePane(SessionID, PaneID)
     case focusPane(SessionID, PaneID)
     case selectTab(SessionID, tabIndex: UInt16)
@@ -197,7 +208,10 @@ public enum ClientMessage: Sendable {
     case setSplitRatio(SessionID, PaneID, ratio: Float)
 
     // Floating pane operations
-    case createFloatingPane(SessionID, TabID)
+    /// Create a floating pane. `profileID`/`snapshot` follow the same
+    /// semantics as `createTab`. `frameHint` optionally supplies initial
+    /// normalized geometry; when nil the server picks a default frame.
+    case createFloatingPane(SessionID, TabID, profileID: String?, snapshot: StartupSnapshot?, frameHint: FloatFrameHint?)
     case closeFloatingPane(SessionID, PaneID)
     case updateFloatingPaneFrame(SessionID, PaneID, x: Float, y: Float, width: Float, height: Float)
     case bringFloatingPaneToFront(SessionID, PaneID)
@@ -208,10 +222,13 @@ public enum ClientMessage: Sendable {
     case runInPlace(SessionID, PaneID, command: String, arguments: [String])
     /// Run a command in the background on the daemon (fire-and-forget, output discarded).
     case runRemoteCommand(SessionID, PaneID, command: String, arguments: [String])
-    /// Create a floating pane that runs a command instead of a shell.
-    case createFloatingPaneWithCommand(SessionID, TabID, command: String, arguments: [String], frameX: Float?, frameY: Float?, frameWidth: Float?, frameHeight: Float?)
     /// Restart a command in an existing (exited) floating pane.
     case restartFloatingPaneCommand(SessionID, PaneID, command: String, arguments: [String])
+    /// Re-run the command in a tree pane, reusing the pane's original
+    /// `StartupSnapshot`. Pairs with the local `rerunTreePaneCommand`
+    /// path; server keeps the `PaneID` stable so the client does not
+    /// rebuild the layout.
+    case rerunPane(SessionID, PaneID)
 
     /// Human-readable summary for debug logging. Long payloads are truncated.
     public var debugDescription: String {
@@ -243,12 +260,12 @@ public enum ClientMessage: Sendable {
             return "extractSelection(session=\(sid), pane=\(pid), [\(s.line):\(s.col)..\(e.line):\(e.col)])"
         case .mouseEvent(let sid, let pid, let event):
             return "mouseEvent(session=\(sid), pane=\(pid), action=\(event.action), col=\(event.col), row=\(event.row))"
-        case .createTab(let sid):
-            return "createTab(session=\(sid))"
+        case .createTab(let sid, let profileID, let snapshot):
+            return "createTab(session=\(sid), profile=\(profileID ?? "nil"), hasSnapshot=\(snapshot != nil))"
         case .closeTab(let sid, let tid):
             return "closeTab(session=\(sid), tab=\(tid))"
-        case .splitPane(let sid, let pid, let dir):
-            return "splitPane(session=\(sid), pane=\(pid), dir=\(dir))"
+        case .splitPane(let sid, let pid, let dir, let profileID, let snapshot):
+            return "splitPane(session=\(sid), pane=\(pid), dir=\(dir), profile=\(profileID ?? "nil"), hasSnapshot=\(snapshot != nil))"
         case .closePane(let sid, let pid):
             return "closePane(session=\(sid), pane=\(pid))"
         case .focusPane(let sid, let pid):
@@ -257,8 +274,8 @@ public enum ClientMessage: Sendable {
             return "selectTab(session=\(sid), tabIndex=\(tabIndex))"
         case .setSplitRatio(let sid, let pid, let ratio):
             return "setSplitRatio(session=\(sid), pane=\(pid), ratio=\(ratio))"
-        case .createFloatingPane(let sid, let tid):
-            return "createFloatingPane(session=\(sid), tab=\(tid))"
+        case .createFloatingPane(let sid, let tid, let profileID, let snapshot, let frameHint):
+            return "createFloatingPane(session=\(sid), tab=\(tid), profile=\(profileID ?? "nil"), hasSnapshot=\(snapshot != nil), hasFrameHint=\(frameHint != nil))"
         case .closeFloatingPane(let sid, let pid):
             return "closeFloatingPane(session=\(sid), pane=\(pid))"
         case .updateFloatingPaneFrame(let sid, let pid, let x, let y, let w, let h):
@@ -271,10 +288,10 @@ public enum ClientMessage: Sendable {
             return "runInPlace(session=\(sid), pane=\(pid), cmd=\(truncate(cmd, maxLength: 80)), args=\(args))"
         case .runRemoteCommand(let sid, let pid, let cmd, let args):
             return "runRemoteCommand(session=\(sid), pane=\(pid), cmd=\(truncate(cmd, maxLength: 80)), args=\(args))"
-        case .createFloatingPaneWithCommand(let sid, let tid, let cmd, let args, _, _, _, _):
-            return "createFloatingPaneWithCommand(session=\(sid), tab=\(tid), cmd=\(truncate(cmd, maxLength: 80)), args=\(args))"
         case .restartFloatingPaneCommand(let sid, let pid, let cmd, let args):
             return "restartFloatingPaneCommand(session=\(sid), pane=\(pid), cmd=\(truncate(cmd, maxLength: 80)), args=\(args))"
+        case .rerunPane(let sid, let pid):
+            return "rerunPane(session=\(sid), pane=\(pid))"
         }
     }
 
@@ -307,8 +324,8 @@ public enum ClientMessage: Sendable {
         case .toggleFloatingPanePin:    return .toggleFloatingPanePin
         case .runInPlace:              return .runInPlace
         case .runRemoteCommand:        return .runRemoteCommand
-        case .createFloatingPaneWithCommand: return .createFloatingPaneWithCommand
         case .restartFloatingPaneCommand:    return .restartFloatingPaneCommand
+        case .rerunPane:                     return .rerunPane
         }
     }
 }

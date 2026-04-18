@@ -14,12 +14,14 @@ let package = Package(
         .library(name: "TYServer", targets: ["TYServer"]),
         .library(name: "TYClient", targets: ["TYClient"]),
         .library(name: "TYAutomation", targets: ["TYAutomation"]),
+        .library(name: "TYCLIUtils", targets: ["TYCLIUtils"]),
         .executable(name: "tongyou", targets: ["tongyou"]),
     ],
     targets: [
         // Pure terminal state machine: Screen, VTParser, StreamHandler, etc.
         .target(
             name: "TYTerminal",
+            dependencies: ["TYConfig"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 
@@ -54,7 +56,7 @@ let package = Package(
         // Binary wire protocol for client/server communication.
         .target(
             name: "TYProtocol",
-            dependencies: ["TYTerminal"],
+            dependencies: ["TYTerminal", "TYConfig"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 
@@ -77,14 +79,21 @@ let package = Package(
         // Client library: connects to tongyou server, manages screen replicas.
         .target(
             name: "TYClient",
-            dependencies: ["TYTerminal", "TYProtocol", "TYServer", "TYAutomation"],
+            dependencies: ["TYTerminal", "TYProtocol", "TYServer", "TYAutomation", "TYConfig"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+
+        // CLI-side utilities (argument parsing helpers shared by the
+        // `tongyou` executable). Lives as a library so it can be unit-tested.
+        .target(
+            name: "TYCLIUtils",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 
         // tongyou executable: unified CLI for daemon and session management.
         .executableTarget(
             name: "tongyou",
-            dependencies: ["TYClient", "TYProtocol", "TYServer", "TYAutomation"],
+            dependencies: ["TYClient", "TYProtocol", "TYServer", "TYAutomation", "TYCLIUtils"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 
@@ -102,7 +111,7 @@ let package = Package(
 
         .testTarget(
             name: "TYProtocolTests",
-            dependencies: ["TYProtocol", "TYTerminal"],
+            dependencies: ["TYProtocol", "TYTerminal", "TYConfig"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 
@@ -127,6 +136,12 @@ let package = Package(
         .testTarget(
             name: "TYPTYTests",
             dependencies: ["TYPTY", "TYTerminal"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+
+        .testTarget(
+            name: "TYCLIUtilsTests",
+            dependencies: ["TYCLIUtils"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 

@@ -89,12 +89,17 @@ public final class TerminalCore: @unchecked Sendable {
     ///   - columns: Terminal width.
     ///   - rows: Terminal height.
     ///   - workingDirectory: Initial working directory for the shell.
-    public func start(columns: UInt16, rows: UInt16, workingDirectory: String) throws {
+    ///   - extraEnv: Optional environment overrides applied on top of the
+    ///     default environment; later entries override earlier ones and
+    ///     override any default-built value with the same key.
+    public func start(columns: UInt16, rows: UInt16, workingDirectory: String,
+                      extraEnv: [(String, String)] = []) throws {
         try startProcess { process in
             try process.start(
                 columns: columns,
                 rows: rows,
-                workingDirectory: workingDirectory
+                workingDirectory: workingDirectory,
+                extraEnv: extraEnv
             )
         }
     }
@@ -107,15 +112,18 @@ public final class TerminalCore: @unchecked Sendable {
     ///   - columns: Terminal width.
     ///   - rows: Terminal height.
     ///   - workingDirectory: Initial working directory.
+    ///   - extraEnv: Optional environment overrides (see shell variant).
     public func start(command: String, arguments: [String] = [],
-                      columns: UInt16, rows: UInt16, workingDirectory: String) throws {
+                      columns: UInt16, rows: UInt16, workingDirectory: String,
+                      extraEnv: [(String, String)] = []) throws {
         try startProcess { process in
             try process.start(
                 command: command,
                 arguments: arguments,
                 columns: columns,
                 rows: rows,
-                workingDirectory: workingDirectory
+                workingDirectory: workingDirectory,
+                extraEnv: extraEnv
             )
         }
     }

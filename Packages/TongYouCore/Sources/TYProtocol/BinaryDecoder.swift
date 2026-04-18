@@ -1,4 +1,5 @@
 import Foundation
+import TYConfig
 import TYTerminal
 
 /// Error thrown when binary decoding fails.
@@ -287,6 +288,105 @@ public struct BinaryDecoder: Sendable {
         return MouseEncoder.Event(action: action, button: button, col: col, row: row, modifiers: modifiers)
     }
 
+    // MARK: - Startup Snapshot
+
+    /// Read a single `EnvVar` (two length-prefixed strings).
+    public mutating func readEnvVar() throws -> EnvVar {
+        let key = try readString()
+        let value = try readString()
+        return EnvVar(key: key, value: value)
+    }
+
+    /// Decode a `StartupSnapshot` written by `writeStartupSnapshot`.
+    public mutating func readStartupSnapshot() throws -> StartupSnapshot {
+        let hasCommand = try readBool()
+        let command = hasCommand ? try readString() : nil
+
+        let args = try readStringArray()
+
+        let hasCwd = try readBool()
+        let cwd = hasCwd ? try readString() : nil
+
+        let envCount = Int(try readUInt16())
+        var env: [EnvVar] = []
+        env.reserveCapacity(envCount)
+        for _ in 0..<envCount {
+            env.append(try readEnvVar())
+        }
+
+        let closeOnExitRaw = try readUInt8()
+        let closeOnExit: Bool?
+        switch closeOnExitRaw {
+        case 0: closeOnExit = nil
+        case 1: closeOnExit = false
+        case 2: closeOnExit = true
+        default:
+            throw BinaryDecoderError.invalidEnumValue(
+                type: "StartupSnapshot.closeOnExit",
+                rawValue: UInt64(closeOnExitRaw)
+            )
+        }
+
+        return StartupSnapshot(
+            command: command,
+            args: args,
+            cwd: cwd,
+            env: env,
+            closeOnExit: closeOnExit
+        )
+    }
+
+    /// Decode an optional `StartupSnapshot`.
+    public mutating func readOptionalStartupSnapshot() throws -> StartupSnapshot? {
+        let hasSnapshot = try readUInt8()
+        switch hasSnapshot {
+        case 0: return nil
+        case 1: return try readStartupSnapshot()
+        default:
+            throw BinaryDecoderError.invalidEnumValue(
+                type: "OptionalStartupSnapshot.hasValue",
+                rawValue: UInt64(hasSnapshot)
+            )
+        }
+    }
+
+    /// Decode an optional length-prefixed UTF-8 string (1-byte presence + body).
+    public mutating func readOptionalString() throws -> String? {
+        let hasValue = try readUInt8()
+        switch hasValue {
+        case 0: return nil
+        case 1: return try readString()
+        default:
+            throw BinaryDecoderError.invalidEnumValue(
+                type: "OptionalString.hasValue",
+                rawValue: UInt64(hasValue)
+            )
+        }
+    }
+
+    /// Decode a `FloatFrameHint` (4 × Float32).
+    public mutating func readFloatFrameHint() throws -> FloatFrameHint {
+        let x = try readFloat()
+        let y = try readFloat()
+        let width = try readFloat()
+        let height = try readFloat()
+        return FloatFrameHint(x: x, y: y, width: width, height: height)
+    }
+
+    /// Decode an optional `FloatFrameHint` (1-byte presence + body).
+    public mutating func readOptionalFloatFrameHint() throws -> FloatFrameHint? {
+        let hasValue = try readUInt8()
+        switch hasValue {
+        case 0: return nil
+        case 1: return try readFloatFrameHint()
+        default:
+            throw BinaryDecoderError.invalidEnumValue(
+                type: "OptionalFloatFrameHint.hasValue",
+                rawValue: UInt64(hasValue)
+            )
+        }
+    }
+
     // MARK: - Protocol Messages
 
     /// Decode a `ScreenDiff` from the buffer.
@@ -381,7 +481,21 @@ public struct BinaryDecoder: Sendable {
     public mutating func readPaneMetadata() throws -> RemotePaneMetadata {
         let hasCwd = try readBool()
         let cwd = hasCwd ? try readString() : nil
-        return RemotePaneMetadata(cwd: cwd)
+        let hasProfileID = try readBool()
+        let profileID = hasProfileID ? try readString() : nil
+        let closeOnExitRaw = try readUInt8()
+        let closeOnExit: Bool?
+        switch closeOnExitRaw {
+        case 0: closeOnExit = nil
+        case 1: closeOnExit = false
+        case 2: closeOnExit = true
+        default:
+            throw BinaryDecoderError.invalidEnumValue(
+                type: "RemotePaneMetadata.closeOnExit",
+                rawValue: UInt64(closeOnExitRaw)
+            )
+        }
+        return RemotePaneMetadata(cwd: cwd, profileID: profileID, closeOnExit: closeOnExit)
     }
 
     /// Decode a `TabInfo` from the buffer.
@@ -526,7 +640,10 @@ public struct BinaryDecoder: Sendable {
             return .mouseEvent(sessionID, paneID, event)
 
         case .createTab:
-            return .createTab(try readSessionID())
+            let sessionID = try readSessionID()
+            let profileID = try readOptionalString()
+            let snapshot = try readOptionalStartupSnapshot()
+            return .createTab(sessionID, profileID: profileID, snapshot: snapshot)
 
         case .closeTab:
             let sessionID = try readSessionID()
@@ -537,7 +654,9 @@ public struct BinaryDecoder: Sendable {
             let sessionID = try readSessionID()
             let paneID = try readPaneID()
             let direction = try readSplitDirection()
-            return .splitPane(sessionID, paneID, direction)
+            let profileID = try readOptionalString()
+            let snapshot = try readOptionalStartupSnapshot()
+            return .splitPane(sessionID, paneID, direction, profileID: profileID, snapshot: snapshot)
 
         case .closePane:
             let sessionID = try readSessionID()
@@ -563,7 +682,15 @@ public struct BinaryDecoder: Sendable {
         case .createFloatingPane:
             let sessionID = try readSessionID()
             let tabID = try readTabID()
-            return .createFloatingPane(sessionID, tabID)
+            let profileID = try readOptionalString()
+            let snapshot = try readOptionalStartupSnapshot()
+            let frameHint = try readOptionalFloatFrameHint()
+            return .createFloatingPane(
+                sessionID, tabID,
+                profileID: profileID,
+                snapshot: snapshot,
+                frameHint: frameHint
+            )
 
         case .closeFloatingPane:
             let sessionID = try readSessionID()
@@ -603,26 +730,17 @@ public struct BinaryDecoder: Sendable {
             let arguments = try readStringArray()
             return .runRemoteCommand(sessionID, paneID, command: command, arguments: arguments)
 
-        case .createFloatingPaneWithCommand:
-            let sessionID = try readSessionID()
-            let tabID = try readTabID()
-            let command = try readString()
-            let arguments = try readStringArray()
-            var frameX: Float?, frameY: Float?, frameWidth: Float?, frameHeight: Float?
-            if try readBool() {
-                frameX = try readFloat()
-                frameY = try readFloat()
-                frameWidth = try readFloat()
-                frameHeight = try readFloat()
-            }
-            return .createFloatingPaneWithCommand(sessionID, tabID, command: command, arguments: arguments, frameX: frameX, frameY: frameY, frameWidth: frameWidth, frameHeight: frameHeight)
-
         case .restartFloatingPaneCommand:
             let sessionID = try readSessionID()
             let paneID = try readPaneID()
             let command = try readString()
             let arguments = try readStringArray()
             return .restartFloatingPaneCommand(sessionID, paneID, command: command, arguments: arguments)
+
+        case .rerunPane:
+            let sessionID = try readSessionID()
+            let paneID = try readPaneID()
+            return .rerunPane(sessionID, paneID)
         }
     }
 }
