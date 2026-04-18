@@ -278,6 +278,31 @@ struct SessionManagerProfileTests {
 
     // MARK: - Phase 4: floating pane inherits active pane
 
+    // MARK: - Phase 5: tryResolveProfile seam
+
+    @Test func tryResolveProfileSucceedsForKnownProfile() throws {
+        let mgr = try makeManager(profiles: [
+            "ok": "command = /bin/bash"
+        ])
+        try mgr.tryResolveProfile(id: "ok")
+    }
+
+    @Test func tryResolveProfileThrowsForUnknownProfile() throws {
+        let mgr = try makeManager()
+        #expect(throws: ProfileResolveError.self) {
+            try mgr.tryResolveProfile(id: "does-not-exist")
+        }
+    }
+
+    @Test func tryResolveProfileThrowsForInvalidOverride() throws {
+        let mgr = try makeManager(profiles: [
+            "ok": "command = /bin/bash"
+        ])
+        #expect(throws: ProfileResolveError.self) {
+            try mgr.tryResolveProfile(id: "ok", overrides: ["no-equals-sign"])
+        }
+    }
+
     @Test func createFloatingPaneInheritsActivePaneProfile() throws {
         setenv("TY_TEST_PROFILE", "custom", 1)
         defer { unsetenv("TY_TEST_PROFILE") }

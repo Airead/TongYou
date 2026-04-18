@@ -218,8 +218,18 @@ public final class AppControlClient {
     /// Send `tab.create` — create a new tab in the session resolved from
     /// `ref` and return the newly allocated tab ref. When `focus` is true,
     /// the new tab becomes the active tab (Phase 7 view-focus opt-in).
-    public func createTab(sessionRef: String, focus: Bool = false) throws -> String {
-        let response = try sendCommand("tab.create", params: ["ref": sessionRef, "focus": focus])
+    /// `profile` picks the profile for the tab's root pane; `overrides`
+    /// is a list of `"key = value"` lines applied on top (Phase 5).
+    public func createTab(
+        sessionRef: String,
+        focus: Bool = false,
+        profile: String? = nil,
+        overrides: [String]? = nil
+    ) throws -> String {
+        var params: [String: Any] = ["ref": sessionRef, "focus": focus]
+        if let profile { params["profile"] = profile }
+        if let overrides, !overrides.isEmpty { params["overrides"] = overrides }
+        let response = try sendCommand("tab.create", params: params)
         switch response {
         case .success(let value):
             guard case .raw(let data) = value else {
@@ -256,9 +266,20 @@ public final class AppControlClient {
     /// `ref` may be a session / tab / pane ref; when session- or tab-level,
     /// the focused pane (or first tree pane) is split. When `focus` is true,
     /// the new pane receives view focus (Phase 7 view-focus opt-in).
-    public func splitPane(ref: String, direction: SplitDirection, focus: Bool = false) throws -> String {
+    /// `profile` picks the profile for the new pane; `overrides` is a list
+    /// of `"key = value"` lines applied on top (Phase 5).
+    public func splitPane(
+        ref: String,
+        direction: SplitDirection,
+        focus: Bool = false,
+        profile: String? = nil,
+        overrides: [String]? = nil
+    ) throws -> String {
         let dir: String = direction == .vertical ? "vertical" : "horizontal"
-        let response = try sendCommand("pane.split", params: ["ref": ref, "direction": dir, "focus": focus])
+        var params: [String: Any] = ["ref": ref, "direction": dir, "focus": focus]
+        if let profile { params["profile"] = profile }
+        if let overrides, !overrides.isEmpty { params["overrides"] = overrides }
+        let response = try sendCommand("pane.split", params: params)
         switch response {
         case .success(let value):
             guard case .raw(let data) = value else {
@@ -306,8 +327,18 @@ public final class AppControlClient {
     /// resolved from `ref` and return the newly allocated float ref. When
     /// `focus` is true, the GUI switches its active session to the float's
     /// host session (Phase 7 view-focus opt-in).
-    public func createFloatingPane(sessionRef: String, focus: Bool = false) throws -> String {
-        let response = try sendCommand("floatPane.create", params: ["ref": sessionRef, "focus": focus])
+    /// `profile` picks the profile for the new float; `overrides` is a list
+    /// of `"key = value"` lines applied on top (Phase 5).
+    public func createFloatingPane(
+        sessionRef: String,
+        focus: Bool = false,
+        profile: String? = nil,
+        overrides: [String]? = nil
+    ) throws -> String {
+        var params: [String: Any] = ["ref": sessionRef, "focus": focus]
+        if let profile { params["profile"] = profile }
+        if let overrides, !overrides.isEmpty { params["overrides"] = overrides }
+        let response = try sendCommand("floatPane.create", params: params)
         switch response {
         case .success(let value):
             guard case .raw(let data) = value else {

@@ -1067,6 +1067,18 @@ final class SessionManager {
         findPane(id: paneID)?.profileID
     }
 
+    /// Probe a profile id + overrides combination against the shared
+    /// `ProfileMerger` without building a pane. Used by the automation
+    /// layer to surface `PROFILE_NOT_FOUND` / `INVALID_PARAMS` *before*
+    /// the actual create call (which would otherwise silently fall back
+    /// to `default`).
+    ///
+    /// Throws `ProfileResolveError`; callers translate those into the
+    /// appropriate transport-layer error.
+    func tryResolveProfile(id: String, overrides: [String] = []) throws {
+        _ = try profileMerger.resolve(profileID: id, overrides: overrides)
+    }
+
     /// Resolve `profileID` and call-site `overrides` into a `TerminalPane`
     /// whose `startupSnapshot` carries the merged startup fields. All new
     /// panes flow through this entry point; the PTY-launching layer reads
