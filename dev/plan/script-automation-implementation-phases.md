@@ -101,46 +101,222 @@ sudo -u nobody ./tongyou app ping
 ## Phase 2：Ref 映射系统与 Session 查询
 
 ### 目标
-实现稳定的 Ref 句柄分配和映射，支持 `session.list` 命令查询当前 GUI 中的所有会话。
+建立稳定的 Ref 句柄分配、反查和生命周期机制，支持 `session.list` 命令返回 GUI 当前完整的会话/tab/pane/float 结构，供后续所有命令消费。
 
 ### 涉及文件
-- `TongYou/App/GUIAutomationRefStore.swift`（新建）
-- `GUIAutomationServer.swift`（新增 list 处理）
-- `AppControlClient.swift`（新增 list 命令）
+- `Packages/TongYouCore/Sources/TYAutomation/GUIAutomationRefStore.swift`（新建，MainActor，ref ↔ UUID 双向映射）
+- `Packages/TongYouCore/Sources/TYAutomation/GUIAutomationRef.swift`（新建，ref 字符串解析/拼装、合法性校验）
+- `Packages/TongYouCore/Sources/TYAutomation/GUIAutomationSchema.swift`（新建，`session.list` 请求/响应的 Codable 结构）
+- `Packages/TongYouCore/Sources/TYAutomation/GUIAutomationServer.swift`（Phase 1 文件，新增 `session.list` handler、命令执行前统一调用 `refreshRefs()`）
+- `Packages/TongYouCore/Sources/TYClient/AppControlClient.swift`（Phase 1 文件，新增 `list` 命令及文本/JSON 渲染）
+- `Packages/TongYouCore/Tests/TYAutomationTests/GUIAutomationRefStoreTests.swift`（新建，单元测试）
+
+### Ref 格式规范
+
+**Session ref 选择规则**（按顺序尝试，首个满足即采用）：
+1. `name` 非空、不包含 `/`、`:`、空白字符、不匹配 `^(sess|tab|pane|float):\d+$`、且在当前活跃 session 中唯一 → 使用 `name` 作为 ref
+2. 否则回退到 `sess:<n>`，`<n>` 为 session 级全局单调计数器
+
+**子对象 ref 固定为扁平形式**：
+- Tab：`<session-ref>/tab:<n>`
+- Tree Pane：`<session-ref>/pane:<n>`（n 在 session 内部全局计数，不区分 tab）
+- Float Pane：`<session-ref>/float:<n>`（n 在 session 内部全局计数，不区分 tab）
+
+**命名空间说明**：
+- Tab / Pane / Float 三个计数器互相独立：同一 session 下可以同时存在 `tab:1`、`pane:1`、`float:1`
+- Float pane 实际归属某个 tab（见 `TerminalTab.floatingPanes`），但 ref 只挂在 session 下；RefStore 内部同时记录 `(sessionID, tabID, floatID)` 三元组供 Phase 6 定位
+
+### Ref 生命周期与稳定性
+
+**稳定性保证**（以下操作不改变已分配 ref）：
+- Session 重命名（即使改名后符合"name 作为 ref"的条件，已分配的 `sess:<n>` 也不升级，避免脚本缓存失效）
+- Tab 重排序、切换 active tab
+- Pane 树结构调整（split 子节点、修改 ratio）
+- Float pane 移动/调整大小/pin toggle
+- Remote session 在 `ready ⇄ detached ⇄ pendingAttach` 之间切换（UUID 不变则 ref 不变）
+
+**以下操作会导致 ref 失效**：
+- Session / tab / pane / float 关闭 → 对应 UUID 被 SessionManager 移除，下次 `refreshRefs()` 时 RefStore 同步标记失效，后续命令查询返回 `SESSION_NOT_FOUND` / `TAB_NOT_FOUND` / `PANE_NOT_FOUND`
+- **无墓碑机制**：失效的 ref 不出现在 `session.list` 响应中，但 ref 本身不会被新对象复用（计数器单调递增）
+- GUI 进程重启：所有计数器、映射全部重置，脚本必须重新调用 `list` 获取新 ref
+
+**计数器单调递增保证**：
+- `sess:<n>` / `tab:<n>` / `pane:<n>` / `float:<n>` 的 `<n>` 仅递增不回收
+- 例：创建 `sess:1`、`sess:2`，关闭 `sess:1`，再创建新 session 得到 `sess:3`（不复用 `sess:1`）
+
+**Remote session 的特殊处理**：
+- Remote session 的 ref 以 GUI 本地 `TerminalSession.id` 为键，与 daemon 侧的 `serverSessionID` 解耦
+- detach 后的 remote session 仍保留在 `SessionManager.sessions` 中，ref 持续有效
+
+### 并发模型与刷新策略
+
+- `GUIAutomationRefStore` 标注为 `@MainActor`，与 `SessionManager`（`@Observable final class`）共享同一 actor，避免跨线程同步
+- **懒触发刷新**：每条命令进入 handler 时，服务端先 `await MainActor.run { refStore.refreshRefs(from: sessionManager) }`，再解析 ref 参数
+- 不订阅 `@Observable` 变更：`refreshRefs()` 是 idempotent 的纯扫描（已存在的 UUID 保留原 ref，新增 UUID 分配下一个编号），每次命令前跑一次开销可接受
+- RefStore 内部用 `[String: UUID]` + `[UUID: String]` 双字典，天然线程安全（MainActor 隔离）
+- `refreshRefs()` 遍历顺序：session 按 `SessionManager.sessions` 数组顺序；tab 按 `TerminalSession.tabs` 数组顺序；pane 按 `PaneNode` DFS（left-first）顺序；float 按 `TerminalTab.floatingPanes` 数组顺序
+
+### `session.list` 响应 Schema
+
+```json
+{
+  "id": "1",
+  "ok": true,
+  "result": {
+    "sessions": [
+      {
+        "ref": "dev",
+        "name": "dev",
+        "type": "local",
+        "state": "ready",
+        "active": true,
+        "tabs": [
+          {
+            "ref": "dev/tab:1",
+            "title": "Shell",
+            "active": true,
+            "panes": ["dev/pane:1", "dev/pane:2"],
+            "floats": []
+          },
+          {
+            "ref": "dev/tab:2",
+            "title": "Logs",
+            "active": false,
+            "panes": ["dev/pane:3"],
+            "floats": ["dev/float:1"]
+          }
+        ]
+      },
+      {
+        "ref": "sess:1",
+        "name": "",
+        "type": "local",
+        "state": "ready",
+        "active": false,
+        "tabs": [
+          {"ref": "sess:1/tab:1", "title": "Shell", "active": true, "panes": ["sess:1/pane:1"], "floats": []}
+        ]
+      },
+      {
+        "ref": "prod",
+        "name": "prod",
+        "type": "remote",
+        "state": "detached",
+        "active": false,
+        "tabs": []
+      }
+    ]
+  }
+}
+```
+
+字段说明：
+- `type`：`local` / `remote`
+- `state`：`ready` / `detached` / `pendingAttach`（映射自 `SessionDisplayState`）
+- `active`：session 级表示是否为当前 active session；tab 级表示是否为 `activeTabIndex` 对应 tab
+- `name`：原始 session 名（可能为空字符串，用户展示用；ref 才是命令引用的唯一标识）
+- Remote session 在 `detached` 状态下 `tabs` 可为空（未 attach 时无本地 tab 数据）
+
+CLI 默认文本输出保持 `script-automation-plan.md §9.3` 约定，扩展 REF/STATE 列：
+
+```
+REF      NAME    TYPE    STATE      TABS  PANES
+dev      dev     local   ready      2     3
+sess:1           local   ready      1     1
+prod     prod    remote  detached   0     0
+```
 
 ### 实现要点
-1. `GUIAutomationRefStore` 维护 `ref → UUID` 和 `UUID → ref` 双向映射
-2. 分配规则：
-   - Session：用户命名优先，未命名则 `sess:1`, `sess:2`...
-   - Tab：`<session>/tab:1`, `tab:2`...
-   - Tree Pane：`<session>/pane:1`, `pane:2`...
-   - Float Pane：`<session>/float:1`, `float:2`...
-3. `refreshRefs()` 遍历 `SessionManager.sessions` 及其 tabs/panes/floatingPanes
-4. Ref 一旦分配**永不回收**
-5. `session.list` 返回所有 session 的名称/类型/tabs/panes 数量
-6. CLI 侧实现 `tongyou app list`
+
+1. **`GUIAutomationRef` 值类型**
+   - 提供 `parse(_ string: String) throws -> Ref` 和 `description: String`
+   - `Ref` 用 enum 区分 `session(String)` / `tab(String, UInt)` / `pane(String, UInt)` / `float(String, UInt)`
+   - 非法格式（含非法字符、缺少计数器、session 段为空）抛 `INVALID_REF`
+2. **`GUIAutomationRefStore`**
+   - `refreshRefs(from: SessionManager)`：扫描并同步映射，纯读不触发副作用
+   - `resolve(_ ref: Ref) throws -> ResolvedTarget`：返回 `(sessionID: UUID, tabID: UUID?, paneID: UUID?, floatID: UUID?)`
+   - `sessionRef(for id: UUID) -> String?` 等反查接口（命令响应拼装用）
+   - 内部计数器：`sessionCounter: UInt` 全局；`tabCounter / paneCounter / floatCounter: [UUID: UInt]` per-session
+3. **`session.list` handler**
+   - 纯读操作，无 UI 写入，直接在 MainActor 上执行
+   - 输出 schema 由 `GUIAutomationSchema` 定义（Codable），server 和 client 共用
+4. **CLI `tongyou app list`**
+   - 默认文本输出按上表格式，列宽按实际内容自适应
+   - `--json` 透传服务端响应
+
+### 单元测试要点
+
+`GUIAutomationRefStoreTests.swift` 至少覆盖：
+
+1. **命名规则**
+   - 纯字母 name 采用 name 作为 ref
+   - 包含 `/` / `:` / 空格的 name 回退到 `sess:<n>`
+   - name 匹配 `sess:42` pattern 的 session 强制回退
+   - 空 name 回退到 `sess:<n>`
+2. **冲突处理**
+   - 两个 session 都叫 `dev`：先创建的拿到 `dev`，后创建的回退到 `sess:<n>`
+3. **稳定性**
+   - 重命名 session 后 ref 不变
+   - 关闭第一个 tab 后其余 tab 的 ref 保持
+   - 分屏新增 pane 后已有 pane 的 ref 不变
+4. **计数器单调性**
+   - 创建 → 关闭 → 再创建，新对象拿到下一个编号而非复用
+5. **失效行为**
+   - 关闭 session 后 `resolve(.session("dev"))` 抛 `SESSION_NOT_FOUND`
+   - 非法 ref 格式抛 `INVALID_REF`
+6. **DFS 顺序**
+   - 多次分屏后 pane 编号遵循构造时的 DFS(left-first) 顺序
 
 ### 人工验证步骤
+
 ```bash
 # 1. 启动 GUI App，手动创建：
 #    - 1 个未命名 local session
-#    - 1 个命名为 "dev" 的 local session（含 2 个 tab，第 2 个 tab 分屏为 2 个 pane）
-#    - 1 个 remote session（如果环境支持）
+#    - 1 个命名为 "dev" 的 local session（2 个 tab；tab 2 纵向分屏为 2 个 pane）
+#    - 1 个 remote session（若环境支持）
 
-# 2. 执行查询
+# 2. 默认文本输出
 ./tongyou app list
+# 期望：
+# REF      NAME    TYPE    STATE      TABS  PANES
+# dev      dev     local   ready      2     3
+# sess:1           local   ready      1     1
+# prod     prod    remote  ready      1     1
 
-# 期望输出包含类似：
-# NAME    TYPE    TABS    PANES
-# dev     local   2       3
-# sess:1  local   1       1
-# prod    remote  1       1
+# 3. JSON 输出结构（Phase 8 完成前可用临时 --json flag 验证）
+./tongyou app --json list | jq '.result.sessions[0].tabs[0].panes'
+# 期望：["dev/pane:1"]
+
+# 4. 稳定性：在 GUI 中把 "dev" 重命名为 "work"，再次 list
+./tongyou app list
+# 期望：原 "dev" 行的 REF 仍为 "dev"（不升级、不变），NAME 列变为 "work"
+
+# 5. 计数器单调性：关闭 dev，再新建一个名为 "dev" 的 session
+./tongyou app list
+# 期望：新 session 的 REF 为 "dev"（旧 ref 已失效，name 不再冲突）
+#       已关闭的旧 dev 不在列表中
+
+# 6. 特殊字符命名：在 GUI 中创建名为 "a/b" 的 session
+./tongyou app list
+# 期望：REF 列为 "sess:<n>"，NAME 列为 "a/b"
+
+# 7. 幂等性
+for i in 1 2 3; do ./tongyou app list; done
+# 期望：三次输出完全一致
+
+# 8. Remote session detach 后 ref 稳定（若环境支持）
+#    在 GUI 中 detach "prod"，再次 list
+# 期望：prod 行仍在，STATE 列变为 "detached"，REF 保持 "prod"
 ```
 
 ### 完成标准
-- `list` 输出与 GUI 当前状态一致
-- Ref 在 session 重命名后仍保持稳定
-- 多次调用 `list` 结果一致，Ref 编号不跳跃
+
+- `list` 文本输出与 GUI 状态一致，JSON 输出符合上述 schema
+- RefStore 单元测试全部通过（命名规则/冲突/稳定性/单调性/失效/DFS 顺序）
+- Session 重命名、tab 重排、pane 分屏均不改变已分配 ref
+- 计数器关闭后不回收，新对象必然拿到更大编号
+- 特殊字符或与自动编号冲突的 session name 自动回退到 `sess:<n>`，原名保留在 `name` 字段
+- GUI 未运行时返回 `GUI_NOT_RUNNING`，并发多次 `list` 结果一致
 
 ---
 

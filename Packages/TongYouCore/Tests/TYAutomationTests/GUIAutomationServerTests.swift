@@ -202,6 +202,93 @@ struct GUIAutomationServerTests {
         let resp = try #require(try Self.readLine(socket))
         #expect(resp.contains("\"code\":\"UNKNOWN_COMMAND\""))
     }
+
+    // MARK: - session.list
+
+    @Test func sessionListWithoutHandlerReturnsEmptyArray() throws {
+        let (config, tmpDir) = Self.isolatedConfig()
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        let server = GUIAutomationServer(configuration: config)
+        try server.start()
+        defer { server.stop() }
+
+        Thread.sleep(forTimeInterval: 0.05)
+
+        let token = try #require(GUIAutomationAuth.read(tokenPath: config.tokenPath))
+
+        let socket = try TYSocket.connect(path: config.socketPath)
+        defer { socket.closeSocket() }
+
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        _ = try Self.readLine(socket)
+
+        try Self.sendLine(socket, #"{"cmd":"session.list"}"#)
+        let resp = try #require(try Self.readLine(socket))
+        #expect(resp.contains("\"ok\":true"))
+        #expect(resp.contains("\"sessions\":[]"))
+    }
+
+    @Test func sessionListRoutesThroughMainActorHandler() throws {
+        let (baseConfig, tmpDir) = Self.isolatedConfig()
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        let config = GUIAutomationServer.Configuration(
+            socketPath: baseConfig.socketPath,
+            tokenPath: baseConfig.tokenPath,
+            allowedPeerUID: baseConfig.allowedPeerUID,
+            handleSessionList: {
+                let tab = TabDescriptor(
+                    ref: "demo/tab:1",
+                    title: "Shell",
+                    active: true,
+                    panes: ["demo/pane:1"],
+                    floats: []
+                )
+                let session = SessionDescriptor(
+                    ref: "demo",
+                    name: "demo",
+                    type: .local,
+                    state: .ready,
+                    active: true,
+                    tabs: [tab]
+                )
+                return SessionListResponse(sessions: [session])
+            }
+        )
+
+        let server = GUIAutomationServer(configuration: config)
+        try server.start()
+        defer { server.stop() }
+
+        Thread.sleep(forTimeInterval: 0.05)
+
+        let token = try #require(GUIAutomationAuth.read(tokenPath: config.tokenPath))
+
+        let socket = try TYSocket.connect(path: config.socketPath)
+        defer { socket.closeSocket() }
+
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        _ = try Self.readLine(socket)
+
+        try Self.sendLine(socket, #"{"cmd":"session.list"}"#)
+        let resp = try #require(try Self.readLine(socket))
+        #expect(resp.contains("\"ok\":true"))
+
+        // Decode the response and check the structured payload rather
+        // than relying on JSONEncoder's escaping of '/'.
+        struct Envelope: Decodable {
+            let result: SessionListResponse
+        }
+        let envelope = try JSONDecoder().decode(Envelope.self, from: Data(resp.utf8))
+        #expect(envelope.result.sessions.count == 1)
+        let session = try #require(envelope.result.sessions.first)
+        #expect(session.ref == "demo")
+        #expect(session.state == .ready)
+        #expect(session.tabs.count == 1)
+        #expect(session.tabs[0].ref == "demo/tab:1")
+        #expect(session.tabs[0].panes == ["demo/pane:1"])
+    }
 }
 
 // MARK: - Auth helpers

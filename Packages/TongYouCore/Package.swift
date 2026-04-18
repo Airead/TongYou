@@ -70,7 +70,7 @@ let package = Package(
         // socket primitives; independent of the binary daemon protocol.
         .target(
             name: "TYAutomation",
-            dependencies: ["TYProtocol", "TYServer"],
+            dependencies: ["TYTerminal", "TYProtocol", "TYServer"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 
@@ -120,7 +120,7 @@ let package = Package(
 
         .testTarget(
             name: "TYAutomationTests",
-            dependencies: ["TYAutomation", "TYProtocol"],
+            dependencies: ["TYAutomation", "TYProtocol", "TYTerminal"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 

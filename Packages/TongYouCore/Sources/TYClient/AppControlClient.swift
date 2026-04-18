@@ -113,10 +113,36 @@ public final class AppControlClient {
         let response = try sendCommand("server.ping")
         switch response {
         case .success(let value):
-            return value ?? ""
+            if case .string(let s) = value { return s }
+            return ""
         case .error(let code, let message):
             throw AppControlError.serverError(code: code, message: message)
         }
+    }
+
+    /// Send `session.list` and decode the response.
+    public func listSessions() throws -> SessionListResponse {
+        let response = try sendCommand("session.list")
+        switch response {
+        case .success(let value):
+            guard case .raw(let data) = value else {
+                throw AppControlError.invalidResponse(raw: "expected object result for session.list")
+            }
+            do {
+                return try JSONDecoder().decode(SessionListResponse.self, from: data)
+            } catch {
+                throw AppControlError.invalidResponse(raw: String(data: data, encoding: .utf8) ?? "")
+            }
+        case .error(let code, let message):
+            throw AppControlError.serverError(code: code, message: message)
+        }
+    }
+
+    /// Send `session.list` and return the raw JSON line the server sent.
+    /// Used by `--json` CLI output to avoid re-serializing.
+    public func listSessionsRawJSON() throws -> String {
+        let line = try sendCommandLine("session.list")
+        return line
     }
 
     /// Send a raw command line and parse the single-line JSON response.
@@ -131,8 +157,37 @@ public final class AppControlClient {
         return try readResponse()
     }
 
-    enum Response {
-        case success(String?)
+    /// Send a command and return the raw response line verbatim.
+    private func sendCommandLine(_ cmd: String) throws -> String {
+        let line = #"{"cmd":"\#(escape(cmd))"}"#
+        do {
+            try io.writeLine(line)
+        } catch {
+            throw AppControlError.transport(underlying: error)
+        }
+        let response: String?
+        do {
+            response = try io.readLine()
+        } catch {
+            throw AppControlError.transport(underlying: error)
+        }
+        guard let response else {
+            throw AppControlError.transport(underlying: LineIO.IOError.connectionClosed)
+        }
+        return response
+    }
+
+    /// The decoded `result` payload of a successful response. Commands that
+    /// return simple strings use `.string`; commands that return JSON objects
+    /// carry the raw bytes so the caller can decode them with Codable.
+    public enum ResultValue {
+        case null
+        case string(String)
+        case raw(Data)
+    }
+
+    public enum Response {
+        case success(ResultValue)
         case error(code: String, message: String)
     }
 
@@ -157,8 +212,16 @@ public final class AppControlClient {
             throw AppControlError.invalidResponse(raw: line)
         }
         if ok {
-            let resultStr = obj["result"] as? String
-            return .success(resultStr)
+            let raw = obj["result"]
+            if raw is NSNull || raw == nil {
+                return .success(.null)
+            }
+            if let s = raw as? String {
+                return .success(.string(s))
+            }
+            // Re-serialize the object/array so the caller can decode.
+            let data = (try? JSONSerialization.data(withJSONObject: raw!)) ?? Data()
+            return .success(.raw(data))
         } else {
             guard let err = obj["error"] as? [String: Any],
                   let code = err["code"] as? String else {

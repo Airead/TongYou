@@ -27,15 +27,23 @@ public final class GUIAutomationServer: @unchecked Sendable {
         public let socketPath: String
         public let tokenPath: String
         public let allowedPeerUID: uid_t
+        /// Produces the current session list. The closure runs on the
+        /// connection's handler queue (not main); callers that touch
+        /// main-actor state (e.g. `SessionManager`) must hop to MainActor
+        /// themselves. If nil, `session.list` returns an empty result —
+        /// useful for tests that don't exercise the GUI path.
+        public let handleSessionList: (@Sendable () -> SessionListResponse)?
 
         public init(
             socketPath: String = GUIAutomationPaths.socketPath(),
             tokenPath: String = GUIAutomationPaths.tokenPath(),
-            allowedPeerUID: uid_t = getuid()
+            allowedPeerUID: uid_t = getuid(),
+            handleSessionList: (@Sendable () -> SessionListResponse)? = nil
         ) {
             self.socketPath = socketPath
             self.tokenPath = tokenPath
             self.allowedPeerUID = allowedPeerUID
+            self.handleSessionList = handleSessionList
         }
     }
 
@@ -161,11 +169,12 @@ public final class GUIAutomationServer: @unchecked Sendable {
             }
 
             let expectedToken = currentToken()
+            let cfg = config
             let connQueue = DispatchQueue(
                 label: "io.github.airead.tongyou.automation.conn"
             )
             connQueue.async {
-                GUIAutomationServer.handleConnection(client, expectedToken: expectedToken)
+                GUIAutomationServer.handleConnection(client, expectedToken: expectedToken, config: cfg)
             }
         }
     }
@@ -183,7 +192,11 @@ public final class GUIAutomationServer: @unchecked Sendable {
         case authenticated
     }
 
-    private static func handleConnection(_ socket: TYSocket, expectedToken: String) {
+    private static func handleConnection(
+        _ socket: TYSocket,
+        expectedToken: String,
+        config: Configuration
+    ) {
         defer { socket.closeSocket() }
 
         let io = LineIO(fd: socket.fileDescriptor)
@@ -223,22 +236,44 @@ public final class GUIAutomationServer: @unchecked Sendable {
                 tryWrite(io: io, success: .string("ok"))
 
             case .authenticated:
-                let response = dispatch(request: request)
+                let response = dispatch(request: request, config: config)
                 tryWrite(io: io, response: response)
             }
         }
     }
 
-    private static func dispatch(request: ParsedRequest) -> JSONResponse {
+    private static func dispatch(request: ParsedRequest, config: Configuration) -> JSONResponse {
         switch request.cmd {
         case "handshake":
             // Idempotent: already authenticated.
             return .success(.string("ok"))
         case "server.ping":
             return .success(.string("pong"))
+        case "session.list":
+            return handleSessionListCommand(config: config)
         default:
             return .error(code: "UNKNOWN_COMMAND", message: "unknown command: \(request.cmd)")
         }
+    }
+
+    private static func handleSessionListCommand(config: Configuration) -> JSONResponse {
+        guard let producer = config.handleSessionList else {
+            return .success(rawJSON(#"{"sessions":[]}"#))
+        }
+        let response = producer()
+        do {
+            let data = try JSONEncoder().encode(response)
+            guard let fragment = String(data: data, encoding: .utf8) else {
+                return .error(code: "INTERNAL_ERROR", message: "failed to encode session list")
+            }
+            return .success(rawJSON(fragment))
+        } catch {
+            return .error(code: "INTERNAL_ERROR", message: "failed to encode session list: \(error)")
+        }
+    }
+
+    private static func rawJSON(_ fragment: String) -> JSONValue {
+        .raw(fragment)
     }
 
     // MARK: - JSON helpers
@@ -257,6 +292,9 @@ public final class GUIAutomationServer: @unchecked Sendable {
     enum JSONValue {
         case string(String)
         case null
+        /// Pre-serialized JSON fragment; spliced into `result` verbatim.
+        /// Caller is responsible for ensuring the fragment is valid JSON.
+        case raw(String)
     }
 
     private static func parseRequest(_ line: String) -> Result<ParsedRequest, Error> {
@@ -280,6 +318,8 @@ public final class GUIAutomationServer: @unchecked Sendable {
                 resultFragment = "null"
             case .string(let s):
                 resultFragment = jsonEncodeString(s)
+            case .raw(let fragment):
+                resultFragment = fragment
             }
             return #"{"ok":true,"result":\#(resultFragment)}"#
         case .error(let code, let message):

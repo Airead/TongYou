@@ -1,4 +1,5 @@
 import Foundation
+import TYAutomation
 import TYClient
 import TYProtocol
 import TYServer
@@ -18,6 +19,7 @@ enum Command {
 
     // GUI app automation commands
     case appPing
+    case appList(json: Bool)
 
     case help
 }
@@ -71,13 +73,27 @@ func parseArguments() -> Command {
 }
 
 func parseAppArgs(_ args: [String]) -> Command {
-    guard let sub = args.first else {
+    // --json is a global flag on the `app` subcommand; accept it either
+    // before or after the action.
+    var json = false
+    var remaining: [String] = []
+    for arg in args {
+        if arg == "--json" {
+            json = true
+        } else {
+            remaining.append(arg)
+        }
+    }
+
+    guard let sub = remaining.first else {
         printAppUsage()
         exit(1)
     }
     switch sub {
     case "ping":
         return .appPing
+    case "list", "ls":
+        return .appList(json: json)
     case "--help", "-h", "help":
         printAppUsage()
         exit(0)
@@ -90,12 +106,13 @@ func parseAppArgs(_ args: [String]) -> Command {
 
 func printAppUsage() {
     let usage = """
-    Usage: tongyou app <subcommand>
+    Usage: tongyou app [--json] <subcommand>
 
     Control the running TongYou GUI app via the automation socket.
 
     Subcommands:
       ping        Verify the GUI is running and reachable.
+      list (ls)   List all sessions in the GUI.
     """
     print(usage)
 }
@@ -146,6 +163,7 @@ func printUsage() {
 
     App (GUI automation):
       app ping                  Check whether the TongYou GUI is running
+      app list [--json]         List all sessions in the GUI
 
     Other:
       help                      Show this help message
@@ -400,10 +418,9 @@ func closeSession(idPrefix: String) {
 
 // MARK: - App Automation Commands
 
-func appPing() {
-    let client: AppControlClient
+func connectToGUIOrExit() -> AppControlClient {
     do {
-        client = try AppControlClient.connect()
+        return try AppControlClient.connect()
     } catch AppControlError.guiNotRunning {
         fputs("tongyou: TongYou GUI not running\n", stderr)
         exit(1)
@@ -417,6 +434,10 @@ func appPing() {
         fputs("tongyou: failed to connect to GUI: \(error)\n", stderr)
         exit(1)
     }
+}
+
+func appPing() {
+    let client = connectToGUIOrExit()
 
     do {
         let result = try client.ping()
@@ -427,6 +448,90 @@ func appPing() {
     } catch {
         fputs("tongyou: ping failed: \(error)\n", stderr)
         exit(1)
+    }
+}
+
+func appList(json: Bool) {
+    let client = connectToGUIOrExit()
+
+    if json {
+        do {
+            let raw = try client.listSessionsRawJSON()
+            print(raw)
+        } catch AppControlError.serverError(let code, let message) {
+            fputs("tongyou: GUI returned error: \(code): \(message)\n", stderr)
+            exit(1)
+        } catch {
+            fputs("tongyou: list failed: \(error)\n", stderr)
+            exit(1)
+        }
+        return
+    }
+
+    let response: SessionListResponse
+    do {
+        response = try client.listSessions()
+    } catch AppControlError.serverError(let code, let message) {
+        fputs("tongyou: GUI returned error: \(code): \(message)\n", stderr)
+        exit(1)
+    } catch {
+        fputs("tongyou: list failed: \(error)\n", stderr)
+        exit(1)
+    }
+    renderSessionListText(response)
+}
+
+/// Render the `session.list` response as a column-aligned text table.
+func renderSessionListText(_ response: SessionListResponse) {
+    if response.sessions.isEmpty {
+        print("No active sessions.")
+        return
+    }
+
+    struct Row {
+        let ref: String
+        let name: String
+        let type: String
+        let state: String
+        let tabs: String
+        let panes: String
+    }
+
+    let rows: [Row] = response.sessions.map { s in
+        let paneCount = s.tabs.reduce(0) { $0 + $1.panes.count + $1.floats.count }
+        return Row(
+            ref: s.ref,
+            name: s.name,
+            type: s.type.rawValue,
+            state: s.state.rawValue,
+            tabs: String(s.tabs.count),
+            panes: String(paneCount)
+        )
+    }
+
+    let headers = Row(ref: "REF", name: "NAME", type: "TYPE", state: "STATE", tabs: "TABS", panes: "PANES")
+    let allRows = [headers] + rows
+
+    let refW = allRows.map { $0.ref.count }.max() ?? 3
+    let nameW = allRows.map { $0.name.count }.max() ?? 4
+    let typeW = allRows.map { $0.type.count }.max() ?? 4
+    let stateW = allRows.map { $0.state.count }.max() ?? 5
+    let tabsW = allRows.map { $0.tabs.count }.max() ?? 4
+
+    func pad(_ s: String, _ w: Int) -> String {
+        s.padding(toLength: w, withPad: " ", startingAt: 0)
+    }
+
+    for row in allRows {
+        let line = [
+            pad(row.ref, refW),
+            pad(row.name, nameW),
+            pad(row.type, typeW),
+            pad(row.state, stateW),
+            pad(row.tabs, tabsW),
+            row.panes,
+        ].joined(separator: "  ")
+        print(line)
     }
 }
 
@@ -449,6 +554,8 @@ case .close(let sessionID):
     closeSession(idPrefix: sessionID)
 case .appPing:
     appPing()
+case .appList(let json):
+    appList(json: json)
 case .help:
     printUsage()
 }
