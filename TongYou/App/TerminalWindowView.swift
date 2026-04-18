@@ -441,7 +441,7 @@ struct TerminalWindowView: View {
     private func splitPane(direction: SplitDirection) {
         guard let focusedID = focusManager.focusedPaneID else { return }
         let cwd = viewStore.view(for: focusedID)?.currentWorkingDirectory
-        let newPane = TerminalPane(initialWorkingDirectory: cwd)
+        let newPane = sessionManager.createPane(initialWorkingDirectory: cwd)
         guard sessionManager.splitPane(id: focusedID, direction: direction, newPane: newPane) else {
             return
         }
@@ -501,6 +501,18 @@ struct TerminalWindowView: View {
         if sessionManager.activeSession?.source.isRemote == true {
             notificationStore.clearAll(forPaneID: paneID)
             sessionManager.closePane(id: paneID)
+            return
+        }
+
+        // Profile `close-on-exit = false`: keep the pane so the user can
+        // still read the final output. The terminal stays frozen on its
+        // last buffer; normal close-pane dismisses it.
+        if let pane = sessionManager.activeSession?.tabs
+            .lazy
+            .compactMap({ $0.paneTree.findPane(id: paneID) })
+            .first,
+           pane.startupSnapshot.closeOnExit == false {
+            sessionManager.markTreePaneExited(paneID, exitCode: exitCode)
             return
         }
 

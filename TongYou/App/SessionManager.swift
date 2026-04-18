@@ -2,6 +2,7 @@ import AppKit
 import CoreGraphics
 import Foundation
 import TYClient
+import TYConfig
 import TYProtocol
 import TYServer
 import TYTerminal
@@ -67,6 +68,29 @@ final class SessionManager {
     /// Keyed by local pane ID. Used to determine exit behavior and re-run commands.
     private(set) var floatingPaneCommands: [UUID: FloatingPaneCommandInfo] = [:]
 
+    /// Tree panes whose process has exited but are kept open per
+    /// `startupSnapshot.closeOnExit == false`. The user can dismiss them
+    /// through the usual close-pane action. Mirrors `exitedFloatingPanes`.
+    private(set) var exitedTreePanes: [UUID: Int32] = [:]
+
+    /// Loader and merger for pane profiles. Backed by
+    /// `~/.config/tongyou/profiles/`. Phase 1 / 2 have no file watcher —
+    /// `reload()` is called once at init; hot reload comes with Phase 3.
+    private let profileLoader: ProfileLoader
+    private let profileMerger: ProfileMerger
+
+    /// Default location for profile files (`~/.config/tongyou/profiles/`).
+    private static func defaultProfileDirectory() -> URL {
+        let expanded = NSString(string: "~/.config/tongyou/profiles")
+            .expandingTildeInPath
+        return URL(fileURLWithPath: expanded)
+    }
+
+    /// Environment variable that force-overrides the profile id for every
+    /// `createPane` call. Temporary Phase 2 testing hook — replaced by real
+    /// caller-driven wiring in Phases 4–6.
+    private static let testProfileEnvVar = "TY_TEST_PROFILE"
+
     /// Pending command info for remote floating panes awaiting server layoutUpdate.
     private var pendingRemoteCommandInfos: [FloatingPaneCommandInfo] = []
 
@@ -112,7 +136,10 @@ final class SessionManager {
     /// Sidebar session sort order persisted alongside local sessions.
     private var sessionSortOrder: [UUID] = []
 
-    init(localSessionStore: SessionStore? = nil) {
+    init(
+        localSessionStore: SessionStore? = nil,
+        profileLoader: ProfileLoader? = nil
+    ) {
         let store: SessionStore
         if let s = localSessionStore {
             store = s
@@ -121,6 +148,18 @@ final class SessionManager {
         }
         self.localSessionStore = store
         sessionSortOrder = store.loadOrder()
+
+        let loader = profileLoader
+            ?? ProfileLoader(directory: Self.defaultProfileDirectory())
+        do {
+            try loader.reload()
+        } catch {
+            NSLog("SessionManager: failed to load profiles from %@: %@",
+                  Self.defaultProfileDirectory().path, String(describing: error))
+        }
+        self.profileLoader = loader
+        self.profileMerger = ProfileMerger(loader: loader)
+
         MainActor.assumeIsolated {
             SessionManagerRegistry.shared.register(self)
         }
@@ -285,7 +324,9 @@ final class SessionManager {
     @discardableResult
     func createSession(name: String? = nil, initialWorkingDirectory: String? = nil, isAnonymous: Bool = false) -> UUID {
         let baseName = name ?? nextAvailableName(prefix: "LSession")
+        let initialPane = createPane(initialWorkingDirectory: initialWorkingDirectory)
         var session = TerminalSession(name: baseName, initialWorkingDirectory: initialWorkingDirectory, isAnonymous: isAnonymous)
+        session.tabs = [TerminalTab(initialPane: initialPane)]
         session.name = uniqueSessionName(baseName, for: session.id)
         let newSessionID = session.id
         sessions.append(session)
@@ -316,8 +357,11 @@ final class SessionManager {
         let session = sessions[index]
         let paneIDs = session.allPaneIDs
 
-        // Clean up exited floating pane tracking.
-        for paneID in paneIDs { exitedFloatingPanes.removeValue(forKey: paneID) }
+        // Clean up exited pane tracking (both floating and tree).
+        for paneID in paneIDs {
+            exitedFloatingPanes.removeValue(forKey: paneID)
+            exitedTreePanes.removeValue(forKey: paneID)
+        }
 
         // Clean up remote controllers if this is a remote session.
         if let serverSessionID = session.source.serverSessionID {
@@ -494,7 +538,8 @@ final class SessionManager {
             return nil
         }
 
-        let tab = TerminalTab(title: title, initialWorkingDirectory: initialWorkingDirectory)
+        let initialPane = createPane(initialWorkingDirectory: initialWorkingDirectory)
+        let tab = TerminalTab(title: title, initialPane: initialPane)
         sessions[targetIndex].tabs.append(tab)
         if GUIAutomationPolicy.shouldTakeViewFocus() {
             sessions[targetIndex].activeTabIndex = sessions[targetIndex].tabs.count - 1
@@ -540,6 +585,7 @@ final class SessionManager {
         let removedPaneIDs = sessions[targetIndex].tabs[index].allPaneIDsIncludingFloating
         for paneID in removedPaneIDs {
             exitedFloatingPanes.removeValue(forKey: paneID)
+            exitedTreePanes.removeValue(forKey: paneID)
             stopAllControllers(for: paneID)
         }
 
@@ -760,6 +806,7 @@ final class SessionManager {
             guard sessions[targetIndex].tabs[i].paneTree.contains(paneID: paneID)
             else { continue }
             stopAllControllers(for: paneID)
+            exitedTreePanes.removeValue(forKey: paneID)
             if let newTree = sessions[targetIndex].tabs[i].paneTree.removePane(id: paneID) {
                 sessions[targetIndex].tabs[i].paneTree = newTree
                 scheduleLocalSaveIfNeeded(sessionID: session.id)
@@ -858,7 +905,7 @@ final class SessionManager {
             return nil
         }
 
-        let pane = TerminalPane(initialWorkingDirectory: initialWorkingDirectory)
+        let pane = createPane(initialWorkingDirectory: initialWorkingDirectory)
         let floating = FloatingPane(pane: pane, frame: activeFloatingPanes.nextCascadedFrame(), zIndex: activeFloatingPanes.nextZIndex)
         activeFloatingPanes.append(floating)
         if attachedLocalSessionIDs.contains(session.id) {
@@ -872,6 +919,102 @@ final class SessionManager {
     /// ESC will close it, Enter will re-run the command.
     func markFloatingPaneExited(_ paneID: UUID, exitCode: Int32) {
         exitedFloatingPanes[paneID] = exitCode
+    }
+
+    /// Mark a tree pane as exited (process finished) with the given exit
+    /// code. The pane is kept in the tree so its last-screen contents
+    /// remain visible until the user dismisses it. Used only when the
+    /// pane's `startupSnapshot.closeOnExit == false`.
+    func markTreePaneExited(_ paneID: UUID, exitCode: Int32) {
+        exitedTreePanes[paneID] = exitCode
+    }
+
+    /// Re-run the command in an exited tree pane using the same startup
+    /// snapshot that launched it originally. Returns the new controller on
+    /// success, or nil if the pane is not a local tree pane.
+    @discardableResult
+    func rerunTreePaneCommand(paneID: UUID) -> (any TerminalControlling)? {
+        guard let pane = findPane(id: paneID) else { return nil }
+        exitedTreePanes.removeValue(forKey: paneID)
+
+        localControllers[paneID]?.stop()
+        let controller = TerminalController(columns: 80, rows: 24)
+        controller.start(snapshot: pane.startupSnapshot)
+        localControllers[paneID] = controller
+        return controller
+    }
+
+    /// Find a `TerminalPane` by id across every session (tree + floating).
+    private func findPane(id paneID: UUID) -> TerminalPane? {
+        for session in sessions {
+            for tab in session.tabs {
+                if let pane = tab.paneTree.findPane(id: paneID) {
+                    return pane
+                }
+                if let fp = tab.floatingPanes.first(where: { $0.pane.id == paneID }) {
+                    return fp.pane
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Resolve `profileID` and call-site `overrides` into a `TerminalPane`
+    /// whose `startupSnapshot` carries the merged startup fields. All new
+    /// panes flow through this entry point; the PTY-launching layer reads
+    /// the snapshot instead of resampling global state.
+    ///
+    /// `TY_TEST_PROFILE` environment variable, when set, force-overrides
+    /// `profileID` for every call — a temporary Phase 2 hook for ad-hoc
+    /// testing. Unknown profile ids fall back to `default` with a log.
+    func createPane(
+        profileID: String? = nil,
+        overrides: [String] = [],
+        initialWorkingDirectory: String? = nil
+    ) -> TerminalPane {
+        let requestedID: String = {
+            if let forced = ProcessInfo.processInfo.environment[Self.testProfileEnvVar],
+               !forced.isEmpty {
+                return forced
+            }
+            return profileID ?? TerminalPane.defaultProfileID
+        }()
+
+        let resolved: ResolvedProfile
+        do {
+            resolved = try profileMerger.resolve(profileID: requestedID, overrides: overrides)
+        } catch {
+            NSLog("SessionManager: profile '%@' resolve failed (%@); falling back to default",
+                  requestedID, String(describing: error))
+            do {
+                resolved = try profileMerger.resolve(profileID: TerminalPane.defaultProfileID)
+            } catch {
+                NSLog("SessionManager: default profile resolve also failed: %@",
+                      String(describing: error))
+                return TerminalPane(initialWorkingDirectory: initialWorkingDirectory)
+            }
+        }
+
+        for warning in resolved.warnings {
+            NSLog("SessionManager: profile '%@' warning: %@", requestedID, warning)
+        }
+
+        var snapshotWarnings: [String] = []
+        var snapshot = StartupSnapshot(from: resolved.startup, warnings: &snapshotWarnings)
+        for warning in snapshotWarnings {
+            NSLog("SessionManager: profile '%@' snapshot warning: %@", requestedID, warning)
+        }
+
+        // Caller-supplied cwd fills in when the profile itself says nothing.
+        if snapshot.cwd == nil, let cwd = initialWorkingDirectory {
+            snapshot.cwd = cwd
+        }
+
+        return TerminalPane(
+            profileID: resolved.profileID,
+            startupSnapshot: snapshot,
+            initialWorkingDirectory: initialWorkingDirectory ?? snapshot.cwd
+        )
     }
 
     /// Close a floating pane by its pane ID. Returns true if found and removed.
@@ -1192,8 +1335,11 @@ final class SessionManager {
     /// Called on explicit disconnect and before wiring a new connection
     /// so stale state from a previous connection doesn't block re-attach.
     private func cleanupRemoteState() {
-        // Clean up exited floating pane tracking for remote panes.
-        for paneID in remoteControllers.keys { exitedFloatingPanes.removeValue(forKey: paneID) }
+        // Clean up exited pane tracking for remote panes (both types).
+        for paneID in remoteControllers.keys {
+            exitedFloatingPanes.removeValue(forKey: paneID)
+            exitedTreePanes.removeValue(forKey: paneID)
+        }
 
         for controller in remoteControllers.values {
             controller.stop()
@@ -1825,20 +1971,14 @@ final class SessionManager {
         if let existing = localControllers[paneID] {
             return existing
         }
-        var cwd: String?
-        // Fast path: search active session first.
-        if let session = activeSession, session.source == .local {
-            cwd = findWorkingDirectory(for: paneID, in: session)
-        }
-        // Fallback: search all local sessions.
-        if cwd == nil {
-            for session in sessions where session.source == .local {
-                cwd = findWorkingDirectory(for: paneID, in: session)
-                if cwd != nil { break }
-            }
+        let pane = findPane(id: paneID)
+        var snapshot = pane?.startupSnapshot ?? StartupSnapshot()
+        if snapshot.cwd == nil {
+            // Legacy restoration paths may only carry initialWorkingDirectory.
+            snapshot.cwd = pane?.initialWorkingDirectory
         }
         let controller = TerminalController(columns: 80, rows: 24)
-        controller.start(workingDirectory: cwd)
+        controller.start(snapshot: snapshot)
         localControllers[paneID] = controller
         return controller
     }

@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import TYConfig
 import TYTerminal
 import TYServer
 
@@ -145,7 +146,7 @@ final class TerminalController: TerminalControlling {
     private static let defaultWorkingDirectory: String =
         ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
 
-    func start(workingDirectory: String? = nil, command: String? = nil, arguments: [String] = []) {
+    func start(workingDirectory: String? = nil, command: String? = nil, arguments: [String] = [], extraEnv: [(String, String)] = []) {
         let cols = UInt16(clamping: core.columns)
         let rows = UInt16(clamping: core.rows)
         let dir = workingDirectory ?? Self.defaultWorkingDirectory
@@ -157,19 +158,34 @@ final class TerminalController: TerminalControlling {
                     arguments: arguments,
                     columns: cols,
                     rows: rows,
-                    workingDirectory: dir
+                    workingDirectory: dir,
+                    extraEnv: extraEnv
                 )
             } else {
                 try core.start(
                     columns: cols,
                     rows: rows,
-                    workingDirectory: dir
+                    workingDirectory: dir,
+                    extraEnv: extraEnv
                 )
             }
         } catch {
             print("Failed to start PTY: \(error)")
             return
         }
+    }
+
+    /// Start the PTY using a profile-resolved `StartupSnapshot`. A nil /
+    /// empty `snapshot.command` selects the user's default login shell; a
+    /// non-empty command runs that executable with `snapshot.args`.
+    func start(snapshot: StartupSnapshot) {
+        let commandOrNil = snapshot.command.flatMap { $0.isEmpty ? nil : $0 }
+        start(
+            workingDirectory: snapshot.cwd,
+            command: commandOrNil,
+            arguments: snapshot.args,
+            extraEnv: snapshot.envTuples
+        )
     }
 
     func stop() {

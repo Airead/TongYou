@@ -20,6 +20,7 @@ let package = Package(
         // Pure terminal state machine: Screen, VTParser, StreamHandler, etc.
         .target(
             name: "TYTerminal",
+            dependencies: ["TYConfig"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 

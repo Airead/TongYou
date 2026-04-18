@@ -1,4 +1,5 @@
 import Foundation
+import TYConfig
 import TYTerminal
 import TYProtocol
 
@@ -940,20 +941,40 @@ public final class ServerSessionManager {
     }
 
     /// Create a new pane with its TerminalCore and start the PTY.
-    /// - Parameter workingDirectory: If provided, the new pane starts in this directory;
-    ///   otherwise falls back to `config.defaultWorkingDirectory` / `$HOME` / `/`.
+    /// - Parameters:
+    ///   - workingDirectory: If provided, the new pane starts in this directory;
+    ///     otherwise falls back to `snapshot?.cwd` / `config.defaultWorkingDirectory` /
+    ///     `$HOME` / `/`.
+    ///   - snapshot: Optional profile-resolved startup fields. When non-nil,
+    ///     the PTY is launched with the snapshot's command/args/env; when
+    ///     nil, behavior is identical to pre-profile code paths. Phase 2
+    ///     leaves this parameter unused by internal callers — it is wired
+    ///     end-to-end starting in Phase 5 (JSON-RPC surface).
     private func createAndStartPane(
         sessionID: SessionID,
         workingDirectory: String? = nil,
-        paneID: PaneID? = nil
+        paneID: PaneID? = nil,
+        snapshot: StartupSnapshot? = nil
     ) -> (PaneID, TerminalPane, TerminalCore) {
+        let effectiveProfileID = TerminalPane.defaultProfileID
+        let resolvedSnapshot = snapshot ?? StartupSnapshot(cwd: workingDirectory)
+
         let pane: TerminalPane
         let actualPaneID: PaneID
         if let paneID {
             actualPaneID = paneID
-            pane = TerminalPane(id: paneID.uuid, initialWorkingDirectory: workingDirectory)
+            pane = TerminalPane(
+                id: paneID.uuid,
+                profileID: effectiveProfileID,
+                startupSnapshot: resolvedSnapshot,
+                initialWorkingDirectory: workingDirectory
+            )
         } else {
-            pane = TerminalPane(initialWorkingDirectory: workingDirectory)
+            pane = TerminalPane(
+                profileID: effectiveProfileID,
+                startupSnapshot: resolvedSnapshot,
+                initialWorkingDirectory: workingDirectory
+            )
             actualPaneID = PaneID(pane.id)
         }
 
@@ -966,14 +987,27 @@ public final class ServerSessionManager {
         wireStandardCallbacks(core, sessionID: sessionID, paneID: actualPaneID)
         coreLookup[actualPaneID] = core
 
-        let effectiveCwd = resolvedWorkingDirectory(workingDirectory)
+        let effectiveCwd = resolvedWorkingDirectory(workingDirectory ?? resolvedSnapshot.cwd)
+        let extraEnv = resolvedSnapshot.envTuples
 
         do {
-            try core.start(
-                columns: config.defaultColumns,
-                rows: config.defaultRows,
-                workingDirectory: effectiveCwd
-            )
+            if let command = resolvedSnapshot.command, !command.isEmpty {
+                try core.start(
+                    command: command,
+                    arguments: resolvedSnapshot.args,
+                    columns: config.defaultColumns,
+                    rows: config.defaultRows,
+                    workingDirectory: effectiveCwd,
+                    extraEnv: extraEnv
+                )
+            } else {
+                try core.start(
+                    columns: config.defaultColumns,
+                    rows: config.defaultRows,
+                    workingDirectory: effectiveCwd,
+                    extraEnv: extraEnv
+                )
+            }
         } catch {
             Log.error("Failed to start PTY for pane \(actualPaneID): \(error)", category: .session)
         }
