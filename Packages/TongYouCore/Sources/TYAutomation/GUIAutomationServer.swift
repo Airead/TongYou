@@ -33,17 +33,34 @@ public final class GUIAutomationServer: @unchecked Sendable {
         /// themselves. If nil, `session.list` returns an empty result —
         /// useful for tests that don't exercise the GUI path.
         public let handleSessionList: (@Sendable () -> SessionListResponse)?
+        /// Creates a session of the given type, returning the allocated ref.
+        /// Note: Phase 7 will treat `session.create` as a focus-whitelisted
+        /// command — implementations should feel free to activate the window.
+        public let handleSessionCreate: (@Sendable (String?, AutomationSessionType) -> Result<SessionCreateResponse, AutomationError>)?
+        /// Closes the session named by the ref.
+        /// Focus-whitelisted (see `handleSessionCreate`).
+        public let handleSessionClose: (@Sendable (String) -> Result<Void, AutomationError>)?
+        /// Attaches a detached remote session by ref. Local sessions must
+        /// return `.unsupportedOperation`.
+        /// Focus-whitelisted (see `handleSessionCreate`).
+        public let handleSessionAttach: (@Sendable (String) -> Result<Void, AutomationError>)?
 
         public init(
             socketPath: String = GUIAutomationPaths.socketPath(),
             tokenPath: String = GUIAutomationPaths.tokenPath(),
             allowedPeerUID: uid_t = getuid(),
-            handleSessionList: (@Sendable () -> SessionListResponse)? = nil
+            handleSessionList: (@Sendable () -> SessionListResponse)? = nil,
+            handleSessionCreate: (@Sendable (String?, AutomationSessionType) -> Result<SessionCreateResponse, AutomationError>)? = nil,
+            handleSessionClose: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
+            handleSessionAttach: (@Sendable (String) -> Result<Void, AutomationError>)? = nil
         ) {
             self.socketPath = socketPath
             self.tokenPath = tokenPath
             self.allowedPeerUID = allowedPeerUID
             self.handleSessionList = handleSessionList
+            self.handleSessionCreate = handleSessionCreate
+            self.handleSessionClose = handleSessionClose
+            self.handleSessionAttach = handleSessionAttach
         }
     }
 
@@ -251,6 +268,12 @@ public final class GUIAutomationServer: @unchecked Sendable {
             return .success(.string("pong"))
         case "session.list":
             return handleSessionListCommand(config: config)
+        case "session.create":
+            return handleSessionCreateCommand(request: request, config: config)
+        case "session.close":
+            return handleSessionCloseCommand(request: request, config: config)
+        case "session.attach":
+            return handleSessionAttachCommand(request: request, config: config)
         default:
             return .error(code: "UNKNOWN_COMMAND", message: "unknown command: \(request.cmd)")
         }
@@ -261,14 +284,87 @@ public final class GUIAutomationServer: @unchecked Sendable {
             return .success(rawJSON(#"{"sessions":[]}"#))
         }
         let response = producer()
+        return encodeCodableResult(response)
+    }
+
+    private static func handleSessionCreateCommand(
+        request: ParsedRequest,
+        config: Configuration
+    ) -> JSONResponse {
+        guard let handler = config.handleSessionCreate else {
+            return .error(code: "INTERNAL_ERROR", message: "session.create not wired")
+        }
+
+        // `name` is optional; when present, must be a non-empty string.
+        let name: String?
+        if let any = request.params["name"] {
+            guard let s = any as? String, !s.isEmpty else {
+                return .error(code: "INVALID_PARAMS", message: "`name` must be a non-empty string")
+            }
+            name = s
+        } else {
+            name = nil
+        }
+
+        // `type` defaults to "local".
+        let typeRaw = (request.params["type"] as? String) ?? "local"
+        guard let type = AutomationSessionType(rawValue: typeRaw) else {
+            return .error(code: "INVALID_PARAMS", message: "`type` must be 'local' or 'remote'")
+        }
+
+        switch handler(name, type) {
+        case .success(let payload):
+            return encodeCodableResult(payload)
+        case .failure(let error):
+            return .error(code: error.code, message: error.message)
+        }
+    }
+
+    private static func handleSessionCloseCommand(
+        request: ParsedRequest,
+        config: Configuration
+    ) -> JSONResponse {
+        guard let handler = config.handleSessionClose else {
+            return .error(code: "INTERNAL_ERROR", message: "session.close not wired")
+        }
+        guard let ref = request.params["ref"] as? String, !ref.isEmpty else {
+            return .error(code: "INVALID_PARAMS", message: "`ref` is required")
+        }
+        switch handler(ref) {
+        case .success:
+            return .success(.null)
+        case .failure(let error):
+            return .error(code: error.code, message: error.message)
+        }
+    }
+
+    private static func handleSessionAttachCommand(
+        request: ParsedRequest,
+        config: Configuration
+    ) -> JSONResponse {
+        guard let handler = config.handleSessionAttach else {
+            return .error(code: "INTERNAL_ERROR", message: "session.attach not wired")
+        }
+        guard let ref = request.params["ref"] as? String, !ref.isEmpty else {
+            return .error(code: "INVALID_PARAMS", message: "`ref` is required")
+        }
+        switch handler(ref) {
+        case .success:
+            return .success(.null)
+        case .failure(let error):
+            return .error(code: error.code, message: error.message)
+        }
+    }
+
+    private static func encodeCodableResult<T: Encodable>(_ value: T) -> JSONResponse {
         do {
-            let data = try JSONEncoder().encode(response)
+            let data = try JSONEncoder().encode(value)
             guard let fragment = String(data: data, encoding: .utf8) else {
-                return .error(code: "INTERNAL_ERROR", message: "failed to encode session list")
+                return .error(code: "INTERNAL_ERROR", message: "failed to encode response")
             }
             return .success(rawJSON(fragment))
         } catch {
-            return .error(code: "INTERNAL_ERROR", message: "failed to encode session list: \(error)")
+            return .error(code: "INTERNAL_ERROR", message: "failed to encode response: \(error)")
         }
     }
 
@@ -281,6 +377,10 @@ public final class GUIAutomationServer: @unchecked Sendable {
     private struct ParsedRequest {
         let cmd: String
         let token: String?
+        /// The full decoded JSON object. Command handlers read parameters
+        /// from this dict by key; extracting values is each handler's job
+        /// so new commands don't require touching the parser.
+        let params: [String: Any]
     }
 
     private enum JSONResponse {
@@ -306,7 +406,7 @@ public final class GUIAutomationServer: @unchecked Sendable {
             return .failure(ParseError())
         }
         let token = obj["token"] as? String
-        return .success(ParsedRequest(cmd: cmd, token: token))
+        return .success(ParsedRequest(cmd: cmd, token: token, params: obj))
     }
 
     private static func encode(response: JSONResponse) -> String {

@@ -182,6 +182,7 @@ struct TerminalWindowView: View {
                 sessionManager.onRemoteDetached = nil
                 sessionManager.onRemoteSessionEmpty = nil
                 sessionManager.onRemoteLayoutChanged = nil
+                sessionManager.onSessionClosed = nil
             }
         ))
         .onAppear {
@@ -839,8 +840,19 @@ struct TerminalWindowView: View {
                     focusManager.removeFromHistory(id: paneID)
                 }
             }
-            if sessionManager.sessions.isEmpty {
+            // Skip window close when the session was torn down by an
+            // automation client (`tongyou app close`). The CLI caller
+            // just wants the session removed — taking down the window
+            // would also exit the app when this is the last window.
+            if sessionManager.sessions.isEmpty, !sessionManager.isAutomationClose {
                 NSApp.keyWindow?.close()
+            }
+        }
+
+        sessionManager.onSessionClosed = { [viewStore, focusManager] _, removedPaneIDs in
+            for paneID in removedPaneIDs {
+                viewStore.tearDown(for: paneID)
+                focusManager.removeFromHistory(id: paneID)
             }
         }
 

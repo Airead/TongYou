@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import TYAutomation
 import TYTerminal
@@ -14,13 +15,37 @@ final class GUIAutomationService {
     private var server: GUIAutomationServer?
     private let refStore = GUIAutomationRefStore()
 
+    /// Timeout for blocking automation handlers that wait on MainActor
+    /// work (e.g. remote session creation round-trips through the daemon).
+    nonisolated private static let blockingWaitTimeout: DispatchTimeInterval = .seconds(5)
+
     private init() {}
 
     func start() {
         guard server == nil else { return }
+        // Bind the weak self to a local `let` before forwarding to the
+        // inner `@Sendable` closures. The [weak self] capture introduces
+        // `self` as a mutable var, which Swift 6 flags when re-captured
+        // inside concurrent closures.
         let config = GUIAutomationServer.Configuration(
             handleSessionList: { [weak self] in
-                Self.runOnMain { self?.buildSessionList() ?? SessionListResponse(sessions: []) }
+                let service = self
+                return Self.runOnMain { service?.buildSessionList() ?? SessionListResponse(sessions: []) }
+            },
+            handleSessionCreate: { [weak self] name, type in
+                let service = self
+                return service?.handleSessionCreate(name: name, type: type)
+                    ?? .failure(.internal("GUIAutomationService deallocated"))
+            },
+            handleSessionClose: { [weak self] ref in
+                let service = self
+                return service?.handleSessionClose(ref: ref)
+                    ?? .failure(.internal("GUIAutomationService deallocated"))
+            },
+            handleSessionAttach: { [weak self] ref in
+                let service = self
+                return service?.handleSessionAttach(ref: ref)
+                    ?? .failure(.internal("GUIAutomationService deallocated"))
             }
         )
         let instance = GUIAutomationServer(configuration: config)
@@ -86,4 +111,186 @@ final class GUIAutomationService {
         }
         return .ready
     }
+
+    // MARK: - session.create / close / attach
+    //
+    // Phase 7 will introduce a focus whitelist mechanism (`GUIAutomationPolicy`);
+    // these three commands belong to the whitelist, so they actively bring the
+    // GUI to the foreground via `NSApp.activate(ignoringOtherApps: true)` once
+    // the underlying operation succeeds.
+
+    nonisolated private func handleSessionCreate(
+        name: String?,
+        type: AutomationSessionType
+    ) -> Result<SessionCreateResponse, AutomationError> {
+        switch type {
+        case .local:
+            return Self.runOnMain { self.createLocalSessionOnMain(name: name) }
+        case .remote:
+            return createRemoteSessionBlocking(name: name)
+        }
+    }
+
+    nonisolated private func handleSessionClose(ref: String) -> Result<Void, AutomationError> {
+        Self.runOnMain { self.closeSessionOnMain(ref: ref) }
+    }
+
+    nonisolated private func handleSessionAttach(ref: String) -> Result<Void, AutomationError> {
+        Self.runOnMain { self.attachSessionOnMain(ref: ref) }
+    }
+
+    // MARK: - MainActor operations
+
+    private func createLocalSessionOnMain(name: String?) -> Result<SessionCreateResponse, AutomationError> {
+        guard let manager = SessionManagerRegistry.shared.primaryManager else {
+            return .failure(.internal("no SessionManager available"))
+        }
+        let sessionID = manager.createSession(name: name)
+        // Refresh ref allocation so the new session gets a stable ref.
+        let snapshots = Self.collectSnapshots()
+        refStore.refreshRefs(snapshots: snapshots)
+        guard let ref = refStore.sessionRef(for: sessionID) else {
+            return .failure(.internal("ref allocation failed for new session"))
+        }
+        Self.activateApp()
+        return .success(SessionCreateResponse(ref: ref))
+    }
+
+    private func closeSessionOnMain(ref: String) -> Result<Void, AutomationError> {
+        let snapshots = Self.collectSnapshots()
+        refStore.refreshRefs(snapshots: snapshots)
+
+        let target: GUIAutomationRefStore.ResolvedTarget
+        do {
+            target = try refStore.resolve(refString: ref)
+        } catch let err as AutomationError {
+            return .failure(err)
+        } catch {
+            return .failure(.internal("ref resolution failed: \(error)"))
+        }
+
+        guard let manager = SessionManagerRegistry.shared.manager(owning: target.sessionID) else {
+            return .failure(.sessionNotFound(ref))
+        }
+        guard let index = manager.sessions.firstIndex(where: { $0.id == target.sessionID }) else {
+            return .failure(.sessionNotFound(ref))
+        }
+
+        let wasActive = manager.activeSessionIndex == index
+        // Signal to view-layer callbacks that this close came from
+        // automation — they must not close the hosting window when
+        // the session list becomes empty. See TerminalWindowView's
+        // `onRemoteSessionEmpty` handler.
+        manager.isAutomationClose = true
+        manager.closeSession(at: index)
+        manager.isAutomationClose = false
+
+        if wasActive, !manager.sessions.isEmpty {
+            let nextIndex = manager.sessions.firstIndex(where: {
+                manager.allAttachedSessionIDs.contains($0.id)
+            }) ?? 0
+            manager.selectSession(at: nextIndex)
+        }
+
+        Self.activateApp()
+        return .success(())
+    }
+
+    private func attachSessionOnMain(ref: String) -> Result<Void, AutomationError> {
+        let snapshots = Self.collectSnapshots()
+        refStore.refreshRefs(snapshots: snapshots)
+
+        let target: GUIAutomationRefStore.ResolvedTarget
+        do {
+            target = try refStore.resolve(refString: ref)
+        } catch let err as AutomationError {
+            return .failure(err)
+        } catch {
+            return .failure(.internal("ref resolution failed: \(error)"))
+        }
+
+        guard let manager = SessionManagerRegistry.shared.manager(owning: target.sessionID) else {
+            return .failure(.sessionNotFound(ref))
+        }
+        guard let session = manager.sessions.first(where: { $0.id == target.sessionID }) else {
+            return .failure(.sessionNotFound(ref))
+        }
+        guard let serverSessionID = session.source.serverSessionID else {
+            return .failure(.unsupportedOperation("cannot attach a local session"))
+        }
+        manager.attachRemoteSession(serverSessionID: serverSessionID)
+        Self.activateApp()
+        return .success(())
+    }
+
+    // MARK: - Remote create: blocking wait
+
+    /// Remote create hops to MainActor, enqueues the create request, then
+    /// blocks the caller (the connection thread) on a semaphore until the
+    /// daemon round-trips. Timeout returns `MAIN_THREAD_TIMEOUT` so the
+    /// CLI gets a definite answer instead of hanging.
+    nonisolated private func createRemoteSessionBlocking(name: String?) -> Result<SessionCreateResponse, AutomationError> {
+        let semaphore = DispatchSemaphore(value: 0)
+        let box = ResultBox<SessionCreateResponse>()
+
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                self.startRemoteCreate(name: name, box: box, signal: { semaphore.signal() })
+            }
+        }
+
+        let waitResult = semaphore.wait(timeout: .now() + Self.blockingWaitTimeout)
+        if waitResult == .timedOut {
+            return .failure(.mainThreadTimeout)
+        }
+        if let success = box.success { return .success(success) }
+        if let error = box.error { return .failure(error) }
+        return .failure(.internal("remote create completed with no result"))
+    }
+
+    private func startRemoteCreate(
+        name: String?,
+        box: ResultBox<SessionCreateResponse>,
+        signal: @escaping @Sendable () -> Void
+    ) {
+        guard let manager = SessionManagerRegistry.shared.primaryManager else {
+            box.error = .internal("no SessionManager available")
+            signal()
+            return
+        }
+        manager.createRemoteSession(name: name) { [weak self] localID in
+            guard let self else {
+                box.error = .internal("GUIAutomationService deallocated")
+                signal()
+                return
+            }
+            guard let localID else {
+                box.error = .internal("remote session creation failed or connection dropped")
+                signal()
+                return
+            }
+            let snapshots = Self.collectSnapshots()
+            self.refStore.refreshRefs(snapshots: snapshots)
+            if let ref = self.refStore.sessionRef(for: localID) {
+                box.success = SessionCreateResponse(ref: ref)
+                Self.activateApp()
+            } else {
+                box.error = .internal("ref allocation failed for new session")
+            }
+            signal()
+        }
+    }
+
+    @MainActor
+    private static func activateApp() {
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
+/// Mutable result slot shared between the connection thread (waiter) and
+/// the MainActor (producer). Access is serialized by the semaphore: the
+/// main-actor closure writes before signalling; the waiter reads after.
+nonisolated private final class ResultBox<Value>: @unchecked Sendable {
+    nonisolated(unsafe) var success: Value?
+    nonisolated(unsafe) var error: AutomationError?
 }

@@ -282,7 +282,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
-			shellScript = "set -euo pipefail\n\nPKG_DIR=\"${SRCROOT}/Packages/TongYouCore\"\nCLI_DEST=\"${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Resources/app/bin\"\n\n# Build the tongyou CLI with matching configuration.\nif [ \"${CONFIGURATION}\" = \"Release\" ]; then\n  SWIFT_CONFIG=\"release\"\nelse\n  SWIFT_CONFIG=\"debug\"\nfi\n\ncd \"${PKG_DIR}\"\nswift build -c \"${SWIFT_CONFIG}\" --product tongyou 2>&1\n\n# Copy the built binary into the app bundle.\nmkdir -p \"${CLI_DEST}\"\ncp -f \"${PKG_DIR}/.build/${SWIFT_CONFIG}/tongyou\" \"${CLI_DEST}/tongyou\"\nchmod +x \"${CLI_DEST}/tongyou\"\n";
+			shellScript = "set -euo pipefail\n\nPKG_DIR=\"${SRCROOT}/Packages/TongYouCore\"\nCLI_DEST=\"${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Resources/app/bin\"\n\n# Build the tongyou CLI with matching configuration.\nif [ \"${CONFIGURATION}\" = \"Release\" ]; then\n  SWIFT_CONFIG=\"release\"\nelse\n  SWIFT_CONFIG=\"debug\"\nfi\n\ncd \"${PKG_DIR}\"\nswift build -c \"${SWIFT_CONFIG}\" --product tongyou 2>&1\n\n# Copy the built binary into the app bundle.\nmkdir -p \"${CLI_DEST}\"\ncp -f \"${PKG_DIR}/.build/${SWIFT_CONFIG}/tongyou\" \"${CLI_DEST}/tongyou\"\nchmod +x \"${CLI_DEST}/tongyou\"\n\n# Re-sign with a fresh machine-local adhoc signature. SwiftPM's own\n# adhoc sign trips Gatekeeper (\"rejecting due to lack of matching\n# active rule\") on every rebuild, which surfaces as SIGKILL when the\n# user invokes the installed CLI. A plain codesign here produces a\n# signature Gatekeeper accepts.\ncodesign --force --sign - \"${CLI_DEST}/tongyou\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

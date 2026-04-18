@@ -70,6 +70,12 @@ final class SessionManager {
     /// Pending command info for remote floating panes awaiting server layoutUpdate.
     private var pendingRemoteCommandInfos: [FloatingPaneCommandInfo] = []
 
+    /// Callbacks keyed by requested session name, fired when the matching
+    /// remote session first lands in `sessions`. Used by automation to
+    /// await remote-create completion synchronously. Handlers receive the
+    /// local session UUID on success or `nil` on disconnect/timeout.
+    private var pendingRemoteCreateHandlers: [String: (UUID?) -> Void] = [:]
+
     /// Local session persistence store.
     private let localSessionStore: SessionStore
 
@@ -318,6 +324,7 @@ final class SessionManager {
 
         sessionSortOrder.removeAll { $0 == session.id }
         saveSessionOrder()
+        onSessionClosed?(session.id, paneIDs)
         return paneIDs
     }
 
@@ -966,9 +973,21 @@ final class SessionManager {
 
     /// Disconnect from the tongyou server.
     func disconnectFromTYD() {
+        failPendingRemoteCreateHandlers()
         remoteClient?.disconnect()
         remoteClient = nil
         cleanupRemoteState()
+    }
+
+    /// Invoke every pending remote-create handler with `nil` and clear the
+    /// table. Called on disconnect paths so `AppControlClient.createSession`
+    /// doesn't block forever when the daemon connection drops.
+    private func failPendingRemoteCreateHandlers() {
+        let handlers = pendingRemoteCreateHandlers
+        pendingRemoteCreateHandlers.removeAll()
+        for handler in handlers.values {
+            handler(nil)
+        }
     }
 
     /// Remove all remote sessions, controllers, and mappings.
@@ -998,6 +1017,7 @@ final class SessionManager {
 
     /// Called when the server connection drops unexpectedly.
     private func handleRemoteDisconnected() {
+        failPendingRemoteCreateHandlers()
         remoteClient = nil
         cleanupRemoteState()
     }
@@ -1042,8 +1062,16 @@ final class SessionManager {
     }
 
     /// Create a new remote session: connect if needed, then request creation.
-    func createRemoteSession(name: String? = nil) {
+    ///
+    /// When `completion` is provided, it fires on the main actor once the
+    /// matching remote session is first registered locally (via
+    /// `handleRemoteSessionCreated`). On disconnect before completion the
+    /// handler is called with `nil`.
+    func createRemoteSession(name: String? = nil, completion: ((UUID?) -> Void)? = nil) {
         let sessionName = name ?? nextAvailableName(prefix: "RSession")
+        if let completion {
+            pendingRemoteCreateHandlers[sessionName] = completion
+        }
         ensureConnected {
             self.remoteClient?.createSession(name: sessionName)
         }
@@ -1084,6 +1112,21 @@ final class SessionManager {
     /// Callback when a remote session is detached (view layer tears down MetalViews).
     /// Parameter: pane IDs that were removed.
     var onRemoteDetached: (([UUID]) -> Void)?
+
+    /// Callback fired at the end of `closeSession(at:)`, regardless of
+    /// the trigger (UI click, keyboard, CLI automation). The view layer
+    /// wires this to tear down MetalViews and clear focus history so
+    /// every close path gets the same cleanup.
+    ///
+    /// Parameters: `(closedSessionID, removedPaneIDs)`.
+    var onSessionClosed: ((UUID, [UUID]) -> Void)?
+
+    /// True while an automation-initiated close is in flight. Observers
+    /// that would otherwise close the hosting window when `sessions`
+    /// becomes empty (e.g. `onRemoteSessionEmpty`) should skip that
+    /// behavior while this flag is set — CLI callers want to remove
+    /// the session without taking down the window.
+    var isAutomationClose: Bool = false
 
     /// Get the remote controller for a pane, if it exists.
     func remoteController(for paneID: UUID) -> ClientTerminalController? {
@@ -1160,6 +1203,11 @@ final class SessionManager {
         attachRemoteSession(serverSessionID: sessionUUID)
         if let index = sessionIndex(forServerSessionID: sessionUUID) {
             activeSessionIndex = index
+        }
+        // Fire any automation create-completion handler waiting on this name.
+        if let handler = pendingRemoteCreateHandlers.removeValue(forKey: info.name) {
+            let localID = sessionIndex(forServerSessionID: sessionUUID).map { sessions[$0].id }
+            handler(localID)
         }
     }
 

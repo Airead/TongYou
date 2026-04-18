@@ -145,10 +145,52 @@ public final class AppControlClient {
         return line
     }
 
+    /// Send `session.create` and return the allocated ref.
+    public func createSession(name: String?, type: AutomationSessionType) throws -> String {
+        var params: [String: Any] = ["type": type.rawValue]
+        if let name { params["name"] = name }
+        let response = try sendCommand("session.create", params: params)
+        switch response {
+        case .success(let value):
+            guard case .raw(let data) = value else {
+                throw AppControlError.invalidResponse(raw: "expected object result for session.create")
+            }
+            do {
+                let decoded = try JSONDecoder().decode(SessionCreateResponse.self, from: data)
+                return decoded.ref
+            } catch {
+                throw AppControlError.invalidResponse(raw: String(data: data, encoding: .utf8) ?? "")
+            }
+        case .error(let code, let message):
+            throw AppControlError.serverError(code: code, message: message)
+        }
+    }
+
+    /// Send `session.close` for the given ref. Throws on server error.
+    public func closeSession(ref: String) throws {
+        let response = try sendCommand("session.close", params: ["ref": ref])
+        if case .error(let code, let message) = response {
+            throw AppControlError.serverError(code: code, message: message)
+        }
+    }
+
+    /// Send `session.attach` for the given ref. Throws on server error.
+    public func attachSession(ref: String) throws {
+        let response = try sendCommand("session.attach", params: ["ref": ref])
+        if case .error(let code, let message) = response {
+            throw AppControlError.serverError(code: code, message: message)
+        }
+    }
+
     /// Send a raw command line and parse the single-line JSON response.
     /// Intended for internal use and future commands.
     func sendCommand(_ cmd: String) throws -> Response {
-        let line = #"{"cmd":"\#(escape(cmd))"}"#
+        try sendCommand(cmd, params: [:])
+    }
+
+    /// Send a command with arbitrary scalar params.
+    func sendCommand(_ cmd: String, params: [String: Any]) throws -> Response {
+        let line = try encodeRequest(cmd: cmd, params: params)
         do {
             try io.writeLine(line)
         } catch {
@@ -159,7 +201,7 @@ public final class AppControlClient {
 
     /// Send a command and return the raw response line verbatim.
     private func sendCommandLine(_ cmd: String) throws -> String {
-        let line = #"{"cmd":"\#(escape(cmd))"}"#
+        let line = try encodeRequest(cmd: cmd, params: [:])
         do {
             try io.writeLine(line)
         } catch {
@@ -175,6 +217,22 @@ public final class AppControlClient {
             throw AppControlError.transport(underlying: LineIO.IOError.connectionClosed)
         }
         return response
+    }
+
+    private func encodeRequest(cmd: String, params: [String: Any]) throws -> String {
+        var payload: [String: Any] = params
+        payload["cmd"] = cmd
+        do {
+            let data = try JSONSerialization.data(withJSONObject: payload, options: [])
+            guard let s = String(data: data, encoding: .utf8) else {
+                throw AppControlError.invalidResponse(raw: "non-utf8 request payload")
+            }
+            return s
+        } catch let err as AppControlError {
+            throw err
+        } catch {
+            throw AppControlError.transport(underlying: error)
+        }
     }
 
     /// The decoded `result` payload of a successful response. Commands that

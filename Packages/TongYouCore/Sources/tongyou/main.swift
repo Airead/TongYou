@@ -20,6 +20,9 @@ enum Command {
     // GUI app automation commands
     case appPing
     case appList(json: Bool)
+    case appCreate(name: String?, type: AutomationSessionType, json: Bool)
+    case appClose(ref: String, json: Bool)
+    case appAttach(ref: String, json: Bool)
 
     case help
 }
@@ -89,11 +92,26 @@ func parseAppArgs(_ args: [String]) -> Command {
         printAppUsage()
         exit(1)
     }
+    let rest = Array(remaining.dropFirst())
     switch sub {
     case "ping":
         return .appPing
     case "list", "ls":
         return .appList(json: json)
+    case "create":
+        return parseAppCreateArgs(rest, json: json)
+    case "close":
+        guard let ref = rest.first else {
+            fputs("tongyou: app close requires a ref\n", stderr)
+            exit(1)
+        }
+        return .appClose(ref: ref, json: json)
+    case "attach":
+        guard let ref = rest.first else {
+            fputs("tongyou: app attach requires a ref\n", stderr)
+            exit(1)
+        }
+        return .appAttach(ref: ref, json: json)
     case "--help", "-h", "help":
         printAppUsage()
         exit(0)
@@ -104,6 +122,30 @@ func parseAppArgs(_ args: [String]) -> Command {
     }
 }
 
+func parseAppCreateArgs(_ args: [String], json: Bool) -> Command {
+    var name: String?
+    var type: AutomationSessionType = .local
+    for arg in args {
+        switch arg {
+        case "--local":
+            type = .local
+        case "--remote":
+            type = .remote
+        default:
+            if arg.hasPrefix("--") {
+                fputs("tongyou: unknown option '\(arg)' for app create\n", stderr)
+                exit(1)
+            }
+            if name != nil {
+                fputs("tongyou: app create takes at most one name argument\n", stderr)
+                exit(1)
+            }
+            name = arg
+        }
+    }
+    return .appCreate(name: name, type: type, json: json)
+}
+
 func printAppUsage() {
     let usage = """
     Usage: tongyou app [--json] <subcommand>
@@ -111,8 +153,11 @@ func printAppUsage() {
     Control the running TongYou GUI app via the automation socket.
 
     Subcommands:
-      ping        Verify the GUI is running and reachable.
-      list (ls)   List all sessions in the GUI.
+      ping                             Verify the GUI is running and reachable.
+      list (ls)                        List all sessions in the GUI.
+      create [name] [--local|--remote] Create a new session; --local is default.
+      close <ref>                      Close the session identified by ref.
+      attach <ref>                     Attach a detached remote session.
     """
     print(usage)
 }
@@ -162,8 +207,11 @@ func printUsage() {
       close (rm) <session-id>   Close a session by ID (prefix match supported)
 
     App (GUI automation):
-      app ping                  Check whether the TongYou GUI is running
-      app list [--json]         List all sessions in the GUI
+      app ping                       Check whether the TongYou GUI is running
+      app list [--json]              List all sessions in the GUI
+      app create [name] [--remote]   Create a new session in the GUI
+      app close <ref>                Close a session in the GUI by ref
+      app attach <ref>               Attach a detached remote session by ref
 
     Other:
       help                      Show this help message
@@ -481,6 +529,83 @@ func appList(json: Bool) {
     renderSessionListText(response)
 }
 
+func appCreate(name: String?, type: AutomationSessionType, json: Bool) {
+    let client = connectToGUIOrExit()
+    let ref: String
+    do {
+        ref = try client.createSession(name: name, type: type)
+    } catch AppControlError.serverError(let code, let message) {
+        if json {
+            printJSONError(code: code, message: message)
+        } else {
+            fputs("tongyou: GUI returned error: \(code): \(message)\n", stderr)
+        }
+        exit(1)
+    } catch {
+        fputs("tongyou: create failed: \(error)\n", stderr)
+        exit(1)
+    }
+    if json {
+        printJSONResult(#"{"ref":"\#(ref)"}"#)
+    } else {
+        print(ref)
+    }
+}
+
+func appClose(ref: String, json: Bool) {
+    let client = connectToGUIOrExit()
+    do {
+        try client.closeSession(ref: ref)
+    } catch AppControlError.serverError(let code, let message) {
+        if json {
+            printJSONError(code: code, message: message)
+        } else {
+            fputs("tongyou: GUI returned error: \(code): \(message)\n", stderr)
+        }
+        exit(1)
+    } catch {
+        fputs("tongyou: close failed: \(error)\n", stderr)
+        exit(1)
+    }
+    if json { printJSONResult("null") }
+}
+
+func appAttach(ref: String, json: Bool) {
+    let client = connectToGUIOrExit()
+    do {
+        try client.attachSession(ref: ref)
+    } catch AppControlError.serverError(let code, let message) {
+        if json {
+            printJSONError(code: code, message: message)
+        } else {
+            fputs("tongyou: GUI returned error: \(code): \(message)\n", stderr)
+        }
+        exit(1)
+    } catch {
+        fputs("tongyou: attach failed: \(error)\n", stderr)
+        exit(1)
+    }
+    if json { printJSONResult("null") }
+}
+
+private func printJSONResult(_ resultFragment: String) {
+    print(#"{"ok":true,"result":\#(resultFragment)}"#)
+}
+
+private func printJSONError(code: String, message: String) {
+    let codeEscaped = jsonEscaped(code)
+    let messageEscaped = jsonEscaped(message)
+    print(#"{"ok":false,"error":{"code":\#(codeEscaped),"message":\#(messageEscaped)}}"#)
+}
+
+private func jsonEscaped(_ s: String) -> String {
+    let data = (try? JSONSerialization.data(withJSONObject: [s], options: [.fragmentsAllowed])) ?? Data("[\"\"]".utf8)
+    guard let serialized = String(data: data, encoding: .utf8), serialized.count >= 2 else {
+        return "\"\""
+    }
+    return String(serialized.dropFirst().dropLast())
+}
+
 /// Render the `session.list` response as a column-aligned text table.
 func renderSessionListText(_ response: SessionListResponse) {
     if response.sessions.isEmpty {
@@ -556,6 +681,12 @@ case .appPing:
     appPing()
 case .appList(let json):
     appList(json: json)
+case .appCreate(let name, let type, let json):
+    appCreate(name: name, type: type, json: json)
+case .appClose(let ref, let json):
+    appClose(ref: ref, json: json)
+case .appAttach(let ref, let json):
+    appAttach(ref: ref, json: json)
 case .help:
     printUsage()
 }

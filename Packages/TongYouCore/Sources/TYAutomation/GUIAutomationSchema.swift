@@ -84,3 +84,14 @@ public struct SessionListResponse: Codable, Sendable, Equatable {
         self.sessions = sessions
     }
 }
+
+// MARK: - session.create response
+
+/// The `session.create` response body (goes under `result`).
+public struct SessionCreateResponse: Codable, Sendable, Equatable {
+    public let ref: String
+
+    public init(ref: String) {
+        self.ref = ref
+    }
+}
