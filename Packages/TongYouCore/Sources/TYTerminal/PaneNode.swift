@@ -144,25 +144,26 @@ public indirect enum PaneNode: Equatable, Sendable {
         }
     }
 
-    /// Update the split ratio at the node that directly contains the given pane ID as a leaf child.
+    /// Update the split ratio so that the pane identified by `paneID` occupies
+    /// `newRatio` of its parent split. When the target is the second child the
+    /// parent's stored ratio (first child's share) becomes `1 - newRatio`.
     public func updateRatio(for paneID: UUID, newRatio: CGFloat) -> PaneNode {
         switch self {
         case .leaf:
             return self
         case .split(let dir, let ratio, let first, let second):
-            // If the pane is a direct leaf child of this split, update this node's ratio.
-            switch (first, second) {
-            case (.leaf(let p), _) where p.id == paneID,
-                 (_, .leaf(let p)) where p.id == paneID:
+            if case .leaf(let p) = first, p.id == paneID {
                 return .split(direction: dir, ratio: newRatio, first: first, second: second)
-            default:
-                return .split(
-                    direction: dir,
-                    ratio: ratio,
-                    first: first.updateRatio(for: paneID, newRatio: newRatio),
-                    second: second.updateRatio(for: paneID, newRatio: newRatio)
-                )
             }
+            if case .leaf(let p) = second, p.id == paneID {
+                return .split(direction: dir, ratio: 1.0 - newRatio, first: first, second: second)
+            }
+            return .split(
+                direction: dir,
+                ratio: ratio,
+                first: first.updateRatio(for: paneID, newRatio: newRatio),
+                second: second.updateRatio(for: paneID, newRatio: newRatio)
+            )
         }
     }
 
