@@ -30,6 +30,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
     }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        GUIAutomationService.shared.start()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        GUIAutomationService.shared.stop()
+    }
 }
 
 struct TongYouCommands: Commands {

@@ -16,6 +16,9 @@ enum Command {
     case create(name: String?)
     case close(sessionID: String)
 
+    // GUI app automation commands
+    case appPing
+
     case help
 }
 
@@ -54,6 +57,9 @@ func parseArguments() -> Command {
         }
         return .close(sessionID: args[1])
 
+    case "app":
+        return parseAppArgs(Array(args.dropFirst()))
+
     case "help", "--help", "-h":
         return .help
 
@@ -62,6 +68,36 @@ func parseArguments() -> Command {
         printUsage()
         exit(1)
     }
+}
+
+func parseAppArgs(_ args: [String]) -> Command {
+    guard let sub = args.first else {
+        printAppUsage()
+        exit(1)
+    }
+    switch sub {
+    case "ping":
+        return .appPing
+    case "--help", "-h", "help":
+        printAppUsage()
+        exit(0)
+    default:
+        fputs("tongyou: unknown subcommand '\(sub)' for app\n", stderr)
+        printAppUsage()
+        exit(1)
+    }
+}
+
+func printAppUsage() {
+    let usage = """
+    Usage: tongyou app <subcommand>
+
+    Control the running TongYou GUI app via the automation socket.
+
+    Subcommands:
+      ping        Verify the GUI is running and reachable.
+    """
+    print(usage)
 }
 
 func parseDaemonArgs(_ args: [String]) -> Command {
@@ -107,6 +143,9 @@ func printUsage() {
       list (ls)                 List all sessions
       create (new) [--name N]   Create a new session
       close (rm) <session-id>   Close a session by ID (prefix match supported)
+
+    App (GUI automation):
+      app ping                  Check whether the TongYou GUI is running
 
     Other:
       help                      Show this help message
@@ -359,6 +398,38 @@ func closeSession(idPrefix: String) {
     conn.close()
 }
 
+// MARK: - App Automation Commands
+
+func appPing() {
+    let client: AppControlClient
+    do {
+        client = try AppControlClient.connect()
+    } catch AppControlError.guiNotRunning {
+        fputs("tongyou: TongYou GUI not running\n", stderr)
+        exit(1)
+    } catch AppControlError.tokenFileMissing(let path) {
+        fputs("tongyou: auth token file missing at \(path)\n", stderr)
+        exit(1)
+    } catch AppControlError.handshakeFailed(let reason) {
+        fputs("tongyou: handshake with GUI failed: \(reason)\n", stderr)
+        exit(1)
+    } catch {
+        fputs("tongyou: failed to connect to GUI: \(error)\n", stderr)
+        exit(1)
+    }
+
+    do {
+        let result = try client.ping()
+        print(result)
+    } catch AppControlError.serverError(let code, let message) {
+        fputs("tongyou: GUI returned error: \(code): \(message)\n", stderr)
+        exit(1)
+    } catch {
+        fputs("tongyou: ping failed: \(error)\n", stderr)
+        exit(1)
+    }
+}
+
 // MARK: - Entry Point
 
 let command = parseArguments()
@@ -376,6 +447,8 @@ case .create(let name):
     createSession(name: name)
 case .close(let sessionID):
     closeSession(idPrefix: sessionID)
+case .appPing:
+    appPing()
 case .help:
     printUsage()
 }

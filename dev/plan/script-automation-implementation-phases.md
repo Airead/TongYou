@@ -7,39 +7,94 @@
 ## Phase 1：GUI Socket 基础设施
 
 ### 目标
-建立 GUI App 侧的自动化控制服务器与 CLI 侧的基础连接能力，确保两者能正常通信。
+建立 GUI App 侧的自动化控制服务器与 CLI 侧的基础连接能力，确保两者能正常通信，并参照 daemon 侧的三层安全加固（commit `4c6537b`）完成 GUI Socket 的安全基线。
 
 ### 涉及文件
-- `TongYou/App/GUIAutomationServer.swift`（新建）
-- `Packages/TongYouCore/tongyou/AppControlClient.swift`（新建基础框架）
-- `TongYouApp.swift`（启动时初始化 GUIAutomationServer）
+- `Packages/TongYouCore/Sources/TYAutomation/GUIAutomationServer.swift`（新建核心逻辑，含连接状态机；新模块 `TYAutomation`）
+- `Packages/TongYouCore/Sources/TYAutomation/GUIAutomationAuth.swift`（新建，token 生成/持久化/清理）
+- `Packages/TongYouCore/Sources/TYAutomation/GUIAutomationPaths.swift`（新建，运行时目录与 per-PID 路径助手）
+- `Packages/TongYouCore/Sources/TYClient/AppControlClient.swift`（新建客户端，含握手逻辑）
+- `Packages/TongYouCore/Sources/TYProtocol/TYSocket.swift`（复用已有 `listen()` 和 `peerCredentials()`）
+- `TongYou/App/GUIAutomationService.swift`（新建 App 级服务门面）
+- `TongYou/TongYouApp.swift`（启动时初始化 GUIAutomationServer，退出时清理 socket/token）
+
+### 路径约定
+与 daemon 共享运行时目录，避免运行时文件散落：
+- Socket：`<runtime-dir>/gui-<pid>.sock`（runtime-dir 在 macOS 为 `~/Library/Caches/tongyou/`，否则为 `$XDG_RUNTIME_DIR/tongyou/`）
+- Token：`<runtime-dir>/gui-<pid>.token`
+- 通过 PID 后缀支持多个 GUI 实例并存
 
 ### 实现要点
-1. `GUIAutomationServer` 在 App 启动时绑定 `~/.tongyou/tongyou-gui-<pid>.sock`，权限 `0o600`
+1. `GUIAutomationServer` 在 App 启动时绑定 `<runtime-dir>/gui-<pid>.sock`
 2. Accept loop 跑在独立 `DispatchQueue`，派生独立任务处理每个客户端
 3. 实现 JSON/Line 基础解析（按 `\n` 分帧）
 4. 注册一个 `server.ping` 内部命令，返回 `{"ok":true,"result":"pong"}`
-5. CLI 侧实现 `tongyou app ping`，连接 GUI Socket 并发送 ping
+5. CLI 侧实现 `tongyou app ping`，连接 GUI Socket 并发送握手 + ping
+
+### 安全加固（参照 daemon 三层方案）
+
+**Layer 1 — 文件权限**
+- 运行时目录强制为 `0o700`：复用 `ServerConfig.ensureParentDirectory`
+- socket 文件 bind 后立即 `chmod 0o600`（由 `TYSocket.listen()` 自动完成）
+- GUI 正常退出时删除自己 PID 对应的 socket 与 token 文件，避免孤儿文件残留
+
+**Layer 2 — Peer credential 校验**
+- 每个 accept 到的连接调用 `getpeereid()` 获取对端 UID/GID
+- 若对端 UID ≠ `getuid()`，立即关闭连接并记录日志（不返回错误体，避免探测）
+- 复用 `TYSocket` 中 daemon 侧已有的 `peerCredentials()` 实现，避免重复代码
+
+**Layer 3 — Token 握手认证**
+- GUI 启动时生成 32 字节随机 token（`SecRandomCopyBytes`），写入 `~/.tongyou/tongyou-gui-<pid>.token`，权限 `0o600`
+- 连接状态机：`awaitingHandshake → authenticated`
+- 客户端首条消息必须是 `handshake { token }`，token 不匹配则返回 `UNAUTHENTICATED` 并关闭
+- 在 `authenticated` 之前，除 `handshake` 外所有命令（含 `server.ping`）都返回 `UNAUTHENTICATED`
+- CLI 侧：连接建立后先读取 token 文件、发送握手，成功后才执行用户命令
+- GUI 退出时删除 token 文件；Phase 8 的 `SocketPathResolver` 需同步读取 token
 
 ### 人工验证步骤
 ```bash
+# 运行时目录（macOS 默认）
+RT=~/Library/Caches/tongyou
+
 # 1. 启动 TongYou GUI App
-# 2. 确认 socket 文件已创建
-ls ~/.tongyou/tongyou-gui-*.sock
+# 2. 确认 socket 与 token 文件已创建且权限正确
+ls -ld "$RT"
+# 期望：drwx------（0700）
+
+ls -l "$RT"/gui-*.sock "$RT"/gui-*.token
+# 期望：两者均为 -rw-------（0600）
 
 # 3. 执行 ping 命令
 ./tongyou app ping
 # 期望输出：pong
 
-# 4. 关闭 GUI App 后再次执行
+# 4. 关闭 GUI App 后确认 socket/token 已清理
+ls "$RT"/gui-*.sock "$RT"/gui-*.token 2>&1
+# 期望：No such file or directory
+
+# 5. GUI 未运行时执行 ping
 ./tongyou app ping
 # 期望输出：TongYou GUI not running（或类似提示）
+
+# 6. 跳过握手直接发命令（用 nc 或自定义脚本）
+echo '{"cmd":"server.ping"}' | nc -U "$RT"/gui-*.sock
+# 期望：返回 {"ok":false,"error":{"code":"UNAUTHENTICATED",...}} 并关闭连接
+
+# 7. 使用错误 token 握手
+echo '{"cmd":"handshake","token":"wrong"}' | nc -U "$RT"/gui-*.sock
+# 期望：UNAUTHENTICATED，连接关闭
+
+# 8. 跨 UID 访问（需 sudo 或切换用户）
+sudo -u nobody ./tongyou app ping
+# 期望：连接被服务端关闭，客户端报错
 ```
 
 ### 完成标准
 - GUI 运行时 `tongyou app ping` 成功返回
-- GUI 关闭后 `tongyou app ping` 提示未运行
-- 同 UID 进程可连接，不同 UID 被拒绝
+- GUI 关闭后 `tongyou app ping` 提示未运行，且 socket/token 文件被清理
+- 运行时目录为 `0o700`，socket/token 文件为 `0o600`
+- 同 UID 进程可连接，不同 UID 在 `getpeereid()` 阶段即被拒绝
+- 未完成握手或 token 错误的连接无法执行任何业务命令
 
 ---
 
