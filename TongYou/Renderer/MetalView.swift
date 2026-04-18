@@ -140,6 +140,8 @@ final class MetalView: NSView {
         notificationRingLayer.lineWidth = 2
         notificationRingLayer.opacity = 0
         layer?.addSublayer(notificationRingLayer)
+
+        registerForDraggedTypes([.fileURL])
     }
 
     override func makeBackingLayer() -> CALayer {
@@ -330,6 +332,49 @@ final class MetalView: NSView {
         guard let string = NSPasteboard.general.string(forType: .string),
               !string.isEmpty else { return }
         terminalController?.handlePaste(string)
+    }
+
+    // MARK: - Drag & Drop
+
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        acceptsFileDrop(sender) ? .copy : []
+    }
+
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        acceptsFileDrop(sender) ? .copy : []
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [
+            .urlReadingFileURLsOnly: true
+        ]
+        guard
+            let urls = sender.draggingPasteboard.readObjects(
+                forClasses: [NSURL.self],
+                options: options
+            ) as? [URL],
+            !urls.isEmpty
+        else {
+            return false
+        }
+        let text = urls
+            .map { Self.shellQuote($0.path) }
+            .joined(separator: " ")
+        terminalController?.handlePaste(text)
+        return true
+    }
+
+    private func acceptsFileDrop(_ sender: any NSDraggingInfo) -> Bool {
+        sender.draggingPasteboard.canReadObject(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        )
+    }
+
+    /// POSIX single-quote quoting. Inside single quotes every byte is literal
+    /// except `'` itself, which we close-escape-reopen as `'\''`.
+    nonisolated static func shellQuote(_ path: String) -> String {
+        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     // MARK: - Search
