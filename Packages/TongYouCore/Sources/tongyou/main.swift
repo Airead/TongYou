@@ -24,6 +24,7 @@ enum Command {
     case appCreate(name: String?, type: AutomationSessionType, json: Bool)
     case appClose(ref: String, json: Bool)
     case appAttach(ref: String, json: Bool)
+    case appDetach(ref: String, json: Bool)
     case appSend(ref: String, text: String, json: Bool)
     case appKey(ref: String, key: String, json: Bool)
     case appNewTab(sessionRef: String, json: Bool)
@@ -122,6 +123,12 @@ func parseAppArgs(_ args: [String]) -> Command {
             exit(1)
         }
         return .appAttach(ref: ref, json: json)
+    case "detach":
+        guard let ref = rest.first else {
+            fputs("tongyou: app detach requires a ref\n", stderr)
+            exit(1)
+        }
+        return .appDetach(ref: ref, json: json)
     case "send":
         guard rest.count >= 2 else {
             fputs("tongyou: app send requires <ref> <text>\n", stderr)
@@ -284,6 +291,7 @@ func printAppUsage() {
       create [name] [--local|--remote]     Create a new session; --local is default.
       close <ref>                          Close the session identified by ref.
       attach <ref>                         Attach a detached remote session.
+      detach <ref>                         Detach the session identified by ref (stops rendering / receiving input).
       send <ref> <text>                    Send raw UTF-8 text to the target pane (no trailing newline).
       key <ref> <key>                      Send a key event (e.g. Enter, Ctrl+C, Alt+Left) to the target pane.
       new-tab <session-ref>                Create a new tab in the given session.
@@ -347,6 +355,7 @@ func printUsage() {
       app create [name] [--remote]   Create a new session in the GUI
       app close <ref>                Close a session in the GUI by ref
       app attach <ref>               Attach a detached remote session by ref
+      app detach <ref>               Detach a session by ref (stop rendering / receiving input)
       app send <ref> <text>          Send text to the target pane (no trailing newline)
       app key <ref> <key>            Send a key event (Enter, Ctrl+C, …) to the target pane
       app new-tab <session-ref>      Create a new tab in the given session
@@ -732,6 +741,24 @@ func appAttach(ref: String, json: Bool) {
     if json { printJSONResult("null") }
 }
 
+func appDetach(ref: String, json: Bool) {
+    let client = connectToGUIOrExit()
+    do {
+        try client.detachSession(ref: ref)
+    } catch AppControlError.serverError(let code, let message) {
+        if json {
+            printJSONError(code: code, message: message)
+        } else {
+            fputs("tongyou: GUI returned error: \(code): \(message)\n", stderr)
+        }
+        exit(1)
+    } catch {
+        fputs("tongyou: detach failed: \(error)\n", stderr)
+        exit(1)
+    }
+    if json { printJSONResult("null") }
+}
+
 func appSend(ref: String, text: String, json: Bool) {
     let client = connectToGUIOrExit()
     do {
@@ -994,6 +1021,8 @@ case .appClose(let ref, let json):
     appClose(ref: ref, json: json)
 case .appAttach(let ref, let json):
     appAttach(ref: ref, json: json)
+case .appDetach(let ref, let json):
+    appDetach(ref: ref, json: json)
 case .appSend(let ref, let text, let json):
     appSend(ref: ref, text: text, json: json)
 case .appKey(let ref, let key, let json):

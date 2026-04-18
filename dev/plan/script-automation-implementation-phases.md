@@ -326,8 +326,8 @@ for i in 1 2 3; do ./tongyou app list; done
 支持通过 CLI 创建和关闭 session，包括 local 和 remote 两种类型。
 
 ### 涉及文件
-- `GUIAutomationServer.swift`（新增 create/close/attach 处理）
-- `AppControlClient.swift`（新增 create/close/attach 命令）
+- `GUIAutomationServer.swift`（新增 create/close/attach/detach 处理）
+- `AppControlClient.swift`（新增 create/close/attach/detach 命令）
 - `SessionManager.swift`（可能需要暴露创建 local session 的公共方法）
 
 ### 实现要点
@@ -336,8 +336,9 @@ for i in 1 2 3; do ./tongyou app list; done
    - `--remote`：通过 `RemoteSessionClient` 请求 daemon 创建并 attach
 2. `session.close`：根据 ref 找到 session ID，调用 `SessionManager.closeSession`
 3. `session.attach`：仅对 detached remote session 有效，local session 返回 `UNSUPPORTED_OPERATION`
-4. 创建成功后返回分配的 session ref
-5. CLI 侧实现 `tongyou app create [name] [--local] [--remote]`、`close`、`attach`
+4. `session.detach`：对 local 调 `SessionManager.detachLocalSession`，对 remote 调 `detachRemoteSession`；detach 后的 session 仍保留在 sidebar 中，ref 不变
+5. 创建成功后返回分配的 session ref
+6. CLI 侧实现 `tongyou app create [name] [--local] [--remote]`、`close`、`attach`、`detach`
 
 ### 人工验证步骤
 ```bash
@@ -357,12 +358,20 @@ for i in 1 2 3; do ./tongyou app list; done
 # 5. remote 环境支持时
 ./tongyou app create prod --remote
 # 期望：GUI 中立即出现并 attach 该 remote session
+
+# 6. Detach / Re-attach 往返
+./tongyou app detach prod
+./tongyou app list
+# 期望：prod 行仍在，STATE 列变为 "detached"，REF 保持 "prod"
+./tongyou app attach prod
+# 期望：STATE 回到 "ready"
 ```
 
 ### 完成标准
 - 能成功创建和关闭 local session
 - `--remote` 时 GUI 自动 attach 新 session
 - local session 上执行 `attach` 返回 `UNSUPPORTED_OPERATION`
+- `detach` 后 session 保留在 sidebar、ref 不变，`attach` 可恢复
 - GUI 未运行时返回 `GUI_NOT_RUNNING`
 
 ---
@@ -471,7 +480,7 @@ for i in 1 2 3; do ./tongyou app list; done
 # 期望：行为与 local session 一致；所有变更均由 daemon 的 layoutUpdate 回填
 
 # 9. Detached remote session 拒绝结构性操作
-./tongyou app detach prod        # 或通过其它入口 detach
+./tongyou app detach prod
 ./tongyou app new-tab prod
 # 期望：UNSUPPORTED_OPERATION，提示需先 attach
 ```

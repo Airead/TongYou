@@ -45,6 +45,10 @@ public final class GUIAutomationServer: @unchecked Sendable {
         /// return `.unsupportedOperation`.
         /// Focus-whitelisted (see `handleSessionCreate`).
         public let handleSessionAttach: (@Sendable (String) -> Result<Void, AutomationError>)?
+        /// Detaches an attached session by ref. Works for both local and
+        /// remote sessions — the session remains in the sidebar but stops
+        /// rendering / receiving input. Not focus-whitelisted.
+        public let handleSessionDetach: (@Sendable (String) -> Result<Void, AutomationError>)?
         /// Writes raw UTF-8 text to the pane resolved from `ref`. Ref may
         /// refer to a session (→ focused pane), tab (→ focused pane), pane,
         /// or float. Not focus-whitelisted — must not activate the window.
@@ -80,6 +84,7 @@ public final class GUIAutomationServer: @unchecked Sendable {
             handleSessionCreate: (@Sendable (String?, AutomationSessionType) -> Result<SessionCreateResponse, AutomationError>)? = nil,
             handleSessionClose: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
             handleSessionAttach: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
+            handleSessionDetach: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
             handlePaneSendText: (@Sendable (String, String) -> Result<Void, AutomationError>)? = nil,
             handlePaneSendKey: (@Sendable (String, KeyEncoder.KeyInput) -> Result<Void, AutomationError>)? = nil,
             handleTabCreate: (@Sendable (String) -> Result<TabCreateResponse, AutomationError>)? = nil,
@@ -97,6 +102,7 @@ public final class GUIAutomationServer: @unchecked Sendable {
             self.handleSessionCreate = handleSessionCreate
             self.handleSessionClose = handleSessionClose
             self.handleSessionAttach = handleSessionAttach
+            self.handleSessionDetach = handleSessionDetach
             self.handlePaneSendText = handlePaneSendText
             self.handlePaneSendKey = handlePaneSendKey
             self.handleTabCreate = handleTabCreate
@@ -319,6 +325,8 @@ public final class GUIAutomationServer: @unchecked Sendable {
             return handleSessionCloseCommand(request: request, config: config)
         case "session.attach":
             return handleSessionAttachCommand(request: request, config: config)
+        case "session.detach":
+            return handleSessionDetachCommand(request: request, config: config)
         case "pane.sendText":
             return handlePaneSendTextCommand(request: request, config: config)
         case "pane.sendKey":
@@ -407,6 +415,24 @@ public final class GUIAutomationServer: @unchecked Sendable {
     ) -> JSONResponse {
         guard let handler = config.handleSessionAttach else {
             return .error(code: "INTERNAL_ERROR", message: "session.attach not wired")
+        }
+        guard let ref = request.params["ref"] as? String, !ref.isEmpty else {
+            return .error(code: "INVALID_PARAMS", message: "`ref` is required")
+        }
+        switch handler(ref) {
+        case .success:
+            return .success(.null)
+        case .failure(let error):
+            return .error(code: error.code, message: error.message)
+        }
+    }
+
+    private static func handleSessionDetachCommand(
+        request: ParsedRequest,
+        config: Configuration
+    ) -> JSONResponse {
+        guard let handler = config.handleSessionDetach else {
+            return .error(code: "INTERNAL_ERROR", message: "session.detach not wired")
         }
         guard let ref = request.params["ref"] as? String, !ref.isEmpty else {
             return .error(code: "INVALID_PARAMS", message: "`ref` is required")

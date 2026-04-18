@@ -53,6 +53,7 @@ tongyou app list [--json]
 tongyou app create [name] [--local] [--remote] [--json]
 tongyou app close <session> [--json]
 tongyou app attach <session> [--json]
+tongyou app detach <session> [--json]
 
 # 终端交互
 tongyou app send <session> <text> [--json]

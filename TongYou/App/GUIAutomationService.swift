@@ -47,6 +47,11 @@ final class GUIAutomationService {
                 return service?.handleSessionAttach(ref: ref)
                     ?? .failure(.internal("GUIAutomationService deallocated"))
             },
+            handleSessionDetach: { [weak self] ref in
+                let service = self
+                return service?.handleSessionDetach(ref: ref)
+                    ?? .failure(.internal("GUIAutomationService deallocated"))
+            },
             handlePaneSendText: { [weak self] ref, text in
                 let service = self
                 return service?.handlePaneSendText(ref: ref, text: text)
@@ -182,6 +187,10 @@ final class GUIAutomationService {
 
     nonisolated private func handleSessionAttach(ref: String) -> Result<Void, AutomationError> {
         Self.runOnMain { self.attachSessionOnMain(ref: ref) }
+    }
+
+    nonisolated private func handleSessionDetach(ref: String) -> Result<Void, AutomationError> {
+        Self.runOnMain { self.detachSessionOnMain(ref: ref) }
     }
 
     // MARK: - pane.sendText / pane.sendKey
@@ -344,6 +353,34 @@ final class GUIAutomationService {
         }
         manager.attachRemoteSession(serverSessionID: serverSessionID)
         Self.activateApp()
+        return .success(())
+    }
+
+    private func detachSessionOnMain(ref: String) -> Result<Void, AutomationError> {
+        let snapshots = Self.collectSnapshots()
+        refStore.refreshRefs(snapshots: snapshots)
+
+        let target: GUIAutomationRefStore.ResolvedTarget
+        do {
+            target = try refStore.resolve(refString: ref)
+        } catch let err as AutomationError {
+            return .failure(err)
+        } catch {
+            return .failure(.internal("ref resolution failed: \(error)"))
+        }
+
+        guard let manager = SessionManagerRegistry.shared.manager(owning: target.sessionID) else {
+            return .failure(.sessionNotFound(ref))
+        }
+        guard let session = manager.sessions.first(where: { $0.id == target.sessionID }) else {
+            return .failure(.sessionNotFound(ref))
+        }
+        // Not in the focus whitelist — must not activate the window.
+        if let serverSessionID = session.source.serverSessionID {
+            manager.detachRemoteSession(serverSessionID: serverSessionID)
+        } else {
+            manager.detachLocalSession(sessionID: session.id)
+        }
         return .success(())
     }
 

@@ -355,6 +355,96 @@ struct GUIAutomationServerTests {
         #expect(captured.ref == "dev")
     }
 
+    @Test func sessionDetachForwardsRefToHandler() throws {
+        let (baseConfig, tmpDir) = Self.isolatedConfig()
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        final class Captured: @unchecked Sendable {
+            var ref: String?
+        }
+        let captured = Captured()
+
+        let config = GUIAutomationServer.Configuration(
+            socketPath: baseConfig.socketPath,
+            tokenPath: baseConfig.tokenPath,
+            allowedPeerUID: baseConfig.allowedPeerUID,
+            handleSessionDetach: { ref in
+                captured.ref = ref
+                return .success(())
+            }
+        )
+        let server = GUIAutomationServer(configuration: config)
+        try server.start()
+        defer { server.stop() }
+        Thread.sleep(forTimeInterval: 0.05)
+
+        let token = try #require(GUIAutomationAuth.read(tokenPath: config.tokenPath))
+        let socket = try TYSocket.connect(path: config.socketPath)
+        defer { socket.closeSocket() }
+
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        _ = try Self.readLine(socket)
+
+        try Self.sendLine(socket, #"{"cmd":"session.detach","ref":"prod"}"#)
+        let resp = try #require(try Self.readLine(socket))
+        #expect(resp.contains("\"ok\":true"))
+        #expect(captured.ref == "prod")
+    }
+
+    @Test func sessionDetachPropagatesHandlerError() throws {
+        let (baseConfig, tmpDir) = Self.isolatedConfig()
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        let config = GUIAutomationServer.Configuration(
+            socketPath: baseConfig.socketPath,
+            tokenPath: baseConfig.tokenPath,
+            allowedPeerUID: baseConfig.allowedPeerUID,
+            handleSessionDetach: { _ in .failure(.sessionNotFound("ghost")) }
+        )
+        let server = GUIAutomationServer(configuration: config)
+        try server.start()
+        defer { server.stop() }
+        Thread.sleep(forTimeInterval: 0.05)
+
+        let token = try #require(GUIAutomationAuth.read(tokenPath: config.tokenPath))
+        let socket = try TYSocket.connect(path: config.socketPath)
+        defer { socket.closeSocket() }
+
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        _ = try Self.readLine(socket)
+
+        try Self.sendLine(socket, #"{"cmd":"session.detach","ref":"ghost"}"#)
+        let resp = try #require(try Self.readLine(socket))
+        #expect(resp.contains("\"code\":\"SESSION_NOT_FOUND\""))
+    }
+
+    @Test func sessionDetachRequiresRef() throws {
+        let (baseConfig, tmpDir) = Self.isolatedConfig()
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        let config = GUIAutomationServer.Configuration(
+            socketPath: baseConfig.socketPath,
+            tokenPath: baseConfig.tokenPath,
+            allowedPeerUID: baseConfig.allowedPeerUID,
+            handleSessionDetach: { _ in .success(()) }
+        )
+        let server = GUIAutomationServer(configuration: config)
+        try server.start()
+        defer { server.stop() }
+        Thread.sleep(forTimeInterval: 0.05)
+
+        let token = try #require(GUIAutomationAuth.read(tokenPath: config.tokenPath))
+        let socket = try TYSocket.connect(path: config.socketPath)
+        defer { socket.closeSocket() }
+
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        _ = try Self.readLine(socket)
+
+        try Self.sendLine(socket, #"{"cmd":"session.detach"}"#)
+        let resp = try #require(try Self.readLine(socket))
+        #expect(resp.contains("\"code\":\"INVALID_PARAMS\""))
+    }
+
     @Test func sessionAttachOnLocalReturnsUnsupported() throws {
         let (baseConfig, tmpDir) = Self.isolatedConfig()
         defer { try? FileManager.default.removeItem(atPath: tmpDir) }

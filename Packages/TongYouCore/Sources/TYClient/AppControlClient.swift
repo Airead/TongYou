@@ -183,6 +183,14 @@ public final class AppControlClient {
         }
     }
 
+    /// Send `session.detach` for the given ref. Throws on server error.
+    public func detachSession(ref: String) throws {
+        let response = try sendCommand("session.detach", params: ["ref": ref])
+        if case .error(let code, let message) = response {
+            throw AppControlError.serverError(code: code, message: message)
+        }
+    }
+
     /// Send `pane.sendText` — write raw UTF-8 text to the pane resolved from `ref`.
     /// The server does not auto-append a newline; callers that want Enter must
     /// follow up with `sendKey(ref:key:)` using `"Enter"`.
