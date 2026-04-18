@@ -554,6 +554,12 @@ public struct BinaryDecoder: Sendable {
             let tabIndex = try readUInt16()
             return .selectTab(sessionID, tabIndex: tabIndex)
 
+        case .setSplitRatio:
+            let sessionID = try readSessionID()
+            let paneID = try readPaneID()
+            let ratio = try readFloat()
+            return .setSplitRatio(sessionID, paneID, ratio: ratio)
+
         case .createFloatingPane:
             let sessionID = try readSessionID()
             let tabID = try readTabID()

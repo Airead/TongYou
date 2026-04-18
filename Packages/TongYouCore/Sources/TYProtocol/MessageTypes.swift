@@ -61,6 +61,7 @@ public enum ClientMessageType: UInt16, Sendable {
     case focusPane       = 0x0224
 
     case selectTab       = 0x022A
+    case setSplitRatio   = 0x022F
 
     // Floating pane operations
     case createFloatingPane       = 0x0225
@@ -191,6 +192,9 @@ public enum ClientMessage: Sendable {
     case closePane(SessionID, PaneID)
     case focusPane(SessionID, PaneID)
     case selectTab(SessionID, tabIndex: UInt16)
+    /// Adjust the split ratio at the node directly containing `paneID` as a
+    /// leaf child. `ratio` is the target pane's share in `(0.0, 1.0)`.
+    case setSplitRatio(SessionID, PaneID, ratio: Float)
 
     // Floating pane operations
     case createFloatingPane(SessionID, TabID)
@@ -251,6 +255,8 @@ public enum ClientMessage: Sendable {
             return "focusPane(session=\(sid), pane=\(pid))"
         case .selectTab(let sid, let tabIndex):
             return "selectTab(session=\(sid), tabIndex=\(tabIndex))"
+        case .setSplitRatio(let sid, let pid, let ratio):
+            return "setSplitRatio(session=\(sid), pane=\(pid), ratio=\(ratio))"
         case .createFloatingPane(let sid, let tid):
             return "createFloatingPane(session=\(sid), tab=\(tid))"
         case .closeFloatingPane(let sid, let pid):
@@ -293,6 +299,7 @@ public enum ClientMessage: Sendable {
         case .closePane:      return .closePane
         case .focusPane:      return .focusPane
         case .selectTab:      return .selectTab
+        case .setSplitRatio:  return .setSplitRatio
         case .createFloatingPane:       return .createFloatingPane
         case .closeFloatingPane:        return .closeFloatingPane
         case .updateFloatingPaneFrame:  return .updateFloatingPaneFrame

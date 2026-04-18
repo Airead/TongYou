@@ -755,9 +755,9 @@ final class SessionManager {
     }
 
     /// Update the split ratio at the node that directly contains `paneID`
-    /// as a leaf child. For local sessions only — remote sessions do not
-    /// yet expose a protocol command for split ratios.
-    /// Returns true if the pane was found and the ratio was updated.
+    /// as a leaf child. For remote sessions the change is forwarded to
+    /// the server and local state reconciles on the next layoutUpdate.
+    /// Returns true when the pane was located in any tab.
     @discardableResult
     func updateSplitRatio(
         inSessionID: UUID,
@@ -765,6 +765,17 @@ final class SessionManager {
         newRatio: CGFloat
     ) -> Bool {
         guard let idx = sessions.firstIndex(where: { $0.id == inSessionID }) else { return false }
+
+        if let serverSessionID = sessions[idx].source.serverSessionID,
+           let serverPaneUUID = serverPaneUUID(for: paneID) {
+            remoteClient?.setSplitRatio(
+                sessionID: SessionID(serverSessionID),
+                paneID: PaneID(serverPaneUUID),
+                ratio: Float(newRatio)
+            )
+            return true
+        }
+
         for i in sessions[idx].tabs.indices {
             guard sessions[idx].tabs[i].paneTree.contains(paneID: paneID) else { continue }
             let newTree = sessions[idx].tabs[i].paneTree.updateRatio(

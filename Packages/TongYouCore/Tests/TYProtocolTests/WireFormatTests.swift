@@ -451,6 +451,20 @@ struct WireFormatTests {
         #expect(tabIndex == 3)
     }
 
+    @Test func roundTripSetSplitRatio() throws {
+        let sid = SessionID()
+        let pid = PaneID()
+        let msg = ClientMessage.setSplitRatio(sid, pid, ratio: 0.3)
+        let decoded = try encodeAndDecode(clientMessage: msg)
+        guard case .setSplitRatio(let dSid, let dPid, let ratio) = decoded else {
+            Issue.record("Expected .setSplitRatio")
+            return
+        }
+        #expect(dSid == sid)
+        #expect(dPid == pid)
+        #expect(abs(ratio - 0.3) < 1e-6)
+    }
+
     @Test func roundTripTabInfoWithFocusedPaneID() throws {
         let sid = SessionID()
         let pid = PaneID()

@@ -613,9 +613,10 @@ final class GUIAutomationService {
             guard let session = manager.sessions.first(where: { $0.id == sessionID }) else {
                 return .failure(.sessionNotFound(ref))
             }
-            if session.source.serverSessionID != nil {
+            if let serverID = session.source.serverSessionID,
+               !manager.attachedRemoteSessionIDs.contains(serverID) {
                 return .failure(.unsupportedOperation(
-                    "pane.resize is not yet supported for remote sessions"
+                    "session is detached; attach it first with 'tongyou app attach'"
                 ))
             }
             guard manager.updateSplitRatio(

@@ -172,6 +172,48 @@ struct ServerSessionManagerTests {
         manager.closeSession(id: session.id)
     }
 
+    @Test("setSplitRatio updates parent split ratio")
+    func setSplitRatioUpdatesRatio() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "Ratio Test")
+        guard case .leaf(let firstPaneID) = session.tabs[0].layout else {
+            Issue.record("Expected leaf layout")
+            return
+        }
+        let secondPaneID = manager.splitPane(
+            sessionID: session.id,
+            paneID: firstPaneID,
+            direction: .vertical
+        )!
+
+        #expect(manager.setSplitRatio(
+            sessionID: session.id, paneID: secondPaneID, ratio: 0.25
+        ))
+
+        let info = manager.sessionInfo(for: session.id)
+        // Second child targets ratio 0.25; stored ratio (first child's share) becomes 0.75.
+        if case .split(_, let ratio, _, _) = info?.tabs[0].layout {
+            #expect(abs(ratio - 0.75) < 1e-6)
+        } else {
+            Issue.record("Expected split layout with updated ratio")
+        }
+
+        manager.closeSession(id: session.id)
+    }
+
+    @Test("setSplitRatio rejects unknown pane")
+    func setSplitRatioUnknownPane() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "Ratio Reject")
+        let bogus = PaneID()
+
+        #expect(!manager.setSplitRatio(
+            sessionID: session.id, paneID: bogus, ratio: 0.5
+        ))
+
+        manager.closeSession(id: session.id)
+    }
+
     @Test("Close pane removes from tree")
     func closePane() {
         let manager = ServerSessionManager()

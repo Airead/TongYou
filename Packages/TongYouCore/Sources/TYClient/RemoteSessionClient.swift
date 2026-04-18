@@ -192,6 +192,13 @@ public final class RemoteSessionClient: @unchecked Sendable {
         connection?.send(.selectTab(sessionID, tabIndex: tabIndex))
     }
 
+    /// Ask the server to adjust a split ratio. The pane whose position in
+    /// the tree directly identifies the parent split receives `ratio` as
+    /// its share of that split.
+    public func setSplitRatio(sessionID: SessionID, paneID: PaneID, ratio: Float) {
+        connection?.send(.setSplitRatio(sessionID, paneID, ratio: ratio))
+    }
+
     // MARK: - Floating Pane Operations
 
     public func createFloatingPane(sessionID: SessionID, tabID: TabID) {
