@@ -367,7 +367,9 @@ struct GUIAutomationRefStoreTests {
         #expect(r3.tabID == tab.id)
 
         let r4 = try store.resolve(refString: "dev/float:1")
-        #expect(r4.floatID == floatPane.id)
+        // Float refs resolve to the inner TerminalPane UUID, not the
+        // FloatingPane struct UUID — see GUIAutomationRefStore.refreshChildren.
+        #expect(r4.floatID == floatPane.pane.id)
         #expect(r4.tabID == tab.id)
     }
 

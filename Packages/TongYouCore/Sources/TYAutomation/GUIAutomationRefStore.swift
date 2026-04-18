@@ -136,8 +136,15 @@ public final class GUIAutomationRefStore {
             }
 
             // Floating panes, in array order.
+            //
+            // We key by `float.pane.id` rather than `float.id` (the
+            // FloatingPane struct UUID) because the rest of the app —
+            // FocusManager, MetalViewStore, SessionManager.closeFloatingPane,
+            // etc. — all identify floats by their inner TerminalPane ID.
+            // Keying by the struct UUID here would hand callers an identifier
+            // they can't use anywhere else.
             for float in tab.floatingPanes {
-                let floatID = float.id
+                let floatID = float.pane.id
                 activeFloatIDs.insert(floatID)
                 per.floatToTab[floatID] = tab.id
                 if per.floatIndexByID[floatID] == nil {
@@ -254,8 +261,10 @@ public final class GUIAutomationRefStore {
             let paneRefs = tab.paneTree.allPaneIDs.compactMap {
                 paneRef(sessionID: session.id, paneID: $0)
             }
+            // floatRef is keyed by the inner TerminalPane UUID — see
+            // refreshChildren for the rationale.
             let floatRefs = tab.floatingPanes.compactMap {
-                floatRef(sessionID: session.id, floatID: $0.id)
+                floatRef(sessionID: session.id, floatID: $0.pane.id)
             }
             return TabDescriptor(
                 ref: tabRefStr,
