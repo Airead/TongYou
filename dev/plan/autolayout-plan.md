@@ -1,246 +1,510 @@
-# 终端模拟器自动布局引擎 (Auto Layout Engine) 架构设计
+# TongYou 自动布局引擎实施计划
 
-为了实现一个高度可扩展、支持任意布局策略的终端布局引擎，我们需要将系统的职责清晰划分。本设计采用面向对象的思想，主要分为三个核心模块：**数据模型 (Data Model)**、**布局策略 (Layout Strategies)** 和 **引擎核心 (Engine Core)**。
+为 TongYou 引入一个可扩展的自动布局引擎（Tiling Layout Engine），支持多种布局策略（BSP、Grid、MasterStack、Fibonacci 等），并涵盖方向性焦点切换、Zoom、swap/move 等高级交互。
 
-在深入架构细节之前，我们先梳理现代终端模拟器的布局流派与底层原理。
+本计划基于 TongYou 现状（严格 BSP 二叉树 + 值类型 `PaneNode`、client/server 双端、SwiftUI + Metal 渲染），将原设计文档（详见本文第六、七章保留内容）映射为可独立实现、可人工验证的分阶段落地方案。
 
-## 一、 现代终端常见布局流派 (Common Layout Paradigms)
+---
 
-现代终端（如 iTerm2, tmux, Kitty, WezTerm, Zellij）处理窗格布局的方式通常分为以下几种，我们的引擎设计必须能够兼容这些流派：
+## 一、核心决策（已拍板）
 
-1. **二叉空间分割 (BSP - Binary Space Partitioning)**
+| # | 决策 | 说明 |
+|---|---|---|
+| 1 | **模型 vs 计算分离** | Weight 作为 AST 内状态（可持久化）；Rect 仅为 `solve(...)` 的瞬时输出，**不写回节点**。 |
+| 2 | **值语义** | `PaneNode` 继续作为值类型（`indirect enum` + `struct Container`）。所有引擎 API 都是纯函数：输入 `TerminalTab` → 输出新 `TerminalTab`。不引入 reference 类型的 engine 实例。 |
+| 3 | **同向连续 split 扁平化** | 向右连续 split 3 次 → 1 个水平 container，4 个同级子节点。符合 iTerm2 / tmux / Kitty 行为，并真正发挥 N-ary 的价值。 |
+| 4 | **Weight 语义** | 自由相对值（`[1, 1, 2]` 表示 25% / 25% / 50%）。插入/删除 sibling 不需要重算其他 weight。 |
+| 5 | **minWidth / minHeight** | 全局默认 20 列 × 3 行；`TerminalPane` 暂不暴露自定义字段。策略在分配空间时必须尊重该约束。 |
+| 6 | **Engine 归属** | 放在 `Packages/TongYouCore/Sources/TYTerminal/Layout/`，纯算法 + `Sendable`，无 UI 依赖。Client 和 Server 共享同一份实现。 |
+| 7 | **Floating 归引擎管** | 但仅 P4 阶段纳入；P1–P3 期间 `TerminalTab.floatingPanes` 保持现状。 |
+| 8 | **Zoom 状态位置** | 存在 `TerminalTab.zoomedPaneID: UUID?` 上，切 tab 时自然保持。 |
+| 9 | **不做向后兼容** | Enum schema 一次性改到位，Swift 穷尽 switch 会引导所有 callsite。 |
+| 10 | **旧磁盘 session 丢弃** | 新 schema 直接覆盖；Codable 解旧格式失败时 catch 成空 session list。Wire protocol 同步改，不 bump 版本号。 |
 
-    - **特点**：纯手动布局（iTerm2 和 tmux 的默认行为）。每一次分割都在现有的某个矩形区域内“一分为二”（水平或垂直），形成树状嵌套结构。
+---
 
-2. **主次布局 (Master & Stack / Main-Vertical)**
+## 二、数据模型
 
-    - **特点**：平铺式窗口管理器和 Kitty 中流行。屏幕一侧保留一个巨大的“主窗格”（如写代码），剩余新窗格在另一侧垂直或水平堆叠排列（如查看日志）。自动管理位置，突出核心焦点。
+### 2.1 `PaneNode`（新）
 
-3. **网格与均等布局 (Grid / Even)**
+```swift
+// Packages/TongYouCore/Sources/TYTerminal/PaneNode.swift
+public indirect enum PaneNode: Equatable, Sendable {
+    case leaf(TerminalPane)
+    case container(Container)
 
-    - **特点**：同时监控多个地位平等的任务时使用。系统自动计算最优的行数和列数（如 $2 \times 2$ 或 $3 \times 2$ 的矩阵），让所有窗格面积尽可能大且均匀分布。
+    public var nodeID: UUID {
+        switch self {
+        case .leaf(let p):       return p.id
+        case .container(let c):  return c.id
+        }
+    }
+}
 
-4. **螺旋 / 斐波那契布局 (Spiral / Fibonacci)**
+public struct Container: Equatable, Sendable, Identifiable {
+    public let id: UUID
+    public var strategy: LayoutStrategyKind
+    public var children: [PaneNode]
+    public var weights: [CGFloat]       // parallel to children, free relative values
 
-    - **特点**：每次新建窗格时，系统自动寻找当前面积最大的窗格并对其对半切分，呈现出向内卷曲的视觉效果。适合大量临时终端的紧凑排布。
-
-5. **堆叠 / 聚焦模式 (Monocle / Zoom)**
-
-    - **特点**：临时让一个窗格全屏显示，其他窗格隐藏或挂起（如 tmux 的 `Prefix + z`）。
-
-
-## 二、 自动布局引擎的核心实现原理
-
-实现一个布局引擎本质上是在编写一个微型的**平铺式窗口管理器 (Tiling Window Manager)**。它的运作流转如下：
-
-1. **数据结构维护**：不直接记录绝对坐标，而是使用**抽象语法树 (AST)** 记录相对关系（如“水平分割容器”包含 A 和 B）。
-
-2. **算法计算**：当触发布局变动时，自顶向下（从拥有全局宽高 $W \times H$ 的根节点开始），根据各节点的权重或预设规则，递归分配具体的 $(x, y, width, height)$。
-
-3. **渲染与系统调用**：将计算好的几何数据转化为 UI 上的分割线绘制，并通过系统调用向每个底层的 PTY 发送 `SIGWINCH`（Window Change）信号，令终端内运行的程序（如 Vim）重排版。
-
-
-## 三、 核心概念与数据模型 (Data Model)
-
-引擎的数据结构基于**抽象语法树 (AST)** 或**容器树 (Container Tree)**。与传统的严格二叉树 (BSP) 不同，我们设计一种更通用的节点结构。
-
-### 1. 节点抽象 (Node)
-
-所有屏幕上的元素都是一个节点，它们都具有基本的几何属性。由于终端是以字符网格为单位的，坐标和尺寸均为**整数**。
-
-- `id`: 节点的唯一标识符 (UUID)。
-
-- `rect`: 节点占据的矩形区域，包含 `{x, y, width, height}`（单位：字符列/行）。
-
-- `type`: 节点类型（`Pane` 或 `Container`）。
-
-- `weight` / `flex`: 权重或比例（默认值为 1）。用于在同级节点间非均等地分配剩余空间。
-
-- `isFloating`: 标识该节点是否脱离平铺层，作为悬浮窗口存在。
-
-- `zIndex`: 渲染层级，主要用于悬浮窗口或全屏放大的窗格。
-
-
-### 2. 窗格节点 (Pane Node - 叶子节点)
-
-这是真正运行终端会话的节点。
-
-- 继承自 `Node`。
-
-- `pty`: 关联的底层伪终端 (Pseudo-Terminal) 对象。
-
-- `content`: 终端屏幕缓冲区 (Screen Buffer)。
-
-- `minWidth`, `minHeight`: 该窗格允许的最小尺寸。
-
-
-### 3. 容器节点 (Container Node - 内部节点)
-
-容器不显示内容，只负责包含和组织其他节点。
-
-- 继承自 `Node`。
-
-- `children`: 一个包含子节点 (Node) 的有序列表。
-
-- `layoutStrategy`: **核心扩展点**。该容器当前应用的布局策略对象（例如 `HorizontalSplit`, `Grid`, `MasterStack`）。容器根据这个策略来决定如何分配空间给它的 `children`。
-
-
-## 四、 布局策略接口 (Layout Strategies - 核心扩展点)
-
-这是实现“支持所有可用 layout”和“方便扩展”的关键。我们定义一个统一的接口 `ILayoutStrategy`。任何新的布局只需要实现这个接口即可。
-
-### 1. `ILayoutStrategy` 接口定义
-
-```
-interface ILayoutStrategy {
-    // 标识符，如 "bsp-horizontal", "grid", "master-stack"
-    name: string;
-
-    /**
-     * 核心计算方法：
-     * 根据 parentRect 的可用空间以及子节点的 weight 属性，
-     * 为每个子节点计算出新的 rect，并直接更新到子节点对象中。
-     */
-    applyLayout(parentRect: Rect, children: Node[]): void;
-
-    /**
-     * 当新建一个 Pane 时，决定将其插入到 children 列表的哪个位置。
-     */
-    getInsertIndex(children: Node[], activePane: PaneNode): number;
+    // Invariant: children.count == weights.count && children.count >= 1
+    // collapsing rule will destroy containers with children.count < 2 (see §5)
 }
 ```
 
-### 2. 具体策略实现示例
+### 2.2 `LayoutStrategyKind`
+
+```swift
+public enum LayoutStrategyKind: String, Sendable, Codable {
+    case horizontal    // horizontal split (top / bottom rows)
+    case vertical      // vertical split (left / right columns)
+    case grid          // auto-balanced grid (weights ignored)
+    case masterStack   // one master + stacked siblings
+    case fibonacci     // spiral split (P4+)
+}
+```
 
-- **`BSPHorizontalStrategy`**: 根据子节点的 `weight` 比例，将 `parentRect` 的高度分割给不同的子节点。
+策略通过 enum 派发；新增策略 = 加一个 case + 实现一个 solver 函数。
 
-- **`GridStrategy`**: 根据子节点数量 $N$，计算最优行数 $R$ 和列数 $C$，按网格均分空间，通常忽略 `weight`。
+### 2.3 `Rect`
 
-- **`MasterStackStrategy`**: 将第一个子节点视为 Master，分配较大空间（如 60%）；其余放入 Stack，均分剩余的 40%。
+引入整数字符网格坐标（**不复用 `CGRect`**，CGRect 是 Double，字符网格语义不清晰）：
 
+```swift
+public struct Rect: Equatable, Sendable, Codable {
+    public var x: Int
+    public var y: Int
+    public var width: Int
+    public var height: Int
+}
+```
 
-## 五、 引擎控制器 (Engine Core)
+### 2.4 `TerminalTab` 新增字段
 
-引擎是与用户交互的中心，负责维护根节点 (Root Node)，接收指令并触发重排。
+```swift
+public struct TerminalTab: Identifiable, Sendable {
+    // ... existing fields ...
+    public var zoomedPaneID: UUID?   // nil = normal tiled state
+}
+```
 
-### 1. 核心状态与基础操作
+### 2.5 Wire 侧镜像：`TYProtocol/SessionInfo.swift::LayoutTree`
 
-- `rootContainer`: 整个屏幕的平铺根容器。
+同步改成等价结构。`LayoutTree+PaneNode.swift` 保留双向转换。`BinaryEncoder / BinaryDecoder` 的 LayoutTree 段（~20 行）重写。
 
-- `floatingNodes`: 独立于平铺树的悬浮节点列表。
+---
 
-- `activePane`: 当前获得键盘输入的活跃窗格。
+## 三、布局策略接口
 
-- `zoomedPane`: 当前处于临时全屏放大状态的窗格引用。如果为 `null` 则代表正常平铺状态。
+### 3.1 Solver 签名
 
-- `screenRect`: 整个终端窗口当前的行数和列数。
+```swift
+// 纯函数：给定父矩形和 container 内容，返回每个 child 的 rect
+public protocol LayoutSolver {
+    static func solve(
+        parentRect: Rect,
+        children: [PaneNode],
+        weights: [CGFloat],
+        minSize: Size,
+        dividerSize: Int       // reserved cells between siblings; always 0 initially
+    ) -> [Rect]
+}
+```
 
+`dividerSize` 作为**未来预留参数**：目前 TongYou 分隔符是 SwiftUI 画的几像素细线、不占字符格，`LayoutDispatch` 一律传 `0`。将来若改用字符分隔符（`│ ─ ┼`），solver 层签名无需改动，只需 dispatch 时传 `1`，solver 内部把 `(L - (N-1) * dividerSize)` 作为可分配空间即可。
 
-### 2. 交互与高级控制 API (API)
+派发入口：
 
-- `addPane(pane: PaneNode, targetContainer?: ContainerNode)`:
+```swift
+public enum LayoutDispatch {
+    public static func solve(container: Container, in rect: Rect) -> [Rect] {
+        switch container.strategy {
+        case .horizontal:  return HorizontalSolver.solve(...)
+        case .vertical:    return VerticalSolver.solve(...)
+        case .grid:        return GridSolver.solve(...)
+        case .masterStack: return MasterStackSolver.solve(...)
+        case .fibonacci:   return FibonacciSolver.solve(...)
+        }
+    }
+}
+```
 
-    插入新窗格，并触发 `layoutStrategy.applyLayout` 重新计算。
+### 3.2 插入点策略
 
-- `removePane(pane: PaneNode)`:
+```swift
+public protocol InsertIndexStrategy {
+    static func insertIndex(
+        children: [PaneNode],
+        activePaneID: UUID?
+    ) -> Int
+}
+```
 
-    从树中移除该窗格，随后触发**树的修剪逻辑 (Pruning)**，并重新排版剩余节点。
+默认实现：**在 active pane 之后插入**。Grid / Fibonacci 会覆盖成"追加到尾"或"切分面积最大者"。
 
-- `resizeNode(node: Node, deltaX: number, deltaY: number)`:
+### 3.3 余数分配规则
 
-    **响应鼠标拖拽或快捷键调宽/窄**。引擎不直接修改 `rect`，而是根据 `delta` 将变化转换为同级相邻节点的 `weight` 比例增减，然后触发 `applyLayout`。
+整数离散空间下，`L × weight_i / sum(weights)` 几乎总有除不尽的余数。规则：
 
-- `MapsFocus(direction: 'up'|'down'|'left'|'right')`:
+1. 先把每个 child 的份额**向下取整**，得到基础分配。
+2. 余数 = `L - sum(基础分配)`（通常是 1~N-1 个单元）。
+3. 把余数**按 weight 降序**依次补给各 child，每人 +1 直到分完；weight 相同时**索引较小的优先**（最左 / 最上）。
 
-    **方向性焦点切换**。引擎以当前 `activePane.rect` 的几何边界为基准，向指定方向发射射线 (Ray-casting)，寻找在该方向上几何距离最近且边缘相交的 Pane，将其设为新的 `activePane`。_(如果在全屏态下触发焦点切换，引擎可以选择拦截并提示，或者自动取消全屏态。)_
+这样余数始终倾向"看起来更重要"的 pane，避免布局在再 resolve 时发生视觉跳动。
 
-- `swapPanes(paneA: PaneNode, paneB: PaneNode)`:
+### 3.4 MinSize 冲突处理
 
-    **位置交换 (Swap)**。不改变树的拓扑结构，直接在 AST 中交换这两个节点的位置。
+两种触发场景，处理方式不同：
 
-- `movePane(pane: PaneNode, targetNode: Node, direction: 'up'|'down'|'left'|'right')`:
+| 场景 | 行为 |
+|---|---|
+| **用户拖分隔符**（`resizePane`） | 检测到至少一个相邻 child 会 `< minSize` → 直接返回 `nil`（本次 resize 不生效），UI 层表现为"拖不动"。 |
+| **窗口整体缩小**（`solveRects` 正常调用） | 允许违反。Solver 仍按 weight 比例分配但**不低于视觉最小 1 单元**；PTY 层收到的 cols/rows 取 `max(actualCells, minSize)` —— 物理尺寸保护 PTY 内程序（htop 等）不崩溃，渲染层对溢出部分直接裁剪。 |
 
-    **结构性迁移 (Relocate)**。将窗格从当前位置拔出（触发原父节点的修剪逻辑），然后移动到 `targetNode` 的指定方向。
+两种场景在 solver 层的区分由调用方传入的上下文决定：solver 本身只负责**报告是否违反**（通过返回额外的 `violated: Bool` 或专用类型），具体是"阻止"还是"裁剪"由引擎上层决定。
 
-- `toggleZoom(pane: PaneNode)`:
+### 3.5 各策略具体算法
 
-    **临时全屏/取消全屏 (Monocle/Zoom)**。
+#### `HorizontalSolver` / `VerticalSolver`
 
-    - **进入 Zoom**：设置 `zoomedPane = pane`。引擎停止平铺树的渲染绘制。直接将 `pane.rect` 覆盖为当前的 `screenRect`，并单独向其底层 PTY 发送 `SIGWINCH`。其他所有 Pane 进入休眠/挂起状态（保留内存，停止渲染）。
+1D 按 weight 比例分配主轴长度：
+- `.horizontal` 沿**垂直方向**切分父 rect（上/下堆叠），所有 child 共享父 rect 的宽度
+- `.vertical` 沿**水平方向**切分（左/右并列），所有 child 共享父 rect 的高度
+- 非主轴维度原样继承父 rect
+- 主轴维度 = `父 rect 主轴长 × weight_i / sum(weights)`，按 §3.3 余数规则分配
 
-    - **退出 Zoom**：设置 `zoomedPane = null`。引擎恢复平铺树的渲染，触发一次全局的 `applyLayout`，让该窗格缩回原本在树中的几何位置。
+#### `GridSolver`
 
-- `changeLayout(container: ContainerNode, newStrategy: ILayoutStrategy)`:
+N 个子节点排在 R×C 网格中（weights 忽略）：
 
-    **动态切换布局**。替换策略，立即调用新策略重新排版。
+1. **求最优 R、C**：枚举 `R ∈ [1, N]`，`C = ceil(N / R)`，对每个组合计算单 pane 宽高比 `(W/C) / (H/R)`，选最接近父 rect 宽高比 `W/H` 的那组。
+2. **填入顺序**：按行优先。`child[i]` 的 row = `i / C`，col = `i % C`。
+3. **最后一行不足时（拉伸填满）**：若最后一行只有 `k < C` 个 pane，该行所有 pane **重新按 `W/k` 分配宽度**（等分整行）；非最后一行维持 `W/C` 宽度。行高对所有行一律 `H/R`。
 
-- `serialize() / deserialize(json)`:
+#### `MasterStackSolver`（二维 solver）
 
-    **会话状态持久化**。将当前 AST 树（包含每个节点的 `weight`、`type`、`strategy`、关联的执行命令/工作目录等）导出为 JSON。
+Flat 结构：`children = [master, stack_0, stack_1, ...]`，`weights = [masterWeight, s_0, s_1, ...]`。
 
+- `weights[0] / sum(weights)` 沿**水平方向**给 master（master 永远在左，占宽度 `W × weights[0] / sum`）
+- `weights[1..]` 沿**垂直方向**分配给 stack 子节点（按 §3.3 规则切分剩余宽度区域的高度）
+- 初始值约定：新建 MasterStack container 时 `weights[0]` 设为**其他 weights 之和的 1.5 倍**，使 master 约占 60%；后续用户拖动 master/stack 边界时更新 `weights[0]`，**不锁定**
+- 拖动 stack 内两个相邻 pane 之间的水平分隔条 → 改对应两个 `weights[i]`
 
-## 六、 树的生命周期与自清理机制 (Tree Lifecycle)
+未来若需 "main-horizontal"（主在上）变体，新增 `.masterStackTop` kind，不改本策略语义。
 
-由于动态布局会导致树结构的频繁变动，引擎必须具备“垃圾回收”和层级扁平化的能力，防止 AST 过度嵌套。在每次 `removePane` 或跨容器移动 Pane 后，引擎自动执行自底向上的检查：
+### 3.6 拖分隔符的 weight 更新
 
-- **规则 1 - 修剪 (Pruning)**: 任何子节点数量为 0 的 `ContainerNode`（即空容器），将被立刻销毁，并从它的父节点中移除。
+用户在 HContainer / VContainer / MasterStack 里拖动任意相邻分隔符，**只改相邻两个的 weight**：
 
-- **规则 2 - 降级与折叠 (Collapsing)**: 如果一个 `ContainerNode` 在删除子节点后，只剩下 **1 个** 子节点，那么这个容器就失去了存在的意义。引擎会将该容器销毁，并用这**唯一的一个子节点**直接替换掉该容器在父节点中的位置。
+1. 根据拖动 delta 像素 → 换算成主轴字符单元 delta
+2. 按"当前总主轴长度对应的 weight 总和"比例，把字符 delta 换算成 weight delta
+3. 更新 `weights[i] += Δw, weights[i+1] -= Δw`
+4. 其他 weight 一律不动
 
+这保证拖一条分隔符不会牵动整行，和 iTerm2 / tmux 行为一致。
 
-## 七、 深入：技术难点与常见“坑点” (Difficulties & Pitfalls)
+### 3.7 扁平化规则（决策 #3 的实现）
 
-开发终端布局引擎时，会遇到比普通 Web GUI 复杂得多的底层限制。以下是系统设计必须处理的核心挑战：
+`splitPane(tab, targetPaneID, direction, newPane)` 的行为：
 
-### 1. 离散空间限制 (字符网格 vs 像素)
+```
+let targetParent = parent container of targetPaneID
+let newStrategy = (direction == .vertical) ? .vertical : .horizontal
 
-这是终端布局与普通 GUI 布局最大的不同。GUI 窗口是以像素计算的，而终端是以**字符单元格 (Character Cells)** 计算的。所有的坐标和尺寸必须是整数，且外部窗口字体的缩放会动态改变整个网格的行数和列数，引擎必须实时基于字符重新计算，不能依赖绝对像素。
+if targetParent.strategy == newStrategy:
+    // 同方向：直接插入同级（扁平化）
+    children.insert(newPane, after: targetPaneID)
+    weights.insert(1.0, at: same index)   // 新 child 默认 weight = 1
+else:
+    // 异方向：创建新 container 替换 target
+    let newContainer = Container(
+        strategy: newStrategy,
+        children: [leaf(target), leaf(newPane)],
+        weights: [1.0, 1.0]
+    )
+    replace target with container(newContainer)
+```
 
-### 2. 递归缩放与联动调整的复杂度
+---
 
-当用户用鼠标拖动两个窗格之间的分割线时（调用 `resizeNode`），如果拖动的是一个父节点的分割线，那么该节点下的**整棵子树**都需要按 `weight` 比例缩放。要正确地自底向上冒泡拖拽事件，再自顶向下重新分配比例，算法极易出现越界。
+## 四、引擎 API（`LayoutEngine`）
 
-### 3. 边框 (Borders) 与余数 (Remainder) 处理
+全部是 `TYTerminal/Layout/LayoutEngine.swift` 下的 `public static` 纯函数。
 
-终端中的边框也是由字符（如 `│` 或 `─`）绘制的，**边框本身也会占用 1 行或 1 列的空间**。
+| 方法 | 签名（简写） | 阶段 |
+|---|---|---|
+| `splitPane` | `(tab, targetPaneID, direction, newPane) -> TerminalTab?` | P3 |
+| `closePane` | `(tab, paneID) -> (TerminalTab, promotedFocusID: UUID?)?` | P3 |
+| `resizePane` | `(tab, paneID, edge, deltaCells: Int) -> TerminalTab?` | P3 |
+| `solveRects` | `(tab, screenRect) -> [UUID: Rect]` | P1 |
+| `focusNeighbor` | `(tab, fromPaneID, direction) -> UUID?` | P4 |
+| `swapPanes` | `(tab, paneA, paneB) -> TerminalTab?` | P4 |
+| `movePane` | `(tab, paneID, targetPaneID, side) -> TerminalTab?` | P4 |
+| `toggleZoom` | `(tab, paneID) -> TerminalTab` | P4 |
+| `changeStrategy` | `(tab, containerID, newKind) -> TerminalTab?` | P4 |
 
-- **坑点**：假设 100 列均分为 3 份，$100 \div 3 = 33.33$。因为只能是整数，必定剩下 1 列的余数。
+`SessionManager` 的原 `splitPane / closePane / updateSplitRatio / updateActivePaneTree` 将在 P3 变成对这些函数的薄包装。
 
-- **解法**：策略在计算时必须显式扣除边框空间。除不尽的像素余数，策略应明确决定分配给最后一行/列，或者按 `weight` 补偿给最大的窗格，绝不能丢弃导致黑边。
+---
 
+## 五、树的自清理规则
 
-### 4. 最小尺寸坍缩 (Minimum Size Collapsing)
+每次 `closePane` / `movePane` 后自底向上修剪（复用现有 BSP 的同名规则，只是扩展到 N-ary）：
 
-当用户疯狂切分，或主窗口缩小到极端情况时。
+- **规则 1（Pruning）**：`children.isEmpty` 的 Container 立即销毁，从父节点移除。
+- **规则 2（Collapsing）**：`children.count == 1` 的 Container 销毁，用唯一子节点原地替换。
+- **规则 3（Merge）**：移除节点后，若父 Container 与祖父 Container 策略相同，可合并同级（例如 `HContainer[A, HContainer[B, C]]` → `HContainer[A, B, C]`）。P3 阶段暂不实现规则 3（先确保正确性，扁平化由 splitPane 前置保证）；P4 的 `movePane` 引入后再加。
 
-- **坑点**：如果某些 CLI 程序（如 htop）尺寸被挤压到 $\le 1$，PTY 会陷入异常，文字渲染彻底崩溃。
+---
 
-- **解法**：策略发现无法满足 `minWidth` / `minHeight` 时，必须抛出异常回滚改变（让鼠标“拉不动”边框），或静默裁剪隐藏溢出部分。
+## 六、分阶段实施
 
+### P1｜接口定稿 + 纯算法层（`TYTerminal/Layout/`）
 
-### 5. PTY 信号风暴 (`SIGWINCH` Thrashing)
+**目标**：把 §二 / §三 / §四 的接口草案直接落地成代码并实现所有 solver，通过单测。**不动数据模型、不动 SessionManager、不动渲染**。接口和实现一起写——对着 §三 的算法描述边写边调签名，不做独立的"header-only 定稿"阶段（YAGNI）。
 
-- **坑点**：拖拽改变大小时，网格尺寸在短时间内变化数百次。如果每一帧都向底层程序发送 `SIGWINCH`，会导致程序频繁重绘，消耗大量 CPU 并产生严重的画面撕裂闪烁 (Flickering)。
+**交付物**：
+- `TYTerminal/Layout/Rect.swift`（`Rect` / `Size` 整数类型）
+- `TYTerminal/Layout/LayoutStrategyKind.swift`
+- `TYTerminal/Layout/LayoutSolver.swift`（§3.1 协议 + `dividerSize` 参数）
+- `TYTerminal/Layout/Solvers/HorizontalSolver.swift`
+- `TYTerminal/Layout/Solvers/VerticalSolver.swift`
+- `TYTerminal/Layout/Solvers/GridSolver.swift`（含 §3.5 的 R×C 最优求解 + 最后一行拉伸填满）
+- `TYTerminal/Layout/Solvers/MasterStackSolver.swift`（二维 solver，master 比例初值为 stack weight 之和 × 1.5，≈60%）
+- `TYTerminal/Layout/LayoutDispatch.swift`（kind → solver 派发，`dividerSize` 一律传 0）
+- `TongYouCoreTests/LayoutTests/` — 每个 solver 至少 10 个 case，覆盖：
+  - 均匀 weight / 极端 weight（99:1）
+  - 余数分配规则（§3.3，验证余数按 weight 降序补 1）
+  - minSize 冲突两种场景（§3.4，resize 场景返回 nil / 窗口缩小场景允许降级）
+  - Grid R×C 最优求解（6 个 pane 在不同宽高比父 rect 下选择不同组合）
+  - Grid 最后一行拉伸填满（5 pane 排 2×3，第二行每个占 50% 宽度）
+  - MasterStack 初始比例 ≈60% + 拖动后可任意调整
+  - `dividerSize` 传 0 vs 传 1 的对比验证（确认预留参数生效）
 
-- **解法**：利用**防抖 (Debouncing)** 机制。拖拽期间只重绘 UI 分割线，停止拖拽后（例如静默 50ms）再统一向 PTY 发送最终的 `SIGWINCH` 信号。
+**验证**：`swift test --filter LayoutTests` 全绿；人工 review solver 算法与 §三 描述一致。
 
+**风险**：零——新增独立模块，不影响现有代码。
 
-### 6. 全屏态 (Zoom) 的渲染泄漏
+**不做**：数据模型迁移（P2）、`LayoutEngine` 高层 API（P3）、扁平化 `splitPane` 逻辑（P3）、渲染层接入（P2）。
 
-引入 `zoomedPane` 后，当外部窗口 Resize 时。
+---
 
-- **解法**：必须拦截全局渲染。只将新的 `screenRect` 和防抖后的 `SIGWINCH` 仅仅发送给当前全屏的那一个 PTY。后台被隐藏的 PTY 不要发送尺寸变更信号，防止其在后台乱排版，直到退出 Zoom 时再统一唤醒重排。
+### P2｜数据模型迁移（一次性）
 
+**目标**：`PaneNode` enum 从 BSP 二叉树迁移到 N-ary Container 模型；`LayoutTree`、`BinaryEncoder/Decoder`、所有 callsite 同步改到位；磁盘 schema 改版、旧 session 文件丢弃。
 
-### 7. Unicode 与双宽字符的截断 (Wide Character Truncation)
+**步骤**：
 
-- **坑点**：当窗格因布局调整被缩窄时，其右边缘正好压住了一个“全角字符”（如中文、Emoji，占 2 个字符宽）。如果硬切断它，该字符后半部分丢失不仅导致乱码，还会破坏光标定位，导致后续输出全部错位。
+1. 改 `TYTerminal/PaneNode.swift`：
+   - 旧：`case split(direction, ratio, first, second)`
+   - 新：`case container(Container)`
+   - `TerminalTab` 新增 `zoomedPaneID: UUID?`
+2. 改 `TYProtocol/SessionInfo.swift::LayoutTree` 镜像。
+3. 改 `TYProtocol/BinaryEncoder.swift / BinaryDecoder.swift`：LayoutTree 段重写（weights 作为 `[Float]` 编码）。
+4. 改 `TYProtocol/LayoutTree+PaneNode.swift`：双向转换。
+5. 让编译器找剩余 callsite：跑 `swift build`，修到 0 error。预计涉及：
+   - `App/SessionManager.swift`（Pane Operations 区段 762–979）
+   - `App/PaneSplitView.swift`（渲染递归）
+   - `App/FocusManager.swift`
+   - `App/TabManager.swift`（如仍有引用）
+   - `App/TerminalWindowView.swift`
+   - `Config/Keybinding.swift`
+   - `TYServer/ServerSessionManager.swift` + `SocketServer.swift`
+   - `TYAutomation/GUIAutomationRefStore.swift`
+6. 磁盘层：`PersistedSession` 解旧格式会失败，在读取入口 try? 后当 nil 处理。用户首次运行新版 session list 为空。
+7. 渲染层接入 `LayoutEngine.solveRects(tab, screenRect)`：`PaneSplitView` 不再递归计算比例，而是读取 rect 字典并直接布局子 view。
+8. 测试改写：`PaneNodeTests / PaneSplitTests / FocusManagerTests / WireFormatTests / BinaryCoderTests / ServerSessionManagerTests / IntegrationTests / GUIAutomationRefStoreTests` 全部适配新模型。
 
-- **解法**：布局引擎计算边界时，必须结合渲染器判断。如果切割线落在双宽字符中间，必须将该字符整体清除，并使用单宽的空格（Space）字符平滑替换其残余位置。
+**验证**：
+- `swift build` 全过
+- `swift test`（TongYouCore 包）全绿
+- `xcodebuild test`（TongYouTests target）全绿
+- 手动：新建 session、split 几次、拖动分隔条、重启应用（session list 为空正常）、连 tyd 创建 remote session 并正确渲染
 
+**风险**：
+- 高。这是整个计划最重的阶段。
+- 缓解：开 feature branch，先把 P1 的 solver 打桩进 PaneSplitView（这样 P2 只需换 AST，不用同时换算法）。
+- 不在此阶段实现扁平化的 `splitPane` 逻辑——先让新 AST 跑起来，行为与旧 BSP 等价（每次 split 都建新 container）。**扁平化留给 P3**。
 
-## 八、 总结与扩展性
+---
 
-通过这种设计，**数据模型**（节点和父子关系）是稳定的，**控制逻辑**（防抖、拖拽、持久化、全屏状态机）是集中的，而**排版算法**是完全开放的。
+### P3｜`LayoutEngine` 引入 + SessionManager 薄化
 
-只需实现一个新的 `ILayoutStrategy` 接口对象并注册，就可以瞬间让终端支持斐波那契、六角形或者任意自定义布局，而无需修改超过 90% 的核心引擎代码。这正是策略模式带来的极致扩展性。
+**目标**：把 SessionManager 里 pane 树的算法部分全部搬进 `LayoutEngine` 纯函数；实现扁平化 splitPane 与正确的 resize/close。
+
+**步骤**：
+
+1. 新建 `TYTerminal/Layout/LayoutEngine.swift`，实现 §四 表中 P3 栏的 5 个函数。
+2. `SessionManager.splitPane`（825 行起）→ 调用 `LayoutEngine.splitPane` 并处理 controller 创建。
+3. `SessionManager.closePane`（896 行起）→ 调用 `LayoutEngine.closePane`，同时处理 controller 清理和 focus 转移（`promotedFocusID`）。
+4. `SessionManager.updateSplitRatio`（939 行起）→ 调用 `LayoutEngine.resizePane`。
+5. `SessionManager.updateActivePaneTree`（971 行起）→ 保留（外部更新树的快速路径），但内部走 engine 做一次自清理（pruning + collapsing）。
+6. 实现扁平化：`splitPane` 按 §3.3 规则。
+7. 补测：`LayoutEngineTests`，覆盖扁平化、pruning、collapsing 各类情况。
+
+**验证**：
+- `swift test` 全绿
+- 手动：连续向右 split 5 次 → 观察树结构应该是 1 个 HContainer + 6 个 leaf（而非深嵌套）
+- 手动：关闭中间 pane → sibling weight 不变，总和重新占满
+- 手动：拖动分隔条 → 只有相邻两个 weight 变动
+- SessionManager 行数预期瘦身 500–800 行
+
+**风险**：中等。算法集中，测试好写。
+
+---
+
+### P4｜高级功能
+
+以下各子项可**独立合并、独立发版**，顺序按实现成本从低到高：
+
+#### P4.1 Zoom / Monocle
+
+- `TerminalTab.zoomedPaneID` 已在 P2 引入；`LayoutEngine.toggleZoom(tab, paneID)` 写入/清除该字段。
+- 渲染层：`solveRects` 看见 `zoomedPaneID != nil` 时返回 `{zoomedID: screenRect}` 单项，其他 pane 不出现。
+- PTY 层：仅向 zoomed pane 发 SIGWINCH；其他 pane PTY 尺寸冻结，直到退出 zoom。
+- 退出 zoom：清 `zoomedPaneID` + 触发全局 resolve + 向所有 pane 发 SIGWINCH。
+
+#### P4.2 方向性焦点切换
+
+- `LayoutEngine.focusNeighbor(tab, from, direction) -> UUID?`。
+- 算法：以当前 pane 的 rect 中心为原点，沿方向查找共享边界最长的邻居（比 ray-casting 简单且足够）。
+- 需要 `solveRects` 先跑一次，所以签名可能变成 `(tab, screenRect, from, direction)`。
+- 接入 `FocusManager` / `Keybinding`。
+
+#### P4.3 Swap / Move
+
+- `swapPanes`：交换两个 pane 在各自 container 中的位置（不改拓扑）。
+- `movePane`：从原 container 拔出（触发 pruning/collapsing），插入到 target 的指定方向。
+- 需要同时实现 §五 规则 3（同策略相邻 container 合并）。
+
+#### P4.4 Floating 纳入引擎
+
+- `TerminalTab.floatingPanes` 保留字段，但新增 `layoutStrategy: FloatingLayoutKind`（初始两种：`.free` 保持现状、`.tile` 网格自动排列）。
+- `LayoutEngine.solveFloatingRects(tab, screenRect) -> [UUID: Rect]` 分开求解。
+- Floating pane 的拖拽/pin/visibility 已有逻辑保留，只是 rect 来源改为引擎输出。
+
+#### P4.5 策略切换
+
+- `changeStrategy(tab, containerID, newKind)`：替换 container 的 `strategy`；`weights` 保持（grid 会忽略）。
+- 接入菜单或键位：让用户能把一个 container 从 BSP 切到 Grid / MasterStack。
+
+---
+
+### P5｜坑点处理（原设计文档 §七 对应）
+
+以下每项都可与 P4 并行，或放到 P4 之后：
+
+| 坑点 | 处理位置 | 说明 |
+|---|---|---|
+| **字符网格离散化** | `Rect: Int` 已强制整数 | P1 已解决 |
+| **边框与余数** | 每个 solver 内部 | P1 solver 实现时必须处理：显式扣除分隔符列/行；余数优先分给 weight 最大的 child |
+| **最小尺寸坍缩** | solver 内部 + UI 层 | solver 无法满足 minSize 时：(a) resize 场景回滚（拖不动），(b) 窗口缩小场景抛异常→UI 层显示提示 |
+| **SIGWINCH 风暴** | 渲染/PTY 层 | 拖拽期间只改 weight + 重绘分隔符；停止拖拽后 debounce 50ms 再向所有 PTY 发 SIGWINCH |
+| **Zoom 渲染泄漏** | `solveRects` 已处理 | P4.1 自然满足：zoom 态只返回 zoomed pane 的 rect |
+| **双宽字符截断** | 渲染层（MetalView） | 已有双宽字符处理逻辑，只需要在计算终端 col count 时按字符单元而非像素 |
+
+---
+
+## 七、Blast Radius 清单（P2 参考）
+
+一次性要改的文件（Swift 穷尽 switch 会帮你找全遗漏）：
+
+**L1 模型层**
+- `Packages/TongYouCore/Sources/TYTerminal/PaneNode.swift`
+- `Packages/TongYouCore/Sources/TYTerminal/TerminalTab.swift`（新增 `zoomedPaneID`）
+
+**L2 协议层**
+- `Packages/TongYouCore/Sources/TYProtocol/SessionInfo.swift`（`LayoutTree` 镜像）
+- `Packages/TongYouCore/Sources/TYProtocol/BinaryEncoder.swift`
+- `Packages/TongYouCore/Sources/TYProtocol/BinaryDecoder.swift`
+- `Packages/TongYouCore/Sources/TYProtocol/LayoutTree+PaneNode.swift`
+
+**L3 调用层（客户端）**
+- `TongYou/App/SessionManager.swift`
+- `TongYou/App/PaneSplitView.swift`
+- `TongYou/App/FocusManager.swift`
+- `TongYou/App/TabManager.swift`（如仍在用）
+- `TongYou/App/TerminalWindowView.swift`
+- `TongYou/Config/Keybinding.swift`
+
+**L3 调用层（服务端）**
+- `Packages/TongYouCore/Sources/TYServer/ServerSessionManager.swift`
+- `Packages/TongYouCore/Sources/TYServer/SocketServer.swift`
+- `Packages/TongYouCore/Sources/TYAutomation/GUIAutomationRefStore.swift`
+
+**测试**
+- `TongYouTests/PaneNodeTests.swift`
+- `TongYouTests/PaneSplitTests.swift`
+- `TongYouTests/FocusManagerTests.swift`
+- `Packages/TongYouCore/Tests/TYProtocolTests/WireFormatTests.swift`
+- `Packages/TongYouCore/Tests/TYProtocolTests/BinaryCoderTests.swift`
+- `Packages/TongYouCore/Tests/TYServerTests/ServerSessionManagerTests.swift`
+- `Packages/TongYouCore/Tests/TYServerTests/IntegrationTests.swift`
+- `Packages/TongYouCore/Tests/TYAutomationTests/GUIAutomationRefStoreTests.swift`
+
+**新增文件（P1 + P3）**
+- `Packages/TongYouCore/Sources/TYTerminal/Layout/Rect.swift`
+- `Packages/TongYouCore/Sources/TYTerminal/Layout/LayoutStrategyKind.swift`
+- `Packages/TongYouCore/Sources/TYTerminal/Layout/LayoutDispatch.swift`
+- `Packages/TongYouCore/Sources/TYTerminal/Layout/Solvers/*.swift`
+- `Packages/TongYouCore/Sources/TYTerminal/Layout/LayoutEngine.swift`
+- `Packages/TongYouCore/Tests/TYTerminalTests/LayoutTests/*.swift`
+
+---
+
+## 八、不在本计划范围（Non-Goals）
+
+- **`SessionManager` 拆分**：Remote / Persistence / Command / Floating 四大区段的抽离与本引擎正交，等自然痛点出现再做。P3 后 SessionManager 会因引擎介入自动瘦身 500–800 行，若仍觉庞大再启动独立重构计划。
+- **多屏 / 窗口分离**：布局引擎目前只管单个 `TerminalTab` 内部；跨 tab、跨 window 的 pane 迁移不在范围。
+- **拖拽交互复杂规则**：如拖 pane 到屏幕边缘自动吸附分组，放到 P4 之后的扩展计划。
+- **布局模板库**（"保存当前布局 / 应用布局"）：`serialize / deserialize` 能力已有（Codable），但 UI 层的布局管理器属于独立需求。
+
+---
+
+## 九、原设计文档参考（理论基础）
+
+以下章节的理论讨论已吸收进本计划（§一~八），仅保留作为设计背景参考。
+
+### 9.1 现代终端常见布局流派
+
+1. **BSP (Binary Space Partitioning)**：iTerm2、tmux 默认行为，手动分割形成树状嵌套
+2. **Master & Stack**：Kitty、平铺式 WM 风格，主窗格 + 侧边堆叠
+3. **Grid / Even**：自动 R×C 均分
+4. **Spiral / Fibonacci**：对面积最大者切分，螺旋视觉效果
+5. **Monocle / Zoom**：临时全屏一个 pane，其他挂起（tmux `Prefix+z`）
+
+本引擎通过 `LayoutStrategyKind` + solver 抽象，可覆盖以上全部五类（P1 先做 1、2、3；4、5 在 P4）。
+
+### 9.2 核心实现原理
+
+1. **数据结构维护**：AST 记录相对关系（权重 + 容器嵌套），不存绝对坐标
+2. **算法计算**：自顶向下递归分配 `(x, y, w, h)`
+3. **渲染与系统调用**：UI 绘分隔符 + 向各 PTY 发 `SIGWINCH`
+
+### 9.3 技术难点 & 常见坑点（已在 §P5 中映射到实现位置）
+
+- **离散空间**：字符网格而非像素，全用整数
+- **递归缩放**：拖动父容器分割线 → 整棵子树按 weight 缩放
+- **边框与余数**：分隔符占 1 列/行；除不尽的余数按策略显式分配
+- **最小尺寸坍缩**：`≤ 1` 会让 htop 等崩溃，必须回滚或裁剪
+- **SIGWINCH 风暴**：拖拽 debounce 50ms
+- **Zoom 渲染泄漏**：只对 zoomed pane 发 SIGWINCH
+- **双宽字符截断**：切割线落中间时整体清除并用空格替换
+
+---
+
+## 十、里程碑节奏（建议）
+
+| 阶段 | 预计工作量 | 依赖 |
+|---|---|---|
+| P1（接口定稿 + 纯算法层） | 3–4 days | — |
+| P2（数据模型迁移） | 3–5 days | P1（solver 打桩进 PaneSplitView 做等价验证） |
+| P3（LayoutEngine + SessionManager 薄化） | 2–3 days | P2 |
+| P4.1 Zoom | 1 day | P3 |
+| P4.2 方向焦点 | 1–2 days | P3 |
+| P4.3 Swap/Move | 2 days | P3 |
+| P4.4 Floating | 2–3 days | P3 |
+| P4.5 策略切换 | 1 day | P3 |
+| P5 坑点扫尾 | 1–2 days | P4 各项自然包含 |
+
+总计约 **2.5 周**（按全职估）。P2 是单一最大风险点，建议单独一个 branch，完成 + review 后再进 P3。
