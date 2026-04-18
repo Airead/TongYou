@@ -361,16 +361,22 @@ struct BinaryCoderTests {
     @Test func roundTripCreateFloatingPaneMessage() throws {
         let sessionID = SessionID()
         let tabID = TabID()
-        let msg = ClientMessage.createFloatingPane(sessionID, tabID)
+        let msg = ClientMessage.createFloatingPane(
+            sessionID, tabID,
+            profileID: nil, snapshot: nil, frameHint: nil
+        )
 
         var encoder = BinaryEncoder()
         encoder.writeClientMessage(msg)
 
         var decoder = BinaryDecoder(encoder.data)
         let decoded = try decoder.readClientMessage(type: .createFloatingPane)
-        if case .createFloatingPane(let sid, let tid) = decoded {
+        if case .createFloatingPane(let sid, let tid, let profileID, let snapshot, let frameHint) = decoded {
             #expect(sid == sessionID)
             #expect(tid == tabID)
+            #expect(profileID == nil)
+            #expect(snapshot == nil)
+            #expect(frameHint == nil)
         } else {
             Issue.record("Expected createFloatingPane, got \(decoded)")
         }
@@ -751,6 +757,132 @@ struct BinaryCoderTests {
         #expect(decoded == nil)
         #expect(decoder.remaining == 0)
     }
+
+    // MARK: - FloatFrameHint
+
+    @Test func roundTripFloatFrameHint() throws {
+        let hint = FloatFrameHint(x: 0.1, y: 0.25, width: 0.5, height: 0.75)
+
+        var encoder = BinaryEncoder()
+        encoder.writeFloatFrameHint(hint)
+
+        var decoder = BinaryDecoder(encoder.data)
+        let decoded = try decoder.readFloatFrameHint()
+        #expect(decoded == hint)
+        #expect(decoder.remaining == 0)
+    }
+
+    @Test func optionalFloatFrameHintNilAndPresent() throws {
+        var encoder = BinaryEncoder()
+        encoder.writeOptionalFloatFrameHint(nil)
+        let hint = FloatFrameHint(x: 0.0, y: 0.0, width: 1.0, height: 1.0)
+        encoder.writeOptionalFloatFrameHint(hint)
+
+        var decoder = BinaryDecoder(encoder.data)
+        #expect(try decoder.readOptionalFloatFrameHint() == nil)
+        #expect(try decoder.readOptionalFloatFrameHint() == hint)
+    }
+
+    // MARK: - Create-class messages (profileID + snapshot + frameHint)
+
+    private func sampleSnapshot() -> StartupSnapshot {
+        StartupSnapshot(
+            command: "/bin/bash",
+            args: ["-l"],
+            env: [EnvVar(key: "TY", value: "1")],
+            closeOnExit: false
+        )
+    }
+
+    @Test func roundTripCreateTabAllCombinations() throws {
+        let sid = SessionID()
+        let snap = sampleSnapshot()
+        let cases: [(String?, StartupSnapshot?)] = [
+            (nil, nil),
+            ("ci", nil),
+            (nil, snap),
+            ("ci", snap),
+        ]
+        for (profileID, snapshot) in cases {
+            let msg = ClientMessage.createTab(sid, profileID: profileID, snapshot: snapshot)
+            var encoder = BinaryEncoder()
+            encoder.writeClientMessage(msg)
+            var decoder = BinaryDecoder(encoder.data)
+            let decoded = try decoder.readClientMessage(type: .createTab)
+            guard case .createTab(let dSid, let dProfile, let dSnap) = decoded else {
+                Issue.record("Expected .createTab"); continue
+            }
+            #expect(dSid == sid)
+            #expect(dProfile == profileID)
+            #expect(dSnap == snapshot)
+        }
+    }
+
+    @Test func roundTripSplitPaneAllCombinations() throws {
+        let sid = SessionID()
+        let pid = PaneID()
+        let snap = sampleSnapshot()
+        let cases: [(String?, StartupSnapshot?)] = [
+            (nil, nil),
+            ("ci", nil),
+            (nil, snap),
+            ("ci", snap),
+        ]
+        for (profileID, snapshot) in cases {
+            let msg = ClientMessage.splitPane(
+                sid, pid, .vertical,
+                profileID: profileID, snapshot: snapshot
+            )
+            var encoder = BinaryEncoder()
+            encoder.writeClientMessage(msg)
+            var decoder = BinaryDecoder(encoder.data)
+            let decoded = try decoder.readClientMessage(type: .splitPane)
+            guard case .splitPane(let dSid, let dPid, let dDir, let dProfile, let dSnap) = decoded else {
+                Issue.record("Expected .splitPane"); continue
+            }
+            #expect(dSid == sid)
+            #expect(dPid == pid)
+            #expect(dDir == .vertical)
+            #expect(dProfile == profileID)
+            #expect(dSnap == snapshot)
+        }
+    }
+
+    @Test func roundTripCreateFloatingPaneAllCombinations() throws {
+        let sid = SessionID()
+        let tid = TabID()
+        let snap = sampleSnapshot()
+        let hint = FloatFrameHint(x: 0.1, y: 0.2, width: 0.5, height: 0.3)
+        let cases: [(String?, StartupSnapshot?, FloatFrameHint?)] = [
+            (nil, nil, nil),
+            ("ci", nil, nil),
+            (nil, snap, nil),
+            (nil, nil, hint),
+            ("ci", snap, hint),
+        ]
+        for (profileID, snapshot, frameHint) in cases {
+            let msg = ClientMessage.createFloatingPane(
+                sid, tid,
+                profileID: profileID,
+                snapshot: snapshot,
+                frameHint: frameHint
+            )
+            var encoder = BinaryEncoder()
+            encoder.writeClientMessage(msg)
+            var decoder = BinaryDecoder(encoder.data)
+            let decoded = try decoder.readClientMessage(type: .createFloatingPane)
+            guard case .createFloatingPane(let dSid, let dTid, let dProfile, let dSnap, let dHint) = decoded else {
+                Issue.record("Expected .createFloatingPane"); continue
+            }
+            #expect(dSid == sid)
+            #expect(dTid == tid)
+            #expect(dProfile == profileID)
+            #expect(dSnap == snapshot)
+            #expect(dHint == frameHint)
+        }
+    }
+
+    // MARK: - Optional StartupSnapshot presence
 
     @Test func optionalStartupSnapshotPresent() throws {
         let snapshot = StartupSnapshot(

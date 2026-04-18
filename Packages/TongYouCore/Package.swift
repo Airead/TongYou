@@ -79,7 +79,7 @@ let package = Package(
         // Client library: connects to tongyou server, manages screen replicas.
         .target(
             name: "TYClient",
-            dependencies: ["TYTerminal", "TYProtocol", "TYServer", "TYAutomation"],
+            dependencies: ["TYTerminal", "TYProtocol", "TYServer", "TYAutomation", "TYConfig"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 

@@ -3,6 +3,7 @@ import Foundation
 @testable import TYServer
 import TYProtocol
 import TYTerminal
+import TYConfig
 
 @Suite("ServerSessionManager Tests", .serialized)
 struct ServerSessionManagerTests {
@@ -829,6 +830,141 @@ struct ServerSessionManagerTests {
         } else {
             Issue.record("Expected split layout in persisted data")
         }
+
+        manager.closeSession(id: session.id)
+    }
+
+    // MARK: - Phase 7.2: Client-supplied profileID + snapshot + frameHint
+
+    @Test("createTab with snapshot attaches snapshot to pane")
+    func createTabWithSnapshotLaunchesPTYWithCommand() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "7.2 createTab snapshot")
+        let snapshot = StartupSnapshot(
+            command: "/usr/bin/env",
+            args: ["sh", "-c", "true"],
+            env: [EnvVar(key: "TY_TEST", value: "1")],
+            closeOnExit: false
+        )
+
+        let tabID = manager.createTab(
+            sessionID: session.id,
+            profileID: "ci",
+            snapshot: snapshot
+        )
+        #expect(tabID != nil)
+
+        let info = manager.sessionInfo(for: session.id)
+        guard let newTab = info?.tabs.first(where: { $0.id == tabID }) else {
+            Issue.record("New tab not found in SessionInfo")
+            manager.closeSession(id: session.id)
+            return
+        }
+        guard case .leaf(let newPaneID) = newTab.layout else {
+            Issue.record("Expected leaf layout for new tab")
+            manager.closeSession(id: session.id)
+            return
+        }
+
+        #expect(info?.paneMetadata[newPaneID]?.profileID == "ci")
+        let pane = manager.treePaneForTests(paneID: newPaneID)
+        #expect(pane?.profileID == "ci")
+        #expect(pane?.startupSnapshot == snapshot)
+
+        manager.closeSession(id: session.id)
+    }
+
+    @Test("splitPane with snapshot overrides parent inheritance")
+    func splitPaneWithSnapshotOverridesParentInheritance() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "7.2 split override")
+        guard case .leaf(let parentPaneID) = session.tabs[0].layout else {
+            Issue.record("Expected leaf layout"); return
+        }
+
+        let childSnapshot = StartupSnapshot(
+            command: "/bin/sh",
+            args: ["-c", "exit 0"],
+            closeOnExit: true
+        )
+        let newPaneID = manager.splitPane(
+            sessionID: session.id,
+            paneID: parentPaneID,
+            direction: .horizontal,
+            profileID: "ci",
+            snapshot: childSnapshot
+        )
+        #expect(newPaneID != nil)
+
+        let newPane = manager.treePaneForTests(paneID: newPaneID!)
+        #expect(newPane?.profileID == "ci")
+        #expect(newPane?.startupSnapshot == childSnapshot)
+
+        // Parent should be unchanged.
+        let parent = manager.treePaneForTests(paneID: parentPaneID)
+        #expect(parent?.profileID == TerminalPane.defaultProfileID)
+
+        manager.closeSession(id: session.id)
+    }
+
+    @Test("splitPane without snapshot still inherits parent profileID")
+    func splitPaneWithoutSnapshotInheritsParent() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "7.2 split inherit")
+        guard case .leaf(let rootPaneID) = session.tabs[0].layout else {
+            Issue.record("Expected leaf layout"); return
+        }
+
+        // First split explicitly carries profileID=custom so we can assert
+        // the next split inherits it (classic parent-inheritance path).
+        let custom = manager.splitPane(
+            sessionID: session.id,
+            paneID: rootPaneID,
+            direction: .vertical,
+            profileID: "custom",
+            snapshot: nil
+        )!
+        #expect(manager.treePaneForTests(paneID: custom)?.profileID == "custom")
+
+        // Now split the custom pane without providing profile/snapshot.
+        let inherited = manager.splitPane(
+            sessionID: session.id,
+            paneID: custom,
+            direction: .horizontal
+        )!
+        #expect(manager.treePaneForTests(paneID: inherited)?.profileID == "custom")
+
+        manager.closeSession(id: session.id)
+    }
+
+    @Test("createFloatingPane with frame hint applies clamped geometry")
+    func createFloatingPaneWithFrameHintAppliesGeometry() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "7.2 float hint")
+        let tabID = session.tabs[0].id
+
+        // width/height below 0.1 must clamp up to 0.1; values stay untouched otherwise.
+        let hint = FloatFrameHint(x: 0.2, y: 0.3, width: 0.05, height: 0.4)
+        let paneID = manager.createFloatingPane(
+            sessionID: session.id,
+            tabID: tabID,
+            profileID: "ci",
+            snapshot: StartupSnapshot(command: "/bin/true"),
+            frameHint: hint
+        )
+        #expect(paneID != nil)
+
+        let info = manager.sessionInfo(for: session.id)
+        guard let fp = info?.tabs.first?.floatingPanes.first(where: { $0.paneID == paneID }) else {
+            Issue.record("Floating pane not found in SessionInfo")
+            manager.closeSession(id: session.id)
+            return
+        }
+        #expect(fp.frameX == 0.2)
+        #expect(fp.frameY == 0.3)
+        #expect(fp.frameWidth == 0.1)   // clamped up from 0.05
+        #expect(fp.frameHeight == 0.4)
+        #expect(info?.paneMetadata[paneID!]?.profileID == "ci")
 
         manager.closeSession(id: session.id)
     }

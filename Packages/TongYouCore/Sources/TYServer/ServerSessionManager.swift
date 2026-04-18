@@ -251,14 +251,25 @@ public final class ServerSessionManager {
     // MARK: - Tab Operations
 
     @discardableResult
-    public func createTab(sessionID: SessionID) -> TabID? {
+    public func createTab(
+        sessionID: SessionID,
+        profileID: String? = nil,
+        snapshot: StartupSnapshot? = nil
+    ) -> TabID? {
         guard let session = sessions[sessionID] else { return nil }
 
-        // Inherit cwd from the focused pane of the active tab.
+        // If caller provided a snapshot, trust it fully; otherwise inherit
+        // cwd from the focused pane of the active tab (current behavior).
         let focusedCwd = session.activeTab?.focusedPaneCwd(coreLookup: coreLookup)
+        let effectiveCwd = snapshot == nil ? focusedCwd : nil
 
         let tabID = TabID()
-        let (paneID, pane, core) = createAndStartPane(sessionID: sessionID, workingDirectory: focusedCwd)
+        let (paneID, pane, core) = createAndStartPane(
+            sessionID: sessionID,
+            workingDirectory: effectiveCwd,
+            snapshot: snapshot,
+            profileID: profileID
+        )
         let paneTree = PaneNode.leaf(pane)
 
         let tab = ServerTab(
@@ -320,23 +331,26 @@ public final class ServerSessionManager {
     public func splitPane(
         sessionID: SessionID,
         paneID: PaneID,
-        direction: SplitDirection
+        direction: SplitDirection,
+        profileID: String? = nil,
+        snapshot: StartupSnapshot? = nil
     ) -> PaneID? {
         guard var session = sessions[sessionID] else { return nil }
         guard let tabIndex = session.tabIndex(for: paneID) else { return nil }
 
-        // Inherit cwd from the pane being split.
-        let sourceCwd = coreLookup[paneID]?.currentWorkingDirectory
-        // Inherit profileID from the parent pane so split panes live on
-        // the same profile. Tree panes carry profileID on TerminalPane;
-        // fall back to default if the parent cannot be located.
+        // If the caller provided a snapshot, let it drive launch entirely.
+        // Otherwise inherit cwd + profileID from the parent pane (current behavior).
         let parentProfileID = session.tabs[tabIndex].paneTree
             .findPane(id: paneID.uuid)?.profileID
+        let sourceCwd = coreLookup[paneID]?.currentWorkingDirectory
+        let effectiveProfileID = profileID ?? parentProfileID
+        let effectiveCwd = snapshot == nil ? sourceCwd : nil
 
         let (newPaneID, newPane, core) = createAndStartPane(
             sessionID: sessionID,
-            workingDirectory: sourceCwd,
-            profileID: parentProfileID
+            workingDirectory: effectiveCwd,
+            snapshot: snapshot,
+            profileID: effectiveProfileID
         )
 
         guard let newTree = session.tabs[tabIndex].paneTree.split(
@@ -487,21 +501,37 @@ public final class ServerSessionManager {
     // MARK: - Floating Pane Operations
 
     @discardableResult
-    public func createFloatingPane(sessionID: SessionID, tabID: TabID) -> PaneID? {
+    public func createFloatingPane(
+        sessionID: SessionID,
+        tabID: TabID,
+        profileID: String? = nil,
+        snapshot: StartupSnapshot? = nil,
+        frameHint: FloatFrameHint? = nil
+    ) -> PaneID? {
         guard var session = sessions[sessionID] else { return nil }
         guard let tabIndex = session.tabs.firstIndex(where: { $0.id == tabID }) else { return nil }
 
-        // Inherit cwd and profile from the focused pane of the target tab.
+        // If caller provided a snapshot, let it drive launch. Otherwise
+        // inherit cwd + profile from the focused pane of the target tab.
         let focusedCwd = session.tabs[tabIndex].focusedPaneCwd(coreLookup: coreLookup)
         let parentProfileID = session.tabs[tabIndex].focusedPaneProfileID()
+        let effectiveProfileID = profileID ?? parentProfileID
+        let effectiveCwd = snapshot == nil ? focusedCwd : nil
 
         let (paneID, pane, core) = createAndStartPane(
             sessionID: sessionID,
-            workingDirectory: focusedCwd,
-            profileID: parentProfileID
+            workingDirectory: effectiveCwd,
+            snapshot: snapshot,
+            profileID: effectiveProfileID
         )
         let nextZ = (session.tabs[tabIndex].floatingPanes.max(by: { $0.zIndex < $1.zIndex })?.zIndex ?? -1) + 1
-        let fp = FloatingPaneInfo(paneID: paneID, zIndex: nextZ)
+        var fp = FloatingPaneInfo(paneID: paneID, zIndex: nextZ)
+        if let frameHint {
+            fp.frameX = frameHint.x
+            fp.frameY = frameHint.y
+            fp.frameWidth = min(max(frameHint.width, 0.1), 1.0)
+            fp.frameHeight = min(max(frameHint.height, 0.1), 1.0)
+        }
 
         session.tabs[tabIndex].floatingPanes.append(fp)
         session.tabs[tabIndex].floatingPaneCores[paneID] = core
@@ -562,6 +592,20 @@ public final class ServerSessionManager {
     }
 
     // MARK: - Pane ID Queries
+
+    /// Test-only accessor returning the `TerminalPane` for a tree pane by
+    /// scanning every session's tab trees. Returns nil for floating panes
+    /// (which don't persist a full `TerminalPane`) or unknown IDs.
+    internal func treePaneForTests(paneID: PaneID) -> TerminalPane? {
+        for session in sessions.values {
+            for tab in session.tabs {
+                if let pane = tab.paneTree.findPane(id: paneID.uuid) {
+                    return pane
+                }
+            }
+        }
+        return nil
+    }
 
     public func allPaneIDs(sessionID: SessionID) -> [PaneID] {
         guard let session = sessions[sessionID] else { return [] }
@@ -821,57 +865,6 @@ public final class ServerSessionManager {
         } catch {
             Log.error("runRemoteCommand: failed to start '\(command)': \(error)", category: .session)
         }
-    }
-
-    /// Create a floating pane that runs a command instead of a shell.
-    /// The pane stays open after the command exits (for the user to read output).
-    @discardableResult
-    public func createFloatingPaneWithCommand(
-        sessionID: SessionID, tabID: TabID,
-        command: String, arguments: [String],
-        frameX: Float? = nil, frameY: Float? = nil,
-        frameWidth: Float? = nil, frameHeight: Float? = nil
-    ) -> PaneID? {
-        guard var session = sessions[sessionID] else { return nil }
-        guard let tabIndex = session.tabs.firstIndex(where: { $0.id == tabID }) else { return nil }
-
-        let cwd = resolvedWorkingDirectory(session.tabs[tabIndex].focusedPaneCwd(coreLookup: coreLookup))
-
-        let paneID = PaneID()
-        let core = TerminalCore(
-            columns: Int(config.defaultColumns),
-            rows: Int(config.defaultRows),
-            maxScrollback: config.maxScrollback
-        )
-
-        wireStandardCallbacks(core, sessionID: sessionID, paneID: paneID)
-        coreLookup[paneID] = core
-
-        let wrapped = wrapCommandInLoginShell(command, arguments: arguments)
-        do {
-            try core.start(
-                command: wrapped.command, arguments: wrapped.arguments,
-                columns: config.defaultColumns, rows: config.defaultRows,
-                workingDirectory: cwd
-            )
-        } catch {
-            Log.error("createFloatingPaneWithCommand: failed to start '\(command)': \(error)", category: .session)
-            coreLookup.removeValue(forKey: paneID)
-            return nil
-        }
-
-        let nextZ = (session.tabs[tabIndex].floatingPanes.max(by: { $0.zIndex < $1.zIndex })?.zIndex ?? -1) + 1
-        var fp = FloatingPaneInfo(paneID: paneID, zIndex: nextZ)
-        if let x = frameX { fp.frameX = x }
-        if let y = frameY { fp.frameY = y }
-        if let w = frameWidth { fp.frameWidth = min(max(w, 0.1), 1.0) }
-        if let h = frameHeight { fp.frameHeight = min(max(h, 0.1), 1.0) }
-        session.tabs[tabIndex].floatingPanes.append(fp)
-        session.tabs[tabIndex].floatingPaneCores[paneID] = core
-        session.tabs[tabIndex].floatingPaneProfileIDs[paneID] = TerminalPane.defaultProfileID
-        sessions[sessionID] = session
-        Log.info("Floating pane with command created: \(paneID), cmd=\(command)", category: .session)
-        return paneID
     }
 
     /// Restart a command in an existing (exited) floating pane.

@@ -250,6 +250,34 @@ public struct BinaryEncoder: Sendable {
         }
     }
 
+    /// Encode an optional length-prefixed UTF-8 string (1-byte presence + body).
+    public mutating func writeOptionalString(_ value: String?) {
+        if let value {
+            writeUInt8(1)
+            writeString(value)
+        } else {
+            writeUInt8(0)
+        }
+    }
+
+    /// Encode a `FloatFrameHint` (4 × Float32 normalized coordinates).
+    public mutating func writeFloatFrameHint(_ hint: FloatFrameHint) {
+        writeFloat(hint.x)
+        writeFloat(hint.y)
+        writeFloat(hint.width)
+        writeFloat(hint.height)
+    }
+
+    /// Encode an optional `FloatFrameHint` (1-byte presence + body).
+    public mutating func writeOptionalFloatFrameHint(_ hint: FloatFrameHint?) {
+        if let hint {
+            writeUInt8(1)
+            writeFloatFrameHint(hint)
+        } else {
+            writeUInt8(0)
+        }
+    }
+
     // MARK: - Protocol Messages
 
     /// Encode a `ScreenDiff` into the buffer.
@@ -444,17 +472,21 @@ public struct BinaryEncoder: Sendable {
             writePaneID(paneID)
             writeMouseEvent(event)
 
-        case .createTab(let sessionID):
+        case .createTab(let sessionID, let profileID, let snapshot):
             writeSessionID(sessionID)
+            writeOptionalString(profileID)
+            writeOptionalStartupSnapshot(snapshot)
 
         case .closeTab(let sessionID, let tabID):
             writeSessionID(sessionID)
             writeTabID(tabID)
 
-        case .splitPane(let sessionID, let paneID, let direction):
+        case .splitPane(let sessionID, let paneID, let direction, let profileID, let snapshot):
             writeSessionID(sessionID)
             writePaneID(paneID)
             writeSplitDirection(direction)
+            writeOptionalString(profileID)
+            writeOptionalStartupSnapshot(snapshot)
 
         case .closePane(let sessionID, let paneID):
             writeSessionID(sessionID)
@@ -473,9 +505,12 @@ public struct BinaryEncoder: Sendable {
             writePaneID(paneID)
             writeFloat(ratio)
 
-        case .createFloatingPane(let sessionID, let tabID):
+        case .createFloatingPane(let sessionID, let tabID, let profileID, let snapshot, let frameHint):
             writeSessionID(sessionID)
             writeTabID(tabID)
+            writeOptionalString(profileID)
+            writeOptionalStartupSnapshot(snapshot)
+            writeOptionalFloatFrameHint(frameHint)
 
         case .closeFloatingPane(let sessionID, let paneID):
             writeSessionID(sessionID)
@@ -508,20 +543,6 @@ public struct BinaryEncoder: Sendable {
             writePaneID(paneID)
             writeString(command)
             writeStringArray(arguments)
-
-        case .createFloatingPaneWithCommand(let sessionID, let tabID, let command, let arguments, let frameX, let frameY, let frameWidth, let frameHeight):
-            writeSessionID(sessionID)
-            writeTabID(tabID)
-            writeString(command)
-            writeStringArray(arguments)
-            let hasFrame = frameX != nil || frameY != nil || frameWidth != nil || frameHeight != nil
-            writeBool(hasFrame)
-            if hasFrame {
-                writeFloat(frameX ?? 0.3)
-                writeFloat(frameY ?? 0.3)
-                writeFloat(frameWidth ?? 0.4)
-                writeFloat(frameHeight ?? 0.4)
-            }
 
         case .restartFloatingPaneCommand(let sessionID, let paneID, let command, let arguments):
             writeSessionID(sessionID)

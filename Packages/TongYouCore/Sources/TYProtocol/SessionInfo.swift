@@ -87,6 +87,24 @@ public struct FloatingPaneInfo: Equatable, Sendable, Codable {
     }
 }
 
+/// Optional initial placement for a floating pane, carried on the
+/// `createFloatingPane` wire message. All values are normalized container
+/// coordinates (0–1), matching `updateFloatingPaneFrame`. When `nil` on the
+/// wire, the server applies its default frame.
+public struct FloatFrameHint: Equatable, Sendable, Codable {
+    public var x: Float
+    public var y: Float
+    public var width: Float
+    public var height: Float
+
+    public init(x: Float, y: Float, width: Float, height: Float) {
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+    }
+}
+
 /// Serializable representation of the pane layout tree.
 /// Mirrors `PaneNode` from TYTerminal but uses protocol-layer IDs.
 public indirect enum LayoutTree: Sendable, Equatable, Codable {

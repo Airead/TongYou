@@ -475,8 +475,12 @@ public final class SocketServer: @unchecked Sendable {
                 client.send(.clipboardSet(text))
             }
 
-        case .createTab(let sessionID):
-            if sessionManager.createTab(sessionID: sessionID) != nil {
+        case .createTab(let sessionID, let profileID, let snapshot):
+            if sessionManager.createTab(
+                sessionID: sessionID,
+                profileID: profileID,
+                snapshot: snapshot
+            ) != nil {
                 broadcastLayoutOrClosed(sessionID: sessionID)
             }
 
@@ -484,9 +488,11 @@ public final class SocketServer: @unchecked Sendable {
             sessionManager.closeTab(sessionID: sessionID, tabID: tabID)
             broadcastLayoutOrClosed(sessionID: sessionID)
 
-        case .splitPane(let sessionID, let paneID, let direction):
+        case .splitPane(let sessionID, let paneID, let direction, let profileID, let snapshot):
             if sessionManager.splitPane(
-                sessionID: sessionID, paneID: paneID, direction: direction
+                sessionID: sessionID, paneID: paneID, direction: direction,
+                profileID: profileID,
+                snapshot: snapshot
             ) != nil {
                 broadcastLayoutOrClosed(sessionID: sessionID)
             }
@@ -508,8 +514,13 @@ public final class SocketServer: @unchecked Sendable {
                 broadcastLayoutOrClosed(sessionID: sessionID)
             }
 
-        case .createFloatingPane(let sessionID, let tabID):
-            if sessionManager.createFloatingPane(sessionID: sessionID, tabID: tabID) != nil {
+        case .createFloatingPane(let sessionID, let tabID, let profileID, let snapshot, let frameHint):
+            if sessionManager.createFloatingPane(
+                sessionID: sessionID, tabID: tabID,
+                profileID: profileID,
+                snapshot: snapshot,
+                frameHint: frameHint
+            ) != nil {
                 broadcastLayoutOrClosed(sessionID: sessionID)
             }
 
@@ -545,15 +556,6 @@ public final class SocketServer: @unchecked Sendable {
             sessionManager.runRemoteCommand(
                 paneID: paneID, command: command, arguments: arguments
             )
-
-        case .createFloatingPaneWithCommand(let sessionID, let tabID, let command, let arguments, let frameX, let frameY, let frameWidth, let frameHeight):
-            if sessionManager.createFloatingPaneWithCommand(
-                sessionID: sessionID, tabID: tabID,
-                command: command, arguments: arguments,
-                frameX: frameX, frameY: frameY, frameWidth: frameWidth, frameHeight: frameHeight
-            ) != nil {
-                broadcastLayoutOrClosed(sessionID: sessionID)
-            }
 
         case .restartFloatingPaneCommand(let sessionID, let paneID, let command, let arguments):
             if sessionManager.restartFloatingPaneCommand(

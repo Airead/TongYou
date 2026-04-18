@@ -373,6 +373,43 @@ public struct BinaryDecoder: Sendable {
         }
     }
 
+    /// Decode an optional length-prefixed UTF-8 string (1-byte presence + body).
+    public mutating func readOptionalString() throws -> String? {
+        let hasValue = try readUInt8()
+        switch hasValue {
+        case 0: return nil
+        case 1: return try readString()
+        default:
+            throw BinaryDecoderError.invalidEnumValue(
+                type: "OptionalString.hasValue",
+                rawValue: UInt64(hasValue)
+            )
+        }
+    }
+
+    /// Decode a `FloatFrameHint` (4 × Float32).
+    public mutating func readFloatFrameHint() throws -> FloatFrameHint {
+        let x = try readFloat()
+        let y = try readFloat()
+        let width = try readFloat()
+        let height = try readFloat()
+        return FloatFrameHint(x: x, y: y, width: width, height: height)
+    }
+
+    /// Decode an optional `FloatFrameHint` (1-byte presence + body).
+    public mutating func readOptionalFloatFrameHint() throws -> FloatFrameHint? {
+        let hasValue = try readUInt8()
+        switch hasValue {
+        case 0: return nil
+        case 1: return try readFloatFrameHint()
+        default:
+            throw BinaryDecoderError.invalidEnumValue(
+                type: "OptionalFloatFrameHint.hasValue",
+                rawValue: UInt64(hasValue)
+            )
+        }
+    }
+
     // MARK: - Protocol Messages
 
     /// Decode a `ScreenDiff` from the buffer.
@@ -614,7 +651,10 @@ public struct BinaryDecoder: Sendable {
             return .mouseEvent(sessionID, paneID, event)
 
         case .createTab:
-            return .createTab(try readSessionID())
+            let sessionID = try readSessionID()
+            let profileID = try readOptionalString()
+            let snapshot = try readOptionalStartupSnapshot()
+            return .createTab(sessionID, profileID: profileID, snapshot: snapshot)
 
         case .closeTab:
             let sessionID = try readSessionID()
@@ -625,7 +665,9 @@ public struct BinaryDecoder: Sendable {
             let sessionID = try readSessionID()
             let paneID = try readPaneID()
             let direction = try readSplitDirection()
-            return .splitPane(sessionID, paneID, direction)
+            let profileID = try readOptionalString()
+            let snapshot = try readOptionalStartupSnapshot()
+            return .splitPane(sessionID, paneID, direction, profileID: profileID, snapshot: snapshot)
 
         case .closePane:
             let sessionID = try readSessionID()
@@ -651,7 +693,15 @@ public struct BinaryDecoder: Sendable {
         case .createFloatingPane:
             let sessionID = try readSessionID()
             let tabID = try readTabID()
-            return .createFloatingPane(sessionID, tabID)
+            let profileID = try readOptionalString()
+            let snapshot = try readOptionalStartupSnapshot()
+            let frameHint = try readOptionalFloatFrameHint()
+            return .createFloatingPane(
+                sessionID, tabID,
+                profileID: profileID,
+                snapshot: snapshot,
+                frameHint: frameHint
+            )
 
         case .closeFloatingPane:
             let sessionID = try readSessionID()
@@ -690,20 +740,6 @@ public struct BinaryDecoder: Sendable {
             let command = try readString()
             let arguments = try readStringArray()
             return .runRemoteCommand(sessionID, paneID, command: command, arguments: arguments)
-
-        case .createFloatingPaneWithCommand:
-            let sessionID = try readSessionID()
-            let tabID = try readTabID()
-            let command = try readString()
-            let arguments = try readStringArray()
-            var frameX: Float?, frameY: Float?, frameWidth: Float?, frameHeight: Float?
-            if try readBool() {
-                frameX = try readFloat()
-                frameY = try readFloat()
-                frameWidth = try readFloat()
-                frameHeight = try readFloat()
-            }
-            return .createFloatingPaneWithCommand(sessionID, tabID, command: command, arguments: arguments, frameX: frameX, frameY: frameY, frameWidth: frameWidth, frameHeight: frameHeight)
 
         case .restartFloatingPaneCommand:
             let sessionID = try readSessionID()
