@@ -333,6 +333,28 @@ public final class ServerSessionManager {
         }
     }
 
+    /// Update the split ratio at the node that directly contains `paneID`
+    /// as a leaf child. `ratio` is the target pane's share in `(0.0, 1.0)`.
+    /// Returns true when the pane was located and the tree was updated.
+    @discardableResult
+    public func setSplitRatio(
+        sessionID: SessionID,
+        paneID: PaneID,
+        ratio: Float
+    ) -> Bool {
+        guard var session = sessions[sessionID] else { return false }
+        guard let tabIndex = session.tabIndex(for: paneID) else { return false }
+        guard session.tabs[tabIndex].paneTree.contains(paneID: paneID.uuid) else {
+            return false
+        }
+        session.tabs[tabIndex].paneTree = session.tabs[tabIndex].paneTree.updateRatio(
+            for: paneID.uuid, newRatio: CGFloat(ratio)
+        )
+        sessions[sessionID] = session
+        saveSession(id: sessionID)
+        return true
+    }
+
     // MARK: - Terminal I/O
 
     public func sendInput(paneID: PaneID, data: [UInt8]) {

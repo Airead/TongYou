@@ -182,9 +182,12 @@ struct TerminalWindowView: View {
                 sessionManager.onRemoteDetached = nil
                 sessionManager.onRemoteSessionEmpty = nil
                 sessionManager.onRemoteLayoutChanged = nil
+                sessionManager.onSessionClosed = nil
+                sessionManager.onFocusPaneRequest = nil
             }
         ))
         .onAppear {
+            focusManager.attachViewStore(viewStore)
             sessionManager.restoreLocalSessions()
             loadWindowBackground()
             if configLoader.config.draftEnabled || sessionManager.tabs.isEmpty {
@@ -192,6 +195,9 @@ struct TerminalWindowView: View {
             }
             focusActiveTabRootPane()
             wireRemoteLayoutCallback()
+            sessionManager.onFocusPaneRequest = { [focusManager] paneID in
+                focusManager.focusPane(id: paneID)
+            }
             if configLoader.config.autoConnectDaemon {
                 sessionManager.ensureConnected {}
             }
@@ -201,7 +207,6 @@ struct TerminalWindowView: View {
             if let paneID = newID {
                 sessionManager.notifyPaneFocused(paneID)
                 notificationStore.markRead(paneID: paneID)
-                activateFirstResponder(for: paneID)
             }
             for (paneID, view) in viewStore.allViews {
                 let shouldShow = notificationStore.unreadPaneIDs.contains(paneID) && paneID != newID
@@ -539,14 +544,14 @@ struct TerminalWindowView: View {
             let treeIDs = Set(activeTab.allPaneIDs)
             let targetID = focusManager.previousFocusedPane(existingIn: treeIDs)
                 ?? activeTab.paneTree.firstPane.id
-            focusAndActivate(paneID: targetID)
+            focusManager.focusPane(id: targetID)
         } else {
             // Currently on a tree pane -> show all and focus floating
             sessionManager.setFloatingPanesVisibility(visible: true)
             let targetID = focusManager.previousFocusedPane(existingIn: floatingIDs)
                 ?? activeTab.floatingPanes.last?.pane.id
             if let id = targetID {
-                focusAndActivate(paneID: id)
+                focusManager.focusPane(id: id)
             }
         }
     }
@@ -636,15 +641,15 @@ struct TerminalWindowView: View {
             startRenamingActiveSession()
         case .runInPlace(let command, let arguments):
             if let paneID = focusManager.focusedPaneID {
-                Task {
+                Task { @MainActor in
                     await sessionManager.runInPlace(at: paneID, command: command, arguments: arguments)
                 }
             }
         case .runCommand(let command, let arguments, let options):
             if let paneID = focusManager.focusedPaneID {
-                Task {
+                Task { @MainActor in
                     if let newPaneID = await sessionManager.runCommand(at: paneID, command: command, arguments: arguments, options: options) {
-                        focusAndActivate(paneID: newPaneID)
+                        focusManager.focusPane(id: newPaneID)
                     }
                 }
             }
@@ -666,9 +671,6 @@ struct TerminalWindowView: View {
     private func moveFocus(_ direction: FocusDirection) {
         guard let activeTab = sessionManager.activeTab else { return }
         focusManager.moveFocus(direction: direction, in: activeTab.paneTree)
-        if let focusedID = focusManager.focusedPaneID {
-            activateFirstResponder(for: focusedID)
-        }
     }
 
     // MARK: - Helpers
@@ -694,7 +696,7 @@ struct TerminalWindowView: View {
     private func focusNextPane(fallback: UUID) {
         let remaining = Set(sessionManager.activeTab?.allPaneIDsIncludingFloating ?? [])
         let nextID = focusManager.previousFocusedPane(existingIn: remaining) ?? fallback
-        focusAndActivate(paneID: nextID)
+        focusManager.focusPane(id: nextID)
     }
 
     /// Focus the root pane of the active tab.
@@ -717,18 +719,6 @@ struct TerminalWindowView: View {
             focusManager.focusPane(id: saved)
         } else {
             focusManager.focusPane(id: tab.paneTree.firstPane.id)
-        }
-    }
-
-    /// Focus a pane and make its MetalView the first responder for keyboard input.
-    private func focusAndActivate(paneID: UUID) {
-        focusManager.focusPane(id: paneID)
-        activateFirstResponder(for: paneID)
-    }
-
-    private func activateFirstResponder(for paneID: UUID) {
-        if let metalView = viewStore.view(for: paneID) {
-            metalView.window?.makeFirstResponder(metalView)
         }
     }
 
@@ -839,8 +829,19 @@ struct TerminalWindowView: View {
                     focusManager.removeFromHistory(id: paneID)
                 }
             }
-            if sessionManager.sessions.isEmpty {
+            // Skip window close when the session was torn down by an
+            // automation client (`tongyou app close`). The CLI caller
+            // just wants the session removed — taking down the window
+            // would also exit the app when this is the last window.
+            if sessionManager.sessions.isEmpty, !sessionManager.isAutomationClose {
                 NSApp.keyWindow?.close()
+            }
+        }
+
+        sessionManager.onSessionClosed = { [viewStore, focusManager] _, removedPaneIDs in
+            for paneID in removedPaneIDs {
+                viewStore.tearDown(for: paneID)
+                focusManager.removeFromHistory(id: paneID)
             }
         }
 

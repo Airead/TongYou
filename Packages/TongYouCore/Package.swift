@@ -13,6 +13,7 @@ let package = Package(
         .library(name: "TYConfig", targets: ["TYConfig"]),
         .library(name: "TYServer", targets: ["TYServer"]),
         .library(name: "TYClient", targets: ["TYClient"]),
+        .library(name: "TYAutomation", targets: ["TYAutomation"]),
         .executable(name: "tongyou", targets: ["tongyou"]),
     ],
     targets: [
@@ -64,17 +65,26 @@ let package = Package(
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 
+        // GUI automation: JSON/line Unix-socket server used by the GUI app for
+        // script-driven automation (`tongyou app ...`). Reuses TYProtocol's
+        // socket primitives; independent of the binary daemon protocol.
+        .target(
+            name: "TYAutomation",
+            dependencies: ["TYTerminal", "TYProtocol", "TYServer"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+
         // Client library: connects to tongyou server, manages screen replicas.
         .target(
             name: "TYClient",
-            dependencies: ["TYTerminal", "TYProtocol", "TYServer"],
+            dependencies: ["TYTerminal", "TYProtocol", "TYServer", "TYAutomation"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 
         // tongyou executable: unified CLI for daemon and session management.
         .executableTarget(
             name: "tongyou",
-            dependencies: ["TYClient", "TYProtocol", "TYServer"],
+            dependencies: ["TYClient", "TYProtocol", "TYServer", "TYAutomation"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 
@@ -105,6 +115,12 @@ let package = Package(
         .testTarget(
             name: "TYClientTests",
             dependencies: ["TYClient", "TYServer", "TYProtocol", "TYTerminal"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+
+        .testTarget(
+            name: "TYAutomationTests",
+            dependencies: ["TYAutomation", "TYProtocol", "TYTerminal"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 

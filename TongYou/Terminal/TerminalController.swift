@@ -228,6 +228,16 @@ final class TerminalController: TerminalControlling {
         writeToPTY(data)
     }
 
+    /// Send a pre-composed key event (e.g. from automation) to the PTY.
+    func sendKey(_ input: KeyEncoder.KeyInput) {
+        let options = KeyEncoder.Options(
+            appCursorMode: core.appCursorMode,
+            optionAsAlt: optionAsAlt
+        )
+        guard let data = KeyEncoder.encode(input, options: options) else { return }
+        writeToPTY(data)
+    }
+
     /// Clear selection, auto-scroll to bottom, and write data to the PTY.
     private func writeToPTY(_ data: Data) {
         selection = nil

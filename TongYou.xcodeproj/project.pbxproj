@@ -16,6 +16,7 @@
 		A1000003300000000000001 /* TYClient in Frameworks */ = {isa = PBXBuildFile; productRef = A1000002300000000000007 /* TYClient */; };
 		A1000003300000000000002 /* TYProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = A1000002300000000000008 /* TYProtocol */; };
 		A1000003300000000000003 /* TYConfig in Frameworks */ = {isa = PBXBuildFile; productRef = A1000002300000000000009 /* TYConfig */; };
+		A1000003300000000000004 /* TYAutomation in Frameworks */ = {isa = PBXBuildFile; productRef = A100000230000000000000A /* TYAutomation */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -70,6 +71,7 @@
 				A1000003300000000000001 /* TYClient in Frameworks */,
 				A1000003300000000000002 /* TYProtocol in Frameworks */,
 				A1000003300000000000003 /* TYConfig in Frameworks */,
+				A1000003300000000000004 /* TYAutomation in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -140,6 +142,7 @@
 				A1000002300000000000007 /* TYClient */,
 				A1000002300000000000008 /* TYProtocol */,
 				A1000002300000000000009 /* TYConfig */,
+				A100000230000000000000A /* TYAutomation */,
 			);
 			productName = TongYou;
 			productReference = 2C42370F2F88817B00DE6FC2 /* TongYou.app */;
@@ -279,7 +282,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
-			shellScript = "set -euo pipefail\n\nPKG_DIR=\"${SRCROOT}/Packages/TongYouCore\"\nCLI_DEST=\"${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Resources/app/bin\"\n\n# Build the tongyou CLI with matching configuration.\nif [ \"${CONFIGURATION}\" = \"Release\" ]; then\n  SWIFT_CONFIG=\"release\"\nelse\n  SWIFT_CONFIG=\"debug\"\nfi\n\ncd \"${PKG_DIR}\"\nswift build -c \"${SWIFT_CONFIG}\" --product tongyou 2>&1\n\n# Copy the built binary into the app bundle.\nmkdir -p \"${CLI_DEST}\"\ncp -f \"${PKG_DIR}/.build/${SWIFT_CONFIG}/tongyou\" \"${CLI_DEST}/tongyou\"\nchmod +x \"${CLI_DEST}/tongyou\"\n";
+			shellScript = "set -euo pipefail\n\nPKG_DIR=\"${SRCROOT}/Packages/TongYouCore\"\nCLI_DEST=\"${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Resources/app/bin\"\n\n# Build the tongyou CLI with matching configuration.\nif [ \"${CONFIGURATION}\" = \"Release\" ]; then\n  SWIFT_CONFIG=\"release\"\nelse\n  SWIFT_CONFIG=\"debug\"\nfi\n\ncd \"${PKG_DIR}\"\nswift build -c \"${SWIFT_CONFIG}\" --product tongyou 2>&1\n\n# Copy the built binary into the app bundle.\nmkdir -p \"${CLI_DEST}\"\ncp -f \"${PKG_DIR}/.build/${SWIFT_CONFIG}/tongyou\" \"${CLI_DEST}/tongyou\"\nchmod +x \"${CLI_DEST}/tongyou\"\n\n# Re-sign with a fresh machine-local adhoc signature. SwiftPM's own\n# adhoc sign trips Gatekeeper (\"rejecting due to lack of matching\n# active rule\") on every rebuild, which surfaces as SIGKILL when the\n# user invokes the installed CLI. A plain codesign here produces a\n# signature Gatekeeper accepts.\ncodesign --force --sign - \"${CLI_DEST}/tongyou\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -676,6 +679,10 @@
 		A1000002300000000000009 /* TYConfig */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = TYConfig;
+		};
+		A100000230000000000000A /* TYAutomation */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TYAutomation;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -394,6 +394,11 @@ public struct BinaryEncoder: Sendable {
             writeSessionID(sessionID)
             writeUInt16(tabIndex)
 
+        case .setSplitRatio(let sessionID, let paneID, let ratio):
+            writeSessionID(sessionID)
+            writePaneID(paneID)
+            writeFloat(ratio)
+
         case .createFloatingPane(let sessionID, let tabID):
             writeSessionID(sessionID)
             writeTabID(tabID)

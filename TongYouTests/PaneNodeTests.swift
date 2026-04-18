@@ -224,6 +224,27 @@ struct PaneNodeTests {
         }
     }
 
+    @Test func updateRatioSecondChildInverts() {
+        // newRatio is the target pane's share. When the target is the second
+        // child, the parent's stored ratio (first child's share) becomes
+        // 1 - newRatio so the target ends up at `newRatio`.
+        let pane1 = TerminalPane()
+        let pane2 = TerminalPane()
+        let node = PaneNode.split(
+            direction: .vertical,
+            ratio: 0.5,
+            first: .leaf(pane1),
+            second: .leaf(pane2)
+        )
+
+        let result = node.updateRatio(for: pane2.id, newRatio: 0.2)
+        if case .split(_, let ratio, _, _) = result {
+            #expect(abs(ratio - 0.8) < 0.0001)
+        } else {
+            Issue.record("Expected split node")
+        }
+    }
+
     @Test func updateRatioNestedChild() {
         let pane1 = TerminalPane()
         let pane2 = TerminalPane()

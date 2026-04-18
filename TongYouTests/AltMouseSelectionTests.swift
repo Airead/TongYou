@@ -31,6 +31,7 @@ private final class MockMouseController: TerminalControlling {
     func consumeSnapshot() -> ScreenSnapshot? { nil }
     func handleKeyDown(_ event: NSEvent) {}
     func sendText(_ text: String) {}
+    func sendKey(_ input: KeyEncoder.KeyInput) {}
     func scrollUp(lines: Int) {}
     func scrollDown(lines: Int) {}
 

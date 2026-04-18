@@ -501,6 +501,13 @@ public final class SocketServer: @unchecked Sendable {
         case .selectTab(let sessionID, let tabIndex):
             sessionManager.selectTab(sessionID: sessionID, tabIndex: Int(tabIndex))
 
+        case .setSplitRatio(let sessionID, let paneID, let ratio):
+            if sessionManager.setSplitRatio(
+                sessionID: sessionID, paneID: paneID, ratio: ratio
+            ) {
+                broadcastLayoutOrClosed(sessionID: sessionID)
+            }
+
         case .createFloatingPane(let sessionID, let tabID):
             if sessionManager.createFloatingPane(sessionID: sessionID, tabID: tabID) != nil {
                 broadcastLayoutOrClosed(sessionID: sessionID)

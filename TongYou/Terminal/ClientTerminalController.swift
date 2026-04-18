@@ -101,6 +101,21 @@ final class ClientTerminalController: TerminalControlling {
         )
     }
 
+    func sendKey(_ input: KeyEncoder.KeyInput) {
+        let options = KeyEncoder.Options(
+            appCursorMode: false,
+            optionAsAlt: optionAsAlt
+        )
+        guard let data = KeyEncoder.encode(input, options: options) else { return }
+        selection = nil
+        scrollToBottomIfNeeded()
+        remoteClient.sendInput(
+            sessionID: sessionID,
+            paneID: paneID,
+            data: Array(data)
+        )
+    }
+
     private func sendScroll(delta: Int32) {
         remoteClient.scrollViewport(
             sessionID: sessionID,

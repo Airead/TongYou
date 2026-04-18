@@ -70,6 +70,38 @@ final class SessionManager {
     /// Pending command info for remote floating panes awaiting server layoutUpdate.
     private var pendingRemoteCommandInfos: [FloatingPaneCommandInfo] = []
 
+    /// Callbacks keyed by requested session name, fired when the matching
+    /// remote session first lands in `sessions`. Used by automation to
+    /// await remote-create completion synchronously. Handlers receive the
+    /// local session UUID on success or `nil` on disconnect/timeout.
+    /// A completion handler for a remote-create round-trip, plus the
+    /// caller's view-focus preference (from Phase 7 focus policy). User
+    /// actions default to `takeViewFocus: true`; automation callers pass
+    /// `false` unless they explicitly want to switch to the new session.
+    private struct PendingRemoteCreate {
+        let takeViewFocus: Bool
+        let completion: (UUID?) -> Void
+    }
+
+    private var pendingRemoteCreateHandlers: [String: PendingRemoteCreate] = [:]
+
+    /// FIFO queues of completions awaiting the next newly-materialized tab
+    /// in a remote session's layoutUpdate. Keyed by local session UUID.
+    /// Each arriving tab (identified by a server TabID not previously seen)
+    /// pops one completion and delivers the corresponding local tab UUID.
+    /// On disconnect, pending completions fire with `nil`.
+    private var pendingRemoteTabCreates: [UUID: [(UUID?) -> Void]] = [:]
+
+    /// FIFO queues of completions awaiting the next newly-materialized tree
+    /// pane in a remote session's layoutUpdate. Keyed by local session UUID.
+    /// See `pendingRemoteTabCreates` for semantics.
+    private var pendingRemotePaneSplits: [UUID: [(UUID?) -> Void]] = [:]
+
+    /// FIFO queues of completions awaiting the next newly-materialized
+    /// floating pane in a remote session's layoutUpdate. Keyed by local
+    /// session UUID. See `pendingRemoteTabCreates` for semantics.
+    private var pendingRemoteFloatCreates: [UUID: [(UUID?) -> Void]] = [:]
+
     /// Local session persistence store.
     private let localSessionStore: SessionStore
 
@@ -263,7 +295,9 @@ final class SessionManager {
             applySessionOrder()
             scheduleLocalSaveIfNeeded(sessionID: newSessionID)
         }
-        activeSessionIndex = sessions.firstIndex(where: { $0.id == newSessionID }) ?? sessions.count - 1
+        if GUIAutomationPolicy.shouldTakeViewFocus() {
+            activeSessionIndex = sessions.firstIndex(where: { $0.id == newSessionID }) ?? sessions.count - 1
+        }
         attachedLocalSessionIDs.insert(newSessionID)
         rebuildAllAttachedSessionIDs()
         return newSessionID
@@ -318,6 +352,7 @@ final class SessionManager {
 
         sessionSortOrder.removeAll { $0 == session.id }
         saveSessionOrder()
+        onSessionClosed?(session.id, paneIDs)
         return paneIDs
     }
 
@@ -432,12 +467,27 @@ final class SessionManager {
     /// Create a new tab in the active session.
     /// For remote sessions, sends the request to the server and returns nil —
     /// the tab will be created when the server broadcasts a layoutUpdate.
+    ///
+    /// When `inSessionID` is non-nil, the tab is created in the specified
+    /// session regardless of which session is currently active. When nil,
+    /// behaviour matches the legacy "create in active session" semantics.
     @discardableResult
-    func createTab(title: String = "shell", initialWorkingDirectory: String? = nil) -> UUID? {
-        guard sessions.indices.contains(activeSessionIndex) else {
-            return createSession(initialWorkingDirectory: initialWorkingDirectory)
+    func createTab(
+        inSessionID: UUID? = nil,
+        title: String = "shell",
+        initialWorkingDirectory: String? = nil
+    ) -> UUID? {
+        let targetIndex: Int
+        if let sid = inSessionID {
+            guard let i = sessions.firstIndex(where: { $0.id == sid }) else { return nil }
+            targetIndex = i
+        } else {
+            guard sessions.indices.contains(activeSessionIndex) else {
+                return createSession(initialWorkingDirectory: initialWorkingDirectory)
+            }
+            targetIndex = activeSessionIndex
         }
-        let session = sessions[activeSessionIndex]
+        let session = sessions[targetIndex]
 
         if let serverSessionID = session.source.serverSessionID {
             remoteClient?.createTab(sessionID: SessionID(serverSessionID))
@@ -445,8 +495,10 @@ final class SessionManager {
         }
 
         let tab = TerminalTab(title: title, initialWorkingDirectory: initialWorkingDirectory)
-        sessions[activeSessionIndex].tabs.append(tab)
-        sessions[activeSessionIndex].activeTabIndex = sessions[activeSessionIndex].tabs.count - 1
+        sessions[targetIndex].tabs.append(tab)
+        if GUIAutomationPolicy.shouldTakeViewFocus() {
+            sessions[targetIndex].activeTabIndex = sessions[targetIndex].tabs.count - 1
+        }
         if attachedLocalSessionIDs.contains(session.id) {
             for paneID in tab.allPaneIDsIncludingFloating {
                 _ = ensureLocalController(for: paneID)
@@ -461,12 +513,22 @@ final class SessionManager {
     /// updates when the server broadcasts a layoutUpdate.
     /// When the last tab is closed, the session remains with an empty tab list
     /// — the caller decides whether to close the session.
+    ///
+    /// When `inSessionID` is non-nil, the tab is closed in the specified
+    /// session regardless of which session is active.
     @discardableResult
-    func closeTab(at index: Int) -> Bool {
-        guard sessions.indices.contains(activeSessionIndex),
-              sessions[activeSessionIndex].tabs.indices.contains(index) else { return false }
+    func closeTab(inSessionID: UUID? = nil, at index: Int) -> Bool {
+        let targetIndex: Int
+        if let sid = inSessionID {
+            guard let i = sessions.firstIndex(where: { $0.id == sid }) else { return false }
+            targetIndex = i
+        } else {
+            guard sessions.indices.contains(activeSessionIndex) else { return false }
+            targetIndex = activeSessionIndex
+        }
+        guard sessions[targetIndex].tabs.indices.contains(index) else { return false }
 
-        let session = sessions[activeSessionIndex]
+        let session = sessions[targetIndex]
 
         if let serverSessionID = session.source.serverSessionID,
            let tabIDs = serverTabIDs[session.id],
@@ -475,21 +537,21 @@ final class SessionManager {
             return true
         }
 
-        let removedPaneIDs = sessions[activeSessionIndex].tabs[index].allPaneIDsIncludingFloating
+        let removedPaneIDs = sessions[targetIndex].tabs[index].allPaneIDsIncludingFloating
         for paneID in removedPaneIDs {
             exitedFloatingPanes.removeValue(forKey: paneID)
             stopAllControllers(for: paneID)
         }
 
-        sessions[activeSessionIndex].tabs.remove(at: index)
+        sessions[targetIndex].tabs.remove(at: index)
 
-        let tabCount = sessions[activeSessionIndex].tabs.count
+        let tabCount = sessions[targetIndex].tabs.count
         if tabCount == 0 {
-            sessions[activeSessionIndex].activeTabIndex = 0
-        } else if sessions[activeSessionIndex].activeTabIndex >= tabCount {
-            sessions[activeSessionIndex].activeTabIndex = tabCount - 1
-        } else if sessions[activeSessionIndex].activeTabIndex > index {
-            sessions[activeSessionIndex].activeTabIndex -= 1
+            sessions[targetIndex].activeTabIndex = 0
+        } else if sessions[targetIndex].activeTabIndex >= tabCount {
+            sessions[targetIndex].activeTabIndex = tabCount - 1
+        } else if sessions[targetIndex].activeTabIndex > index {
+            sessions[targetIndex].activeTabIndex -= 1
         }
 
         scheduleLocalSaveIfNeeded(sessionID: session.id)
@@ -504,15 +566,29 @@ final class SessionManager {
 
     // MARK: - Tab Switching
 
-    func selectTab(at index: Int) {
-        guard sessions.indices.contains(activeSessionIndex),
-              !sessions[activeSessionIndex].tabs.isEmpty else { return }
-        let clamped = max(0, min(index, sessions[activeSessionIndex].tabs.count - 1))
-        guard clamped != sessions[activeSessionIndex].activeTabIndex else { return }
-        sessions[activeSessionIndex].activeTabIndex = clamped
-        notifyServerTabSelected(clamped)
-        if sessions[activeSessionIndex].source == .local {
-            scheduleLocalSaveIfNeeded(sessionID: sessions[activeSessionIndex].id)
+    func selectTab(inSessionID: UUID? = nil, at index: Int) {
+        let targetIndex: Int
+        if let sid = inSessionID {
+            guard let i = sessions.firstIndex(where: { $0.id == sid }) else { return }
+            targetIndex = i
+        } else {
+            guard sessions.indices.contains(activeSessionIndex) else { return }
+            targetIndex = activeSessionIndex
+        }
+        guard !sessions[targetIndex].tabs.isEmpty else { return }
+        let clamped = max(0, min(index, sessions[targetIndex].tabs.count - 1))
+        guard clamped != sessions[targetIndex].activeTabIndex else { return }
+        sessions[targetIndex].activeTabIndex = clamped
+        if targetIndex == activeSessionIndex {
+            notifyServerTabSelected(clamped)
+        } else if let serverSessionID = sessions[targetIndex].source.serverSessionID {
+            remoteClient?.selectTab(
+                sessionID: SessionID(serverSessionID),
+                tabIndex: UInt16(clamped)
+            )
+        }
+        if sessions[targetIndex].source == .local {
+            scheduleLocalSaveIfNeeded(sessionID: sessions[targetIndex].id)
         }
     }
 
@@ -605,11 +681,26 @@ final class SessionManager {
 
     /// Split a pane. For remote sessions, sends the request to the server
     /// and returns false — the local tree updates via layoutUpdate.
+    ///
+    /// When `inSessionID` is non-nil, the split is performed against the
+    /// specified session; otherwise the active session is used.
     @discardableResult
-    func splitPane(id paneID: UUID, direction: SplitDirection, newPane: TerminalPane) -> Bool {
-        guard sessions.indices.contains(activeSessionIndex) else { return false }
+    func splitPane(
+        inSessionID: UUID? = nil,
+        id paneID: UUID,
+        direction: SplitDirection,
+        newPane: TerminalPane
+    ) -> Bool {
+        let targetIndex: Int
+        if let sid = inSessionID {
+            guard let i = sessions.firstIndex(where: { $0.id == sid }) else { return false }
+            targetIndex = i
+        } else {
+            guard sessions.indices.contains(activeSessionIndex) else { return false }
+            targetIndex = activeSessionIndex
+        }
 
-        let session = sessions[activeSessionIndex]
+        let session = sessions[targetIndex]
 
         if let sid = session.source.serverSessionID,
            let serverPaneUUID = serverPaneUUID(for: paneID) {
@@ -621,11 +712,11 @@ final class SessionManager {
             return false
         }
 
-        for i in sessions[activeSessionIndex].tabs.indices {
-            if let newTree = sessions[activeSessionIndex].tabs[i].paneTree.split(
+        for i in sessions[targetIndex].tabs.indices {
+            if let newTree = sessions[targetIndex].tabs[i].paneTree.split(
                 paneID: paneID, direction: direction, newPane: newPane
             ) {
-                sessions[activeSessionIndex].tabs[i].paneTree = newTree
+                sessions[targetIndex].tabs[i].paneTree = newTree
                 if attachedLocalSessionIDs.contains(session.id) {
                     _ = ensureLocalController(for: newPane.id)
                 }
@@ -640,11 +731,21 @@ final class SessionManager {
     /// and returns a sentinel value — local state updates via layoutUpdate.
     /// For local sessions, if it's the last pane in its tab, closes the tab.
     /// Returns the ID of a sibling pane to focus, or nil if the tab was closed.
+    ///
+    /// When `inSessionID` is non-nil, the pane is closed in the specified
+    /// session; otherwise the active session is used.
     @discardableResult
-    func closePane(id paneID: UUID) -> UUID? {
-        guard sessions.indices.contains(activeSessionIndex) else { return nil }
+    func closePane(inSessionID: UUID? = nil, id paneID: UUID) -> UUID? {
+        let targetIndex: Int
+        if let sid = inSessionID {
+            guard let i = sessions.firstIndex(where: { $0.id == sid }) else { return nil }
+            targetIndex = i
+        } else {
+            guard sessions.indices.contains(activeSessionIndex) else { return nil }
+            targetIndex = activeSessionIndex
+        }
 
-        let session = sessions[activeSessionIndex]
+        let session = sessions[targetIndex]
 
         if let sid = session.source.serverSessionID,
            let serverPaneUUID = serverPaneUUID(for: paneID) {
@@ -655,20 +756,56 @@ final class SessionManager {
             return nil
         }
 
-        for i in sessions[activeSessionIndex].tabs.indices {
-            guard sessions[activeSessionIndex].tabs[i].paneTree.contains(paneID: paneID)
+        for i in sessions[targetIndex].tabs.indices {
+            guard sessions[targetIndex].tabs[i].paneTree.contains(paneID: paneID)
             else { continue }
             stopAllControllers(for: paneID)
-            if let newTree = sessions[activeSessionIndex].tabs[i].paneTree.removePane(id: paneID) {
-                sessions[activeSessionIndex].tabs[i].paneTree = newTree
+            if let newTree = sessions[targetIndex].tabs[i].paneTree.removePane(id: paneID) {
+                sessions[targetIndex].tabs[i].paneTree = newTree
                 scheduleLocalSaveIfNeeded(sessionID: session.id)
                 return newTree.firstPane.id
             } else {
-                closeTab(at: i)
+                closeTab(inSessionID: session.id, at: i)
                 return nil
             }
         }
         return nil
+    }
+
+    /// Update the split ratio at the node that directly contains `paneID`
+    /// as a leaf child. For remote sessions the change is forwarded to
+    /// the server and local state reconciles on the next layoutUpdate.
+    /// Returns true when the pane was located in any tab.
+    @discardableResult
+    func updateSplitRatio(
+        inSessionID: UUID,
+        paneID: UUID,
+        newRatio: CGFloat
+    ) -> Bool {
+        guard let idx = sessions.firstIndex(where: { $0.id == inSessionID }) else { return false }
+
+        if let serverSessionID = sessions[idx].source.serverSessionID,
+           let serverPaneUUID = serverPaneUUID(for: paneID) {
+            remoteClient?.setSplitRatio(
+                sessionID: SessionID(serverSessionID),
+                paneID: PaneID(serverPaneUUID),
+                ratio: Float(newRatio)
+            )
+            return true
+        }
+
+        for i in sessions[idx].tabs.indices {
+            guard sessions[idx].tabs[i].paneTree.contains(paneID: paneID) else { continue }
+            let newTree = sessions[idx].tabs[i].paneTree.updateRatio(
+                for: paneID, newRatio: newRatio
+            )
+            sessions[idx].tabs[i].paneTree = newTree
+            if sessions[idx].source == .local {
+                scheduleLocalSaveIfNeeded(sessionID: sessions[idx].id)
+            }
+            return true
+        }
+        return false
     }
 
     /// Replace the active tab's pane tree (e.g. after a divider drag).
@@ -966,9 +1103,89 @@ final class SessionManager {
 
     /// Disconnect from the tongyou server.
     func disconnectFromTYD() {
+        failPendingRemoteCreateHandlers()
         remoteClient?.disconnect()
         remoteClient = nil
         cleanupRemoteState()
+    }
+
+    /// Invoke every pending remote-create handler with `nil` and clear the
+    /// table. Called on disconnect paths so `AppControlClient.createSession`
+    /// doesn't block forever when the daemon connection drops.
+    private func failPendingRemoteCreateHandlers() {
+        let handlers = pendingRemoteCreateHandlers
+        pendingRemoteCreateHandlers.removeAll()
+        for pending in handlers.values {
+            pending.completion(nil)
+        }
+
+        let tabQueues = pendingRemoteTabCreates
+        pendingRemoteTabCreates.removeAll()
+        for queue in tabQueues.values { for completion in queue { completion(nil) } }
+
+        let paneQueues = pendingRemotePaneSplits
+        pendingRemotePaneSplits.removeAll()
+        for queue in paneQueues.values { for completion in queue { completion(nil) } }
+
+        let floatQueues = pendingRemoteFloatCreates
+        pendingRemoteFloatCreates.removeAll()
+        for queue in floatQueues.values { for completion in queue { completion(nil) } }
+    }
+
+    /// Register a one-shot FIFO listener for the next tab that appears in
+    /// the given remote session via a `layoutUpdate`. `completion` fires
+    /// with the local tab UUID on success, or `nil` if the connection
+    /// drops before a matching update arrives.
+    ///
+    /// Intended for automation flows that need to bridge the daemon's
+    /// async layoutUpdate to a synchronous CLI response. Each newly-
+    /// observed server TabID pops one completion off the queue, in order.
+    func onNextRemoteTabCreated(
+        inSessionID sessionID: UUID,
+        completion: @escaping (UUID?) -> Void
+    ) {
+        pendingRemoteTabCreates[sessionID, default: []].append(completion)
+    }
+
+    /// Register a one-shot FIFO listener for the next tree pane that
+    /// appears in the given remote session via a `layoutUpdate`. See
+    /// `onNextRemoteTabCreated` for semantics.
+    func onNextRemotePaneCreated(
+        inSessionID sessionID: UUID,
+        completion: @escaping (UUID?) -> Void
+    ) {
+        pendingRemotePaneSplits[sessionID, default: []].append(completion)
+    }
+
+    /// Register a one-shot FIFO listener for the next floating pane that
+    /// appears in the given remote session via a `layoutUpdate`. See
+    /// `onNextRemoteTabCreated` for semantics. Delivers the inner
+    /// TerminalPane UUID — the same ID used by `closeFloatingPane(paneID:)`
+    /// and friends.
+    func onNextRemoteFloatCreated(
+        inSessionID sessionID: UUID,
+        completion: @escaping (UUID?) -> Void
+    ) {
+        pendingRemoteFloatCreates[sessionID, default: []].append(completion)
+    }
+
+    /// Pop completions from the per-session FIFO queue and deliver the
+    /// newly-materialized IDs one-for-one. When the queue key exists and
+    /// becomes empty, it is removed to keep the dictionary tidy.
+    ///
+    /// Exposed as internal so the drain semantics can be unit-tested
+    /// without materializing a full remote session.
+    static func drainRemoteCreateListeners(
+        queue: inout [(UUID?) -> Void]?,
+        ids: [UUID]
+    ) {
+        guard var pending = queue, !pending.isEmpty, !ids.isEmpty else { return }
+        var idIterator = ids.makeIterator()
+        while let id = idIterator.next(), !pending.isEmpty {
+            let completion = pending.removeFirst()
+            completion(id)
+        }
+        queue = pending.isEmpty ? nil : pending
     }
 
     /// Remove all remote sessions, controllers, and mappings.
@@ -998,6 +1215,7 @@ final class SessionManager {
 
     /// Called when the server connection drops unexpectedly.
     private func handleRemoteDisconnected() {
+        failPendingRemoteCreateHandlers()
         remoteClient = nil
         cleanupRemoteState()
     }
@@ -1042,8 +1260,23 @@ final class SessionManager {
     }
 
     /// Create a new remote session: connect if needed, then request creation.
-    func createRemoteSession(name: String? = nil) {
+    ///
+    /// When `completion` is provided, it fires on the main actor once the
+    /// matching remote session is first registered locally (via
+    /// `handleRemoteSessionCreated`). On disconnect before completion the
+    /// handler is called with `nil`.
+    func createRemoteSession(
+        name: String? = nil,
+        takeViewFocus: Bool = true,
+        completion: ((UUID?) -> Void)? = nil
+    ) {
         let sessionName = name ?? nextAvailableName(prefix: "RSession")
+        if let completion {
+            pendingRemoteCreateHandlers[sessionName] = PendingRemoteCreate(
+                takeViewFocus: takeViewFocus,
+                completion: completion
+            )
+        }
         ensureConnected {
             self.remoteClient?.createSession(name: sessionName)
         }
@@ -1084,6 +1317,29 @@ final class SessionManager {
     /// Callback when a remote session is detached (view layer tears down MetalViews).
     /// Parameter: pane IDs that were removed.
     var onRemoteDetached: (([UUID]) -> Void)?
+
+    /// Callback fired at the end of `closeSession(at:)`, regardless of
+    /// the trigger (UI click, keyboard, CLI automation). The view layer
+    /// wires this to tear down MetalViews and clear focus history so
+    /// every close path gets the same cleanup.
+    ///
+    /// Parameters: `(closedSessionID, removedPaneIDs)`.
+    var onSessionClosed: ((UUID, [UUID]) -> Void)?
+
+    /// True while an automation-initiated close is in flight. Observers
+    /// that would otherwise close the hosting window when `sessions`
+    /// becomes empty (e.g. `onRemoteSessionEmpty`) should skip that
+    /// behavior while this flag is set — CLI callers want to remove
+    /// the session without taking down the window.
+    var isAutomationClose: Bool = false
+
+    /// Callback to request that a specific pane receive keyboard focus.
+    /// The view layer wires this to its `FocusManager.focusPane(id:)`,
+    /// which in turn triggers the usual focus-change side effects
+    /// (notifyPaneFocused, floating-pane visibility, etc). Used by
+    /// automation (`pane.focus`, `floatPane.focus`) to drive focus from
+    /// outside the window.
+    var onFocusPaneRequest: ((UUID) -> Void)?
 
     /// Get the remote controller for a pane, if it exists.
     func remoteController(for paneID: UUID) -> ClientTerminalController? {
@@ -1155,11 +1411,21 @@ final class SessionManager {
 
     private func handleRemoteSessionCreated(_ info: SessionInfo) {
         addOrUpdateRemoteSession(info)
-        // Auto-attach and select newly created remote sessions.
+        // Auto-attach newly created remote sessions. The "select" part is
+        // gated on the caller's view-focus preference (Phase 7): UI flows
+        // default to true so user gets jumped to the new session; automation
+        // flows default to false so scripts don't disturb the user's view.
         let sessionUUID = info.id.uuid
         attachRemoteSession(serverSessionID: sessionUUID)
-        if let index = sessionIndex(forServerSessionID: sessionUUID) {
+        let pending = pendingRemoteCreateHandlers[info.name]
+        let takeFocus = pending?.takeViewFocus ?? true
+        if takeFocus, let index = sessionIndex(forServerSessionID: sessionUUID) {
             activeSessionIndex = index
+        }
+        // Fire any automation create-completion handler waiting on this name.
+        if let pending = pendingRemoteCreateHandlers.removeValue(forKey: info.name) {
+            let localID = sessionIndex(forServerSessionID: sessionUUID).map { sessions[$0].id }
+            pending.completion(localID)
         }
     }
 
@@ -1234,7 +1500,9 @@ final class SessionManager {
             sessions[sessionIndex].name = resolvedName
         }
 
+        let localSessionID = sessions[sessionIndex].id
         let oldPaneIDs = Set(sessions[sessionIndex].allPaneIDs)
+        let oldServerTabIDs = Set(serverTabIDs[localSessionID] ?? [])
 
         let newTabs = buildTabs(from: info)
 
@@ -1242,20 +1510,57 @@ final class SessionManager {
         if newTabs.isEmpty {
             let removedPaneIDs = Array(oldPaneIDs)
             teardownRemotePanes(oldPaneIDs)
-            onRemoteSessionEmpty?(sessions[sessionIndex].id, removedPaneIDs)
+            onRemoteSessionEmpty?(localSessionID, removedPaneIDs)
             return removedPaneIDs
         }
+
+        let oldTreePaneIDs = Set(sessions[sessionIndex].tabs.flatMap(\.allPaneIDs))
+        let oldFloatPaneIDs = Set(sessions[sessionIndex].tabs.flatMap {
+            $0.floatingPanes.map(\.pane.id)
+        })
 
         sessions[sessionIndex].tabs = newTabs
         sessions[sessionIndex].activeTabIndex = min(
             info.activeTabIndex, max(sessions[sessionIndex].tabs.count - 1, 0)
         )
-        serverTabIDs[sessions[sessionIndex].id] = info.tabs.map(\.id)
+        serverTabIDs[localSessionID] = info.tabs.map(\.id)
 
         let newPaneIDs = Set(sessions[sessionIndex].allPaneIDs)
         let removedPaneIDs = oldPaneIDs.subtracting(newPaneIDs)
         let addedPaneIDs = newPaneIDs.subtracting(oldPaneIDs)
         teardownRemotePanes(removedPaneIDs)
+
+        // Automation bridge: drain pending tab/pane-create listeners in the
+        // order that new entries appear. Tabs are identified by server
+        // TabID (local tab UUIDs regenerate on every layoutUpdate) while
+        // panes reuse stable local UUIDs via `serverToLocalPaneID`.
+        let addedLocalTabIDs = zip(info.tabs, sessions[sessionIndex].tabs).compactMap {
+            tabInfo, localTab -> UUID? in
+            oldServerTabIDs.contains(tabInfo.id) ? nil : localTab.id
+        }
+        Self.drainRemoteCreateListeners(
+            queue: &pendingRemoteTabCreates[localSessionID],
+            ids: addedLocalTabIDs
+        )
+        // Split tree-pane adds from float adds so each automation queue
+        // only sees IDs of the matching kind — otherwise a float create
+        // would wake a pending `pane.split` listener (and vice versa).
+        // Order within each set isn't meaningful (in practice only one
+        // pane is added per layoutUpdate in response to a split/create).
+        let newTreePaneIDs = Set(sessions[sessionIndex].tabs.flatMap(\.allPaneIDs))
+        let newFloatPaneIDs = Set(sessions[sessionIndex].tabs.flatMap {
+            $0.floatingPanes.map(\.pane.id)
+        })
+        let addedTreePaneIDs = newTreePaneIDs.subtracting(oldTreePaneIDs)
+        let addedFloatPaneIDs = newFloatPaneIDs.subtracting(oldFloatPaneIDs)
+        Self.drainRemoteCreateListeners(
+            queue: &pendingRemotePaneSplits[localSessionID],
+            ids: Array(addedTreePaneIDs)
+        )
+        Self.drainRemoteCreateListeners(
+            queue: &pendingRemoteFloatCreates[localSessionID],
+            ids: Array(addedFloatPaneIDs)
+        )
 
         applyPaneMetadata(info.paneMetadata)
 
