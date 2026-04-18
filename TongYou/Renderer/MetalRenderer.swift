@@ -554,19 +554,52 @@ final class MetalRenderer {
     func setContent(_ snapshot: ScreenSnapshot) {
         let selectionChanged = currentSnapshot?.selection != snapshot.selection
         currentSnapshot = snapshot
+
+        let preMergeFullRebuild = pendingDirtyRegion.fullRebuild
+        let preMergeScrollDelta = pendingDirtyRegion.scrollDelta
+        let preMergeDirtyCount = pendingDirtyRegion.dirtyCount
+
         pendingDirtyRegion.merge(snapshot.dirtyRegion)
         if selectionChanged {
             pendingDirtyRegion.markFull()
         }
 
+        GUILog.debug(
+            "setContent: partial=\(snapshot.isPartial) snapshotDirtyRows=\(snapshot.dirtyRows) scrollDelta=\(snapshot.dirtyRegion.scrollDelta) fullRebuild=\(snapshot.dirtyRegion.fullRebuild) | preMerge: full=\(preMergeFullRebuild) scroll=\(preMergeScrollDelta) dirty=\(preMergeDirtyCount) | postMerge: full=\(pendingDirtyRegion.fullRebuild) scroll=\(pendingDirtyRegion.scrollDelta) dirtyRows=\(pendingDirtyRegion.dirtyRows)",
+            category: .renderer
+        )
+
         if snapshot.isPartial {
             assert(snapshot.columns == backingColumns && snapshot.rows == backingRows,
                    "Partial snapshot size mismatch: expected \(backingColumns)x\(backingRows), got \(snapshot.columns)x\(snapshot.rows)")
+
+            // Shift backingCells up by scrollDelta so non-dirty rows reflect
+            // the scrolled content before we patch dirty rows on top.
+            let scrollDelta = snapshot.dirtyRegion.scrollDelta
+            if scrollDelta > 0 && scrollDelta < backingRows {
+                let cols = backingColumns
+                let shiftRows = backingRows - scrollDelta
+                let srcStart = scrollDelta * cols
+                let count = shiftRows * cols
+                backingCells.replaceSubrange(0..<count,
+                    with: backingCells[srcStart..<(srcStart + count)])
+                // Clear newly revealed bottom rows (dirty rows will overwrite them).
+                let clearStart = shiftRows * cols
+                let clearEnd = backingRows * cols
+                for i in clearStart..<clearEnd {
+                    backingCells[i] = .empty
+                }
+            }
+
             for (row, cells) in snapshot.partialRows {
                 let dst = row * backingColumns
                 backingCells.replaceSubrange(dst..<(dst + backingColumns), with: cells)
             }
             let copiedCount = snapshot.partialRows.map { $0.cells.count }.reduce(0, +)
+            GUILog.debug(
+                "setContent partial: copiedRows=\(snapshot.partialRows.map { $0.row }) copiedCells=\(copiedCount) backingSize=\(backingColumns)x\(backingRows)",
+                category: .renderer
+            )
             frameMetrics?.recordSnapshotCellCopyCount(copiedCount)
         } else {
             let count = snapshot.cells.count
@@ -588,6 +621,7 @@ final class MetalRenderer {
         }
 
         if pendingDirtyRegion.fullRebuild {
+            GUILog.debug("setContent: pendingDirtyRegion.fullRebuild → markAllFramesDirty", category: .renderer)
             markAllFramesDirty()
         } else {
             instanceRebuildCounter = 1
@@ -595,6 +629,7 @@ final class MetalRenderer {
             for i in frameStateDirtyRegions.indices {
                 frameStateDirtyRegions[i].merge(snapshot.dirtyRegion)
             }
+            GUILog.debug("setContent: partial path → instanceRebuildCounter=1", category: .renderer)
         }
     }
 
@@ -653,6 +688,11 @@ final class MetalRenderer {
             dirtyRegion = frameStateDirtyRegions[frameIndex]
             frameStateDirtyRegions[frameIndex] = .clean
         }
+
+        GUILog.debug(
+            "render: rebuildInstances=\(rebuildInstances) frameIdx=\(frameIndex) dirtyRegion: full=\(dirtyRegion.fullRebuild) scrollDelta=\(dirtyRegion.scrollDelta) dirtyRows=\(dirtyRegion.dirtyRows.prefix(10)) dirtyCount=\(dirtyRegion.dirtyCount)",
+            category: .renderer
+        )
 
         withUnsafeMutablePointer(to: &frameStates[frameIndex]) { frame in
             if rebuildInstances {
@@ -889,6 +929,11 @@ final class MetalRenderer {
         let snapCols = min(cols, backingColumns)
         let defaultBg = colorPalette.defaultBg
         let palette = colorPalette
+
+        GUILog.debug(
+            "fillBg: fullRebuild=\(dirtyRegion.fullRebuild) scrollDelta=\(dirtyRegion.scrollDelta) dirtyRows=\(dirtyRegion.dirtyRows.prefix(10)) rows=\(rows) backingRows=\(backingRows)",
+            category: .renderer
+        )
 
         // Cursor state
         let cursorVisible = snapshot?.cursorVisible ?? false
@@ -1403,6 +1448,11 @@ final class MetalRenderer {
         let fullRebuild = dirtyRegion.fullRebuild
             || frame.pointee.stagedRowInstances.count != rows
             || frame.pointee.stagedRowInstances.isEmpty
+
+        GUILog.debug(
+            "fillText: fullRebuild=\(fullRebuild) (region.full=\(dirtyRegion.fullRebuild) stagedCount=\(frame.pointee.stagedRowInstances.count) rows=\(rows)) dirtyRows=\(dirtyRegion.dirtyRows.prefix(10)) scrollDelta=\(dirtyRegion.scrollDelta)",
+            category: .renderer
+        )
 
         let colorState = makeTextColorState(snapshot: snapshot, searchLineMap: searchLineMap)
         let cellWidth = Float(fontSystem.cellSize.width)
