@@ -182,6 +182,25 @@ public final class AppControlClient {
         }
     }
 
+    /// Send `pane.sendText` — write raw UTF-8 text to the pane resolved from `ref`.
+    /// The server does not auto-append a newline; callers that want Enter must
+    /// follow up with `sendKey(ref:key:)` using `"Enter"`.
+    public func sendText(ref: String, text: String) throws {
+        let response = try sendCommand("pane.sendText", params: ["ref": ref, "text": text])
+        if case .error(let code, let message) = response {
+            throw AppControlError.serverError(code: code, message: message)
+        }
+    }
+
+    /// Send `pane.sendKey` — dispatch a parsed key spec (e.g. `"Ctrl+C"`) to
+    /// the pane resolved from `ref`.
+    public func sendKey(ref: String, key: String) throws {
+        let response = try sendCommand("pane.sendKey", params: ["ref": ref, "key": key])
+        if case .error(let code, let message) = response {
+            throw AppControlError.serverError(code: code, message: message)
+        }
+    }
+
     /// Send a raw command line and parse the single-line JSON response.
     /// Intended for internal use and future commands.
     func sendCommand(_ cmd: String) throws -> Response {

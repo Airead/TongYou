@@ -23,6 +23,8 @@ enum Command {
     case appCreate(name: String?, type: AutomationSessionType, json: Bool)
     case appClose(ref: String, json: Bool)
     case appAttach(ref: String, json: Bool)
+    case appSend(ref: String, text: String, json: Bool)
+    case appKey(ref: String, key: String, json: Bool)
 
     case help
 }
@@ -112,6 +114,20 @@ func parseAppArgs(_ args: [String]) -> Command {
             exit(1)
         }
         return .appAttach(ref: ref, json: json)
+    case "send":
+        guard rest.count >= 2 else {
+            fputs("tongyou: app send requires <ref> <text>\n", stderr)
+            exit(1)
+        }
+        // Allow text to contain spaces — remaining args are joined.
+        let text = rest.dropFirst().joined(separator: " ")
+        return .appSend(ref: rest[0], text: text, json: json)
+    case "key":
+        guard rest.count >= 2 else {
+            fputs("tongyou: app key requires <ref> <key>\n", stderr)
+            exit(1)
+        }
+        return .appKey(ref: rest[0], key: rest[1], json: json)
     case "--help", "-h", "help":
         printAppUsage()
         exit(0)
@@ -158,6 +174,8 @@ func printAppUsage() {
       create [name] [--local|--remote] Create a new session; --local is default.
       close <ref>                      Close the session identified by ref.
       attach <ref>                     Attach a detached remote session.
+      send <ref> <text>                Send raw UTF-8 text to the target pane (no trailing newline).
+      key <ref> <key>                  Send a key event (e.g. Enter, Ctrl+C, Alt+Left) to the target pane.
     """
     print(usage)
 }
@@ -212,6 +230,8 @@ func printUsage() {
       app create [name] [--remote]   Create a new session in the GUI
       app close <ref>                Close a session in the GUI by ref
       app attach <ref>               Attach a detached remote session by ref
+      app send <ref> <text>          Send text to the target pane (no trailing newline)
+      app key <ref> <key>            Send a key event (Enter, Ctrl+C, …) to the target pane
 
     Other:
       help                      Show this help message
@@ -588,6 +608,42 @@ func appAttach(ref: String, json: Bool) {
     if json { printJSONResult("null") }
 }
 
+func appSend(ref: String, text: String, json: Bool) {
+    let client = connectToGUIOrExit()
+    do {
+        try client.sendText(ref: ref, text: text)
+    } catch AppControlError.serverError(let code, let message) {
+        if json {
+            printJSONError(code: code, message: message)
+        } else {
+            fputs("tongyou: GUI returned error: \(code): \(message)\n", stderr)
+        }
+        exit(1)
+    } catch {
+        fputs("tongyou: send failed: \(error)\n", stderr)
+        exit(1)
+    }
+    if json { printJSONResult("null") }
+}
+
+func appKey(ref: String, key: String, json: Bool) {
+    let client = connectToGUIOrExit()
+    do {
+        try client.sendKey(ref: ref, key: key)
+    } catch AppControlError.serverError(let code, let message) {
+        if json {
+            printJSONError(code: code, message: message)
+        } else {
+            fputs("tongyou: GUI returned error: \(code): \(message)\n", stderr)
+        }
+        exit(1)
+    } catch {
+        fputs("tongyou: key failed: \(error)\n", stderr)
+        exit(1)
+    }
+    if json { printJSONResult("null") }
+}
+
 private func printJSONResult(_ resultFragment: String) {
     print(#"{"ok":true,"result":\#(resultFragment)}"#)
 }
@@ -687,6 +743,10 @@ case .appClose(let ref, let json):
     appClose(ref: ref, json: json)
 case .appAttach(let ref, let json):
     appAttach(ref: ref, json: json)
+case .appSend(let ref, let text, let json):
+    appSend(ref: ref, text: text, json: json)
+case .appKey(let ref, let key, let json):
+    appKey(ref: ref, key: key, json: json)
 case .help:
     printUsage()
 }

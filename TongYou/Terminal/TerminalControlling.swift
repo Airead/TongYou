@@ -19,6 +19,9 @@ protocol TerminalControlling: AnyObject {
 
     func handleKeyDown(_ event: NSEvent)
     func sendText(_ text: String)
+    /// Send a pre-composed key event (produced by `AutomationKeySpec`) to the PTY.
+    /// Bypasses NSEvent so automation callers don't need an AppKit event stream.
+    func sendKey(_ input: KeyEncoder.KeyInput)
 
     // MARK: - Scrollback
 

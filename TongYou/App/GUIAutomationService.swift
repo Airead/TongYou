@@ -46,6 +46,16 @@ final class GUIAutomationService {
                 let service = self
                 return service?.handleSessionAttach(ref: ref)
                     ?? .failure(.internal("GUIAutomationService deallocated"))
+            },
+            handlePaneSendText: { [weak self] ref, text in
+                let service = self
+                return service?.handlePaneSendText(ref: ref, text: text)
+                    ?? .failure(.internal("GUIAutomationService deallocated"))
+            },
+            handlePaneSendKey: { [weak self] ref, input in
+                let service = self
+                return service?.handlePaneSendKey(ref: ref, input: input)
+                    ?? .failure(.internal("GUIAutomationService deallocated"))
             }
         )
         let instance = GUIAutomationServer(configuration: config)
@@ -139,6 +149,23 @@ final class GUIAutomationService {
         Self.runOnMain { self.attachSessionOnMain(ref: ref) }
     }
 
+    // MARK: - pane.sendText / pane.sendKey
+    //
+    // These are **not** in the focus whitelist — they must never bring the
+    // window to the foreground. That rule is enforced here by simply not
+    // calling `NSApp.activate` in the main-actor paths below.
+
+    nonisolated private func handlePaneSendText(ref: String, text: String) -> Result<Void, AutomationError> {
+        Self.runOnMain { self.sendTextOnMain(ref: ref, text: text) }
+    }
+
+    nonisolated private func handlePaneSendKey(
+        ref: String,
+        input: KeyEncoder.KeyInput
+    ) -> Result<Void, AutomationError> {
+        Self.runOnMain { self.sendKeyOnMain(ref: ref, input: input) }
+    }
+
     // MARK: - MainActor operations
 
     private func createLocalSessionOnMain(name: String?) -> Result<SessionCreateResponse, AutomationError> {
@@ -221,6 +248,76 @@ final class GUIAutomationService {
         manager.attachRemoteSession(serverSessionID: serverSessionID)
         Self.activateApp()
         return .success(())
+    }
+
+    private func sendTextOnMain(ref: String, text: String) -> Result<Void, AutomationError> {
+        switch resolvePaneController(ref: ref) {
+        case .success(let controller):
+            controller.sendText(text)
+            return .success(())
+        case .failure(let err):
+            return .failure(err)
+        }
+    }
+
+    private func sendKeyOnMain(ref: String, input: KeyEncoder.KeyInput) -> Result<Void, AutomationError> {
+        switch resolvePaneController(ref: ref) {
+        case .success(let controller):
+            controller.sendKey(input)
+            return .success(())
+        case .failure(let err):
+            return .failure(err)
+        }
+    }
+
+    /// Resolve a ref (session / tab / pane / float) to the `TerminalControlling`
+    /// that should receive the input event. Session- and tab-level refs pick
+    /// the currently focused pane, falling back to the tab's first tree pane.
+    private func resolvePaneController(ref: String) -> Result<any TerminalControlling, AutomationError> {
+        let snapshots = Self.collectSnapshots()
+        refStore.refreshRefs(snapshots: snapshots)
+
+        let target: GUIAutomationRefStore.ResolvedTarget
+        do {
+            target = try refStore.resolve(refString: ref)
+        } catch let err as AutomationError {
+            return .failure(err)
+        } catch {
+            return .failure(.internal("ref resolution failed: \(error)"))
+        }
+
+        guard let manager = SessionManagerRegistry.shared.manager(owning: target.sessionID) else {
+            return .failure(.sessionNotFound(ref))
+        }
+        guard let session = manager.sessions.first(where: { $0.id == target.sessionID }) else {
+            return .failure(.sessionNotFound(ref))
+        }
+
+        let paneID: UUID
+        if let explicit = target.paneID ?? target.floatID {
+            paneID = explicit
+        } else {
+            // Session- or tab-level ref: resolve to the focused pane, fallback first tree pane.
+            let tab: TerminalTab?
+            if let tabID = target.tabID {
+                tab = session.tabs.first(where: { $0.id == tabID })
+            } else {
+                tab = session.activeTab
+            }
+            guard let resolvedTab = tab else {
+                return .failure(.paneNotFound(ref))
+            }
+            if let focused = resolvedTab.focusedPaneID, resolvedTab.hasPane(id: focused) {
+                paneID = focused
+            } else {
+                paneID = resolvedTab.paneTree.firstPane.id
+            }
+        }
+
+        guard let controller = manager.controller(for: paneID) else {
+            return .failure(.paneNotFound(ref))
+        }
+        return .success(controller)
     }
 
     // MARK: - Remote create: blocking wait

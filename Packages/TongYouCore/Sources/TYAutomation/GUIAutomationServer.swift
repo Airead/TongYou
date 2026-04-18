@@ -7,6 +7,7 @@ import Glibc
 import Foundation
 import TYProtocol
 import TYServer
+import TYTerminal
 
 /// Errors raised during server startup.
 public enum GUIAutomationServerError: Error {
@@ -44,6 +45,13 @@ public final class GUIAutomationServer: @unchecked Sendable {
         /// return `.unsupportedOperation`.
         /// Focus-whitelisted (see `handleSessionCreate`).
         public let handleSessionAttach: (@Sendable (String) -> Result<Void, AutomationError>)?
+        /// Writes raw UTF-8 text to the pane resolved from `ref`. Ref may
+        /// refer to a session (→ focused pane), tab (→ focused pane), pane,
+        /// or float. Not focus-whitelisted — must not activate the window.
+        public let handlePaneSendText: (@Sendable (String, String) -> Result<Void, AutomationError>)?
+        /// Sends a parsed key input (already run through `AutomationKeySpec`)
+        /// to the pane resolved from `ref`. Not focus-whitelisted.
+        public let handlePaneSendKey: (@Sendable (String, KeyEncoder.KeyInput) -> Result<Void, AutomationError>)?
 
         public init(
             socketPath: String = GUIAutomationPaths.socketPath(),
@@ -52,7 +60,9 @@ public final class GUIAutomationServer: @unchecked Sendable {
             handleSessionList: (@Sendable () -> SessionListResponse)? = nil,
             handleSessionCreate: (@Sendable (String?, AutomationSessionType) -> Result<SessionCreateResponse, AutomationError>)? = nil,
             handleSessionClose: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
-            handleSessionAttach: (@Sendable (String) -> Result<Void, AutomationError>)? = nil
+            handleSessionAttach: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
+            handlePaneSendText: (@Sendable (String, String) -> Result<Void, AutomationError>)? = nil,
+            handlePaneSendKey: (@Sendable (String, KeyEncoder.KeyInput) -> Result<Void, AutomationError>)? = nil
         ) {
             self.socketPath = socketPath
             self.tokenPath = tokenPath
@@ -61,6 +71,8 @@ public final class GUIAutomationServer: @unchecked Sendable {
             self.handleSessionCreate = handleSessionCreate
             self.handleSessionClose = handleSessionClose
             self.handleSessionAttach = handleSessionAttach
+            self.handlePaneSendText = handlePaneSendText
+            self.handlePaneSendKey = handlePaneSendKey
         }
     }
 
@@ -274,6 +286,10 @@ public final class GUIAutomationServer: @unchecked Sendable {
             return handleSessionCloseCommand(request: request, config: config)
         case "session.attach":
             return handleSessionAttachCommand(request: request, config: config)
+        case "pane.sendText":
+            return handlePaneSendTextCommand(request: request, config: config)
+        case "pane.sendKey":
+            return handlePaneSendKeyCommand(request: request, config: config)
         default:
             return .error(code: "UNKNOWN_COMMAND", message: "unknown command: \(request.cmd)")
         }
@@ -349,6 +365,57 @@ public final class GUIAutomationServer: @unchecked Sendable {
             return .error(code: "INVALID_PARAMS", message: "`ref` is required")
         }
         switch handler(ref) {
+        case .success:
+            return .success(.null)
+        case .failure(let error):
+            return .error(code: error.code, message: error.message)
+        }
+    }
+
+    private static func handlePaneSendTextCommand(
+        request: ParsedRequest,
+        config: Configuration
+    ) -> JSONResponse {
+        guard let handler = config.handlePaneSendText else {
+            return .error(code: "INTERNAL_ERROR", message: "pane.sendText not wired")
+        }
+        guard let ref = request.params["ref"] as? String, !ref.isEmpty else {
+            return .error(code: "INVALID_PARAMS", message: "`ref` is required")
+        }
+        // `text` may legitimately be empty (no-op); a missing or non-string value is rejected.
+        guard let text = request.params["text"] as? String else {
+            return .error(code: "INVALID_PARAMS", message: "`text` must be a string")
+        }
+        switch handler(ref, text) {
+        case .success:
+            return .success(.null)
+        case .failure(let error):
+            return .error(code: error.code, message: error.message)
+        }
+    }
+
+    private static func handlePaneSendKeyCommand(
+        request: ParsedRequest,
+        config: Configuration
+    ) -> JSONResponse {
+        guard let handler = config.handlePaneSendKey else {
+            return .error(code: "INTERNAL_ERROR", message: "pane.sendKey not wired")
+        }
+        guard let ref = request.params["ref"] as? String, !ref.isEmpty else {
+            return .error(code: "INVALID_PARAMS", message: "`ref` is required")
+        }
+        guard let key = request.params["key"] as? String, !key.isEmpty else {
+            return .error(code: "INVALID_PARAMS", message: "`key` is required")
+        }
+        let input: KeyEncoder.KeyInput
+        do {
+            input = try AutomationKeySpec.parse(key)
+        } catch let err as AutomationError {
+            return .error(code: err.code, message: err.message)
+        } catch {
+            return .error(code: "INVALID_PARAMS", message: "failed to parse key: \(error)")
+        }
+        switch handler(ref, input) {
         case .success:
             return .success(.null)
         case .failure(let error):
