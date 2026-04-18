@@ -835,6 +835,222 @@ struct GUIAutomationServerTests {
         #expect(resp.contains("\"code\":\"INVALID_PARAMS\""))
     }
 
+    // MARK: - floatPane.create / focus / close / pin / move
+
+    @Test func floatPaneCreateReturnsRef() throws {
+        let (baseConfig, tmpDir) = Self.isolatedConfig()
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        final class Captured: @unchecked Sendable { var ref: String? }
+        let captured = Captured()
+
+        let config = GUIAutomationServer.Configuration(
+            socketPath: baseConfig.socketPath,
+            tokenPath: baseConfig.tokenPath,
+            allowedPeerUID: baseConfig.allowedPeerUID,
+            handleFloatPaneCreate: { ref in
+                captured.ref = ref
+                return .success(FloatPaneCreateResponse(ref: "dev/float:1"))
+            }
+        )
+        let server = GUIAutomationServer(configuration: config)
+        try server.start()
+        defer { server.stop() }
+        Thread.sleep(forTimeInterval: 0.05)
+
+        let token = try #require(GUIAutomationAuth.read(tokenPath: config.tokenPath))
+        let socket = try TYSocket.connect(path: config.socketPath)
+        defer { socket.closeSocket() }
+
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        _ = try Self.readLine(socket)
+
+        try Self.sendLine(socket, #"{"cmd":"floatPane.create","ref":"dev"}"#)
+        let resp = try #require(try Self.readLine(socket))
+        #expect(resp.contains("\"ok\":true"))
+        #expect(resp.contains("dev/float:1") || resp.contains(#"dev\/float:1"#))
+        #expect(captured.ref == "dev")
+    }
+
+    @Test func floatPaneFocusForwardsRef() throws {
+        let (baseConfig, tmpDir) = Self.isolatedConfig()
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        final class Captured: @unchecked Sendable { var ref: String? }
+        let captured = Captured()
+
+        let config = GUIAutomationServer.Configuration(
+            socketPath: baseConfig.socketPath,
+            tokenPath: baseConfig.tokenPath,
+            allowedPeerUID: baseConfig.allowedPeerUID,
+            handleFloatPaneFocus: { ref in
+                captured.ref = ref
+                return .success(())
+            }
+        )
+        let server = GUIAutomationServer(configuration: config)
+        try server.start()
+        defer { server.stop() }
+        Thread.sleep(forTimeInterval: 0.05)
+
+        let token = try #require(GUIAutomationAuth.read(tokenPath: config.tokenPath))
+        let socket = try TYSocket.connect(path: config.socketPath)
+        defer { socket.closeSocket() }
+
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        _ = try Self.readLine(socket)
+
+        try Self.sendLine(socket, #"{"cmd":"floatPane.focus","ref":"dev/float:2"}"#)
+        let resp = try #require(try Self.readLine(socket))
+        #expect(resp.contains("\"ok\":true"))
+        #expect(captured.ref == "dev/float:2")
+    }
+
+    @Test func floatPaneCloseForwardsRef() throws {
+        let (baseConfig, tmpDir) = Self.isolatedConfig()
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        final class Captured: @unchecked Sendable { var ref: String? }
+        let captured = Captured()
+
+        let config = GUIAutomationServer.Configuration(
+            socketPath: baseConfig.socketPath,
+            tokenPath: baseConfig.tokenPath,
+            allowedPeerUID: baseConfig.allowedPeerUID,
+            handleFloatPaneClose: { ref in
+                captured.ref = ref
+                return .success(())
+            }
+        )
+        let server = GUIAutomationServer(configuration: config)
+        try server.start()
+        defer { server.stop() }
+        Thread.sleep(forTimeInterval: 0.05)
+
+        let token = try #require(GUIAutomationAuth.read(tokenPath: config.tokenPath))
+        let socket = try TYSocket.connect(path: config.socketPath)
+        defer { socket.closeSocket() }
+
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        _ = try Self.readLine(socket)
+
+        try Self.sendLine(socket, #"{"cmd":"floatPane.close","ref":"dev/float:1"}"#)
+        let resp = try #require(try Self.readLine(socket))
+        #expect(resp.contains("\"ok\":true"))
+        #expect(captured.ref == "dev/float:1")
+    }
+
+    @Test func floatPanePinForwardsRef() throws {
+        let (baseConfig, tmpDir) = Self.isolatedConfig()
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        final class Captured: @unchecked Sendable { var ref: String? }
+        let captured = Captured()
+
+        let config = GUIAutomationServer.Configuration(
+            socketPath: baseConfig.socketPath,
+            tokenPath: baseConfig.tokenPath,
+            allowedPeerUID: baseConfig.allowedPeerUID,
+            handleFloatPanePin: { ref in
+                captured.ref = ref
+                return .success(())
+            }
+        )
+        let server = GUIAutomationServer(configuration: config)
+        try server.start()
+        defer { server.stop() }
+        Thread.sleep(forTimeInterval: 0.05)
+
+        let token = try #require(GUIAutomationAuth.read(tokenPath: config.tokenPath))
+        let socket = try TYSocket.connect(path: config.socketPath)
+        defer { socket.closeSocket() }
+
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        _ = try Self.readLine(socket)
+
+        try Self.sendLine(socket, #"{"cmd":"floatPane.pin","ref":"dev/float:1"}"#)
+        let resp = try #require(try Self.readLine(socket))
+        #expect(resp.contains("\"ok\":true"))
+        #expect(captured.ref == "dev/float:1")
+    }
+
+    @Test func floatPaneMoveForwardsFrame() throws {
+        let (baseConfig, tmpDir) = Self.isolatedConfig()
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        final class Captured: @unchecked Sendable {
+            var ref: String?
+            var frame: FloatPaneFrame?
+        }
+        let captured = Captured()
+
+        let config = GUIAutomationServer.Configuration(
+            socketPath: baseConfig.socketPath,
+            tokenPath: baseConfig.tokenPath,
+            allowedPeerUID: baseConfig.allowedPeerUID,
+            handleFloatPaneMove: { ref, frame in
+                captured.ref = ref
+                captured.frame = frame
+                return .success(())
+            }
+        )
+        let server = GUIAutomationServer(configuration: config)
+        try server.start()
+        defer { server.stop() }
+        Thread.sleep(forTimeInterval: 0.05)
+
+        let token = try #require(GUIAutomationAuth.read(tokenPath: config.tokenPath))
+        let socket = try TYSocket.connect(path: config.socketPath)
+        defer { socket.closeSocket() }
+
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        _ = try Self.readLine(socket)
+
+        try Self.sendLine(
+            socket,
+            #"{"cmd":"floatPane.move","ref":"dev/float:1","x":0.1,"y":0.2,"width":0.3,"height":0.4}"#
+        )
+        let resp = try #require(try Self.readLine(socket))
+        #expect(resp.contains("\"ok\":true"))
+        #expect(captured.ref == "dev/float:1")
+        let frame = try #require(captured.frame)
+        #expect(abs(frame.x - 0.1) < 1e-9)
+        #expect(abs(frame.y - 0.2) < 1e-9)
+        #expect(abs(frame.width - 0.3) < 1e-9)
+        #expect(abs(frame.height - 0.4) < 1e-9)
+    }
+
+    @Test func floatPaneMoveRejectsFrameOutOfRange() throws {
+        let (baseConfig, tmpDir) = Self.isolatedConfig()
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        let config = GUIAutomationServer.Configuration(
+            socketPath: baseConfig.socketPath,
+            tokenPath: baseConfig.tokenPath,
+            allowedPeerUID: baseConfig.allowedPeerUID,
+            handleFloatPaneMove: { _, _ in .success(()) }
+        )
+        let server = GUIAutomationServer(configuration: config)
+        try server.start()
+        defer { server.stop() }
+        Thread.sleep(forTimeInterval: 0.05)
+
+        let token = try #require(GUIAutomationAuth.read(tokenPath: config.tokenPath))
+        let socket = try TYSocket.connect(path: config.socketPath)
+        defer { socket.closeSocket() }
+
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        _ = try Self.readLine(socket)
+
+        // width + x exceeds 1 — must be rejected before reaching the handler.
+        try Self.sendLine(
+            socket,
+            #"{"cmd":"floatPane.move","ref":"dev/float:1","x":0.8,"y":0.0,"width":0.5,"height":0.1}"#
+        )
+        let resp = try #require(try Self.readLine(socket))
+        #expect(resp.contains("\"code\":\"INVALID_PARAMS\""))
+    }
+
     @Test func sessionListRoutesThroughMainActorHandler() throws {
         let (baseConfig, tmpDir) = Self.isolatedConfig()
         defer { try? FileManager.default.removeItem(atPath: tmpDir) }

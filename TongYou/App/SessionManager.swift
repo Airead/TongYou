@@ -88,6 +88,11 @@ final class SessionManager {
     /// See `pendingRemoteTabCreates` for semantics.
     private var pendingRemotePaneSplits: [UUID: [(UUID?) -> Void]] = [:]
 
+    /// FIFO queues of completions awaiting the next newly-materialized
+    /// floating pane in a remote session's layoutUpdate. Keyed by local
+    /// session UUID. See `pendingRemoteTabCreates` for semantics.
+    private var pendingRemoteFloatCreates: [UUID: [(UUID?) -> Void]] = [:]
+
     /// Local session persistence store.
     private let localSessionStore: SessionStore
 
@@ -1108,6 +1113,10 @@ final class SessionManager {
         let paneQueues = pendingRemotePaneSplits
         pendingRemotePaneSplits.removeAll()
         for queue in paneQueues.values { for completion in queue { completion(nil) } }
+
+        let floatQueues = pendingRemoteFloatCreates
+        pendingRemoteFloatCreates.removeAll()
+        for queue in floatQueues.values { for completion in queue { completion(nil) } }
     }
 
     /// Register a one-shot FIFO listener for the next tab that appears in
@@ -1133,6 +1142,18 @@ final class SessionManager {
         completion: @escaping (UUID?) -> Void
     ) {
         pendingRemotePaneSplits[sessionID, default: []].append(completion)
+    }
+
+    /// Register a one-shot FIFO listener for the next floating pane that
+    /// appears in the given remote session via a `layoutUpdate`. See
+    /// `onNextRemoteTabCreated` for semantics. Delivers the inner
+    /// TerminalPane UUID — the same ID used by `closeFloatingPane(paneID:)`
+    /// and friends.
+    func onNextRemoteFloatCreated(
+        inSessionID sessionID: UUID,
+        completion: @escaping (UUID?) -> Void
+    ) {
+        pendingRemoteFloatCreates[sessionID, default: []].append(completion)
     }
 
     /// Pop completions from the per-session FIFO queue and deliver the
@@ -1468,6 +1489,11 @@ final class SessionManager {
             return removedPaneIDs
         }
 
+        let oldTreePaneIDs = Set(sessions[sessionIndex].tabs.flatMap(\.allPaneIDs))
+        let oldFloatPaneIDs = Set(sessions[sessionIndex].tabs.flatMap {
+            $0.floatingPanes.map(\.pane.id)
+        })
+
         sessions[sessionIndex].tabs = newTabs
         sessions[sessionIndex].activeTabIndex = min(
             info.activeTabIndex, max(sessions[sessionIndex].tabs.count - 1, 0)
@@ -1491,12 +1517,24 @@ final class SessionManager {
             queue: &pendingRemoteTabCreates[localSessionID],
             ids: addedLocalTabIDs
         )
-        // Pane IDs come from a Set — order isn't meaningful for split-result
-        // matching, so pass through as-is. In practice only one pane is added
-        // per layoutUpdate in response to a split request.
+        // Split tree-pane adds from float adds so each automation queue
+        // only sees IDs of the matching kind — otherwise a float create
+        // would wake a pending `pane.split` listener (and vice versa).
+        // Order within each set isn't meaningful (in practice only one
+        // pane is added per layoutUpdate in response to a split/create).
+        let newTreePaneIDs = Set(sessions[sessionIndex].tabs.flatMap(\.allPaneIDs))
+        let newFloatPaneIDs = Set(sessions[sessionIndex].tabs.flatMap {
+            $0.floatingPanes.map(\.pane.id)
+        })
+        let addedTreePaneIDs = newTreePaneIDs.subtracting(oldTreePaneIDs)
+        let addedFloatPaneIDs = newFloatPaneIDs.subtracting(oldFloatPaneIDs)
         Self.drainRemoteCreateListeners(
             queue: &pendingRemotePaneSplits[localSessionID],
-            ids: Array(addedPaneIDs)
+            ids: Array(addedTreePaneIDs)
+        )
+        Self.drainRemoteCreateListeners(
+            queue: &pendingRemoteFloatCreates[localSessionID],
+            ids: Array(addedFloatPaneIDs)
         )
 
         applyPaneMetadata(info.paneMetadata)

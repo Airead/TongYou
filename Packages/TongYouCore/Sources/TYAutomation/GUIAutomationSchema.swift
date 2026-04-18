@@ -115,3 +115,33 @@ public struct PaneSplitResponse: Codable, Sendable, Equatable {
         self.ref = ref
     }
 }
+
+// MARK: - floatPane.create response
+
+/// The `floatPane.create` response body (goes under `result`).
+public struct FloatPaneCreateResponse: Codable, Sendable, Equatable {
+    public let ref: String
+
+    public init(ref: String) {
+        self.ref = ref
+    }
+}
+
+// MARK: - floatPane.move params
+
+/// Normalized (0–1) frame carried by `floatPane.move`. All four components
+/// are required; validation (finite, in [0, 1], minimum size) happens in
+/// the server handler before it hits the GUI.
+public struct FloatPaneFrame: Sendable, Equatable {
+    public let x: Double
+    public let y: Double
+    public let width: Double
+    public let height: Double
+
+    public init(x: Double, y: Double, width: Double, height: Double) {
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+    }
+}

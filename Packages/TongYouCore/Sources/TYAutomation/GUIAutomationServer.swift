@@ -75,6 +75,23 @@ public final class GUIAutomationServer: @unchecked Sendable {
         /// at its parent split. `ratio` is a value in `(0.0, 1.0)`. Not
         /// focus-whitelisted.
         public let handlePaneResize: (@Sendable (String, Double) -> Result<Void, AutomationError>)?
+        /// Creates a new floating pane in the session resolved from `ref`.
+        /// The session ref determines which tab hosts the new float (server
+        /// uses the active tab). Returns the newly allocated float ref.
+        /// Not focus-whitelisted.
+        public let handleFloatPaneCreate: (@Sendable (String) -> Result<FloatPaneCreateResponse, AutomationError>)?
+        /// Focuses the floating pane resolved from `ref`. Phase 7 will treat
+        /// this as a focus-whitelisted command — implementations may activate
+        /// the window.
+        public let handleFloatPaneFocus: (@Sendable (String) -> Result<Void, AutomationError>)?
+        /// Closes the floating pane resolved from `ref`. Not focus-whitelisted.
+        public let handleFloatPaneClose: (@Sendable (String) -> Result<Void, AutomationError>)?
+        /// Toggles the `isPinned` state on the floating pane resolved from
+        /// `ref`. Not focus-whitelisted.
+        public let handleFloatPanePin: (@Sendable (String) -> Result<Void, AutomationError>)?
+        /// Moves / resizes the floating pane resolved from `ref`. Frame uses
+        /// normalized (0–1) coordinates. Not focus-whitelisted.
+        public let handleFloatPaneMove: (@Sendable (String, FloatPaneFrame) -> Result<Void, AutomationError>)?
 
         public init(
             socketPath: String = GUIAutomationPaths.socketPath(),
@@ -93,7 +110,12 @@ public final class GUIAutomationServer: @unchecked Sendable {
             handlePaneSplit: (@Sendable (String, SplitDirection) -> Result<PaneSplitResponse, AutomationError>)? = nil,
             handlePaneFocus: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
             handlePaneClose: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
-            handlePaneResize: (@Sendable (String, Double) -> Result<Void, AutomationError>)? = nil
+            handlePaneResize: (@Sendable (String, Double) -> Result<Void, AutomationError>)? = nil,
+            handleFloatPaneCreate: (@Sendable (String) -> Result<FloatPaneCreateResponse, AutomationError>)? = nil,
+            handleFloatPaneFocus: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
+            handleFloatPaneClose: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
+            handleFloatPanePin: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
+            handleFloatPaneMove: (@Sendable (String, FloatPaneFrame) -> Result<Void, AutomationError>)? = nil
         ) {
             self.socketPath = socketPath
             self.tokenPath = tokenPath
@@ -112,6 +134,11 @@ public final class GUIAutomationServer: @unchecked Sendable {
             self.handlePaneFocus = handlePaneFocus
             self.handlePaneClose = handlePaneClose
             self.handlePaneResize = handlePaneResize
+            self.handleFloatPaneCreate = handleFloatPaneCreate
+            self.handleFloatPaneFocus = handleFloatPaneFocus
+            self.handleFloatPaneClose = handleFloatPaneClose
+            self.handleFloatPanePin = handleFloatPanePin
+            self.handleFloatPaneMove = handleFloatPaneMove
         }
     }
 
@@ -345,6 +372,16 @@ public final class GUIAutomationServer: @unchecked Sendable {
             return handlePaneCloseCommand(request: request, config: config)
         case "pane.resize":
             return handlePaneResizeCommand(request: request, config: config)
+        case "floatPane.create":
+            return handleFloatPaneCreateCommand(request: request, config: config)
+        case "floatPane.focus":
+            return handleFloatPaneFocusCommand(request: request, config: config)
+        case "floatPane.close":
+            return handleFloatPaneCloseCommand(request: request, config: config)
+        case "floatPane.pin":
+            return handleFloatPanePinCommand(request: request, config: config)
+        case "floatPane.move":
+            return handleFloatPaneMoveCommand(request: request, config: config)
         default:
             return .error(code: "UNKNOWN_COMMAND", message: "unknown command: \(request.cmd)")
         }
@@ -642,6 +679,126 @@ public final class GUIAutomationServer: @unchecked Sendable {
             )
         }
         switch handler(ref, ratio) {
+        case .success:
+            return .success(.null)
+        case .failure(let error):
+            return .error(code: error.code, message: error.message)
+        }
+    }
+
+    private static func handleFloatPaneCreateCommand(
+        request: ParsedRequest,
+        config: Configuration
+    ) -> JSONResponse {
+        guard let handler = config.handleFloatPaneCreate else {
+            return .error(code: "INTERNAL_ERROR", message: "floatPane.create not wired")
+        }
+        guard let ref = request.params["ref"] as? String, !ref.isEmpty else {
+            return .error(code: "INVALID_PARAMS", message: "`ref` is required")
+        }
+        switch handler(ref) {
+        case .success(let payload):
+            return encodeCodableResult(payload)
+        case .failure(let error):
+            return .error(code: error.code, message: error.message)
+        }
+    }
+
+    private static func handleFloatPaneFocusCommand(
+        request: ParsedRequest,
+        config: Configuration
+    ) -> JSONResponse {
+        guard let handler = config.handleFloatPaneFocus else {
+            return .error(code: "INTERNAL_ERROR", message: "floatPane.focus not wired")
+        }
+        guard let ref = request.params["ref"] as? String, !ref.isEmpty else {
+            return .error(code: "INVALID_PARAMS", message: "`ref` is required")
+        }
+        switch handler(ref) {
+        case .success:
+            return .success(.null)
+        case .failure(let error):
+            return .error(code: error.code, message: error.message)
+        }
+    }
+
+    private static func handleFloatPaneCloseCommand(
+        request: ParsedRequest,
+        config: Configuration
+    ) -> JSONResponse {
+        guard let handler = config.handleFloatPaneClose else {
+            return .error(code: "INTERNAL_ERROR", message: "floatPane.close not wired")
+        }
+        guard let ref = request.params["ref"] as? String, !ref.isEmpty else {
+            return .error(code: "INVALID_PARAMS", message: "`ref` is required")
+        }
+        switch handler(ref) {
+        case .success:
+            return .success(.null)
+        case .failure(let error):
+            return .error(code: error.code, message: error.message)
+        }
+    }
+
+    private static func handleFloatPanePinCommand(
+        request: ParsedRequest,
+        config: Configuration
+    ) -> JSONResponse {
+        guard let handler = config.handleFloatPanePin else {
+            return .error(code: "INTERNAL_ERROR", message: "floatPane.pin not wired")
+        }
+        guard let ref = request.params["ref"] as? String, !ref.isEmpty else {
+            return .error(code: "INVALID_PARAMS", message: "`ref` is required")
+        }
+        switch handler(ref) {
+        case .success:
+            return .success(.null)
+        case .failure(let error):
+            return .error(code: error.code, message: error.message)
+        }
+    }
+
+    private static func handleFloatPaneMoveCommand(
+        request: ParsedRequest,
+        config: Configuration
+    ) -> JSONResponse {
+        guard let handler = config.handleFloatPaneMove else {
+            return .error(code: "INTERNAL_ERROR", message: "floatPane.move not wired")
+        }
+        guard let ref = request.params["ref"] as? String, !ref.isEmpty else {
+            return .error(code: "INVALID_PARAMS", message: "`ref` is required")
+        }
+        // All four components are required and must parse as finite numbers.
+        // JSON parser may promote to Double, Int, or NSNumber — normalize.
+        func readNumber(_ key: String) -> Double? {
+            if let d = request.params[key] as? Double { return d }
+            if let n = request.params[key] as? NSNumber { return n.doubleValue }
+            return nil
+        }
+        guard let x = readNumber("x"),
+              let y = readNumber("y"),
+              let width = readNumber("width"),
+              let height = readNumber("height") else {
+            return .error(
+                code: "INVALID_PARAMS",
+                message: "`x`, `y`, `width`, `height` are all required numbers"
+            )
+        }
+        // Range check: origin in [0, 1], size in (0, 1], and origin+size ≤ 1.
+        // The GUI side clamps again, but rejecting obvious nonsense here gives
+        // the CLI a definite error instead of silent clamping.
+        guard [x, y, width, height].allSatisfy({ $0.isFinite }) else {
+            return .error(code: "INVALID_PARAMS", message: "frame components must be finite")
+        }
+        guard x >= 0, y >= 0, width > 0, height > 0,
+              x + width <= 1.0 + 1e-9, y + height <= 1.0 + 1e-9 else {
+            return .error(
+                code: "INVALID_PARAMS",
+                message: "frame must fit within [0, 1] with positive size"
+            )
+        }
+        let frame = FloatPaneFrame(x: x, y: y, width: width, height: height)
+        switch handler(ref, frame) {
         case .success:
             return .success(.null)
         case .failure(let error):

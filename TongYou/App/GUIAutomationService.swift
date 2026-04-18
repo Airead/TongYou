@@ -96,6 +96,31 @@ final class GUIAutomationService {
                 let service = self
                 return service?.handlePaneResize(ref: ref, ratio: ratio)
                     ?? .failure(.internal("GUIAutomationService deallocated"))
+            },
+            handleFloatPaneCreate: { [weak self] ref in
+                let service = self
+                return service?.handleFloatPaneCreate(ref: ref)
+                    ?? .failure(.internal("GUIAutomationService deallocated"))
+            },
+            handleFloatPaneFocus: { [weak self] ref in
+                let service = self
+                return service?.handleFloatPaneFocus(ref: ref)
+                    ?? .failure(.internal("GUIAutomationService deallocated"))
+            },
+            handleFloatPaneClose: { [weak self] ref in
+                let service = self
+                return service?.handleFloatPaneClose(ref: ref)
+                    ?? .failure(.internal("GUIAutomationService deallocated"))
+            },
+            handleFloatPanePin: { [weak self] ref in
+                let service = self
+                return service?.handleFloatPanePin(ref: ref)
+                    ?? .failure(.internal("GUIAutomationService deallocated"))
+            },
+            handleFloatPaneMove: { [weak self] ref, frame in
+                let service = self
+                return service?.handleFloatPaneMove(ref: ref, frame: frame)
+                    ?? .failure(.internal("GUIAutomationService deallocated"))
             }
         )
         let instance = GUIAutomationServer(configuration: config)
@@ -270,6 +295,51 @@ final class GUIAutomationService {
         ratio: Double
     ) -> Result<Void, AutomationError> {
         Self.runOnMain { self.paneResizeOnMain(ref: ref, ratio: ratio) }
+    }
+
+    // MARK: - floatPane.* (Phase 6)
+    //
+    // Only `floatPane.focus` is focus-whitelisted — it actively brings the
+    // GUI to the foreground on success. The rest mutate model state without
+    // activating the window.
+    //
+    // For remote sessions, `floatPane.create` follows the same blocking-
+    // semaphore pattern as `tab.create` / `pane.split`: we register a
+    // one-shot listener on `SessionManager`, send the RPC, then wait for
+    // the server's layoutUpdate to materialize the new float.
+
+    nonisolated private func handleFloatPaneCreate(ref: String) -> Result<FloatPaneCreateResponse, AutomationError> {
+        let remote: RemoteFloatCreateRequest?
+        switch (Self.runOnMain { self.resolveFloatCreateTarget(ref: ref) }) {
+        case .failure(let err): return .failure(err)
+        case .success(let decision):
+            switch decision {
+            case .local(let response): return .success(response)
+            case .failed(let err): return .failure(err)
+            case .remote(let req): remote = req
+            }
+        }
+        guard let remote else { return .failure(.internal("floatPane.create decision missing")) }
+        return createRemoteFloatBlocking(request: remote)
+    }
+
+    nonisolated private func handleFloatPaneFocus(ref: String) -> Result<Void, AutomationError> {
+        Self.runOnMain { self.floatPaneFocusOnMain(ref: ref) }
+    }
+
+    nonisolated private func handleFloatPaneClose(ref: String) -> Result<Void, AutomationError> {
+        Self.runOnMain { self.floatPaneCloseOnMain(ref: ref) }
+    }
+
+    nonisolated private func handleFloatPanePin(ref: String) -> Result<Void, AutomationError> {
+        Self.runOnMain { self.floatPanePinOnMain(ref: ref) }
+    }
+
+    nonisolated private func handleFloatPaneMove(
+        ref: String,
+        frame: FloatPaneFrame
+    ) -> Result<Void, AutomationError> {
+        Self.runOnMain { self.floatPaneMoveOnMain(ref: ref, frame: frame) }
     }
 
     // MARK: - MainActor operations
@@ -635,6 +705,159 @@ final class GUIAutomationService {
         }
     }
 
+    /// Outcome of `resolveFloatCreateTarget` — either the operation fully
+    /// completed locally, or a remote request is ready to dispatch.
+    private enum FloatCreateDecision {
+        case local(FloatPaneCreateResponse)
+        case remote(RemoteFloatCreateRequest)
+        case failed(AutomationError)
+    }
+
+    /// Parameters threaded to the connection-thread blocking waiter.
+    private struct RemoteFloatCreateRequest {
+        let originalRef: String
+        let sessionID: UUID
+    }
+
+    /// Parse/resolve the session ref and, for local sessions, create the
+    /// float inline. Remote sessions fall through so the caller can block-
+    /// wait on the server's layoutUpdate without holding the main actor.
+    private func resolveFloatCreateTarget(ref: String) -> Result<FloatCreateDecision, AutomationError> {
+        let snapshots = Self.collectSnapshots()
+        refStore.refreshRefs(snapshots: snapshots)
+
+        let parsed: AutomationRef
+        do {
+            parsed = try AutomationRef.parse(ref)
+        } catch let err as AutomationError {
+            return .failure(err)
+        } catch {
+            return .failure(.internal("ref parse failed: \(error)"))
+        }
+        guard case .session = parsed else {
+            return .failure(.invalidParams("floatPane.create requires a session ref"))
+        }
+
+        let target: GUIAutomationRefStore.ResolvedTarget
+        do {
+            target = try refStore.resolve(parsed)
+        } catch let err as AutomationError {
+            return .failure(err)
+        } catch {
+            return .failure(.internal("ref resolution failed: \(error)"))
+        }
+
+        guard let manager = SessionManagerRegistry.shared.manager(owning: target.sessionID) else {
+            return .failure(.sessionNotFound(ref))
+        }
+        guard let session = manager.sessions.first(where: { $0.id == target.sessionID }) else {
+            return .failure(.sessionNotFound(ref))
+        }
+
+        if session.source.serverSessionID != nil {
+            if let serverID = session.source.serverSessionID,
+               !manager.attachedRemoteSessionIDs.contains(serverID) {
+                return .failure(.unsupportedOperation(
+                    "session is detached; attach it first with 'tongyou app attach'"
+                ))
+            }
+            return .success(.remote(RemoteFloatCreateRequest(
+                originalRef: ref, sessionID: target.sessionID
+            )))
+        }
+
+        // Local: createFloatingPane operates on the active session — make
+        // sure the target session is active so the new float lands in the
+        // right tab.
+        if let idx = manager.sessions.firstIndex(where: { $0.id == target.sessionID }),
+           idx != manager.activeSessionIndex {
+            manager.selectSession(at: idx)
+        }
+        guard let newPaneID = manager.createFloatingPane() else {
+            return .success(.failed(.internal("floatPane.create failed")))
+        }
+        let postSnapshots = Self.collectSnapshots()
+        refStore.refreshRefs(snapshots: postSnapshots)
+        guard let newRef = refStore.floatRef(sessionID: target.sessionID, floatID: newPaneID) else {
+            return .success(.failed(.internal("ref allocation failed for new float pane")))
+        }
+        return .success(.local(FloatPaneCreateResponse(ref: newRef)))
+    }
+
+    private func floatPaneFocusOnMain(ref: String) -> Result<Void, AutomationError> {
+        switch resolveFloatTarget(ref: ref) {
+        case .failure(let err): return .failure(err)
+        case .success(let (manager, sessionID, paneID, tabID)):
+            // Bring the owning session / tab forward so the float is on-screen.
+            if let idx = manager.sessions.firstIndex(where: { $0.id == sessionID }),
+               idx != manager.activeSessionIndex {
+                manager.selectSession(at: idx)
+            }
+            if let tabID,
+               let session = manager.sessions.first(where: { $0.id == sessionID }),
+               let tabIdx = session.tabs.firstIndex(where: { $0.id == tabID }),
+               session.activeTabIndex != tabIdx {
+                manager.selectTab(inSessionID: sessionID, at: tabIdx)
+            }
+            // Raise the z-index so this float renders above any peers.
+            manager.bringFloatingPaneToFront(paneID: paneID)
+            manager.onFocusPaneRequest?(paneID)
+            manager.notifyPaneFocused(paneID)
+            Self.activateApp()
+            return .success(())
+        }
+    }
+
+    private func floatPaneCloseOnMain(ref: String) -> Result<Void, AutomationError> {
+        switch resolveFloatTarget(ref: ref) {
+        case .failure(let err): return .failure(err)
+        case .success(let (manager, _, paneID, _)):
+            guard manager.closeFloatingPane(paneID: paneID) else {
+                return .failure(.paneNotFound(ref))
+            }
+            return .success(())
+        }
+    }
+
+    private func floatPanePinOnMain(ref: String) -> Result<Void, AutomationError> {
+        switch resolveFloatTarget(ref: ref) {
+        case .failure(let err): return .failure(err)
+        case .success(let (manager, sessionID, paneID, _)):
+            // `toggleFloatingPanePin` only touches the *active* session's
+            // floats. Make the owning session active first so the toggle
+            // lands on the right float.
+            if let idx = manager.sessions.firstIndex(where: { $0.id == sessionID }),
+               idx != manager.activeSessionIndex {
+                manager.selectSession(at: idx)
+            }
+            manager.toggleFloatingPanePin(paneID: paneID)
+            return .success(())
+        }
+    }
+
+    private func floatPaneMoveOnMain(
+        ref: String,
+        frame: FloatPaneFrame
+    ) -> Result<Void, AutomationError> {
+        switch resolveFloatTarget(ref: ref) {
+        case .failure(let err): return .failure(err)
+        case .success(let (manager, sessionID, paneID, _)):
+            // `updateFloatingPaneFrame` operates on the active session only.
+            if let idx = manager.sessions.firstIndex(where: { $0.id == sessionID }),
+               idx != manager.activeSessionIndex {
+                manager.selectSession(at: idx)
+            }
+            let cgFrame = CGRect(
+                x: CGFloat(frame.x),
+                y: CGFloat(frame.y),
+                width: CGFloat(frame.width),
+                height: CGFloat(frame.height)
+            )
+            manager.updateFloatingPaneFrame(paneID: paneID, frame: cgFrame)
+            return .success(())
+        }
+    }
+
     private func paneResizeOnMain(
         ref: String,
         ratio: Double
@@ -708,6 +931,56 @@ final class GUIAutomationService {
             return .failure(.tabNotFound(ref))
         }
         return .success((manager, target.sessionID, tabIndex))
+    }
+
+    /// Resolve a float-only ref to `(manager, sessionID, paneID, tabID)`.
+    /// `paneID` is the inner TerminalPane UUID — the identifier used by
+    /// `SessionManager.closeFloatingPane(paneID:)` and friends. Rejects
+    /// session/tab/tree-pane refs.
+    private func resolveFloatTarget(
+        ref: String
+    ) -> Result<(SessionManager, UUID, UUID, UUID?), AutomationError> {
+        let snapshots = Self.collectSnapshots()
+        refStore.refreshRefs(snapshots: snapshots)
+
+        let parsed: AutomationRef
+        do {
+            parsed = try AutomationRef.parse(ref)
+        } catch let err as AutomationError {
+            return .failure(err)
+        } catch {
+            return .failure(.internal("ref parse failed: \(error)"))
+        }
+        guard case .float = parsed else {
+            return .failure(.invalidParams("expected a float ref like 'session/float:N'"))
+        }
+
+        let target: GUIAutomationRefStore.ResolvedTarget
+        do {
+            target = try refStore.resolve(parsed)
+        } catch let err as AutomationError {
+            return .failure(err)
+        } catch {
+            return .failure(.internal("ref resolution failed: \(error)"))
+        }
+
+        guard let manager = SessionManagerRegistry.shared.manager(owning: target.sessionID) else {
+            return .failure(.sessionNotFound(ref))
+        }
+        guard let paneID = target.floatID else {
+            return .failure(.floatNotFound(ref))
+        }
+        // Block float operations on detached remote sessions — the daemon
+        // owns the authoritative state, and local mutations would be
+        // discarded on the next layoutUpdate.
+        if let session = manager.sessions.first(where: { $0.id == target.sessionID }),
+           let serverID = session.source.serverSessionID,
+           !manager.attachedRemoteSessionIDs.contains(serverID) {
+            return .failure(.unsupportedOperation(
+                "session is detached; attach it first with 'tongyou app attach'"
+            ))
+        }
+        return .success((manager, target.sessionID, paneID, target.tabID))
     }
 
     /// Resolve a pane-or-float ref to `(manager, sessionID, paneID, tabID, isFloat)`.
@@ -977,6 +1250,68 @@ final class GUIAutomationService {
             direction: request.direction,
             newPane: TerminalPane()
         )
+    }
+
+    // MARK: - Remote floatPane.create: blocking wait
+
+    nonisolated private func createRemoteFloatBlocking(
+        request: RemoteFloatCreateRequest
+    ) -> Result<FloatPaneCreateResponse, AutomationError> {
+        let semaphore = DispatchSemaphore(value: 0)
+        let box = ResultBox<FloatPaneCreateResponse>()
+
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                self.startRemoteFloatCreate(request: request, box: box, signal: { semaphore.signal() })
+            }
+        }
+
+        let waitResult = semaphore.wait(timeout: .now() + Self.blockingWaitTimeout)
+        if waitResult == .timedOut { return .failure(.mainThreadTimeout) }
+        if let success = box.success { return .success(success) }
+        if let error = box.error { return .failure(error) }
+        return .failure(.internal("remote floatPane.create completed with no result"))
+    }
+
+    private func startRemoteFloatCreate(
+        request: RemoteFloatCreateRequest,
+        box: ResultBox<FloatPaneCreateResponse>,
+        signal: @escaping @Sendable () -> Void
+    ) {
+        guard let manager = SessionManagerRegistry.shared.manager(owning: request.sessionID) else {
+            box.error = .sessionNotFound(request.originalRef)
+            signal()
+            return
+        }
+        let sessionID = request.sessionID
+        manager.onNextRemoteFloatCreated(inSessionID: sessionID) { [weak self] newFloatPaneID in
+            guard let self else {
+                box.error = .internal("GUIAutomationService deallocated")
+                signal()
+                return
+            }
+            guard let newFloatPaneID else {
+                box.error = .internal("remote floatPane.create failed or connection dropped")
+                signal()
+                return
+            }
+            let snapshots = Self.collectSnapshots()
+            self.refStore.refreshRefs(snapshots: snapshots)
+            if let ref = self.refStore.floatRef(sessionID: sessionID, floatID: newFloatPaneID) {
+                box.success = FloatPaneCreateResponse(ref: ref)
+            } else {
+                box.error = .internal("ref allocation failed for new float pane")
+            }
+            signal()
+        }
+        // `createFloatingPane` on a remote session sends the RPC to the
+        // daemon; the local state mutates only when the layoutUpdate
+        // arrives and our listener above fires.
+        if let idx = manager.sessions.firstIndex(where: { $0.id == sessionID }),
+           idx != manager.activeSessionIndex {
+            manager.selectSession(at: idx)
+        }
+        _ = manager.createFloatingPane()
     }
 
     @MainActor

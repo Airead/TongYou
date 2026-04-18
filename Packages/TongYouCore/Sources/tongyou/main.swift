@@ -34,6 +34,11 @@ enum Command {
     case appFocusPane(ref: String, json: Bool)
     case appClosePane(ref: String, json: Bool)
     case appResizePane(ref: String, ratio: Double, json: Bool)
+    case appFloatPaneCreate(sessionRef: String, json: Bool)
+    case appFloatPaneFocus(ref: String, json: Bool)
+    case appFloatPaneClose(ref: String, json: Bool)
+    case appFloatPanePin(ref: String, json: Bool)
+    case appFloatPaneMove(ref: String, x: Double, y: Double, width: Double, height: Double, json: Bool)
 
     case help
 }
@@ -169,6 +174,8 @@ func parseAppArgs(_ args: [String]) -> Command {
         return .appClosePane(ref: ref, json: json)
     case "resize-pane":
         return parseAppResizePane(rest, json: json)
+    case "float-pane":
+        return parseAppFloatPane(rest, json: json)
     case "--help", "-h", "help":
         printAppUsage()
         exit(0)
@@ -221,6 +228,90 @@ func parseAppSplit(_ args: [String], json: Bool) -> Command {
         exit(1)
     }
     return .appSplit(ref: ref, direction: direction, json: json)
+}
+
+func parseAppFloatPane(_ args: [String], json: Bool) -> Command {
+    guard let sub = args.first else {
+        fputs("tongyou: app float-pane requires a subcommand (create|focus|close|pin|move)\n", stderr)
+        exit(1)
+    }
+    let rest = Array(args.dropFirst())
+    switch sub {
+    case "create":
+        guard let ref = rest.first else {
+            fputs("tongyou: app float-pane create requires a session ref\n", stderr)
+            exit(1)
+        }
+        return .appFloatPaneCreate(sessionRef: ref, json: json)
+    case "focus":
+        guard let ref = rest.first else {
+            fputs("tongyou: app float-pane focus requires a float ref\n", stderr)
+            exit(1)
+        }
+        return .appFloatPaneFocus(ref: ref, json: json)
+    case "close":
+        guard let ref = rest.first else {
+            fputs("tongyou: app float-pane close requires a float ref\n", stderr)
+            exit(1)
+        }
+        return .appFloatPaneClose(ref: ref, json: json)
+    case "pin":
+        guard let ref = rest.first else {
+            fputs("tongyou: app float-pane pin requires a float ref\n", stderr)
+            exit(1)
+        }
+        return .appFloatPanePin(ref: ref, json: json)
+    case "move":
+        return parseAppFloatPaneMove(rest, json: json)
+    default:
+        fputs("tongyou: unknown subcommand '\(sub)' for app float-pane\n", stderr)
+        exit(1)
+    }
+}
+
+func parseAppFloatPaneMove(_ args: [String], json: Bool) -> Command {
+    var ref: String?
+    var x: Double?
+    var y: Double?
+    var width: Double?
+    var height: Double?
+    var i = 0
+    while i < args.count {
+        let arg = args[i]
+        func takeNumber(_ flag: String) -> Double {
+            guard i + 1 < args.count, let v = Double(args[i + 1]) else {
+                fputs("tongyou: \(flag) requires a number\n", stderr)
+                exit(1)
+            }
+            return v
+        }
+        switch arg {
+        case "--x":
+            x = takeNumber("--x"); i += 2
+        case "--y":
+            y = takeNumber("--y"); i += 2
+        case "--width":
+            width = takeNumber("--width"); i += 2
+        case "--height":
+            height = takeNumber("--height"); i += 2
+        default:
+            if arg.hasPrefix("--") {
+                fputs("tongyou: unknown option '\(arg)' for app float-pane move\n", stderr)
+                exit(1)
+            }
+            if ref != nil {
+                fputs("tongyou: app float-pane move takes a single ref argument\n", stderr)
+                exit(1)
+            }
+            ref = arg
+            i += 1
+        }
+    }
+    guard let ref, let x, let y, let width, let height else {
+        fputs("tongyou: app float-pane move requires <ref> --x <v> --y <v> --width <v> --height <v>\n", stderr)
+        exit(1)
+    }
+    return .appFloatPaneMove(ref: ref, x: x, y: y, width: width, height: height, json: json)
 }
 
 func parseAppResizePane(_ args: [String], json: Bool) -> Command {
@@ -301,6 +392,12 @@ func printAppUsage() {
       focus-pane <pane-ref>                Focus the given pane (brings window forward).
       close-pane <pane-ref>                Close the given pane.
       resize-pane <pane-ref> --ratio <v>   Resize the pane by setting its parent split ratio (0 < v < 1).
+      float-pane create <session-ref>      Create a new floating pane in the session.
+      float-pane focus <float-ref>         Focus a floating pane (brings window forward).
+      float-pane close <float-ref>         Close a floating pane.
+      float-pane pin <float-ref>           Toggle the pinned flag on a floating pane.
+      float-pane move <float-ref> --x <v> --y <v> --width <v> --height <v>
+                                           Move / resize a floating pane (normalized 0–1 coords).
     """
     print(usage)
 }
@@ -365,6 +462,12 @@ func printUsage() {
       app focus-pane <pane-ref>      Focus a pane (brings window forward)
       app close-pane <pane-ref>      Close a pane
       app resize-pane <pane-ref> --ratio <v>  Resize a pane by setting its parent split ratio (0 < v < 1)
+      app float-pane create <session-ref>  Create a new floating pane
+      app float-pane focus <float-ref>     Focus a floating pane (brings window forward)
+      app float-pane close <float-ref>     Close a floating pane
+      app float-pane pin <float-ref>       Toggle the pinned flag on a floating pane
+      app float-pane move <float-ref> --x <v> --y <v> --width <v> --height <v>
+                                           Move / resize a floating pane (normalized 0–1 coords)
 
     Other:
       help                      Show this help message
@@ -922,6 +1025,53 @@ func appResizePane(ref: String, ratio: Double, json: Bool) {
     handleCommandResult({ try client.resizePane(ref: ref, ratio: ratio) }, json: json, verb: "resize-pane")
 }
 
+func appFloatPaneCreate(sessionRef: String, json: Bool) {
+    let client = connectToGUIOrExit()
+    let ref: String
+    do {
+        ref = try client.createFloatingPane(sessionRef: sessionRef)
+    } catch AppControlError.serverError(let code, let message) {
+        if json {
+            printJSONError(code: code, message: message)
+        } else {
+            fputs("tongyou: GUI returned error: \(code): \(message)\n", stderr)
+        }
+        exit(1)
+    } catch {
+        fputs("tongyou: float-pane create failed: \(error)\n", stderr)
+        exit(1)
+    }
+    if json {
+        printJSONResult(#"{"ref":\#(jsonEscaped(ref))}"#)
+    } else {
+        print(ref)
+    }
+}
+
+func appFloatPaneFocus(ref: String, json: Bool) {
+    let client = connectToGUIOrExit()
+    handleCommandResult({ try client.focusFloatingPane(ref: ref) }, json: json, verb: "float-pane focus")
+}
+
+func appFloatPaneClose(ref: String, json: Bool) {
+    let client = connectToGUIOrExit()
+    handleCommandResult({ try client.closeFloatingPane(ref: ref) }, json: json, verb: "float-pane close")
+}
+
+func appFloatPanePin(ref: String, json: Bool) {
+    let client = connectToGUIOrExit()
+    handleCommandResult({ try client.pinFloatingPane(ref: ref) }, json: json, verb: "float-pane pin")
+}
+
+func appFloatPaneMove(ref: String, x: Double, y: Double, width: Double, height: Double, json: Bool) {
+    let client = connectToGUIOrExit()
+    handleCommandResult(
+        { try client.moveFloatingPane(ref: ref, x: x, y: y, width: width, height: height) },
+        json: json,
+        verb: "float-pane move"
+    )
+}
+
 private func printJSONResult(_ resultFragment: String) {
     print(#"{"ok":true,"result":\#(resultFragment)}"#)
 }
@@ -1041,6 +1191,16 @@ case .appClosePane(let ref, let json):
     appClosePane(ref: ref, json: json)
 case .appResizePane(let ref, let ratio, let json):
     appResizePane(ref: ref, ratio: ratio, json: json)
+case .appFloatPaneCreate(let sessionRef, let json):
+    appFloatPaneCreate(sessionRef: sessionRef, json: json)
+case .appFloatPaneFocus(let ref, let json):
+    appFloatPaneFocus(ref: ref, json: json)
+case .appFloatPaneClose(let ref, let json):
+    appFloatPaneClose(ref: ref, json: json)
+case .appFloatPanePin(let ref, let json):
+    appFloatPanePin(ref: ref, json: json)
+case .appFloatPaneMove(let ref, let x, let y, let width, let height, let json):
+    appFloatPaneMove(ref: ref, x: x, y: y, width: width, height: height, json: json)
 case .help:
     printUsage()
 }

@@ -295,6 +295,70 @@ public final class AppControlClient {
         }
     }
 
+    /// Send `floatPane.create` — create a new floating pane in the session
+    /// resolved from `ref` and return the newly allocated float ref.
+    public func createFloatingPane(sessionRef: String) throws -> String {
+        let response = try sendCommand("floatPane.create", params: ["ref": sessionRef])
+        switch response {
+        case .success(let value):
+            guard case .raw(let data) = value else {
+                throw AppControlError.invalidResponse(raw: "expected object result for floatPane.create")
+            }
+            do {
+                let decoded = try JSONDecoder().decode(FloatPaneCreateResponse.self, from: data)
+                return decoded.ref
+            } catch {
+                throw AppControlError.invalidResponse(raw: String(data: data, encoding: .utf8) ?? "")
+            }
+        case .error(let code, let message):
+            throw AppControlError.serverError(code: code, message: message)
+        }
+    }
+
+    /// Send `floatPane.focus` — focus the given floating pane. This is a
+    /// focus-whitelisted command; the GUI will bring itself to the foreground
+    /// on success.
+    public func focusFloatingPane(ref: String) throws {
+        let response = try sendCommand("floatPane.focus", params: ["ref": ref])
+        if case .error(let code, let message) = response {
+            throw AppControlError.serverError(code: code, message: message)
+        }
+    }
+
+    /// Send `floatPane.close` — close the given floating pane.
+    public func closeFloatingPane(ref: String) throws {
+        let response = try sendCommand("floatPane.close", params: ["ref": ref])
+        if case .error(let code, let message) = response {
+            throw AppControlError.serverError(code: code, message: message)
+        }
+    }
+
+    /// Send `floatPane.pin` — toggle the `isPinned` flag on the floating pane.
+    public func pinFloatingPane(ref: String) throws {
+        let response = try sendCommand("floatPane.pin", params: ["ref": ref])
+        if case .error(let code, let message) = response {
+            throw AppControlError.serverError(code: code, message: message)
+        }
+    }
+
+    /// Send `floatPane.move` — move / resize the floating pane. All frame
+    /// components use normalized (0–1) coordinates relative to the container.
+    public func moveFloatingPane(
+        ref: String,
+        x: Double,
+        y: Double,
+        width: Double,
+        height: Double
+    ) throws {
+        let response = try sendCommand(
+            "floatPane.move",
+            params: ["ref": ref, "x": x, "y": y, "width": width, "height": height]
+        )
+        if case .error(let code, let message) = response {
+            throw AppControlError.serverError(code: code, message: message)
+        }
+    }
+
     /// Send a raw command line and parse the single-line JSON response.
     /// Intended for internal use and future commands.
     func sendCommand(_ cmd: String) throws -> Response {
