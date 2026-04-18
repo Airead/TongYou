@@ -32,7 +32,7 @@ enum Command {
     case appSplit(ref: String, direction: SplitDirection, json: Bool)
     case appFocusPane(ref: String, json: Bool)
     case appClosePane(ref: String, json: Bool)
-    case appSplitRatio(ref: String, ratio: Double, json: Bool)
+    case appResizePane(ref: String, ratio: Double, json: Bool)
 
     case help
 }
@@ -160,8 +160,8 @@ func parseAppArgs(_ args: [String]) -> Command {
             exit(1)
         }
         return .appClosePane(ref: ref, json: json)
-    case "split-ratio":
-        return parseAppSplitRatio(rest, json: json)
+    case "resize-pane":
+        return parseAppResizePane(rest, json: json)
     case "--help", "-h", "help":
         printAppUsage()
         exit(0)
@@ -216,7 +216,7 @@ func parseAppSplit(_ args: [String], json: Bool) -> Command {
     return .appSplit(ref: ref, direction: direction, json: json)
 }
 
-func parseAppSplitRatio(_ args: [String], json: Bool) -> Command {
+func parseAppResizePane(_ args: [String], json: Bool) -> Command {
     var ref: String?
     var ratio: Double?
     var i = 0
@@ -230,11 +230,11 @@ func parseAppSplitRatio(_ args: [String], json: Bool) -> Command {
             ratio = v
             i += 2
         } else if arg.hasPrefix("--") {
-            fputs("tongyou: unknown option '\(arg)' for app split-ratio\n", stderr)
+            fputs("tongyou: unknown option '\(arg)' for app resize-pane\n", stderr)
             exit(1)
         } else {
             if ref != nil {
-                fputs("tongyou: app split-ratio takes a single ref argument\n", stderr)
+                fputs("tongyou: app resize-pane takes a single ref argument\n", stderr)
                 exit(1)
             }
             ref = arg
@@ -242,10 +242,10 @@ func parseAppSplitRatio(_ args: [String], json: Bool) -> Command {
         }
     }
     guard let ref, let ratio else {
-        fputs("tongyou: app split-ratio requires <pane-ref> --ratio <value>\n", stderr)
+        fputs("tongyou: app resize-pane requires <pane-ref> --ratio <value>\n", stderr)
         exit(1)
     }
-    return .appSplitRatio(ref: ref, ratio: ratio, json: json)
+    return .appResizePane(ref: ref, ratio: ratio, json: json)
 }
 
 func parseAppCreateArgs(_ args: [String], json: Bool) -> Command {
@@ -292,7 +292,7 @@ func printAppUsage() {
       split <ref> [--vertical|--horizontal] Split the target pane (default: vertical).
       focus-pane <pane-ref>                Focus the given pane (brings window forward).
       close-pane <pane-ref>                Close the given pane.
-      split-ratio <pane-ref> --ratio <v>   Set the split ratio of the pane's parent (0 < v < 1).
+      resize-pane <pane-ref> --ratio <v>   Resize the pane by setting its parent split ratio (0 < v < 1).
     """
     print(usage)
 }
@@ -355,7 +355,7 @@ func printUsage() {
       app split <ref> [--horizontal] Split the target pane (default vertical)
       app focus-pane <pane-ref>      Focus a pane (brings window forward)
       app close-pane <pane-ref>      Close a pane
-      app split-ratio <pane-ref> --ratio <v>  Set a split's ratio (0 < v < 1)
+      app resize-pane <pane-ref> --ratio <v>  Resize a pane by setting its parent split ratio (0 < v < 1)
 
     Other:
       help                      Show this help message
@@ -890,9 +890,9 @@ func appClosePane(ref: String, json: Bool) {
     handleCommandResult({ try client.closePane(ref: ref) }, json: json, verb: "close-pane")
 }
 
-func appSplitRatio(ref: String, ratio: Double, json: Bool) {
+func appResizePane(ref: String, ratio: Double, json: Bool) {
     let client = connectToGUIOrExit()
-    handleCommandResult({ try client.setSplitRatio(ref: ref, ratio: ratio) }, json: json, verb: "split-ratio")
+    handleCommandResult({ try client.resizePane(ref: ref, ratio: ratio) }, json: json, verb: "resize-pane")
 }
 
 private func printJSONResult(_ resultFragment: String) {
@@ -1010,8 +1010,8 @@ case .appFocusPane(let ref, let json):
     appFocusPane(ref: ref, json: json)
 case .appClosePane(let ref, let json):
     appClosePane(ref: ref, json: json)
-case .appSplitRatio(let ref, let ratio, let json):
-    appSplitRatio(ref: ref, ratio: ratio, json: json)
+case .appResizePane(let ref, let ratio, let json):
+    appResizePane(ref: ref, ratio: ratio, json: json)
 case .help:
     printUsage()
 }

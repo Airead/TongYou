@@ -87,9 +87,9 @@ final class GUIAutomationService {
                 return service?.handlePaneClose(ref: ref)
                     ?? .failure(.internal("GUIAutomationService deallocated"))
             },
-            handlePaneSplitRatio: { [weak self] ref, ratio in
+            handlePaneResize: { [weak self] ref, ratio in
                 let service = self
-                return service?.handlePaneSplitRatio(ref: ref, ratio: ratio)
+                return service?.handlePaneResize(ref: ref, ratio: ratio)
                     ?? .failure(.internal("GUIAutomationService deallocated"))
             }
         )
@@ -234,11 +234,11 @@ final class GUIAutomationService {
         Self.runOnMain { self.paneCloseOnMain(ref: ref) }
     }
 
-    nonisolated private func handlePaneSplitRatio(
+    nonisolated private func handlePaneResize(
         ref: String,
         ratio: Double
     ) -> Result<Void, AutomationError> {
-        Self.runOnMain { self.paneSplitRatioOnMain(ref: ref, ratio: ratio) }
+        Self.runOnMain { self.paneResizeOnMain(ref: ref, ratio: ratio) }
     }
 
     // MARK: - MainActor operations
@@ -519,7 +519,7 @@ final class GUIAutomationService {
         }
     }
 
-    private func paneSplitRatioOnMain(
+    private func paneResizeOnMain(
         ref: String,
         ratio: Double
     ) -> Result<Void, AutomationError> {
@@ -528,7 +528,7 @@ final class GUIAutomationService {
         case .success(let (manager, sessionID, paneID, _, isFloat)):
             if isFloat {
                 return .failure(.unsupportedOperation(
-                    "floating panes have no split ratio"
+                    "floating panes cannot be resized via pane.resize"
                 ))
             }
             guard let session = manager.sessions.first(where: { $0.id == sessionID }) else {
@@ -536,7 +536,7 @@ final class GUIAutomationService {
             }
             if session.source.serverSessionID != nil {
                 return .failure(.unsupportedOperation(
-                    "pane.splitRatio is not yet supported for remote sessions"
+                    "pane.resize is not yet supported for remote sessions"
                 ))
             }
             guard manager.updateSplitRatio(

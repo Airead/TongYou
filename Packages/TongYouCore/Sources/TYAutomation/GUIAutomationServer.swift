@@ -67,9 +67,10 @@ public final class GUIAutomationServer: @unchecked Sendable {
         public let handlePaneFocus: (@Sendable (String) -> Result<Void, AutomationError>)?
         /// Closes the pane resolved from `ref`. Not focus-whitelisted.
         public let handlePaneClose: (@Sendable (String) -> Result<Void, AutomationError>)?
-        /// Updates the split ratio at the parent of the pane resolved from `ref`.
-        /// `ratio` is a value in `[0.0, 1.0]`. Not focus-whitelisted.
-        public let handlePaneSplitRatio: (@Sendable (String, Double) -> Result<Void, AutomationError>)?
+        /// Resizes the pane resolved from `ref` by updating the split ratio
+        /// at its parent split. `ratio` is a value in `(0.0, 1.0)`. Not
+        /// focus-whitelisted.
+        public let handlePaneResize: (@Sendable (String, Double) -> Result<Void, AutomationError>)?
 
         public init(
             socketPath: String = GUIAutomationPaths.socketPath(),
@@ -87,7 +88,7 @@ public final class GUIAutomationServer: @unchecked Sendable {
             handlePaneSplit: (@Sendable (String, SplitDirection) -> Result<PaneSplitResponse, AutomationError>)? = nil,
             handlePaneFocus: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
             handlePaneClose: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
-            handlePaneSplitRatio: (@Sendable (String, Double) -> Result<Void, AutomationError>)? = nil
+            handlePaneResize: (@Sendable (String, Double) -> Result<Void, AutomationError>)? = nil
         ) {
             self.socketPath = socketPath
             self.tokenPath = tokenPath
@@ -104,7 +105,7 @@ public final class GUIAutomationServer: @unchecked Sendable {
             self.handlePaneSplit = handlePaneSplit
             self.handlePaneFocus = handlePaneFocus
             self.handlePaneClose = handlePaneClose
-            self.handlePaneSplitRatio = handlePaneSplitRatio
+            self.handlePaneResize = handlePaneResize
         }
     }
 
@@ -334,8 +335,8 @@ public final class GUIAutomationServer: @unchecked Sendable {
             return handlePaneFocusCommand(request: request, config: config)
         case "pane.close":
             return handlePaneCloseCommand(request: request, config: config)
-        case "pane.splitRatio":
-            return handlePaneSplitRatioCommand(request: request, config: config)
+        case "pane.resize":
+            return handlePaneResizeCommand(request: request, config: config)
         default:
             return .error(code: "UNKNOWN_COMMAND", message: "unknown command: \(request.cmd)")
         }
@@ -588,12 +589,12 @@ public final class GUIAutomationServer: @unchecked Sendable {
         }
     }
 
-    private static func handlePaneSplitRatioCommand(
+    private static func handlePaneResizeCommand(
         request: ParsedRequest,
         config: Configuration
     ) -> JSONResponse {
-        guard let handler = config.handlePaneSplitRatio else {
-            return .error(code: "INTERNAL_ERROR", message: "pane.splitRatio not wired")
+        guard let handler = config.handlePaneResize else {
+            return .error(code: "INTERNAL_ERROR", message: "pane.resize not wired")
         }
         guard let ref = request.params["ref"] as? String, !ref.isEmpty else {
             return .error(code: "INVALID_PARAMS", message: "`ref` is required")

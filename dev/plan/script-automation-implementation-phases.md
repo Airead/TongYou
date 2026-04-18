@@ -430,7 +430,7 @@ for i in 1 2 3; do ./tongyou app list; done
 2. `pane.split`：调用 `SessionManager.splitPane`，支持 `--vertical` / `--horizontal`
 3. `pane.focus`：调用 `FocusManager.focusPane`，**在白名单中**，允许窗口激活
 4. `pane.close`：调用 `SessionManager.closePane`
-5. `pane.splitRatio`：根据 pane ref 找到其父 `PaneNode.split`，修改 `ratio`
+5. `pane.resize`：根据 pane ref 找到其父 `PaneNode.split`，修改 `ratio`
 6. 焦点策略：`focus-pane` 在白名单，其他不在
 
 ### 人工验证步骤
@@ -444,7 +444,7 @@ for i in 1 2 3; do ./tongyou app list; done
 ./tongyou app split dev --vertical
 
 # 4. 调整分屏比例
-./tongyou app split-ratio dev/pane:1 --ratio 0.3
+./tongyou app resize-pane dev/pane:1 --ratio 0.3
 # 期望：GUI 中分屏比例变为 30%/70%
 
 # 5. 焦点切换
@@ -461,7 +461,7 @@ for i in 1 2 3; do ./tongyou app list; done
 ### 完成标准
 - Tab 和 Pane 的增删改查均通过 CLI 正常驱动
 - `focus-pane` 能正确激活窗口
-- `split-ratio` 能准确调整比例，无效 pane 返回合理错误
+- `resize-pane` 能准确调整比例，无效 pane 返回合理错误
 
 ---
 

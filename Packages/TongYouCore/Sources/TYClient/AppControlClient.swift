@@ -277,10 +277,11 @@ public final class AppControlClient {
         }
     }
 
-    /// Send `pane.splitRatio` — update the split ratio of the parent of the
-    /// given pane. `ratio` must be in the open interval `(0, 1)`.
-    public func setSplitRatio(ref: String, ratio: Double) throws {
-        let response = try sendCommand("pane.splitRatio", params: ["ref": ref, "ratio": ratio])
+    /// Send `pane.resize` — update the split ratio at the parent of the
+    /// given pane, growing or shrinking the pane's share of that split.
+    /// `ratio` must be in the open interval `(0, 1)`.
+    public func resizePane(ref: String, ratio: Double) throws {
+        let response = try sendCommand("pane.resize", params: ["ref": ref, "ratio": ratio])
         if case .error(let code, let message) = response {
             throw AppControlError.serverError(code: code, message: message)
         }

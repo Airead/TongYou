@@ -537,7 +537,7 @@ struct GUIAutomationServerTests {
         #expect(resp.contains("\"code\":\"TAB_NOT_FOUND\""))
     }
 
-    // MARK: - pane.split / pane.focus / pane.close / pane.splitRatio
+    // MARK: - pane.split / pane.focus / pane.close / pane.resize
 
     @Test func paneSplitParsesDirectionAndReturnsRef() throws {
         let (baseConfig, tmpDir) = Self.isolatedConfig()
@@ -675,7 +675,7 @@ struct GUIAutomationServerTests {
         #expect(captured.ref == "dev/pane:2")
     }
 
-    @Test func paneSplitRatioForwardsValue() throws {
+    @Test func paneResizeForwardsValue() throws {
         let (baseConfig, tmpDir) = Self.isolatedConfig()
         defer { try? FileManager.default.removeItem(atPath: tmpDir) }
 
@@ -689,7 +689,7 @@ struct GUIAutomationServerTests {
             socketPath: baseConfig.socketPath,
             tokenPath: baseConfig.tokenPath,
             allowedPeerUID: baseConfig.allowedPeerUID,
-            handlePaneSplitRatio: { ref, ratio in
+            handlePaneResize: { ref, ratio in
                 captured.ref = ref
                 captured.ratio = ratio
                 return .success(())
@@ -707,7 +707,7 @@ struct GUIAutomationServerTests {
         try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
         _ = try Self.readLine(socket)
 
-        try Self.sendLine(socket, #"{"cmd":"pane.splitRatio","ref":"dev/pane:1","ratio":0.3}"#)
+        try Self.sendLine(socket, #"{"cmd":"pane.resize","ref":"dev/pane:1","ratio":0.3}"#)
         let resp = try #require(try Self.readLine(socket))
         #expect(resp.contains("\"ok\":true"))
         #expect(captured.ref == "dev/pane:1")
@@ -718,7 +718,7 @@ struct GUIAutomationServerTests {
         }
     }
 
-    @Test func paneSplitRatioRejectsOutOfRange() throws {
+    @Test func paneResizeRejectsOutOfRange() throws {
         let (baseConfig, tmpDir) = Self.isolatedConfig()
         defer { try? FileManager.default.removeItem(atPath: tmpDir) }
 
@@ -726,7 +726,7 @@ struct GUIAutomationServerTests {
             socketPath: baseConfig.socketPath,
             tokenPath: baseConfig.tokenPath,
             allowedPeerUID: baseConfig.allowedPeerUID,
-            handlePaneSplitRatio: { _, _ in .success(()) }
+            handlePaneResize: { _, _ in .success(()) }
         )
         let server = GUIAutomationServer(configuration: config)
         try server.start()
@@ -740,7 +740,7 @@ struct GUIAutomationServerTests {
         try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
         _ = try Self.readLine(socket)
 
-        try Self.sendLine(socket, #"{"cmd":"pane.splitRatio","ref":"dev/pane:1","ratio":1.5}"#)
+        try Self.sendLine(socket, #"{"cmd":"pane.resize","ref":"dev/pane:1","ratio":1.5}"#)
         let resp = try #require(try Self.readLine(socket))
         #expect(resp.contains("\"code\":\"INVALID_PARAMS\""))
     }
