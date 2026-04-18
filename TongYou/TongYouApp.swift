@@ -48,7 +48,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         nc.addObserver(forName: NSApplication.didBecomeActiveNotification,
                        object: nil, queue: .main) { _ in
             GUILog.debug(
-                "NSApplication.didBecomeActive fired; stack=\n\(Thread.callStackSymbols.prefix(18).joined(separator: "\n"))",
+                "NSApplication.didBecomeActive fired",
                 category: .session
             )
         }
@@ -63,7 +63,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                        object: nil, queue: .main) { note in
             let windowID = (note.object as AnyObject?).map { ObjectIdentifier($0) }
             GUILog.debug(
-                "NSWindow.didBecomeKey window=\(windowID.map { String(describing: $0) } ?? "<nil>"); stack=\n\(Thread.callStackSymbols.prefix(18).joined(separator: "\n"))",
+                "NSWindow.didBecomeKey window=\(windowID.map { String(describing: $0) } ?? "<nil>")",
                 category: .session
             )
         }
