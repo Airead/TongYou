@@ -56,7 +56,7 @@ let package = Package(
         // Binary wire protocol for client/server communication.
         .target(
             name: "TYProtocol",
-            dependencies: ["TYTerminal"],
+            dependencies: ["TYTerminal", "TYConfig"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 
@@ -111,7 +111,7 @@ let package = Package(
 
         .testTarget(
             name: "TYProtocolTests",
-            dependencies: ["TYProtocol", "TYTerminal"],
+            dependencies: ["TYProtocol", "TYTerminal", "TYConfig"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 

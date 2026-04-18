@@ -58,17 +58,17 @@
 
 ### 实现要点
 
-1. **编码格式（提议）**：
+1. **编码格式**（决策：count 用 UInt16 与 `writeStringArray` 风格一致；`args` / `env` 实际条数远低于 65k 上限）：
 
    ```
    StartupSnapshot {
      u8       has_command
      [string  command]        (if has_command)
-     u32      args_count
-     [string] args            (length-prefixed repeated)
+     u16      args_count
+     [string] args            (u16 count + length-prefixed strings, 复用 writeStringArray)
      u8       has_cwd
      [string  cwd]            (if has_cwd)
-     u32      env_count
+     u16      env_count
      [ { string key; string value } ] env  (repeated)
      u8       close_on_exit   (0 = nil, 1 = false, 2 = true)
      u8       has_initial_x
@@ -76,8 +76,8 @@
      ... same for initial_y / initial_width / initial_height
    }
    ```
-   全部可选字段用 leading `u8` 指示是否存在。`[String]` 和 `[EnvVar]` 用 `u32 length` 前缀。
-   `closeOnExit: Bool?` 用 trinary（0/1/2）节省一个字节。
+   全部可选字段用 leading `u8` 指示是否存在。`closeOnExit: Bool?` 用 trinary（0/1/2）节省一个字节。
+   注意：`initial_*` 在 Phase 7.1 保留 `Int?` 语义只做编解码；Phase 7.3 会根据"选 C"从 snapshot 剥离到独立的 float frame hint（见 7.3）。
 
 2. **便捷 API**：
    ```swift
@@ -232,17 +232,17 @@
 - 相关 GUI 调用路径（命令面板、`runCommand` action 等 —— 用 Grep `createFloatingPaneWithCommand` 全局查）
 - `TongYouTests/SessionManagerTests.swift` / `SessionManagerProfileTests.swift`
 
-### 设计决策（Phase 7.3 之前需要定）
+### 设计决策：float 几何走"选 C"（已定）
 
 **`createFloatingPaneWithCommand` 的几何参数（`frameX/Y/Width/Height: Float?`）使用归一化 0–1 坐标**；而 `StartupSnapshot.initialX/Y/Width/Height` 当前是 `Int?`，没写单位语义。
 
-两种走法，实施阶段选一个并文档化：
+- **选择 A（已放弃）**：把 `StartupSnapshot.initial*` 改为 `Float?` 归一化。缺点：profile 文件 `initial-x = 0.25` 语义别扭；且这些字段对 tree pane 完全无用，混在 PTY 启动参数里职责不清。
 
-- **选择 A（推荐）**：把 `StartupSnapshot.initialX/Y/Width/Height` 从 `Int?` 改为 `Float?`，语义定义为**归一化 0–1 容器坐标**，专供 float pane 使用。tree pane 忽略。profile 文件里 `initial-x = 0.25` 表示容器宽度的 25%。改动点：`StartupSnapshot.swift` + `ResolvedStartupFields → StartupSnapshot` 的 `parseFloat` + profile 文档示例。一致性好，但 profile 文件读起来不那么直观。
+- **选择 B（已放弃）**：保留 `Int?` 做像素，float 创建后再单独发 `updateFloatingPaneFrame`。缺点：两步创建有视觉抖动窗口。
 
-- **选择 B**：保留 `Int?`，语义为**像素**。float 几何走另一条单独的 wire 消息（目前 `updateFloatingPaneFrame` 已经是 Float 归一化，创建时几何可以在创建后再单独发一次 `updateFloatingPaneFrame`）。代价：float 创建 + 几何是两步，有抖动窗口。
-
-**本计划默认选 A**。如实施时觉得有坑切到 B，则在 commit message 说明。
+- **选择 C（采用）**：**从 `StartupSnapshot` 里剥离 `initialX/Y/Width/Height`**（它们本来就是 float-only 的 UI 几何，不是 PTY 启动参数）。在 Phase 7.3 的 wire 层给 `createFloatingPane` 加一个独立的可选 `FloatFrameHint { x, y, w, h: Float }`（归一化，与 `updateFloatingPaneFrame` 单位一致）。`ProfileMerger` 产出 snapshot + 可选 frameHint 两个结构。
+  - 好处：snapshot 纯粹化为 PTY 启动参数；float 几何由专属类型承载；profile 文件里的 `initial-x = 0.25` 可以明确标注"float-only, 归一化"。
+  - Phase 7.1 仍按 `StartupSnapshot` 当前形状（含 `Int?` initial*）做编解码；Phase 7.3 再定义 `FloatFrameHint`、从 `StartupSnapshot` 删掉 `initial*`、并更新 `ResolvedStartupFields → …` 的组装。
 
 ### 实现要点
 
@@ -293,10 +293,11 @@
    - 然后让 `manager.createTab / splitPane / createFloatingPane` 的 remote 分支接受 `profileID` + `overrides`（或者把 GUIAutomationService 里已经解析好的 snapshot 传进去）。
 
 4. **迁移 `createFloatingPaneWithCommand` 的 GUI 调用者**：
+   - 前置：先对 `FloatingPaneCommandInfo` 做 15 分钟 grep 审计（全仓 `grep -r FloatingPaneCommandInfo`），看 UI 侧是否绑了"有命令的 float"条件分支，避免删 wire case 时引发意外的 UI 同步改动。
    - `SessionManager.swift:2301 / :2347 / :2362` 三个调用（"命令面板运行命令" / `runCommand` action / 等）
-   - 对每处：构造一个 `StartupSnapshot`（直接填 command/args/closeOnExit/initialX..），然后调 `createFloatingPane(..., snapshot: snapshot)`
+   - 对每处：构造一个 `StartupSnapshot`（填 command/args/closeOnExit）+ 可选 `FloatFrameHint`，调 `createFloatingPane(..., profileID: nil, snapshot: snapshot, frameHint: hint)`
    - `createFloatingPaneWithCommand` 私有函数删除
-   - `FloatingPaneCommandInfo`（如果只被这条路径用到）要么保留作为 UI 层的"有命令的 float"标记，要么合并进 `FloatingPane` 通过 `startupSnapshot.command != nil` 判断。实施时观察实际 usage 决定。
+   - `FloatingPaneCommandInfo` 根据审计结果处理：若仅被这条路径用，删除并改用 `startupSnapshot.command != nil` 判断；若被 UI 绑定，保留为纯 UI 层类型（不再出现在 wire 上）。
 
 ### 测试
 

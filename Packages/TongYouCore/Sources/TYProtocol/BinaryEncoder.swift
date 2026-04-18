@@ -1,4 +1,5 @@
 import Foundation
+import TYConfig
 import TYTerminal
 
 /// Lightweight binary encoder that appends to an internal byte buffer.
@@ -178,6 +179,75 @@ public struct BinaryEncoder: Sendable {
         if event.modifiers.option  { modBits |= 2 }
         if event.modifiers.control { modBits |= 4 }
         writeUInt8(modBits)
+    }
+
+    // MARK: - Startup Snapshot
+
+    /// Write a single environment variable as two length-prefixed strings.
+    public mutating func writeEnvVar(_ env: EnvVar) {
+        writeString(env.key)
+        writeString(env.value)
+    }
+
+    /// Write a nilable `Int` field as a presence flag byte + `Int32` payload.
+    private mutating func writeOptionalInt32(_ value: Int?) {
+        if let value {
+            writeUInt8(1)
+            writeInt32(Int32(clamping: value))
+        } else {
+            writeUInt8(0)
+        }
+    }
+
+    /// Encode a `StartupSnapshot` into the buffer. Layout:
+    ///   has_command u8 + [command string]
+    ///   args (u16 count + strings)
+    ///   has_cwd u8 + [cwd string]
+    ///   env (u16 count + [string key; string value])
+    ///   close_on_exit u8 (0 = nil, 1 = false, 2 = true)
+    ///   has_initial_x u8 + [i32] … (same for y / width / height)
+    public mutating func writeStartupSnapshot(_ snapshot: StartupSnapshot) {
+        if let command = snapshot.command {
+            writeUInt8(1)
+            writeString(command)
+        } else {
+            writeUInt8(0)
+        }
+
+        writeStringArray(snapshot.args)
+
+        if let cwd = snapshot.cwd {
+            writeUInt8(1)
+            writeString(cwd)
+        } else {
+            writeUInt8(0)
+        }
+
+        writeUInt16(UInt16(clamping: snapshot.env.count))
+        for env in snapshot.env {
+            writeEnvVar(env)
+        }
+
+        switch snapshot.closeOnExit {
+        case .none: writeUInt8(0)
+        case .some(false): writeUInt8(1)
+        case .some(true): writeUInt8(2)
+        }
+
+        writeOptionalInt32(snapshot.initialX)
+        writeOptionalInt32(snapshot.initialY)
+        writeOptionalInt32(snapshot.initialWidth)
+        writeOptionalInt32(snapshot.initialHeight)
+    }
+
+    /// Encode an optional `StartupSnapshot` as a presence byte + snapshot body.
+    public mutating func writeOptionalStartupSnapshot(_ snapshot: StartupSnapshot?) {
+        if let snapshot {
+            writeUInt8(1)
+            writeStartupSnapshot(snapshot)
+        } else {
+            writeUInt8(0)
+        }
     }
 
     // MARK: - Protocol Messages

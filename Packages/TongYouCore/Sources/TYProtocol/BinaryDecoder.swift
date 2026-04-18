@@ -1,4 +1,5 @@
 import Foundation
+import TYConfig
 import TYTerminal
 
 /// Error thrown when binary decoding fails.
@@ -285,6 +286,91 @@ public struct BinaryDecoder: Sendable {
             control: modBits & 4 != 0
         )
         return MouseEncoder.Event(action: action, button: button, col: col, row: row, modifiers: modifiers)
+    }
+
+    // MARK: - Startup Snapshot
+
+    /// Read a single `EnvVar` (two length-prefixed strings).
+    public mutating func readEnvVar() throws -> EnvVar {
+        let key = try readString()
+        let value = try readString()
+        return EnvVar(key: key, value: value)
+    }
+
+    /// Read a nilable `Int` field written as presence byte + `Int32` payload.
+    private mutating func readOptionalInt32() throws -> Int? {
+        let hasValue = try readUInt8()
+        switch hasValue {
+        case 0: return nil
+        case 1: return Int(try readInt32())
+        default:
+            throw BinaryDecoderError.invalidEnumValue(
+                type: "OptionalInt32.hasValue",
+                rawValue: UInt64(hasValue)
+            )
+        }
+    }
+
+    /// Decode a `StartupSnapshot` written by `writeStartupSnapshot`.
+    public mutating func readStartupSnapshot() throws -> StartupSnapshot {
+        let hasCommand = try readBool()
+        let command = hasCommand ? try readString() : nil
+
+        let args = try readStringArray()
+
+        let hasCwd = try readBool()
+        let cwd = hasCwd ? try readString() : nil
+
+        let envCount = Int(try readUInt16())
+        var env: [EnvVar] = []
+        env.reserveCapacity(envCount)
+        for _ in 0..<envCount {
+            env.append(try readEnvVar())
+        }
+
+        let closeOnExitRaw = try readUInt8()
+        let closeOnExit: Bool?
+        switch closeOnExitRaw {
+        case 0: closeOnExit = nil
+        case 1: closeOnExit = false
+        case 2: closeOnExit = true
+        default:
+            throw BinaryDecoderError.invalidEnumValue(
+                type: "StartupSnapshot.closeOnExit",
+                rawValue: UInt64(closeOnExitRaw)
+            )
+        }
+
+        let initialX = try readOptionalInt32()
+        let initialY = try readOptionalInt32()
+        let initialWidth = try readOptionalInt32()
+        let initialHeight = try readOptionalInt32()
+
+        return StartupSnapshot(
+            command: command,
+            args: args,
+            cwd: cwd,
+            env: env,
+            closeOnExit: closeOnExit,
+            initialX: initialX,
+            initialY: initialY,
+            initialWidth: initialWidth,
+            initialHeight: initialHeight
+        )
+    }
+
+    /// Decode an optional `StartupSnapshot`.
+    public mutating func readOptionalStartupSnapshot() throws -> StartupSnapshot? {
+        let hasSnapshot = try readUInt8()
+        switch hasSnapshot {
+        case 0: return nil
+        case 1: return try readStartupSnapshot()
+        default:
+            throw BinaryDecoderError.invalidEnumValue(
+                type: "OptionalStartupSnapshot.hasValue",
+                rawValue: UInt64(hasSnapshot)
+            )
+        }
     }
 
     // MARK: - Protocol Messages

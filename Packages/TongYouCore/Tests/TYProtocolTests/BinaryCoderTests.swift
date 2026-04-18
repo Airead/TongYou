@@ -2,6 +2,7 @@ import Testing
 import Foundation
 @testable import TYProtocol
 @testable import TYTerminal
+import TYConfig
 
 @Suite("BinaryEncoder/Decoder round-trip tests", .serialized)
 struct BinaryCoderTests {
@@ -659,5 +660,115 @@ struct BinaryCoderTests {
 
         var decoder = BinaryDecoder(encoder.data)
         #expect(throws: BinaryDecoderError.self) { try decoder.readCursorState() }
+    }
+
+    // MARK: - StartupSnapshot
+
+    @Test func startupSnapshotRoundTripEmpty() throws {
+        let snapshot = StartupSnapshot()
+
+        var encoder = BinaryEncoder()
+        encoder.writeStartupSnapshot(snapshot)
+
+        var decoder = BinaryDecoder(encoder.data)
+        let decoded = try decoder.readStartupSnapshot()
+        #expect(decoded == snapshot)
+        #expect(decoded.command == nil)
+        #expect(decoded.args.isEmpty)
+        #expect(decoded.cwd == nil)
+        #expect(decoded.env.isEmpty)
+        #expect(decoded.closeOnExit == nil)
+        #expect(decoded.initialX == nil)
+        #expect(decoded.initialY == nil)
+        #expect(decoded.initialWidth == nil)
+        #expect(decoded.initialHeight == nil)
+        #expect(decoder.remaining == 0)
+    }
+
+    @Test func startupSnapshotRoundTripFull() throws {
+        let snapshot = StartupSnapshot(
+            command: "/bin/bash",
+            args: ["-l", "-c", "echo 你好 && exec /bin/bash -l"],
+            cwd: "/Users/tester/工作",
+            env: [
+                EnvVar(key: "TY_CI", value: "1"),
+                EnvVar(key: "LANG", value: "zh_CN.UTF-8"),
+                EnvVar(key: "EMOJI", value: "👨‍👩‍👧‍👦"),
+            ],
+            closeOnExit: false,
+            initialX: 100,
+            initialY: -50,
+            initialWidth: 800,
+            initialHeight: 600
+        )
+
+        var encoder = BinaryEncoder()
+        encoder.writeStartupSnapshot(snapshot)
+
+        var decoder = BinaryDecoder(encoder.data)
+        let decoded = try decoder.readStartupSnapshot()
+        #expect(decoded == snapshot)
+        #expect(decoded.env.map(\.key) == ["TY_CI", "LANG", "EMOJI"])
+        #expect(decoded.env.map(\.value) == ["1", "zh_CN.UTF-8", "👨‍👩‍👧‍👦"])
+        #expect(decoder.remaining == 0)
+    }
+
+    @Test func startupSnapshotCloseOnExitTrinary() throws {
+        let states: [Bool?] = [nil, false, true]
+        for state in states {
+            let snapshot = StartupSnapshot(closeOnExit: state)
+            var encoder = BinaryEncoder()
+            encoder.writeStartupSnapshot(snapshot)
+
+            var decoder = BinaryDecoder(encoder.data)
+            let decoded = try decoder.readStartupSnapshot()
+            #expect(decoded.closeOnExit == state)
+            #expect(decoder.remaining == 0)
+        }
+    }
+
+    @Test func startupSnapshotInvalidCloseOnExitByte() throws {
+        var encoder = BinaryEncoder()
+        encoder.writeUInt8(0)           // has_command = false
+        encoder.writeUInt16(0)          // args count = 0
+        encoder.writeUInt8(0)           // has_cwd = false
+        encoder.writeUInt16(0)          // env count = 0
+        encoder.writeUInt8(3)           // close_on_exit invalid
+
+        var decoder = BinaryDecoder(encoder.data)
+        #expect(throws: BinaryDecoderError.self) {
+            try decoder.readStartupSnapshot()
+        }
+    }
+
+    @Test func optionalStartupSnapshotNil() throws {
+        var encoder = BinaryEncoder()
+        encoder.writeOptionalStartupSnapshot(nil)
+        #expect(encoder.data == [0])
+
+        var decoder = BinaryDecoder(encoder.data)
+        let decoded = try decoder.readOptionalStartupSnapshot()
+        #expect(decoded == nil)
+        #expect(decoder.remaining == 0)
+    }
+
+    @Test func optionalStartupSnapshotPresent() throws {
+        let snapshot = StartupSnapshot(
+            command: "/usr/bin/env",
+            args: ["sh", "-c", "true"],
+            env: [EnvVar(key: "K", value: "V")],
+            closeOnExit: true,
+            initialX: 10,
+            initialWidth: 200
+        )
+
+        var encoder = BinaryEncoder()
+        encoder.writeOptionalStartupSnapshot(snapshot)
+        #expect(encoder.data.first == 1)
+
+        var decoder = BinaryDecoder(encoder.data)
+        let decoded = try decoder.readOptionalStartupSnapshot()
+        #expect(decoded == snapshot)
+        #expect(decoder.remaining == 0)
     }
 }
