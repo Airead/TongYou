@@ -109,11 +109,13 @@ struct SessionManagerProfileTests {
         #expect(pane.startupSnapshot.command == nil)
     }
 
-    // MARK: - TY_TEST_PROFILE override
+    // MARK: - TY_TEST_PROFILE fallback (Phase 4 semantics)
 
-    @Test func testProfileEnvForcesProfile() throws {
-        // The env var must be set in the current process so
-        // ProcessInfo.processInfo.environment sees it. Setenv is per-process.
+    /// Phase 4 changed TY_TEST_PROFILE from an unconditional override to
+    /// a fallback that only fires when the caller did not supply a
+    /// profileID. Explicit callers always win so inheritance chains
+    /// (split, new tab) stay observable under the env var.
+    @Test func testProfileEnvIgnoredWhenCallerIsExplicit() throws {
         setenv("TY_TEST_PROFILE", "forced", 1)
         defer { unsetenv("TY_TEST_PROFILE") }
 
@@ -127,8 +129,23 @@ struct SessionManagerProfileTests {
             """
         ])
 
-        // Caller asks for "other" but the env var should win.
         let pane = mgr.createPane(profileID: "other")
+        #expect(pane.profileID == "other")
+        #expect(pane.startupSnapshot.command == "/bin/bash")
+    }
+
+    @Test func testProfileEnvAppliesWhenCallerIsNil() throws {
+        setenv("TY_TEST_PROFILE", "forced", 1)
+        defer { unsetenv("TY_TEST_PROFILE") }
+
+        let mgr = try makeManager(profiles: [
+            "forced": """
+            command = /bin/echo
+            args = forced
+            """
+        ])
+
+        let pane = mgr.createPane() // profileID nil → env var fallback
         #expect(pane.profileID == "forced")
         #expect(pane.startupSnapshot.command == "/bin/echo")
         #expect(pane.startupSnapshot.args == ["forced"])
@@ -168,7 +185,11 @@ struct SessionManagerProfileTests {
         #expect(env["TY_CI"] == "1")
     }
 
-    @Test func createTabFirstPaneHasSnapshot() throws {
+    /// Phase 4: new tabs use `default` — they do NOT inherit from the
+    /// TY_TEST_PROFILE env var (which only fires on session creation).
+    /// This keeps `tongyou new-tab` under a "test-ssh" app launch
+    /// producing a default shell rather than another ssh session.
+    @Test func createTabIgnoresTestProfileEnv() throws {
         setenv("TY_TEST_PROFILE", "marked", 1)
         defer { unsetenv("TY_TEST_PROFILE") }
 
@@ -180,7 +201,95 @@ struct SessionManagerProfileTests {
 
         let tabs = mgr.sessions[0].tabs
         #expect(tabs.count == 2)
-        #expect(tabs.last?.paneTree.firstPane.profileID == "marked")
-        #expect(tabs.last?.paneTree.firstPane.startupSnapshot.command == "/bin/bash")
+        // First tab inherits TY_TEST_PROFILE (session-level bootstrap).
+        #expect(tabs.first?.paneTree.firstPane.profileID == "marked")
+        // Second tab explicitly uses `default`, unaffected by the env.
+        #expect(tabs.last?.paneTree.firstPane.profileID == TerminalPane.defaultProfileID)
+        #expect(tabs.last?.paneTree.firstPane.startupSnapshot.command == nil)
+    }
+
+    @Test func createTabUsesExplicitProfileWhenProvided() throws {
+        let mgr = try makeManager(profiles: [
+            "custom": "command = /usr/bin/fish"
+        ])
+        _ = mgr.createSession(name: "s")
+        _ = mgr.createTab(title: "t2", profileID: "custom")
+
+        let tab = try #require(mgr.sessions[0].tabs.last)
+        #expect(tab.paneTree.firstPane.profileID == "custom")
+        #expect(tab.paneTree.firstPane.startupSnapshot.command == "/usr/bin/fish")
+    }
+
+    // MARK: - Phase 4: split inherits parent profile
+
+    /// When the session's root pane was bootstrapped from a non-default
+    /// profile (here via TY_TEST_PROFILE), splitting it produces a child
+    /// carrying the same profileID and startup fields.
+    @Test func splitPaneInheritsParentProfile() throws {
+        setenv("TY_TEST_PROFILE", "custom", 1)
+        defer { unsetenv("TY_TEST_PROFILE") }
+
+        let mgr = try makeManager(profiles: [
+            "custom": """
+            command = /bin/bash
+            env = TY_CUSTOM=1
+            """
+        ])
+        let sessionID = mgr.createSession(name: "s")
+        let rootPaneID = try #require(mgr.sessions.first?.tabs.first?.paneTree.firstPane.id)
+
+        let newPaneID = try #require(
+            mgr.splitPane(
+                inSessionID: sessionID,
+                parentPaneID: rootPaneID,
+                direction: .vertical
+            )
+        )
+        let child = try #require(mgr.findPane(id: newPaneID))
+        #expect(child.profileID == "custom")
+        #expect(child.startupSnapshot.command == "/bin/bash")
+        let env = Dictionary(uniqueKeysWithValues: child.startupSnapshot.envTuples)
+        #expect(env["TY_CUSTOM"] == "1")
+    }
+
+    @Test func splitPaneExplicitProfileOverridesInheritance() throws {
+        setenv("TY_TEST_PROFILE", "parent", 1)
+        defer { unsetenv("TY_TEST_PROFILE") }
+
+        let mgr = try makeManager(profiles: [
+            "parent": "command = /bin/bash",
+            "child": "command = /usr/bin/fish"
+        ])
+        let sessionID = mgr.createSession(name: "s")
+        let rootPaneID = try #require(mgr.sessions.first?.tabs.first?.paneTree.firstPane.id)
+
+        let newPaneID = try #require(
+            mgr.splitPane(
+                inSessionID: sessionID,
+                parentPaneID: rootPaneID,
+                direction: .horizontal,
+                profileID: "child"
+            )
+        )
+        let child = try #require(mgr.findPane(id: newPaneID))
+        #expect(child.profileID == "child")
+        #expect(child.startupSnapshot.command == "/usr/bin/fish")
+    }
+
+    // MARK: - Phase 4: floating pane inherits active pane
+
+    @Test func createFloatingPaneInheritsActivePaneProfile() throws {
+        setenv("TY_TEST_PROFILE", "custom", 1)
+        defer { unsetenv("TY_TEST_PROFILE") }
+
+        let mgr = try makeManager(profiles: [
+            "custom": "command = /bin/bash"
+        ])
+        _ = mgr.createSession(name: "s")
+
+        let floatID = try #require(mgr.createFloatingPane())
+        let floatPane = try #require(mgr.findPane(id: floatID))
+        #expect(floatPane.profileID == "custom")
+        #expect(floatPane.startupSnapshot.command == "/bin/bash")
     }
 }

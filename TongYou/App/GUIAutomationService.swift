@@ -754,18 +754,16 @@ final class GUIAutomationService {
             )))
         }
 
-        let newPane = TerminalPane()
-        guard manager.splitPane(
+        guard let newPaneID = manager.splitPane(
             inSessionID: target.sessionID,
-            id: paneID,
-            direction: direction,
-            newPane: newPane
+            parentPaneID: paneID,
+            direction: direction
         ) else {
             return .success(.failed(.paneNotFound(ref)))
         }
         let postSnapshots = Self.collectSnapshots()
         refStore.refreshRefs(snapshots: postSnapshots)
-        guard let newRef = refStore.paneRef(sessionID: target.sessionID, paneID: newPane.id) else {
+        guard let newRef = refStore.paneRef(sessionID: target.sessionID, paneID: newPaneID) else {
             return .success(.failed(.internal("ref allocation failed for new pane")))
         }
         return .success(.local(PaneSplitResponse(ref: newRef)))
@@ -1376,12 +1374,13 @@ final class GUIAutomationService {
             }
             signal()
         }
-        // `newPane` is ignored on the remote path (server owns allocation).
+        // Remote path: SessionManager.splitPane returns nil immediately
+        // after dispatching the RPC. The actual new pane id arrives via
+        // `onNextRemotePaneCreated` above.
         _ = manager.splitPane(
             inSessionID: sessionID,
-            id: request.paneID,
-            direction: request.direction,
-            newPane: TerminalPane()
+            parentPaneID: request.paneID,
+            direction: request.direction
         )
     }
 

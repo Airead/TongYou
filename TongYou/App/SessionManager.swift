@@ -90,9 +90,14 @@ final class SessionManager {
         return URL(fileURLWithPath: expanded)
     }
 
-    /// Environment variable that force-overrides the profile id for every
-    /// `createPane` call. Temporary Phase 2 testing hook — replaced by real
-    /// caller-driven wiring in Phases 4–6.
+    /// Environment variable that acts as a fallback profile id when a
+    /// `createPane` caller does not supply one. Temporary Phase 2 testing
+    /// hook — replaced by real caller-driven wiring in Phases 5–6.
+    ///
+    /// Phase 4 changed the semantics from "unconditional override" to
+    /// "fallback when `profileID` is nil" so inheritance paths (split →
+    /// parent pane's profile, new tab → default) remain observable while
+    /// the env var is set on the initial session pane.
     private static let testProfileEnvVar = "TY_TEST_PROFILE"
 
     /// Pending command info for remote floating panes awaiting server layoutUpdate.
@@ -523,6 +528,8 @@ final class SessionManager {
     func createTab(
         inSessionID: UUID? = nil,
         title: String = "shell",
+        profileID: String? = nil,
+        overrides: [String] = [],
         initialWorkingDirectory: String? = nil
     ) -> UUID? {
         let targetIndex: Int
@@ -542,7 +549,16 @@ final class SessionManager {
             return nil
         }
 
-        let initialPane = createPane(initialWorkingDirectory: initialWorkingDirectory)
+        // New tabs default to `default` profile (not the ambient
+        // TY_TEST_PROFILE fallback). Pass the id explicitly so
+        // createPane's env-var fallback only fires on session-level
+        // creation, not on every new tab opened after launch.
+        let effectiveProfileID = profileID ?? TerminalPane.defaultProfileID
+        let initialPane = createPane(
+            profileID: effectiveProfileID,
+            overrides: overrides,
+            initialWorkingDirectory: initialWorkingDirectory
+        )
         let tab = TerminalTab(title: title, initialPane: initialPane)
         sessions[targetIndex].tabs.append(tab)
         if GUIAutomationPolicy.shouldTakeViewFocus() {
@@ -777,6 +793,67 @@ final class SessionManager {
         return false
     }
 
+    /// Split a pane and build the child internally so profile inheritance
+    /// is centralized. When `profileID` is nil, the child inherits the
+    /// parent pane's `profileID`; when the parent cannot be located (e.g.
+    /// remote session where the local mirror has not settled), falls back
+    /// to `default`. Returns the new pane's UUID for local sessions; nil
+    /// for remote (server allocates the id, delivered via layoutUpdate)
+    /// and on lookup failure.
+    @discardableResult
+    func splitPane(
+        inSessionID: UUID? = nil,
+        parentPaneID: UUID,
+        direction: SplitDirection,
+        profileID: String? = nil,
+        overrides: [String] = [],
+        initialWorkingDirectory: String? = nil
+    ) -> UUID? {
+        let targetIndex: Int
+        if let sid = inSessionID {
+            guard let i = sessions.firstIndex(where: { $0.id == sid }) else { return nil }
+            targetIndex = i
+        } else {
+            guard sessions.indices.contains(activeSessionIndex) else { return nil }
+            targetIndex = activeSessionIndex
+        }
+        let session = sessions[targetIndex]
+
+        // Remote sessions: the server owns allocation. Dispatch the RPC
+        // and let layoutUpdate materialize the new pane. `newPane` is a
+        // placeholder the local SessionManager discards on the remote
+        // branch of the existing overload.
+        if let sid = session.source.serverSessionID,
+           let serverPaneUUID = serverPaneUUID(for: parentPaneID) {
+            remoteClient?.splitPane(
+                sessionID: SessionID(sid),
+                paneID: PaneID(serverPaneUUID),
+                direction: direction
+            )
+            return nil
+        }
+
+        let inheritedProfileID = profileID
+            ?? self.profileID(ofPane: parentPaneID)
+            ?? TerminalPane.defaultProfileID
+
+        let newPane = createPane(
+            profileID: inheritedProfileID,
+            overrides: overrides,
+            initialWorkingDirectory: initialWorkingDirectory
+        )
+
+        guard splitPane(
+            inSessionID: session.id,
+            id: parentPaneID,
+            direction: direction,
+            newPane: newPane
+        ) else {
+            return nil
+        }
+        return newPane.id
+    }
+
     /// Close a specific pane. For remote sessions, sends the request to the server
     /// and returns a sentinel value — local state updates via layoutUpdate.
     /// For local sessions, if it's the last pane in its tab, closes the tab.
@@ -891,8 +968,16 @@ final class SessionManager {
     /// Create a new floating pane in the active tab.
     /// For remote sessions, sends the request to the server and returns nil —
     /// the floating pane will be created when the server broadcasts a layoutUpdate.
+    ///
+    /// When `profileID` is nil the float inherits from the active tab's
+    /// focused pane (or `default` if no pane is focused). An explicit id
+    /// always wins.
     @discardableResult
-    func createFloatingPane(initialWorkingDirectory: String? = nil) -> UUID? {
+    func createFloatingPane(
+        profileID: String? = nil,
+        overrides: [String] = [],
+        initialWorkingDirectory: String? = nil
+    ) -> UUID? {
         guard sessions.indices.contains(activeSessionIndex),
               sessions[activeSessionIndex].tabs.indices.contains(
                   sessions[activeSessionIndex].activeTabIndex) else { return nil }
@@ -909,7 +994,18 @@ final class SessionManager {
             return nil
         }
 
-        let pane = createPane(initialWorkingDirectory: initialWorkingDirectory)
+        let activeTab = session.activeTab
+        let parentProfileID = activeTab?.focusedPaneID.flatMap { self.profileID(ofPane: $0) }
+            ?? activeTab?.paneTree.firstPane.profileID
+        let effectiveProfileID = profileID
+            ?? parentProfileID
+            ?? TerminalPane.defaultProfileID
+
+        let pane = createPane(
+            profileID: effectiveProfileID,
+            overrides: overrides,
+            initialWorkingDirectory: initialWorkingDirectory
+        )
         let floating = FloatingPane(pane: pane, frame: activeFloatingPanes.nextCascadedFrame(), zIndex: activeFloatingPanes.nextZIndex)
         activeFloatingPanes.append(floating)
         if attachedLocalSessionIDs.contains(session.id) {
@@ -949,7 +1045,7 @@ final class SessionManager {
     }
 
     /// Find a `TerminalPane` by id across every session (tree + floating).
-    private func findPane(id paneID: UUID) -> TerminalPane? {
+    func findPane(id paneID: UUID) -> TerminalPane? {
         for session in sessions {
             for tab in session.tabs {
                 if let pane = tab.paneTree.findPane(id: paneID) {
@@ -963,25 +1059,38 @@ final class SessionManager {
         return nil
     }
 
+    /// Look up the `profileID` of an existing pane. Returns nil when the
+    /// pane is not found in any session (remote pane not yet mirrored,
+    /// pane already closed, etc). Callers treat nil as "fall back to
+    /// default inheritance" (i.e. `TerminalPane.defaultProfileID`).
+    func profileID(ofPane paneID: UUID) -> String? {
+        findPane(id: paneID)?.profileID
+    }
+
     /// Resolve `profileID` and call-site `overrides` into a `TerminalPane`
     /// whose `startupSnapshot` carries the merged startup fields. All new
     /// panes flow through this entry point; the PTY-launching layer reads
     /// the snapshot instead of resampling global state.
     ///
-    /// `TY_TEST_PROFILE` environment variable, when set, force-overrides
-    /// `profileID` for every call — a temporary Phase 2 hook for ad-hoc
-    /// testing. Unknown profile ids fall back to `default` with a log.
+    /// When `profileID` is nil, the `TY_TEST_PROFILE` environment variable
+    /// (if set) supplies a fallback — a temporary Phase 2 hook for ad-hoc
+    /// testing. Callers that want to escape the env var (e.g. new tabs)
+    /// pass `TerminalPane.defaultProfileID` explicitly. Unknown profile
+    /// ids fall back to `default` with a log.
     func createPane(
         profileID: String? = nil,
         overrides: [String] = [],
         initialWorkingDirectory: String? = nil
     ) -> TerminalPane {
         let requestedID: String = {
+            if let explicit = profileID {
+                return explicit
+            }
             if let forced = ProcessInfo.processInfo.environment[Self.testProfileEnvVar],
                !forced.isEmpty {
                 return forced
             }
-            return profileID ?? TerminalPane.defaultProfileID
+            return TerminalPane.defaultProfileID
         }()
 
         let resolved: ResolvedProfile

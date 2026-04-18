@@ -453,11 +453,16 @@ struct TerminalWindowView: View {
     private func splitPane(direction: SplitDirection) {
         guard let focusedID = focusManager.focusedPaneID else { return }
         let cwd = viewStore.view(for: focusedID)?.currentWorkingDirectory
-        let newPane = sessionManager.createPane(initialWorkingDirectory: cwd)
-        guard sessionManager.splitPane(id: focusedID, direction: direction, newPane: newPane) else {
+        // Remote sessions return nil here — focus lands on the new pane
+        // when the layoutUpdate materializes.
+        guard let newPaneID = sessionManager.splitPane(
+            parentPaneID: focusedID,
+            direction: direction,
+            initialWorkingDirectory: cwd
+        ) else {
             return
         }
-        focusManager.focusPane(id: newPane.id)
+        focusManager.focusPane(id: newPaneID)
     }
 
     private func closePane() {

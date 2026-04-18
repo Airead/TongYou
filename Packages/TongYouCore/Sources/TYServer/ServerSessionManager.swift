@@ -24,6 +24,18 @@ struct ServerTab {
         let target = focusedPaneID ?? PaneID(paneTree.firstPane.id)
         return coreLookup[target]?.currentWorkingDirectory
     }
+
+    /// Return the `profileID` of the focused pane, looking through both
+    /// the tree (where panes carry profileID on `TerminalPane`) and the
+    /// floating-pane table. Returns nil when the focused pane cannot be
+    /// located, which callers map to `default`.
+    func focusedPaneProfileID() -> String? {
+        let target = focusedPaneID ?? PaneID(paneTree.firstPane.id)
+        if let pane = paneTree.findPane(id: target.uuid) {
+            return pane.profileID
+        }
+        return floatingPaneProfileIDs[target]
+    }
 }
 
 /// Server-side session containing tabs and panes.
@@ -315,8 +327,17 @@ public final class ServerSessionManager {
 
         // Inherit cwd from the pane being split.
         let sourceCwd = coreLookup[paneID]?.currentWorkingDirectory
+        // Inherit profileID from the parent pane so split panes live on
+        // the same profile. Tree panes carry profileID on TerminalPane;
+        // fall back to default if the parent cannot be located.
+        let parentProfileID = session.tabs[tabIndex].paneTree
+            .findPane(id: paneID.uuid)?.profileID
 
-        let (newPaneID, newPane, core) = createAndStartPane(sessionID: sessionID, workingDirectory: sourceCwd)
+        let (newPaneID, newPane, core) = createAndStartPane(
+            sessionID: sessionID,
+            workingDirectory: sourceCwd,
+            profileID: parentProfileID
+        )
 
         guard let newTree = session.tabs[tabIndex].paneTree.split(
             paneID: paneID.uuid,
@@ -470,10 +491,15 @@ public final class ServerSessionManager {
         guard var session = sessions[sessionID] else { return nil }
         guard let tabIndex = session.tabs.firstIndex(where: { $0.id == tabID }) else { return nil }
 
-        // Inherit cwd from the focused pane of the target tab.
+        // Inherit cwd and profile from the focused pane of the target tab.
         let focusedCwd = session.tabs[tabIndex].focusedPaneCwd(coreLookup: coreLookup)
+        let parentProfileID = session.tabs[tabIndex].focusedPaneProfileID()
 
-        let (paneID, pane, core) = createAndStartPane(sessionID: sessionID, workingDirectory: focusedCwd)
+        let (paneID, pane, core) = createAndStartPane(
+            sessionID: sessionID,
+            workingDirectory: focusedCwd,
+            profileID: parentProfileID
+        )
         let nextZ = (session.tabs[tabIndex].floatingPanes.max(by: { $0.zIndex < $1.zIndex })?.zIndex ?? -1) + 1
         let fp = FloatingPaneInfo(paneID: paneID, zIndex: nextZ)
 
@@ -970,13 +996,18 @@ public final class ServerSessionManager {
     ///     nil, behavior is identical to pre-profile code paths. Phase 2
     ///     leaves this parameter unused by internal callers — it is wired
     ///     end-to-end starting in Phase 5 (JSON-RPC surface).
+    ///   - profileID: Stamps the new pane's `profileID`. Phase 4 plumbs
+    ///     this through split/new-tab/new-float paths so the string
+    ///     propagates locally; Phase 5 uses it together with `snapshot`
+    ///     to actually launch the profile's command.
     private func createAndStartPane(
         sessionID: SessionID,
         workingDirectory: String? = nil,
         paneID: PaneID? = nil,
-        snapshot: StartupSnapshot? = nil
+        snapshot: StartupSnapshot? = nil,
+        profileID: String? = nil
     ) -> (PaneID, TerminalPane, TerminalCore) {
-        let effectiveProfileID = TerminalPane.defaultProfileID
+        let effectiveProfileID = profileID ?? TerminalPane.defaultProfileID
         let resolvedSnapshot = snapshot ?? StartupSnapshot(cwd: workingDirectory)
 
         let pane: TerminalPane
