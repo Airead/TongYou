@@ -564,6 +564,14 @@ public final class SocketServer: @unchecked Sendable {
             ) {
                 sendFullSnapshot(to: client, sessionID: sessionID, paneID: paneID)
             }
+
+        case .rerunPane(let sessionID, let paneID):
+            // Mirrors local `rerunTreePaneCommand`: stop the old core,
+            // start a fresh one with the same snapshot, keep the PaneID.
+            // Send an immediate fresh snapshot so the client's zombie-pane
+            // contents are replaced without waiting for the first draw.
+            sessionManager.rerunPane(sessionID: sessionID, paneID: paneID)
+            sendFullSnapshot(to: client, sessionID: sessionID, paneID: paneID)
         }
     }
 

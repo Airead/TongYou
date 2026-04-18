@@ -1075,12 +1075,27 @@ final class SessionManager {
     }
 
     /// Re-run the command in an exited tree pane using the same startup
-    /// snapshot that launched it originally. Returns the new controller on
-    /// success, or nil if the pane is not a local tree pane.
+    /// snapshot that launched it originally.
+    ///
+    /// For local panes, returns the newly-started controller so the caller
+    /// can re-wire it into the MetalView. For remote panes, sends the
+    /// `rerunPane` op to the server and returns nil: the existing
+    /// `ClientTerminalController` stays bound to the same `PaneID` and the
+    /// server pushes a fresh `screenFull` to clear the zombie contents.
     @discardableResult
     func rerunTreePaneCommand(paneID: UUID) -> (any TerminalControlling)? {
         guard let pane = findPane(id: paneID) else { return nil }
         exitedTreePanes.removeValue(forKey: paneID)
+
+        if let session = sessions.first(where: { $0.hasPane(id: paneID) }),
+           let serverSessionID = session.source.serverSessionID,
+           let serverPaneUUID = serverPaneUUID(for: paneID) {
+            remoteClient?.rerunPane(
+                sessionID: SessionID(serverSessionID),
+                paneID: PaneID(serverPaneUUID)
+            )
+            return nil
+        }
 
         localControllers[paneID]?.stop()
         let controller = TerminalController(columns: 80, rows: 24)

@@ -77,6 +77,10 @@ public enum ClientMessageType: UInt16, Sendable {
     // 0x022D was createFloatingPaneWithCommand; removed in Phase 7.2. Decoders
     // receiving this opcode must report it as an unknown message type.
     case restartFloatingPaneCommand    = 0x022E
+    /// Rerun a tree pane's command in place, reusing the pane's
+    /// `StartupSnapshot`. The server keeps the `PaneID` stable; the
+    /// existing `TerminalCore` is stopped and replaced. Phase 8.2.
+    case rerunPane                     = 0x0230
 }
 
 // MARK: - Server Messages
@@ -220,6 +224,11 @@ public enum ClientMessage: Sendable {
     case runRemoteCommand(SessionID, PaneID, command: String, arguments: [String])
     /// Restart a command in an existing (exited) floating pane.
     case restartFloatingPaneCommand(SessionID, PaneID, command: String, arguments: [String])
+    /// Re-run the command in a tree pane, reusing the pane's original
+    /// `StartupSnapshot`. Pairs with the local `rerunTreePaneCommand`
+    /// path; server keeps the `PaneID` stable so the client does not
+    /// rebuild the layout.
+    case rerunPane(SessionID, PaneID)
 
     /// Human-readable summary for debug logging. Long payloads are truncated.
     public var debugDescription: String {
@@ -281,6 +290,8 @@ public enum ClientMessage: Sendable {
             return "runRemoteCommand(session=\(sid), pane=\(pid), cmd=\(truncate(cmd, maxLength: 80)), args=\(args))"
         case .restartFloatingPaneCommand(let sid, let pid, let cmd, let args):
             return "restartFloatingPaneCommand(session=\(sid), pane=\(pid), cmd=\(truncate(cmd, maxLength: 80)), args=\(args))"
+        case .rerunPane(let sid, let pid):
+            return "rerunPane(session=\(sid), pane=\(pid))"
         }
     }
 
@@ -314,6 +325,7 @@ public enum ClientMessage: Sendable {
         case .runInPlace:              return .runInPlace
         case .runRemoteCommand:        return .runRemoteCommand
         case .restartFloatingPaneCommand:    return .restartFloatingPaneCommand
+        case .rerunPane:                     return .rerunPane
         }
     }
 }

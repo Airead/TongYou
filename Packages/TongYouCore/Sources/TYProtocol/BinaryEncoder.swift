@@ -542,6 +542,10 @@ public struct BinaryEncoder: Sendable {
             writePaneID(paneID)
             writeString(command)
             writeStringArray(arguments)
+
+        case .rerunPane(let sessionID, let paneID):
+            writeSessionID(sessionID)
+            writePaneID(paneID)
         }
     }
 }

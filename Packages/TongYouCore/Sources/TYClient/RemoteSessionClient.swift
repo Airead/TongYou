@@ -267,6 +267,13 @@ public final class RemoteSessionClient: @unchecked Sendable {
         connection?.send(.restartFloatingPaneCommand(sessionID, paneID, command: command, arguments: arguments))
     }
 
+    /// Re-run the command in a zombie tree pane (Enter on an exited remote
+    /// pane). The server keeps the `PaneID` stable and pushes a fresh
+    /// `screenFull` afterwards to clear the pane visually.
+    public func rerunPane(sessionID: SessionID, paneID: PaneID) {
+        connection?.send(.rerunPane(sessionID, paneID))
+    }
+
     // MARK: - Screen Replica Access
 
     /// Get the screen replica for a pane, creating one if needed.

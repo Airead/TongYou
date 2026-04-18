@@ -1002,6 +1002,63 @@ struct ServerSessionManagerTests {
         manager.closeSession(id: session.id)
     }
 
+    // MARK: - Phase 8.2: rerunPane
+
+    @Test("rerunPane replaces TerminalCore but keeps PaneID and snapshot")
+    func rerunPaneReplacesCoreAndKeepsPaneID() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "phase8 rerun keep-id")
+        guard case .leaf(let rootPaneID) = session.tabs[0].layout else {
+            Issue.record("Expected leaf layout"); return
+        }
+
+        let snapshot = StartupSnapshot(
+            command: "/bin/sh",
+            args: ["-c", "exit 0"],
+            closeOnExit: false
+        )
+        let paneID = manager.splitPane(
+            sessionID: session.id,
+            paneID: rootPaneID,
+            direction: .horizontal,
+            profileID: "ci",
+            snapshot: snapshot
+        )!
+
+        let oldCore = manager.terminalCoreForTests(paneID: paneID)
+        #expect(oldCore != nil)
+
+        manager.rerunPane(sessionID: session.id, paneID: paneID)
+
+        // Same PaneID still exists in the tree — snapshot + profileID preserved.
+        let pane = manager.treePaneForTests(paneID: paneID)
+        #expect(pane != nil)
+        #expect(pane?.profileID == "ci")
+        #expect(pane?.startupSnapshot == snapshot)
+        // closeOnExit still surfaced in metadata after rerun.
+        let info = manager.sessionInfo(for: session.id)
+        #expect(info?.paneMetadata[paneID]?.closeOnExit == false)
+
+        // Core is a fresh instance.
+        let newCore = manager.terminalCoreForTests(paneID: paneID)
+        #expect(newCore != nil)
+        #expect(oldCore !== newCore)
+
+        manager.closeSession(id: session.id)
+    }
+
+    @Test("rerunPane is a no-op for unknown pane")
+    func rerunPaneIgnoresUnknownPane() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "phase8 rerun unknown")
+        let bogus = PaneID()
+
+        // Should not crash, should not mutate anything.
+        manager.rerunPane(sessionID: session.id, paneID: bogus)
+
+        manager.closeSession(id: session.id)
+    }
+
     @Test("createFloatingPane surfaces closeOnExit=false in paneMetadata")
     func createFloatingPaneSurfacesCloseOnExitInMetadata() {
         let manager = ServerSessionManager()

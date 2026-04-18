@@ -598,6 +598,19 @@ struct WireFormatTests {
         #expect(args == ["status"])
     }
 
+    @Test func roundTripRerunPane() throws {
+        let sid = SessionID()
+        let pid = PaneID()
+        let msg = ClientMessage.rerunPane(sid, pid)
+        let decoded = try encodeAndDecode(clientMessage: msg)
+        guard case .rerunPane(let dSid, let dPid) = decoded else {
+            Issue.record("Expected .rerunPane")
+            return
+        }
+        #expect(dSid == sid)
+        #expect(dPid == pid)
+    }
+
     // MARK: - Unknown Type Codes
 
     @Test func unknownServerTypeThrows() throws {

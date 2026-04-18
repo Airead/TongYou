@@ -400,6 +400,38 @@ public final class ServerSessionManager {
         }
     }
 
+    /// Re-run the command in an existing tree pane, reusing the pane's
+    /// original `StartupSnapshot` and `profileID`. The `PaneID` and its
+    /// position in the tree are preserved; only the backing `TerminalCore`
+    /// is replaced. Mirrors the local `SessionManager.rerunTreePaneCommand`
+    /// path so remote zombie panes can be re-run from the GUI.
+    ///
+    /// No layoutUpdate is emitted: the client does not rebuild the tree.
+    /// The fresh core will push a `screenFull` update as soon as it starts
+    /// drawing, which naturally clears any stale output on the client.
+    public func rerunPane(sessionID: SessionID, paneID: PaneID) {
+        guard var session = sessions[sessionID] else { return }
+        guard let tabIndex = session.tabIndex(for: paneID) else { return }
+        guard let pane = session.tabs[tabIndex].paneTree.findPane(id: paneID.uuid) else {
+            // Floating panes go through `restartFloatingPaneCommand`.
+            return
+        }
+
+        if let old = session.tabs[tabIndex].terminalCores.removeValue(forKey: paneID) {
+            teardownPane(paneID, core: old)
+        }
+
+        let (_, _, core) = createAndStartPane(
+            sessionID: sessionID,
+            paneID: paneID,
+            snapshot: pane.startupSnapshot,
+            profileID: pane.profileID
+        )
+        session.tabs[tabIndex].terminalCores[paneID] = core
+        sessions[sessionID] = session
+        Log.info("Rerun pane: \(paneID) in session \(sessionID)", category: .session)
+    }
+
     /// Update the split ratio at the node that directly contains `paneID`
     /// as a leaf child. `ratio` is the target pane's share in `(0.0, 1.0)`.
     /// Returns true when the pane was located and the tree was updated.
@@ -613,6 +645,13 @@ public final class ServerSessionManager {
     }
 
     // MARK: - Pane ID Queries
+
+    /// Test-only accessor returning the backing `TerminalCore` for a pane
+    /// (tree or floating). Used to assert that operations like `rerunPane`
+    /// replace the core with a fresh instance.
+    internal func terminalCoreForTests(paneID: PaneID) -> TerminalCore? {
+        coreLookup[paneID]
+    }
 
     /// Test-only accessor returning the `TerminalPane` for a tree pane by
     /// scanning every session's tab trees. Returns nil for floating panes
