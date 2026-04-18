@@ -418,7 +418,7 @@ for i in 1 2 3; do ./tongyou app list; done
 ## Phase 5：Tab / Pane 结构命令
 
 ### 目标
-支持标签页和树形面板的创建、切换、关闭、分屏及比例调整。
+支持标签页和树形面板的创建、切换、关闭、分屏及比例调整。命令对 local session 和已 attach 的 remote session 同等生效——所有 tab/pane 操作都通过 GUI 侧的 `SessionManager` 执行，remote 分支把请求转发给 daemon，再由 `layoutUpdate` 回填本地状态。
 
 ### 涉及文件
 - `GUIAutomationServer.swift`（新增 tab/pane 结构命令）
@@ -432,6 +432,11 @@ for i in 1 2 3; do ./tongyou app list; done
 4. `pane.close`：调用 `SessionManager.closePane`
 5. `pane.resize`：根据 pane ref 找到其父 `PaneNode.split`，修改 `ratio`
 6. 焦点策略：`focus-pane` 在白名单，其他不在
+7. **Remote session 支持**：
+   - `tab.select` / `tab.close` / `pane.focus` / `pane.close`：`SessionManager` 既有远程分支直接转发给 daemon，无需额外工作
+   - `tab.create` / `pane.split`：daemon 异步创建后通过 `layoutUpdate` 回填；在 `SessionManager` 暴露 `onNextRemoteTabCreated` / `onNextRemotePaneCreated` FIFO 监听点，`GUIAutomationService` 复用 `createRemoteSessionBlocking` 的信号量 + 超时模式，把下一次 layoutUpdate 出现的新 tab/pane UUID 转换成 ref 同步返回
+   - `pane.resize`：新增 `ClientMessage.setSplitRatio`（wire 0x022F）；daemon 在 `ServerSessionManager` 侧应用 `PaneNode.updateRatio` 并广播 `layoutUpdate`；客户端 `SessionManager.updateSplitRatio` 的 remote 分支走 `RemoteSessionClient.setSplitRatio`
+   - detached 的 remote session 在 `GUIAutomationService` 侧直接返回 `UNSUPPORTED_OPERATION`（带 "attach it first" 提示），不把请求发给 daemon
 
 ### 人工验证步骤
 ```bash
@@ -456,12 +461,26 @@ for i in 1 2 3; do ./tongyou app list; done
 
 # 7. 关闭 pane
 ./tongyou app close-pane dev/pane:2
+
+# 8. Remote session 同样支持（若环境可用）
+./tongyou app create prod --remote
+./tongyou app new-tab prod
+./tongyou app split prod --vertical
+./tongyou app resize-pane prod/pane:2 --ratio 0.3
+./tongyou app focus-pane prod/pane:2
+# 期望：行为与 local session 一致；所有变更均由 daemon 的 layoutUpdate 回填
+
+# 9. Detached remote session 拒绝结构性操作
+./tongyou app detach prod        # 或通过其它入口 detach
+./tongyou app new-tab prod
+# 期望：UNSUPPORTED_OPERATION，提示需先 attach
 ```
 
 ### 完成标准
 - Tab 和 Pane 的增删改查均通过 CLI 正常驱动
 - `focus-pane` 能正确激活窗口
 - `resize-pane` 能准确调整比例，无效 pane 返回合理错误
+- 上述命令对 local session 和已 attach 的 remote session 均正常工作；detached remote session 返回 `UNSUPPORTED_OPERATION` 且不发 RPC 给 daemon
 
 ---
 
