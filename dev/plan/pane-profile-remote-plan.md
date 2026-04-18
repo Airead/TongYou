@@ -216,20 +216,29 @@
 
 ## Phase 7.3：客户端 + GUI 透传，统一 float 创建路径
 
+### 已在 Phase 7.2 提前完成（避免破坏构建）
+
+- `TYProtocol.FloatFrameHint` 已定义并上线。
+- `RemoteSessionClient.createTab / splitPane / createFloatingPane` 已扩到最终签名（`profileID: String?`、`snapshot: StartupSnapshot?`、float 额外 `frameHint: FloatFrameHint?`），**参数带默认值 `= nil`** 以保持 GUI 调用兼容。
+- `RemoteSessionClient.createFloatingPaneWithCommand` 仍保留，但实现已改成 shim：内部构造 `StartupSnapshot + FloatFrameHint` 转发到新的 `createFloatingPane` wire 消息。**Phase 7.3 删掉这个 shim**。
+- `ClientMessage.createFloatingPaneWithCommand` + opcode `0x022D` + `ServerSessionManager.createFloatingPaneWithCommand` 都已在 7.2 删除。7.3 只处理客户端 shim 和 GUI 调用方。
+
 ### 目标
 
-1. `RemoteSessionClient` 新签名通过 `profileID` + `snapshot`。
-2. GUI `SessionManager` 的 remote 路径调用本地 `ProfileMerger.resolve(...)` 得到 `StartupSnapshot` 后发到 wire。
-3. 现有调 `createFloatingPaneWithCommand` 的所有 GUI 路径（"命令面板 → run command in new float"）迁移到**构造 snapshot → 统一 `createFloatingPane`**。
-4. 移除 `GUIAutomationService.swift` 三处 `UNSUPPORTED_OPERATION` guard。
+1. GUI `SessionManager` 的 remote 路径调用本地 `ProfileMerger.resolve(...)` 得到 `StartupSnapshot`（float 还要产出 `FloatFrameHint`），通过 `RemoteSessionClient` 发到 wire。
+2. 现有调 `createFloatingPaneWithCommand` 的所有 GUI 路径（"命令面板 → run command in new float"）迁移到**构造 snapshot(+frameHint) → 统一 `createFloatingPane`**。
+3. 删除 `RemoteSessionClient.createFloatingPaneWithCommand` shim 及 GUI 里的 `SessionManager` 私有 `createFloatingPaneWithCommand`。
+4. 从 `StartupSnapshot` 里剥离 `initialX/Y/Width/Height`（选 C 后续落地；这些字段服务端从未消费，删除安全）；`ResolvedStartupFields → StartupSnapshot` 组装同步拆成 `(StartupSnapshot, FloatFrameHint?)` 双产出。
+5. 移除 `GUIAutomationService.swift` 三处 `UNSUPPORTED_OPERATION` guard，remote 路径也先本地 `validateProfile`。
+6. （可选收尾）把 `RemoteSessionClient.createTab/splitPane/createFloatingPane` 参数的 `= nil` 默认值去掉，强制调用方显式传参，避免隐式 nil 行为漂移。
 
 ### 涉及文件
 
-- `Packages/TongYouCore/Sources/TYClient/RemoteSessionClient.swift`（`:171 createTab` / `:179 splitPane` / `:204 createFloatingPane` / 旧 `createFloatingPaneWithCommand`）
-- `TongYou/App/SessionManager.swift`（远程路径 + `:2301 / :2347 / :2362` 的 `createFloatingPaneWithCommand` 调用者 + `:2368 private func createFloatingPaneWithCommand(...)` 本体）
+- `Packages/TongYouCore/Sources/TYClient/RemoteSessionClient.swift`（删 `createFloatingPaneWithCommand` shim；视情况收紧参数默认值）
+- `TongYou/App/SessionManager.swift`（远程路径传 profileID+snapshot+frameHint；`:2301 / :2347 / :2362` 的 `createFloatingPaneWithCommand` 调用者迁移；`:2368 private func createFloatingPaneWithCommand(...)` 删除）
 - `TongYou/App/GUIAutomationService.swift`（删除 `:716 / :846 / :981` 的 guard；让 remote 也调 `validateProfile`）
-- `Packages/TongYouCore/Sources/TYConfig/StartupSnapshot.swift` — **可能需要修改字段类型**，见下面的设计决策
-- 相关 GUI 调用路径（命令面板、`runCommand` action 等 —— 用 Grep `createFloatingPaneWithCommand` 全局查）
+- `Packages/TongYouCore/Sources/TYConfig/StartupSnapshot.swift` — 删 `initialX/Y/Width/Height` 字段；`ResolvedStartupFields → StartupSnapshot`/`FloatFrameHint` 的组装重写
+- 相关 GUI 调用路径（命令面板、`runCommand` action 等 —— 用 `grep -r createFloatingPaneWithCommand` 全局查）
 - `TongYouTests/SessionManagerTests.swift` / `SessionManagerProfileTests.swift`
 
 ### 设计决策：float 几何走"选 C"（已定）
@@ -240,25 +249,27 @@
 
 - **选择 B（已放弃）**：保留 `Int?` 做像素，float 创建后再单独发 `updateFloatingPaneFrame`。缺点：两步创建有视觉抖动窗口。
 
-- **选择 C（采用）**：**从 `StartupSnapshot` 里剥离 `initialX/Y/Width/Height`**（它们本来就是 float-only 的 UI 几何，不是 PTY 启动参数）。在 Phase 7.3 的 wire 层给 `createFloatingPane` 加一个独立的可选 `FloatFrameHint { x, y, w, h: Float }`（归一化，与 `updateFloatingPaneFrame` 单位一致）。`ProfileMerger` 产出 snapshot + 可选 frameHint 两个结构。
+- **选择 C（采用）**：**从 `StartupSnapshot` 里剥离 `initialX/Y/Width/Height`**（它们本来就是 float-only 的 UI 几何，不是 PTY 启动参数）。给 `createFloatingPane` wire 消息加独立的可选 `FloatFrameHint { x, y, w, h: Float }`（归一化，与 `updateFloatingPaneFrame` 单位一致）。`ProfileMerger` 产出 `(StartupSnapshot, FloatFrameHint?)` 两个结构。
   - 好处：snapshot 纯粹化为 PTY 启动参数；float 几何由专属类型承载；profile 文件里的 `initial-x = 0.25` 可以明确标注"float-only, 归一化"。
-  - Phase 7.1 仍按 `StartupSnapshot` 当前形状（含 `Int?` initial*）做编解码；Phase 7.3 再定义 `FloatFrameHint`、从 `StartupSnapshot` 删掉 `initial*`、并更新 `ResolvedStartupFields → …` 的组装。
+  - **落地进度**：`FloatFrameHint` 已在 Phase 7.2 定义并参与 wire/server/client 编解码（提前了一步以避免 7.2→7.3 过渡期破坏构建）。Phase 7.1 仍按 `StartupSnapshot` 当前形状（含 `Int?` initial*）做编解码。Phase 7.3 完成剩下的清理：从 `StartupSnapshot` 删 `initial*` 字段；更新 `ResolvedStartupFields → StartupSnapshot / FloatFrameHint` 的组装；`ProfileMerger.resolve` 返回双产出。
+  - **`initial*` 删除的安全性**：服务端 `createAndStartPane` 从未读过这 4 个字段（只读 command/args/cwd/env/closeOnExit），wire 编解码也是 7.1 新增的、无历史持久化数据，直接删字段不会影响任何运行时行为。
 
 ### 实现要点
 
-1. **`RemoteSessionClient`** 新签名：
+1. **`RemoteSessionClient`**（签名已在 7.2 落地，7.3 只做清理）：
    ```swift
    public func createTab(sessionID: SessionID,
-                         profileID: String?,
-                         snapshot: StartupSnapshot?)
+                         profileID: String? = nil,          // 7.3 可去默认值
+                         snapshot: StartupSnapshot? = nil)
    public func splitPane(sessionID: SessionID, paneID: PaneID,
                          direction: SplitDirection,
-                         profileID: String?,
-                         snapshot: StartupSnapshot?)
+                         profileID: String? = nil,
+                         snapshot: StartupSnapshot? = nil)
    public func createFloatingPane(sessionID: SessionID, tabID: TabID,
-                                  profileID: String?,
-                                  snapshot: StartupSnapshot?)
-   // 旧 createFloatingPaneWithCommand 删除
+                                  profileID: String? = nil,
+                                  snapshot: StartupSnapshot? = nil,
+                                  frameHint: FloatFrameHint? = nil)
+   // 删除：createFloatingPaneWithCommand(...)  —— 现为 shim，7.3 删除并同步删掉 GUI 唯一调用方。
    ```
 
 2. **GUI `SessionManager` 远程路径**：Phase 5 JSON-RPC 已经把 profile+overrides 送到 local 路径；remote 路径需要对称处理。关键改动：
