@@ -731,6 +731,62 @@ struct GUIAutomationServerTests {
         #expect(captured.ref == "dev/pane:3")
     }
 
+    @Test func windowFocusInvokesHandler() throws {
+        let (baseConfig, tmpDir) = Self.isolatedConfig()
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        final class Captured: @unchecked Sendable { var called = 0 }
+        let captured = Captured()
+
+        let config = GUIAutomationServer.Configuration(
+            socketPath: baseConfig.socketPath,
+            tokenPath: baseConfig.tokenPath,
+            allowedPeerUID: baseConfig.allowedPeerUID,
+            handleWindowFocus: {
+                captured.called += 1
+                return .success(())
+            }
+        )
+        let server = GUIAutomationServer(configuration: config)
+        try server.start()
+        defer { server.stop() }
+        Thread.sleep(forTimeInterval: 0.05)
+
+        let token = try #require(GUIAutomationAuth.read(tokenPath: config.tokenPath))
+        let socket = try TYSocket.connect(path: config.socketPath)
+        defer { socket.closeSocket() }
+
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        _ = try Self.readLine(socket)
+
+        try Self.sendLine(socket, #"{"cmd":"window.focus"}"#)
+        let resp = try #require(try Self.readLine(socket))
+        #expect(resp.contains("\"ok\":true"))
+        #expect(resp.contains("\"result\":null"))
+        #expect(captured.called == 1)
+    }
+
+    @Test func windowFocusWithoutHandlerReturnsInternalError() throws {
+        let (config, tmpDir) = Self.isolatedConfig()
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        let server = GUIAutomationServer(configuration: config)
+        try server.start()
+        defer { server.stop() }
+        Thread.sleep(forTimeInterval: 0.05)
+
+        let token = try #require(GUIAutomationAuth.read(tokenPath: config.tokenPath))
+        let socket = try TYSocket.connect(path: config.socketPath)
+        defer { socket.closeSocket() }
+
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        _ = try Self.readLine(socket)
+
+        try Self.sendLine(socket, #"{"cmd":"window.focus"}"#)
+        let resp = try #require(try Self.readLine(socket))
+        #expect(resp.contains("\"code\":\"INTERNAL_ERROR\""))
+    }
+
     @Test func paneCloseForwardsRef() throws {
         let (baseConfig, tmpDir) = Self.isolatedConfig()
         defer { try? FileManager.default.removeItem(atPath: tmpDir) }

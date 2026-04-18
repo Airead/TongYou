@@ -35,15 +35,12 @@ public final class GUIAutomationServer: @unchecked Sendable {
         /// useful for tests that don't exercise the GUI path.
         public let handleSessionList: (@Sendable () -> SessionListResponse)?
         /// Creates a session of the given type, returning the allocated ref.
-        /// Note: Phase 7 will treat `session.create` as a focus-whitelisted
-        /// command — implementations should feel free to activate the window.
+        /// Not focus-whitelisted — must not bring the GUI to the foreground.
         public let handleSessionCreate: (@Sendable (String?, AutomationSessionType) -> Result<SessionCreateResponse, AutomationError>)?
-        /// Closes the session named by the ref.
-        /// Focus-whitelisted (see `handleSessionCreate`).
+        /// Closes the session named by the ref. Not focus-whitelisted.
         public let handleSessionClose: (@Sendable (String) -> Result<Void, AutomationError>)?
         /// Attaches a detached remote session by ref. Local sessions must
-        /// return `.unsupportedOperation`.
-        /// Focus-whitelisted (see `handleSessionCreate`).
+        /// return `.unsupportedOperation`. Not focus-whitelisted.
         public let handleSessionAttach: (@Sendable (String) -> Result<Void, AutomationError>)?
         /// Detaches an attached session by ref. Works for both local and
         /// remote sessions — the session remains in the sidebar but stops
@@ -66,8 +63,8 @@ public final class GUIAutomationServer: @unchecked Sendable {
         /// Splits the pane resolved from `ref` in the given direction. Returns
         /// the newly allocated pane ref. Not focus-whitelisted.
         public let handlePaneSplit: (@Sendable (String, SplitDirection) -> Result<PaneSplitResponse, AutomationError>)?
-        /// Focuses the pane resolved from `ref`. Phase 7 will treat this as a
-        /// focus-whitelisted command — implementations may activate the window.
+        /// Focuses the pane resolved from `ref`. Focus-whitelisted —
+        /// implementations bring the GUI to the foreground on success.
         public let handlePaneFocus: (@Sendable (String) -> Result<Void, AutomationError>)?
         /// Closes the pane resolved from `ref`. Not focus-whitelisted.
         public let handlePaneClose: (@Sendable (String) -> Result<Void, AutomationError>)?
@@ -80,9 +77,8 @@ public final class GUIAutomationServer: @unchecked Sendable {
         /// uses the active tab). Returns the newly allocated float ref.
         /// Not focus-whitelisted.
         public let handleFloatPaneCreate: (@Sendable (String) -> Result<FloatPaneCreateResponse, AutomationError>)?
-        /// Focuses the floating pane resolved from `ref`. Phase 7 will treat
-        /// this as a focus-whitelisted command — implementations may activate
-        /// the window.
+        /// Focuses the floating pane resolved from `ref`. Focus-whitelisted —
+        /// implementations bring the GUI to the foreground on success.
         public let handleFloatPaneFocus: (@Sendable (String) -> Result<Void, AutomationError>)?
         /// Closes the floating pane resolved from `ref`. Not focus-whitelisted.
         public let handleFloatPaneClose: (@Sendable (String) -> Result<Void, AutomationError>)?
@@ -92,6 +88,9 @@ public final class GUIAutomationServer: @unchecked Sendable {
         /// Moves / resizes the floating pane resolved from `ref`. Frame uses
         /// normalized (0–1) coordinates. Not focus-whitelisted.
         public let handleFloatPaneMove: (@Sendable (String, FloatPaneFrame) -> Result<Void, AutomationError>)?
+        /// Brings the GUI to the foreground without mutating focus.
+        /// Focus-whitelisted.
+        public let handleWindowFocus: (@Sendable () -> Result<Void, AutomationError>)?
 
         public init(
             socketPath: String = GUIAutomationPaths.socketPath(),
@@ -115,7 +114,8 @@ public final class GUIAutomationServer: @unchecked Sendable {
             handleFloatPaneFocus: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
             handleFloatPaneClose: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
             handleFloatPanePin: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
-            handleFloatPaneMove: (@Sendable (String, FloatPaneFrame) -> Result<Void, AutomationError>)? = nil
+            handleFloatPaneMove: (@Sendable (String, FloatPaneFrame) -> Result<Void, AutomationError>)? = nil,
+            handleWindowFocus: (@Sendable () -> Result<Void, AutomationError>)? = nil
         ) {
             self.socketPath = socketPath
             self.tokenPath = tokenPath
@@ -139,6 +139,7 @@ public final class GUIAutomationServer: @unchecked Sendable {
             self.handleFloatPaneClose = handleFloatPaneClose
             self.handleFloatPanePin = handleFloatPanePin
             self.handleFloatPaneMove = handleFloatPaneMove
+            self.handleWindowFocus = handleWindowFocus
         }
     }
 
@@ -382,6 +383,8 @@ public final class GUIAutomationServer: @unchecked Sendable {
             return handleFloatPanePinCommand(request: request, config: config)
         case "floatPane.move":
             return handleFloatPaneMoveCommand(request: request, config: config)
+        case "window.focus":
+            return handleWindowFocusCommand(config: config)
         default:
             return .error(code: "UNKNOWN_COMMAND", message: "unknown command: \(request.cmd)")
         }
@@ -799,6 +802,18 @@ public final class GUIAutomationServer: @unchecked Sendable {
         }
         let frame = FloatPaneFrame(x: x, y: y, width: width, height: height)
         switch handler(ref, frame) {
+        case .success:
+            return .success(.null)
+        case .failure(let error):
+            return .error(code: error.code, message: error.message)
+        }
+    }
+
+    private static func handleWindowFocusCommand(config: Configuration) -> JSONResponse {
+        guard let handler = config.handleWindowFocus else {
+            return .error(code: "INTERNAL_ERROR", message: "window.focus not wired")
+        }
+        switch handler() {
         case .success:
             return .success(.null)
         case .failure(let error):

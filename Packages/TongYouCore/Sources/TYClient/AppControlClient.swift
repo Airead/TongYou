@@ -359,6 +359,15 @@ public final class AppControlClient {
         }
     }
 
+    /// Send `window.focus` — bring the GUI window to the foreground without
+    /// changing which pane is focused. Focus-whitelisted.
+    public func focusWindow() throws {
+        let response = try sendCommand("window.focus")
+        if case .error(let code, let message) = response {
+            throw AppControlError.serverError(code: code, message: message)
+        }
+    }
+
     /// Send a raw command line and parse the single-line JSON response.
     /// Intended for internal use and future commands.
     func sendCommand(_ cmd: String) throws -> Response {

@@ -121,6 +121,11 @@ final class GUIAutomationService {
                 let service = self
                 return service?.handleFloatPaneMove(ref: ref, frame: frame)
                     ?? .failure(.internal("GUIAutomationService deallocated"))
+            },
+            handleWindowFocus: { [weak self] in
+                let service = self
+                return service?.handleWindowFocus()
+                    ?? .failure(.internal("GUIAutomationService deallocated"))
             }
         )
         let instance = GUIAutomationServer(configuration: config)
@@ -189,10 +194,11 @@ final class GUIAutomationService {
 
     // MARK: - session.create / close / attach
     //
-    // Phase 7 will introduce a focus whitelist mechanism (`GUIAutomationPolicy`);
-    // these three commands belong to the whitelist, so they actively bring the
-    // GUI to the foreground via `NSApp.activate(ignoringOtherApps: true)` once
-    // the underlying operation succeeds.
+    // These commands mutate session state but are **not** on the Phase 7
+    // focus whitelist — they must not bring the GUI to the foreground. The
+    // rule is enforced by routing all activation attempts through
+    // `GUIAutomationPolicy.activateIfAllowed(command:)`; passing a non-
+    // whitelisted command is a silent no-op.
 
     nonisolated private func handleSessionCreate(
         name: String?,
@@ -222,7 +228,8 @@ final class GUIAutomationService {
     //
     // These are **not** in the focus whitelist — they must never bring the
     // window to the foreground. That rule is enforced here by simply not
-    // calling `NSApp.activate` in the main-actor paths below.
+    // calling `GUIAutomationPolicy.activateIfAllowed` in the main-actor
+    // paths below.
 
     nonisolated private func handlePaneSendText(ref: String, text: String) -> Result<Void, AutomationError> {
         Self.runOnMain { self.sendTextOnMain(ref: ref, text: text) }
@@ -342,6 +349,19 @@ final class GUIAutomationService {
         Self.runOnMain { self.floatPaneMoveOnMain(ref: ref, frame: frame) }
     }
 
+    // MARK: - window.focus
+    //
+    // Focus-whitelisted: unconditionally brings the GUI to the foreground
+    // without changing which pane is focused. Used by scripts that want to
+    // surface the window after a batch of non-whitelisted mutations.
+
+    nonisolated private func handleWindowFocus() -> Result<Void, AutomationError> {
+        Self.runOnMain {
+            GUIAutomationPolicy.activateIfAllowed(command: .windowFocus)
+            return .success(())
+        }
+    }
+
     // MARK: - MainActor operations
 
     private func createLocalSessionOnMain(name: String?) -> Result<SessionCreateResponse, AutomationError> {
@@ -355,7 +375,6 @@ final class GUIAutomationService {
         guard let ref = refStore.sessionRef(for: sessionID) else {
             return .failure(.internal("ref allocation failed for new session"))
         }
-        Self.activateApp()
         return .success(SessionCreateResponse(ref: ref))
     }
 
@@ -395,7 +414,6 @@ final class GUIAutomationService {
             manager.selectSession(at: nextIndex)
         }
 
-        Self.activateApp()
         return .success(())
     }
 
@@ -422,7 +440,6 @@ final class GUIAutomationService {
             return .failure(.unsupportedOperation("cannot attach a local session"))
         }
         manager.attachRemoteSession(serverSessionID: serverSessionID)
-        Self.activateApp()
         return .success(())
     }
 
@@ -686,7 +703,7 @@ final class GUIAutomationService {
             }
             manager.onFocusPaneRequest?(paneID)
             manager.notifyPaneFocused(paneID)
-            Self.activateApp()
+            GUIAutomationPolicy.activateIfAllowed(command: .paneFocus)
             return .success(())
         }
     }
@@ -803,7 +820,7 @@ final class GUIAutomationService {
             manager.bringFloatingPaneToFront(paneID: paneID)
             manager.onFocusPaneRequest?(paneID)
             manager.notifyPaneFocused(paneID)
-            Self.activateApp()
+            GUIAutomationPolicy.activateIfAllowed(command: .floatPaneFocus)
             return .success(())
         }
     }
@@ -1125,7 +1142,6 @@ final class GUIAutomationService {
             self.refStore.refreshRefs(snapshots: snapshots)
             if let ref = self.refStore.sessionRef(for: localID) {
                 box.success = SessionCreateResponse(ref: ref)
-                Self.activateApp()
             } else {
                 box.error = .internal("ref allocation failed for new session")
             }
@@ -1314,10 +1330,6 @@ final class GUIAutomationService {
         _ = manager.createFloatingPane()
     }
 
-    @MainActor
-    private static func activateApp() {
-        NSApp.activate(ignoringOtherApps: true)
-    }
 }
 
 /// Mutable result slot shared between the connection thread (waiter) and

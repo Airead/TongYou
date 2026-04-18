@@ -39,6 +39,7 @@ enum Command {
     case appFloatPaneClose(ref: String, json: Bool)
     case appFloatPanePin(ref: String, json: Bool)
     case appFloatPaneMove(ref: String, x: Double, y: Double, width: Double, height: Double, json: Bool)
+    case appWindowFocus(json: Bool)
 
     case help
 }
@@ -176,6 +177,8 @@ func parseAppArgs(_ args: [String]) -> Command {
         return parseAppResizePane(rest, json: json)
     case "float-pane":
         return parseAppFloatPane(rest, json: json)
+    case "window-focus":
+        return .appWindowFocus(json: json)
     case "--help", "-h", "help":
         printAppUsage()
         exit(0)
@@ -398,6 +401,7 @@ func printAppUsage() {
       float-pane pin <float-ref>           Toggle the pinned flag on a floating pane.
       float-pane move <float-ref> --x <v> --y <v> --width <v> --height <v>
                                            Move / resize a floating pane (normalized 0–1 coords).
+      window-focus                         Bring the GUI window to the foreground (no focus change).
     """
     print(usage)
 }
@@ -468,6 +472,7 @@ func printUsage() {
       app float-pane pin <float-ref>       Toggle the pinned flag on a floating pane
       app float-pane move <float-ref> --x <v> --y <v> --width <v> --height <v>
                                            Move / resize a floating pane (normalized 0–1 coords)
+      app window-focus               Bring the GUI window to the foreground (no focus change)
 
     Other:
       help                      Show this help message
@@ -1072,6 +1077,11 @@ func appFloatPaneMove(ref: String, x: Double, y: Double, width: Double, height: 
     )
 }
 
+func appWindowFocus(json: Bool) {
+    let client = connectToGUIOrExit()
+    handleCommandResult({ try client.focusWindow() }, json: json, verb: "window-focus")
+}
+
 private func printJSONResult(_ resultFragment: String) {
     print(#"{"ok":true,"result":\#(resultFragment)}"#)
 }
@@ -1201,6 +1211,8 @@ case .appFloatPanePin(let ref, let json):
     appFloatPanePin(ref: ref, json: json)
 case .appFloatPaneMove(let ref, let x, let y, let width, let height, let json):
     appFloatPaneMove(ref: ref, x: x, y: y, width: width, height: height, json: json)
+case .appWindowFocus(let json):
+    appWindowFocus(json: json)
 case .help:
     printUsage()
 }
