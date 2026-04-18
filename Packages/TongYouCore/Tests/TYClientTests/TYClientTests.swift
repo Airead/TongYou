@@ -521,6 +521,7 @@ struct TYClientTests {
     @Test("RemoteSessionClient receives session list on connect")
     func remoteSessionClientConnect() throws {
         let socketPath = NSTemporaryDirectory() + "tyc-remote-\(UUID().uuidString.prefix(8)).sock"
+        let tokenPath = socketPath + ".token"
         defer { try? FileManager.default.removeItem(atPath: socketPath) }
 
         let config = ServerConfig(socketPath: socketPath, autoExitOnNoSessions: false)
@@ -530,7 +531,7 @@ struct TYClientTests {
         try server.start()
         Thread.sleep(forTimeInterval: 0.1)
 
-        let connManager = TYDConnectionManager(socketPath: socketPath, autoStart: false)
+        let connManager = TYDConnectionManager(socketPath: socketPath, autoStart: false, tokenPath: tokenPath)
         let client = RemoteSessionClient(connectionManager: connManager)
 
         let receivedSessions = Mutex<[SessionInfo]?>(nil)
@@ -558,6 +559,7 @@ struct TYClientTests {
     @Test("RemoteSessionClient creates session and receives notification")
     func remoteSessionClientCreateSession() throws {
         let socketPath = NSTemporaryDirectory() + "tyc-create-\(UUID().uuidString.prefix(8)).sock"
+        let tokenPath = socketPath + ".token"
         defer { try? FileManager.default.removeItem(atPath: socketPath) }
 
         let config = ServerConfig(socketPath: socketPath, autoExitOnNoSessions: false)
@@ -567,7 +569,7 @@ struct TYClientTests {
         try server.start()
         Thread.sleep(forTimeInterval: 0.1)
 
-        let connManager = TYDConnectionManager(socketPath: socketPath, autoStart: false)
+        let connManager = TYDConnectionManager(socketPath: socketPath, autoStart: false, tokenPath: tokenPath)
         let client = RemoteSessionClient(connectionManager: connManager)
 
         let createdSession = Mutex<SessionInfo?>(nil)
@@ -599,6 +601,7 @@ struct TYClientTests {
     @Test("RemoteSessionClient reconnect attaches and receives screen updates")
     func remoteSessionClientReconnect() throws {
         let socketPath = NSTemporaryDirectory() + "tyc-reconnect-\(UUID().uuidString.prefix(8)).sock"
+        let tokenPath = socketPath + ".token"
         defer { try? FileManager.default.removeItem(atPath: socketPath) }
 
         let config = ServerConfig(socketPath: socketPath, autoExitOnNoSessions: false)
@@ -609,7 +612,7 @@ struct TYClientTests {
         Thread.sleep(forTimeInterval: 0.1)
 
         // --- First connection: create a session ---
-        let connManager1 = TYDConnectionManager(socketPath: socketPath, autoStart: false)
+        let connManager1 = TYDConnectionManager(socketPath: socketPath, autoStart: false, tokenPath: tokenPath)
         let client1 = RemoteSessionClient(connectionManager: connManager1)
 
         let createdSession = Mutex<SessionInfo?>(nil)
@@ -634,7 +637,7 @@ struct TYClientTests {
         Thread.sleep(forTimeInterval: 0.2)
 
         // --- Second connection: should see existing session and attach ---
-        let connManager2 = TYDConnectionManager(socketPath: socketPath, autoStart: false)
+        let connManager2 = TYDConnectionManager(socketPath: socketPath, autoStart: false, tokenPath: tokenPath)
         let client2 = RemoteSessionClient(connectionManager: connManager2)
 
         let receivedSessions = Mutex<[SessionInfo]?>(nil)
@@ -678,6 +681,7 @@ struct TYClientTests {
     @Test("RemoteSessionClient onDisconnected fires when server closes connection")
     func remoteSessionClientDisconnected() throws {
         let socketPath = NSTemporaryDirectory() + "tyc-ondisconnect-\(UUID().uuidString.prefix(8)).sock"
+        let tokenPath = socketPath + ".token"
         defer { try? FileManager.default.removeItem(atPath: socketPath) }
 
         let config = ServerConfig(socketPath: socketPath, autoExitOnNoSessions: false)
@@ -687,7 +691,7 @@ struct TYClientTests {
         try server.start()
         Thread.sleep(forTimeInterval: 0.1)
 
-        let connManager = TYDConnectionManager(socketPath: socketPath, autoStart: false)
+        let connManager = TYDConnectionManager(socketPath: socketPath, autoStart: false, tokenPath: tokenPath)
         let client = RemoteSessionClient(connectionManager: connManager)
 
         let disconnected = Mutex(false)
@@ -715,6 +719,7 @@ struct TYClientTests {
     @Test("RemoteSessionClient screen replica receives updates")
     func remoteSessionClientScreenUpdate() throws {
         let socketPath = NSTemporaryDirectory() + "tyc-screen-\(UUID().uuidString.prefix(8)).sock"
+        let tokenPath = socketPath + ".token"
         defer { try? FileManager.default.removeItem(atPath: socketPath) }
 
         let config = ServerConfig(socketPath: socketPath, autoExitOnNoSessions: false)
@@ -724,7 +729,7 @@ struct TYClientTests {
         try server.start()
         Thread.sleep(forTimeInterval: 0.1)
 
-        let connManager = TYDConnectionManager(socketPath: socketPath, autoStart: false)
+        let connManager = TYDConnectionManager(socketPath: socketPath, autoStart: false, tokenPath: tokenPath)
         let client = RemoteSessionClient(connectionManager: connManager)
 
         let screenUpdated = Mutex(false)
@@ -763,6 +768,54 @@ struct TYClientTests {
 
         client.disconnect()
         server.stop()
+    }
+
+    @Test("TYDConnectionManager with stale token does not hang against no-auth server")
+    func remoteSessionClientStaleToken() throws {
+        let socketPath = NSTemporaryDirectory() + "tyc-stale-\(UUID().uuidString.prefix(8)).sock"
+        let tokenPath = socketPath + ".token"
+        defer {
+            try? FileManager.default.removeItem(atPath: socketPath)
+            try? FileManager.default.removeItem(atPath: tokenPath)
+        }
+
+        // Plant a stale token as if a previous daemon crashed without cleanup.
+        try "stale-token-from-previous-run".write(
+            toFile: tokenPath, atomically: true, encoding: .utf8
+        )
+
+        // Server has no auth configured (simulates a freshly restarted daemon
+        // that hasn't written a token yet, or a test fixture without auth).
+        let config = ServerConfig(socketPath: socketPath, autoExitOnNoSessions: false)
+        let sessionManager = ServerSessionManager(defaultColumns: 80, defaultRows: 24)
+        let server = SocketServer(config: config, sessionManager: sessionManager)
+
+        try server.start()
+        Thread.sleep(forTimeInterval: 0.1)
+        defer { server.stop() }
+
+        let connManager = TYDConnectionManager(
+            socketPath: socketPath, autoStart: false, tokenPath: tokenPath
+        )
+        let client = RemoteSessionClient(connectionManager: connManager)
+
+        let receivedSessions = Mutex<[SessionInfo]?>(nil)
+        client.onSessionList = { sessions in
+            receivedSessions.withLock { $0 = sessions }
+        }
+
+        // Without the idempotent handshake fix this call would block forever
+        // inside performHandshake because the no-auth server ignores .handshake.
+        try client.connect()
+
+        let deadline = Date().addingTimeInterval(2.0)
+        while Date() < deadline {
+            if receivedSessions.withLock({ $0 }) != nil { break }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+
+        #expect(receivedSessions.withLock { $0 } != nil)
+        client.disconnect()
     }
 }
 

@@ -164,7 +164,15 @@ public final class ClientConnection: @unchecked Sendable {
                     }
 
                 case .authenticated:
-                    onMessage?(message)
+                    // Idempotent handshake: a client with a stale token from a
+                    // previous daemon run may still send .handshake. Respond with
+                    // success so performHandshake() unblocks, then drop the
+                    // message instead of dispatching it as a normal request.
+                    if case .handshake = message {
+                        try socket.send(ServerMessage.handshakeResult(success: true))
+                    } else {
+                        onMessage?(message)
+                    }
                 }
             } catch {
                 handleDisconnect()

@@ -11,6 +11,7 @@ public final class TYDConnectionManager: @unchecked Sendable {
     private var connection: TYDConnection?
     private let socketPath: String
     private let autoStart: Bool
+    private let tokenPath: String
     private let lock = NSLock()
 
     /// Called when the connection is established and ready.
@@ -22,9 +23,10 @@ public final class TYDConnectionManager: @unchecked Sendable {
     /// Called when an error occurs during connect or auto-start.
     public var onError: (@Sendable (TYDConnectionError) -> Void)?
 
-    public init(socketPath: String? = nil, autoStart: Bool = true) {
+    public init(socketPath: String? = nil, autoStart: Bool = true, tokenPath: String? = nil) {
         self.socketPath = socketPath ?? ServerConfig.defaultSocketPath()
         self.autoStart = autoStart
+        self.tokenPath = tokenPath ?? ServerConfig.defaultTokenPath()
     }
 
     // MARK: - Connect
@@ -42,7 +44,7 @@ public final class TYDConnectionManager: @unchecked Sendable {
         let conn = TYDConnection(socket: socket)
 
         // Perform token handshake before starting the read loop.
-        if let token = DaemonLifecycle.readAuthToken() {
+        if let token = DaemonLifecycle.readAuthToken(from: tokenPath) {
             print("[TYDClient] Performing handshake")
             try conn.performHandshake(token: token)
             print("[TYDClient] Handshake successful")
