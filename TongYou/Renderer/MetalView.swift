@@ -188,19 +188,19 @@ final class MetalView: NSView {
     override func keyDown(with event: NSEvent) {
         onUserInteraction?()
 
-        // ESC closes an exited floating pane.
+        // ESC dismisses a zombie pane (PTY exited, kept alive by close-on-exit=false).
         if event.keyCode == 53,  // ESC key
            isProcessExited?() == true,
            let paneID {
-            onTabAction?(.closeFloatingPane(paneID))
+            onTabAction?(.dismissExitedPane(paneID))
             return
         }
 
-        // Enter re-runs the command in an exited floating pane.
+        // Enter re-runs the command in a zombie pane.
         if event.keyCode == 36,  // Enter key
            isProcessExited?() == true,
            let paneID {
-            onTabAction?(.rerunFloatingPaneCommand(paneID))
+            onTabAction?(.rerunExitedPaneCommand(paneID))
             return
         }
 

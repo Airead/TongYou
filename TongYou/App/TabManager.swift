@@ -29,6 +29,10 @@ enum TabAction {
     case closeFloatingPane(UUID)
     case toggleOrCreateFloatingPane
     case rerunFloatingPaneCommand(UUID)
+    // Zombie pane (PTY exited, kept alive by close-on-exit=false). Kind-agnostic:
+    // routed based on whether paneID lives in the tree or in the floating list.
+    case dismissExitedPane(UUID)
+    case rerunExitedPaneCommand(UUID)
     // Remote session management
     case listRemoteSessions
     case newRemoteSession
@@ -311,7 +315,7 @@ final class TabManager {
         case .splitVertical, .splitHorizontal, .closePane,
              .focusPane, .paneExited, .growPane, .shrinkPane,
              .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane,
-             .rerunFloatingPaneCommand,
+             .rerunFloatingPaneCommand, .dismissExitedPane, .rerunExitedPaneCommand,
              .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession,
              .renameSession, .runInPlace, .runCommand,
              .paneNotification:

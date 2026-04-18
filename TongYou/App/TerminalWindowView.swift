@@ -306,6 +306,9 @@ struct TerminalWindowView: View {
                 },
                 onUserInteraction: { paneID in
                     notificationStore.markRead(paneID: paneID)
+                },
+                isTreePaneExited: { paneID in
+                    sessionManager.exitedTreePanes[paneID] != nil
                 }
             )
 
@@ -467,7 +470,7 @@ struct TerminalWindowView: View {
 
     private func closePane() {
         guard let focusedID = focusManager.focusedPaneID else { return }
-        removePane(id: focusedID, exitCode: 0)
+        forceClosePane(id: focusedID)
     }
 
     /// Resize the focused pane. Works for both tree panes (adjusts split ratio)
@@ -494,21 +497,19 @@ struct TerminalWindowView: View {
         }
     }
 
-    /// Tear down a pane and focus the nearest sibling or close the tab/window.
-    private func removePane(id paneID: UUID, exitCode: Int32) {
-        // Check if this is a floating pane first.
+    /// PTY process has just exited. Decide between keep-alive (zombie) and
+    /// immediate tear-down based on the pane's `close-on-exit` setting.
+    /// Routed from `.paneExited`.
+    private func handlePTYExit(id paneID: UUID, exitCode: Int32) {
+        // Floating pane: keep alive when the command opted into close-on-exit=false
+        // or exited non-zero (so the user can read the failure output).
         if sessionManager.activeTab?.floatingPanes.contains(where: { $0.pane.id == paneID }) == true {
-            if let cmdInfo = sessionManager.floatingPaneCommands[paneID] {
-                if cmdInfo.closeOnExit && exitCode == 0 {
-                    // close_on_exit with successful exit: close immediately.
-                    closeFloatingPane(id: paneID)
-                } else {
-                    // No close_on_exit, or non-zero exit: keep open for reading.
-                    // ESC closes, Enter re-runs the command.
-                    sessionManager.markFloatingPaneExited(paneID, exitCode: exitCode)
-                }
+            if let cmdInfo = sessionManager.floatingPaneCommands[paneID],
+               !(cmdInfo.closeOnExit && exitCode == 0) {
+                // ESC closes, Enter re-runs the command.
+                sessionManager.markFloatingPaneExited(paneID, exitCode: exitCode)
             } else {
-                // Non-command floating pane (e.g. shell): close immediately.
+                // No command info (e.g. shell) or clean exit with close-on-exit: tear down.
                 closeFloatingPane(id: paneID)
             }
             return
@@ -521,15 +522,35 @@ struct TerminalWindowView: View {
             return
         }
 
-        // Profile `close-on-exit = false`: keep the pane so the user can
-        // still read the final output. The terminal stays frozen on its
-        // last buffer; normal close-pane dismisses it.
+        // Tree pane with `close-on-exit = false`: keep the pane so the
+        // user can still read the final output. ESC dismisses, Enter re-runs.
         if let pane = sessionManager.activeSession?.tabs
             .lazy
             .compactMap({ $0.paneTree.findPane(id: paneID) })
             .first,
            pane.startupSnapshot.closeOnExit == false {
             sessionManager.markTreePaneExited(paneID, exitCode: exitCode)
+            return
+        }
+
+        forceClosePane(id: paneID)
+    }
+
+    /// Tear down a pane unconditionally. Used by user-initiated closes
+    /// (Cmd+W, ESC on an exited pane, the floating-pane close button) — the
+    /// close-on-exit keep-alive logic is intentionally bypassed here, since
+    /// the user has already asked for the pane to go away.
+    private func forceClosePane(id paneID: UUID) {
+        // Floating pane: delegate to the existing helper, which always tears down.
+        if sessionManager.activeTab?.floatingPanes.contains(where: { $0.pane.id == paneID }) == true {
+            closeFloatingPane(id: paneID)
+            return
+        }
+
+        // Remote session: just send to server; layoutUpdate handles the rest.
+        if sessionManager.activeSession?.source.isRemote == true {
+            notificationStore.clearAll(forPaneID: paneID)
+            sessionManager.closePane(id: paneID)
             return
         }
 
@@ -601,6 +622,20 @@ struct TerminalWindowView: View {
         viewStore.view(for: paneID)?.bindController(controller)
     }
 
+    private func rerunTreePaneCommand(paneID: UUID) {
+        guard let controller = sessionManager.rerunTreePaneCommand(paneID: paneID) else { return }
+        viewStore.view(for: paneID)?.bindController(controller)
+    }
+
+    /// Dispatch the appropriate rerun helper based on where `paneID` lives.
+    private func rerunExitedPaneCommand(paneID: UUID) {
+        if sessionManager.activeTab?.floatingPanes.contains(where: { $0.pane.id == paneID }) == true {
+            rerunFloatingPaneCommand(paneID: paneID)
+        } else {
+            rerunTreePaneCommand(paneID: paneID)
+        }
+    }
+
     // MARK: - Action Dispatch
 
     private func handleTabAction(_ action: TabAction) {
@@ -642,7 +677,7 @@ struct TerminalWindowView: View {
         case .focusPane(let direction):
             moveFocus(direction)
         case .paneExited(let paneID, let exitCode):
-            removePane(id: paneID, exitCode: exitCode)
+            handlePTYExit(id: paneID, exitCode: exitCode)
         case .growPane:
             resizePane(delta: 0.1)
         case .shrinkPane:
@@ -656,6 +691,10 @@ struct TerminalWindowView: View {
             toggleOrCreateFloatingPane()
         case .rerunFloatingPaneCommand(let paneID):
             rerunFloatingPaneCommand(paneID: paneID)
+        case .dismissExitedPane(let paneID):
+            forceClosePane(id: paneID)
+        case .rerunExitedPaneCommand(let paneID):
+            rerunExitedPaneCommand(paneID: paneID)
         case .listRemoteSessions:
             sessionManager.listRemoteSessions()
             ensureSidebarVisible()

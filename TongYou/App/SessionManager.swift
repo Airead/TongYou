@@ -1313,7 +1313,7 @@ final class SessionManager {
         case .splitVertical, .splitHorizontal, .closePane,
              .focusPane, .paneExited, .growPane, .shrinkPane,
              .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane,
-             .rerunFloatingPaneCommand,
+             .rerunFloatingPaneCommand, .dismissExitedPane, .rerunExitedPaneCommand,
              .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession,
              .renameSession, .runInPlace(_, _), .runCommand(_, _, _),
              .paneNotification:

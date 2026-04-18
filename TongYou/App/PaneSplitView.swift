@@ -15,6 +15,9 @@ struct PaneSplitView: View {
     let onTitleChanged: (String) -> Void
     let onNodeChanged: (PaneNode) -> Void
     let onUserInteraction: ((UUID) -> Void)?
+    /// Whether a tree pane's PTY process has exited (zombie state). Drives
+    /// ESC-to-dismiss / Enter-to-rerun key handling inside the MetalView.
+    let isTreePaneExited: (UUID) -> Bool
 
     var body: some View {
         switch node {
@@ -35,7 +38,8 @@ struct PaneSplitView: View {
                 onTabAction: onTabAction,
                 onTitleChanged: onTitleChanged,
                 onNodeChanged: onNodeChanged,
-                onUserInteraction: onUserInteraction
+                onUserInteraction: onUserInteraction,
+                isTreePaneExited: isTreePaneExited
             )
         }
     }
@@ -57,7 +61,8 @@ struct PaneSplitView: View {
             },
             onUserInteraction: {
                 onUserInteraction?(pane.id)
-            }
+            },
+            isProcessExited: { isTreePaneExited(pane.id) }
         )
         .id(pane.id)
         .overlay(
@@ -90,6 +95,7 @@ private struct SplitContainerView: View {
     let onTitleChanged: (String) -> Void
     let onNodeChanged: (PaneNode) -> Void
     let onUserInteraction: ((UUID) -> Void)?
+    let isTreePaneExited: (UUID) -> Bool
 
     /// Local ratio used during drag. Nil when not dragging (uses modelRatio).
     @State private var liveRatio: CGFloat?
@@ -162,7 +168,8 @@ private struct SplitContainerView: View {
             onNodeChanged: { newFirst in
                 onNodeChanged(.split(direction: direction, ratio: effectiveRatio, first: newFirst, second: second))
             },
-            onUserInteraction: onUserInteraction
+            onUserInteraction: onUserInteraction,
+            isTreePaneExited: isTreePaneExited
         )
     }
 
@@ -179,7 +186,8 @@ private struct SplitContainerView: View {
             onNodeChanged: { newSecond in
                 onNodeChanged(.split(direction: direction, ratio: effectiveRatio, first: first, second: newSecond))
             },
-            onUserInteraction: onUserInteraction
+            onUserInteraction: onUserInteraction,
+            isTreePaneExited: isTreePaneExited
         )
     }
 }
