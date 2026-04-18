@@ -1558,4 +1558,48 @@ struct GUIAutomationPathsTests {
         let names = Set(found.map { ($0 as NSString).lastPathComponent })
         #expect(names == ["gui-1.sock", "gui-2.sock"])
     }
+
+    @Test func sweepStaleArtifactsRemovesDeadPidFiles() throws {
+        let tmpDir = NSTemporaryDirectory() + "typaths_sweep_\(UUID().uuidString)"
+        try FileManager.default.createDirectory(
+            atPath: tmpDir,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        // Grab a definitely-dead PID by spawning /bin/true and awaiting
+        // its exit. Using the current process's PID guarantees the
+        // alive-PID side of the test.
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/true")
+        try proc.run()
+        proc.waitUntilExit()
+        let deadPid = proc.processIdentifier
+        let alivePid = ProcessInfo.processInfo.processIdentifier
+
+        let deadSock = "gui-\(deadPid).sock"
+        let deadToken = "gui-\(deadPid).token"
+        let aliveSock = "gui-\(alivePid).sock"
+        let aliveToken = "gui-\(alivePid).token"
+        let unrelated = "other.sock"
+        let malformed = "gui-xyz.sock"
+
+        for f in [deadSock, deadToken, aliveSock, aliveToken, unrelated, malformed] {
+            let path = (tmpDir as NSString).appendingPathComponent(f)
+            FileManager.default.createFile(atPath: path, contents: nil)
+        }
+
+        let removed = GUIAutomationPaths.sweepStaleArtifacts(in: tmpDir)
+        let removedNames = Set(removed.map { ($0 as NSString).lastPathComponent })
+        #expect(removedNames == [deadSock, deadToken])
+
+        let remaining = Set(try FileManager.default.contentsOfDirectory(atPath: tmpDir))
+        #expect(remaining == [aliveSock, aliveToken, unrelated, malformed])
+    }
+
+    @Test func sweepStaleArtifactsReturnsEmptyForMissingDirectory() {
+        let tmpDir = NSTemporaryDirectory() + "typaths_missing_\(UUID().uuidString)"
+        let removed = GUIAutomationPaths.sweepStaleArtifacts(in: tmpDir)
+        #expect(removed.isEmpty)
+    }
 }

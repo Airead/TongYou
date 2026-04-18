@@ -194,6 +194,15 @@ public final class GUIAutomationServer: @unchecked Sendable {
             throw GUIAutomationServerError.runtimeDirectorySetupFailed(underlying: error)
         }
 
+        // Sweep gui-*.sock / gui-*.token left over from prior GUI runs
+        // that exited without applicationWillTerminate firing (crash,
+        // Xcode Stop, SIGKILL). Runs after ensureRuntimeDirectory so
+        // the directory exists, and before we create our own artifacts.
+        let swept = GUIAutomationPaths.sweepStaleArtifacts()
+        if !swept.isEmpty {
+            Log.info("GUI automation: removed \(swept.count) stale artifact(s) from prior runs")
+        }
+
         let generatedToken: String
         do {
             generatedToken = try GUIAutomationAuth.generate(tokenPath: config.tokenPath)
