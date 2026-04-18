@@ -53,7 +53,9 @@ cd Packages/TongYouCore && swift test
 
 **Avoid running multiple `xcodebuild` or `swift build`/`swift test` processes concurrently** — they compete for DerivedData / `.build` directory locks, causing hangs or build failures. Always wait for the previous build/test to finish before starting a new one. **Before every build or test, run `pgrep -fl "swift|xcodebuild"` to check for existing processes.** Only proceed when no build/test processes are active (background services like `swift-plugin-server` are fine).
 
-**Never use real user data in tests.** Use isolated/mock resources instead of the real system state. For example, use a custom `NSPasteboard(name:)` instead of `.general`, use a temporary directory instead of `~/Desktop`, and use in-memory `UserDefaults` instead of `.standard`.
+**Never use real user data or system state in tests.** Use isolated/mock resources instead. If the production code doesn't expose a way to inject test doubles (e.g. it reads from a hard-coded default path), change the production code first — add a parameter, accept an injectable dependency, or route through a test-overridable default. Never work around missing seams by letting a test touch a real-user path.
+
+Examples: use a custom `NSPasteboard(name:)` instead of `.general`; a temporary directory instead of `~/Desktop` or `~/Library/Caches/…`; in-memory `UserDefaults` instead of `.standard`; per-test socket / PID / token paths instead of the defaults under `XDG_RUNTIME_DIR`.
 
 **Swift Testing `.serialized` trait:** Swift Testing runs `@Test` cases concurrently by default. For test suites that create real servers, sockets, or PTY processes, add `.serialized` to the `@Suite` to prevent concurrent execution within the suite:
 
