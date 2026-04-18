@@ -589,6 +589,60 @@ struct BinaryCoderTests {
         #expect(decoded.activeTabIndex == 0)
     }
 
+    @Test func roundTripSessionInfoWithPaneMetadata() throws {
+        let paneIDKeepAlive = PaneID()
+        let paneIDAutoClose = PaneID()
+        let paneIDUnspecified = PaneID()
+        let tabID = TabID()
+        let sessionID = SessionID()
+        let info = SessionInfo(
+            id: sessionID,
+            name: "meta",
+            tabs: [TabInfo(id: tabID, title: "t", layout: .leaf(paneIDKeepAlive))],
+            activeTabIndex: 0,
+            paneMetadata: [
+                paneIDKeepAlive: RemotePaneMetadata(
+                    cwd: "/tmp/keep", profileID: "profA", closeOnExit: false
+                ),
+                paneIDAutoClose: RemotePaneMetadata(
+                    cwd: nil, profileID: "profB", closeOnExit: true
+                ),
+                paneIDUnspecified: RemotePaneMetadata(
+                    cwd: "/tmp/u", profileID: nil, closeOnExit: nil
+                ),
+            ]
+        )
+
+        var encoder = BinaryEncoder()
+        encoder.writeSessionInfo(info)
+
+        var decoder = BinaryDecoder(encoder.data)
+        let decoded = try decoder.readSessionInfo()
+        #expect(decoded.paneMetadata[paneIDKeepAlive]?.closeOnExit == false)
+        #expect(decoded.paneMetadata[paneIDKeepAlive]?.cwd == "/tmp/keep")
+        #expect(decoded.paneMetadata[paneIDKeepAlive]?.profileID == "profA")
+        #expect(decoded.paneMetadata[paneIDAutoClose]?.closeOnExit == true)
+        #expect(decoded.paneMetadata[paneIDAutoClose]?.cwd == nil)
+        #expect(decoded.paneMetadata[paneIDUnspecified]?.closeOnExit == nil)
+        #expect(decoded.paneMetadata[paneIDUnspecified]?.cwd == "/tmp/u")
+        #expect(decoder.remaining == 0)
+    }
+
+    @Test func paneMetadataRejectsInvalidCloseOnExitByte() throws {
+        let paneID = PaneID()
+        var encoder = BinaryEncoder()
+        encoder.writePaneID(paneID)
+        encoder.writeBool(false) // cwd absent
+        encoder.writeBool(false) // profileID absent
+        encoder.writeUInt8(99)   // invalid closeOnExit byte
+
+        var decoder = BinaryDecoder(encoder.data)
+        _ = try decoder.readPaneID()
+        #expect(throws: BinaryDecoderError.self) {
+            _ = try decoder.readPaneMetadata()
+        }
+    }
+
     // MARK: - Client Message: scrollViewport
 
     @Test func roundTripScrollViewportMessage() throws {

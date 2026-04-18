@@ -483,7 +483,19 @@ public struct BinaryDecoder: Sendable {
         let cwd = hasCwd ? try readString() : nil
         let hasProfileID = try readBool()
         let profileID = hasProfileID ? try readString() : nil
-        return RemotePaneMetadata(cwd: cwd, profileID: profileID)
+        let closeOnExitRaw = try readUInt8()
+        let closeOnExit: Bool?
+        switch closeOnExitRaw {
+        case 0: closeOnExit = nil
+        case 1: closeOnExit = false
+        case 2: closeOnExit = true
+        default:
+            throw BinaryDecoderError.invalidEnumValue(
+                type: "RemotePaneMetadata.closeOnExit",
+                rawValue: UInt64(closeOnExitRaw)
+            )
+        }
+        return RemotePaneMetadata(cwd: cwd, profileID: profileID, closeOnExit: closeOnExit)
     }
 
     /// Decode a `TabInfo` from the buffer.

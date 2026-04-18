@@ -398,4 +398,59 @@ struct SessionManagerProfileTests {
         #expect(bundle.snapshot == nil)
         #expect(bundle.frameHint == nil)
     }
+
+    // MARK: - Phase 8: remote closeOnExit mirrored onto TerminalPane
+
+    @Test func remoteLayoutUpdateMirrorsCloseOnExitOntoTreePane() throws {
+        let mgr = try makeManager()
+        let sessionID = SessionID()
+        let tabID = TabID()
+        let paneID = PaneID()
+
+        mgr.addOrUpdateRemoteSession(SessionInfo(id: sessionID, name: "remote"))
+
+        let info = SessionInfo(
+            id: sessionID,
+            name: "remote",
+            tabs: [TabInfo(id: tabID, title: "t", layout: .leaf(paneID))],
+            activeTabIndex: 0,
+            paneMetadata: [
+                paneID: RemotePaneMetadata(
+                    cwd: nil,
+                    profileID: "default",
+                    closeOnExit: false
+                )
+            ]
+        )
+        _ = mgr.handleRemoteLayoutUpdate(info)
+
+        let session = mgr.sessions.first { $0.id == sessionID.uuid }
+        #expect(session != nil)
+        let mirrored = session?.tabs.first?.paneTree.firstPane
+        #expect(mirrored?.startupSnapshot.closeOnExit == false)
+    }
+
+    @Test func remoteLayoutUpdateWithoutCloseOnExitLeavesSnapshotUnspecified() throws {
+        let mgr = try makeManager()
+        let sessionID = SessionID()
+        let tabID = TabID()
+        let paneID = PaneID()
+
+        mgr.addOrUpdateRemoteSession(SessionInfo(id: sessionID, name: "remote"))
+
+        let info = SessionInfo(
+            id: sessionID,
+            name: "remote",
+            tabs: [TabInfo(id: tabID, title: "t", layout: .leaf(paneID))],
+            activeTabIndex: 0,
+            paneMetadata: [
+                paneID: RemotePaneMetadata(cwd: nil, profileID: "default", closeOnExit: nil)
+            ]
+        )
+        _ = mgr.handleRemoteLayoutUpdate(info)
+
+        let session = mgr.sessions.first { $0.id == sessionID.uuid }
+        let mirrored = session?.tabs.first?.paneTree.firstPane
+        #expect(mirrored?.startupSnapshot.closeOnExit == nil)
+    }
 }

@@ -515,21 +515,26 @@ struct TerminalWindowView: View {
             return
         }
 
-        // Remote session: just send to server; layoutUpdate handles the rest.
-        if sessionManager.activeSession?.source.isRemote == true {
-            notificationStore.clearAll(forPaneID: paneID)
-            sessionManager.closePane(id: paneID)
-            return
-        }
-
         // Tree pane with `close-on-exit = false`: keep the pane so the
         // user can still read the final output. ESC dismisses, Enter re-runs.
+        // This check runs for both local and remote sessions; the remote
+        // branch relies on the server surfacing `closeOnExit` in
+        // `RemotePaneMetadata`, which the client mirrors onto the
+        // value-type `TerminalPane.startupSnapshot`.
         if let pane = sessionManager.activeSession?.tabs
             .lazy
             .compactMap({ $0.paneTree.findPane(id: paneID) })
             .first,
            pane.startupSnapshot.closeOnExit == false {
             sessionManager.markTreePaneExited(paneID, exitCode: exitCode)
+            return
+        }
+
+        // Remote session without close-on-exit=false: send to server;
+        // layoutUpdate handles the rest.
+        if sessionManager.activeSession?.source.isRemote == true {
+            notificationStore.clearAll(forPaneID: paneID)
+            sessionManager.closePane(id: paneID)
             return
         }
 

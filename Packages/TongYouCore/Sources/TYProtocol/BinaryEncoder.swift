@@ -325,6 +325,10 @@ public struct BinaryEncoder: Sendable {
     }
 
     /// Encode a `PaneMetadata` into the buffer.
+    ///
+    /// `closeOnExit` is encoded as a trinary byte matching
+    /// `writeStartupSnapshot` (0 = nil, 1 = false, 2 = true) so older
+    /// clients that omit the field are naturally decoded as nil.
     public mutating func writePaneMetadata(_ meta: RemotePaneMetadata) {
         writeBool(meta.cwd != nil)
         if let cwd = meta.cwd {
@@ -333,6 +337,11 @@ public struct BinaryEncoder: Sendable {
         writeBool(meta.profileID != nil)
         if let profileID = meta.profileID {
             writeString(profileID)
+        }
+        switch meta.closeOnExit {
+        case .none: writeUInt8(0)
+        case .some(false): writeUInt8(1)
+        case .some(true): writeUInt8(2)
         }
     }
 

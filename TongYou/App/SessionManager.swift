@@ -55,6 +55,11 @@ final class SessionManager {
     /// local pane UUID. Remembered on first sighting and preserved across
     /// layoutUpdate rebuilds (which recreate value-type `TerminalPane`s).
     private var remotePaneProfileIDs: [UUID: String] = [:]
+    /// `closeOnExit` declared by the server for each remote pane, keyed by
+    /// local pane UUID. Only populated when the server sent an explicit
+    /// value; absent means "unspecified" (tear down on exit). Preserved
+    /// across rebuilds the same way as `remotePaneProfileIDs`.
+    private var remotePaneCloseOnExit: [UUID: Bool] = [:]
     /// Maps session UUID → ordered list of server TabIDs (parallel to session.tabs).
     private var serverTabIDs: [UUID: [TabID]] = [:]
 
@@ -1735,6 +1740,7 @@ final class SessionManager {
             remoteControllers.removeValue(forKey: paneID)?.stop()
             floatingPaneCommands.removeValue(forKey: paneID)
             remotePaneProfileIDs.removeValue(forKey: paneID)
+            remotePaneCloseOnExit.removeValue(forKey: paneID)
             if let serverUUID = serverPaneUUID(for: paneID) {
                 serverToLocalPaneID.removeValue(forKey: serverUUID)
             }
@@ -1773,7 +1779,8 @@ final class SessionManager {
         let localPane = getOrCreateRemotePane(
             serverPaneID: info.paneID,
             sessionID: sessionID,
-            profileID: metadata[info.paneID]?.profileID
+            profileID: metadata[info.paneID]?.profileID,
+            closeOnExit: metadata[info.paneID]?.closeOnExit
         )
 
         // Associate pending remote command info with newly created floating panes.
@@ -1871,10 +1878,15 @@ final class SessionManager {
     /// Apply pane metadata (cwd, etc.) from a SessionInfo to the corresponding controllers.
     private func applyPaneMetadata(_ metadata: [PaneID: RemotePaneMetadata]) {
         for (serverPaneID, meta) in metadata {
-            if let profileID = meta.profileID,
-               let localID = serverToLocalPaneID[serverPaneID.uuid],
-               remotePaneProfileIDs[localID] == nil {
-                remotePaneProfileIDs[localID] = profileID
+            if let localID = serverToLocalPaneID[serverPaneID.uuid] {
+                if let profileID = meta.profileID,
+                   remotePaneProfileIDs[localID] == nil {
+                    remotePaneProfileIDs[localID] = profileID
+                }
+                if let closeOnExit = meta.closeOnExit,
+                   remotePaneCloseOnExit[localID] == nil {
+                    remotePaneCloseOnExit[localID] = closeOnExit
+                }
             }
             guard let controller = controllerForServerPane(serverPaneID) else { continue }
             if let cwd = meta.cwd {
@@ -1885,8 +1897,12 @@ final class SessionManager {
 
     /// Reconcile local state with the authoritative server layout.
     /// Returns the local pane IDs that were removed and need MetalView teardown.
+    ///
+    /// `internal` so tests (via `@testable import TongYou`) can drive
+    /// layout reconciliation without a real remote connection; it is only
+    /// wired from the `onLayoutUpdate` callback in production code.
     @discardableResult
-    private func handleRemoteLayoutUpdate(_ info: SessionInfo) -> [UUID] {
+    func handleRemoteLayoutUpdate(_ info: SessionInfo) -> [UUID] {
         guard let sessionIndex = sessionIndex(forServerSessionID: info.id.uuid)
         else { return [] }
 
@@ -1975,7 +1991,9 @@ final class SessionManager {
     /// Parameters: (sessionID, removedPaneIDs, addedPaneIDs)
     var onRemoteLayoutChanged: ((UUID, [UUID], [UUID]) -> Void)?
 
-    private func addOrUpdateRemoteSession(_ info: SessionInfo) {
+    /// `internal` so tests can pre-register a remote session before
+    /// driving `handleRemoteLayoutUpdate`.
+    func addOrUpdateRemoteSession(_ info: SessionInfo) {
         let sessionUUID = info.id.uuid
 
         // Check if this session already exists.
@@ -2010,7 +2028,8 @@ final class SessionManager {
     private func getOrCreateRemotePane(
         serverPaneID: PaneID,
         sessionID: SessionID,
-        profileID: String?
+        profileID: String?,
+        closeOnExit: Bool?
     ) -> TerminalPane {
         // Same test-profile override as `createPane` so TY_TEST_PROFILE also
         // affects remote panes during Phase 3 verification. Protocol-level
@@ -2028,15 +2047,19 @@ final class SessionManager {
             if remotePaneProfileIDs[existingLocalID] == nil {
                 remotePaneProfileIDs[existingLocalID] = resolvedProfileID
             }
+            if let closeOnExit, remotePaneCloseOnExit[existingLocalID] == nil {
+                remotePaneCloseOnExit[existingLocalID] = closeOnExit
+            }
+            let preservedCloseOnExit = remotePaneCloseOnExit[existingLocalID]
             return TerminalPane(
                 id: existingLocalID,
                 profileID: preservedProfileID,
-                startupSnapshot: StartupSnapshot()
+                startupSnapshot: StartupSnapshot(closeOnExit: preservedCloseOnExit)
             )
         }
         let pane = TerminalPane(
             profileID: resolvedProfileID,
-            startupSnapshot: StartupSnapshot()
+            startupSnapshot: StartupSnapshot(closeOnExit: closeOnExit)
         )
         if let client = remoteClient {
             let controller = ClientTerminalController(
@@ -2047,6 +2070,9 @@ final class SessionManager {
             remoteControllers[pane.id] = controller
             serverToLocalPaneID[serverPaneID.uuid] = pane.id
             remotePaneProfileIDs[pane.id] = resolvedProfileID
+            if let closeOnExit {
+                remotePaneCloseOnExit[pane.id] = closeOnExit
+            }
         }
         return pane
     }
@@ -2062,7 +2088,8 @@ final class SessionManager {
             return .leaf(getOrCreateRemotePane(
                 serverPaneID: paneID,
                 sessionID: sessionID,
-                profileID: metadata[paneID]?.profileID
+                profileID: metadata[paneID]?.profileID,
+                closeOnExit: metadata[paneID]?.closeOnExit
             ))
 
         case .split(let direction, let ratio, let first, let second):

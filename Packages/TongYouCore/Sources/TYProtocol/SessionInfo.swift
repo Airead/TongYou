@@ -11,10 +11,17 @@ public struct RemotePaneMetadata: Equatable, Sendable, Codable {
     /// profile's Live fields locally for rendering (theme/palette/etc.).
     /// Optional for backwards compatibility with older servers.
     public var profileID: String?
+    /// Mirrors `StartupSnapshot.closeOnExit`. When `false`, the client
+    /// keeps the pane alive in zombie mode after PTY exit so the user
+    /// can read the last output (ESC dismisses, Enter re-runs). `nil`
+    /// means "unspecified by server"; the client treats it the same as
+    /// the default (tear down).
+    public var closeOnExit: Bool?
 
-    public init(cwd: String? = nil, profileID: String? = nil) {
+    public init(cwd: String? = nil, profileID: String? = nil, closeOnExit: Bool? = nil) {
         self.cwd = cwd
         self.profileID = profileID
+        self.closeOnExit = closeOnExit
     }
 }
 

@@ -968,6 +968,59 @@ struct ServerSessionManagerTests {
 
         manager.closeSession(id: session.id)
     }
+
+    // MARK: - Phase 8: closeOnExit surfaced in RemotePaneMetadata
+
+    @Test("splitPane surfaces closeOnExit=false in paneMetadata")
+    func splitPaneSurfacesCloseOnExitFalseInMetadata() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "phase8 split keep-alive")
+        guard case .leaf(let parentPaneID) = session.tabs[0].layout else {
+            Issue.record("Expected leaf layout"); return
+        }
+
+        let keepAlive = StartupSnapshot(
+            command: "/bin/sh",
+            args: ["-c", "exit 0"],
+            closeOnExit: false
+        )
+        let newPaneID = manager.splitPane(
+            sessionID: session.id,
+            paneID: parentPaneID,
+            direction: .horizontal,
+            profileID: "ci",
+            snapshot: keepAlive
+        )
+        #expect(newPaneID != nil)
+
+        let info = manager.sessionInfo(for: session.id)
+        #expect(info?.paneMetadata[newPaneID!]?.closeOnExit == false)
+        // Parent pane was created with default snapshot (closeOnExit == nil)
+        // and must not leak a false value.
+        #expect(info?.paneMetadata[parentPaneID]?.closeOnExit == nil)
+
+        manager.closeSession(id: session.id)
+    }
+
+    @Test("createFloatingPane surfaces closeOnExit=false in paneMetadata")
+    func createFloatingPaneSurfacesCloseOnExitInMetadata() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "phase8 float keep-alive")
+        let tabID = session.tabs[0].id
+
+        let paneID = manager.createFloatingPane(
+            sessionID: session.id,
+            tabID: tabID,
+            profileID: "ci",
+            snapshot: StartupSnapshot(command: "/bin/true", closeOnExit: false)
+        )
+        #expect(paneID != nil)
+
+        let info = manager.sessionInfo(for: session.id)
+        #expect(info?.paneMetadata[paneID!]?.closeOnExit == false)
+
+        manager.closeSession(id: session.id)
+    }
 }
 
 /// Simple thread-safe wrapper for test assertions.

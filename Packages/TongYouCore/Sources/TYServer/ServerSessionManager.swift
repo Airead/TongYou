@@ -16,6 +16,11 @@ struct ServerTab {
     /// panes only exist as `FloatingPaneInfo` (id + geometry), so we keep the
     /// profile association here and surface it through `toSessionInfo`.
     var floatingPaneProfileIDs: [PaneID: String] = [:]
+    /// `closeOnExit` associated with each floating pane, keyed by paneID.
+    /// Only populated when the originating `StartupSnapshot.closeOnExit` was
+    /// explicitly set; a missing entry means "unspecified" (nil on the wire).
+    /// Tree panes carry the same information on `TerminalPane.startupSnapshot`.
+    var floatingPaneCloseOnExit: [PaneID: Bool] = [:]
     /// The pane that was last focused in this tab by any client.
     var focusedPaneID: PaneID?
 
@@ -63,24 +68,36 @@ struct ServerSession {
         // Collect pane metadata from all tree panes and floating panes.
         var metadata: [PaneID: RemotePaneMetadata] = [:]
         for tab in tabs {
-            // Tree panes carry profileID directly on the TerminalPane.
+            // Tree panes carry profileID + startupSnapshot directly on TerminalPane.
             var treeProfileIDs: [PaneID: String] = [:]
+            var treeCloseOnExit: [PaneID: Bool?] = [:]
             for pane in tab.paneTree.allPanes {
                 treeProfileIDs[PaneID(pane.id)] = pane.profileID
+                treeCloseOnExit[PaneID(pane.id)] = pane.startupSnapshot.closeOnExit
             }
             for paneUUID in tab.paneTree.allPaneIDs {
                 let pid = PaneID(paneUUID)
                 let cwd = coreLookup[pid]?.currentWorkingDirectory
                 let profileID = treeProfileIDs[pid]
-                if cwd != nil || profileID != nil {
-                    metadata[pid] = RemotePaneMetadata(cwd: cwd, profileID: profileID)
+                let closeOnExit = treeCloseOnExit[pid] ?? nil
+                if cwd != nil || profileID != nil || closeOnExit != nil {
+                    metadata[pid] = RemotePaneMetadata(
+                        cwd: cwd,
+                        profileID: profileID,
+                        closeOnExit: closeOnExit
+                    )
                 }
             }
             for fp in tab.floatingPanes {
                 let cwd = coreLookup[fp.paneID]?.currentWorkingDirectory
                 let profileID = tab.floatingPaneProfileIDs[fp.paneID]
-                if cwd != nil || profileID != nil {
-                    metadata[fp.paneID] = RemotePaneMetadata(cwd: cwd, profileID: profileID)
+                let closeOnExit = tab.floatingPaneCloseOnExit[fp.paneID]
+                if cwd != nil || profileID != nil || closeOnExit != nil {
+                    metadata[fp.paneID] = RemotePaneMetadata(
+                        cwd: cwd,
+                        profileID: profileID,
+                        closeOnExit: closeOnExit
+                    )
                 }
             }
         }
@@ -536,6 +553,9 @@ public final class ServerSessionManager {
         session.tabs[tabIndex].floatingPanes.append(fp)
         session.tabs[tabIndex].floatingPaneCores[paneID] = core
         session.tabs[tabIndex].floatingPaneProfileIDs[paneID] = pane.profileID
+        if let explicitCloseOnExit = pane.startupSnapshot.closeOnExit {
+            session.tabs[tabIndex].floatingPaneCloseOnExit[paneID] = explicitCloseOnExit
+        }
         sessions[sessionID] = session
         saveSession(id: sessionID)
         Log.info("Floating pane created: \(paneID) in tab \(tabID)", category: .session)
@@ -551,6 +571,7 @@ public final class ServerSessionManager {
         }
         session.tabs[tabIndex].floatingPanes.removeAll { $0.paneID == paneID }
         session.tabs[tabIndex].floatingPaneProfileIDs.removeValue(forKey: paneID)
+        session.tabs[tabIndex].floatingPaneCloseOnExit.removeValue(forKey: paneID)
         sessions[sessionID] = session
         saveSession(id: sessionID)
         Log.info("Floating pane closed: \(paneID) in session \(sessionID)", category: .session)
@@ -705,6 +726,7 @@ public final class ServerSessionManager {
             let floatingPanes = tabInfo.floatingPanes
             var floatingCores: [PaneID: TerminalCore] = [:]
             var floatingProfileIDs: [PaneID: String] = [:]
+            var floatingCloseOnExit: [PaneID: Bool] = [:]
             for fp in floatingPanes {
                 let (_, pane, core) = createAndStartPane(
                     sessionID: info.id,
@@ -713,6 +735,9 @@ public final class ServerSessionManager {
                 )
                 floatingCores[fp.paneID] = core
                 floatingProfileIDs[fp.paneID] = pane.profileID
+                if let explicitCloseOnExit = pane.startupSnapshot.closeOnExit {
+                    floatingCloseOnExit[fp.paneID] = explicitCloseOnExit
+                }
             }
             let tab = ServerTab(
                 id: tabInfo.id,
@@ -722,6 +747,7 @@ public final class ServerSessionManager {
                 floatingPanes: floatingPanes,
                 floatingPaneCores: floatingCores,
                 floatingPaneProfileIDs: floatingProfileIDs,
+                floatingPaneCloseOnExit: floatingCloseOnExit,
                 focusedPaneID: tabInfo.focusedPaneID
             )
             tabs.append(tab)
