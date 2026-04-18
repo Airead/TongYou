@@ -2,6 +2,7 @@ import Metal
 
 /// App-level singleton that holds shared GlyphAtlas and ColorEmojiAtlas instances.
 /// All MetalRenderers reference the same atlases, avoiding duplicate GPU texture memory.
+@MainActor
 final class SharedAtlasProvider {
     static let shared = SharedAtlasProvider()
 
