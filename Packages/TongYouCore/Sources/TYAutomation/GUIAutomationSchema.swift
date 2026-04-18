@@ -95,3 +95,23 @@ public struct SessionCreateResponse: Codable, Sendable, Equatable {
         self.ref = ref
     }
 }
+
+// MARK: - tab.create / pane.split responses
+
+/// The `tab.create` response body (goes under `result`).
+public struct TabCreateResponse: Codable, Sendable, Equatable {
+    public let ref: String
+
+    public init(ref: String) {
+        self.ref = ref
+    }
+}
+
+/// The `pane.split` response body (goes under `result`).
+public struct PaneSplitResponse: Codable, Sendable, Equatable {
+    public let ref: String
+
+    public init(ref: String) {
+        self.ref = ref
+    }
+}

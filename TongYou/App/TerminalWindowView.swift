@@ -183,6 +183,7 @@ struct TerminalWindowView: View {
                 sessionManager.onRemoteSessionEmpty = nil
                 sessionManager.onRemoteLayoutChanged = nil
                 sessionManager.onSessionClosed = nil
+                sessionManager.onFocusPaneRequest = nil
             }
         ))
         .onAppear {
@@ -193,6 +194,9 @@ struct TerminalWindowView: View {
             }
             focusActiveTabRootPane()
             wireRemoteLayoutCallback()
+            sessionManager.onFocusPaneRequest = { [focusManager] paneID in
+                focusManager.focusPane(id: paneID)
+            }
             if configLoader.config.autoConnectDaemon {
                 sessionManager.ensureConnected {}
             }

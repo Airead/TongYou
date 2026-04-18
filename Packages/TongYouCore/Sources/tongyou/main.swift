@@ -3,6 +3,7 @@ import TYAutomation
 import TYClient
 import TYProtocol
 import TYServer
+import TYTerminal
 
 // MARK: - Argument Parsing
 
@@ -25,6 +26,13 @@ enum Command {
     case appAttach(ref: String, json: Bool)
     case appSend(ref: String, text: String, json: Bool)
     case appKey(ref: String, key: String, json: Bool)
+    case appNewTab(sessionRef: String, json: Bool)
+    case appSelectTab(sessionRef: String, index: UInt, json: Bool)
+    case appCloseTab(sessionRef: String, index: UInt, json: Bool)
+    case appSplit(ref: String, direction: SplitDirection, json: Bool)
+    case appFocusPane(ref: String, json: Bool)
+    case appClosePane(ref: String, json: Bool)
+    case appSplitRatio(ref: String, ratio: Double, json: Bool)
 
     case help
 }
@@ -128,6 +136,32 @@ func parseAppArgs(_ args: [String]) -> Command {
             exit(1)
         }
         return .appKey(ref: rest[0], key: rest[1], json: json)
+    case "new-tab":
+        guard let ref = rest.first else {
+            fputs("tongyou: app new-tab requires a session ref\n", stderr)
+            exit(1)
+        }
+        return .appNewTab(sessionRef: ref, json: json)
+    case "select-tab":
+        return parseAppTabIndex(.selectTab, rest: rest, json: json)
+    case "close-tab":
+        return parseAppTabIndex(.closeTab, rest: rest, json: json)
+    case "split":
+        return parseAppSplit(rest, json: json)
+    case "focus-pane":
+        guard let ref = rest.first else {
+            fputs("tongyou: app focus-pane requires a pane ref\n", stderr)
+            exit(1)
+        }
+        return .appFocusPane(ref: ref, json: json)
+    case "close-pane":
+        guard let ref = rest.first else {
+            fputs("tongyou: app close-pane requires a pane ref\n", stderr)
+            exit(1)
+        }
+        return .appClosePane(ref: ref, json: json)
+    case "split-ratio":
+        return parseAppSplitRatio(rest, json: json)
     case "--help", "-h", "help":
         printAppUsage()
         exit(0)
@@ -136,6 +170,82 @@ func parseAppArgs(_ args: [String]) -> Command {
         printAppUsage()
         exit(1)
     }
+}
+
+private enum TabIndexAction { case selectTab, closeTab }
+
+private func parseAppTabIndex(_ action: TabIndexAction, rest: [String], json: Bool) -> Command {
+    let label = action == .selectTab ? "select-tab" : "close-tab"
+    guard rest.count >= 2, let index = UInt(rest[1]) else {
+        fputs("tongyou: app \(label) requires <session-ref> <index>\n", stderr)
+        exit(1)
+    }
+    switch action {
+    case .selectTab:
+        return .appSelectTab(sessionRef: rest[0], index: index, json: json)
+    case .closeTab:
+        return .appCloseTab(sessionRef: rest[0], index: index, json: json)
+    }
+}
+
+func parseAppSplit(_ args: [String], json: Bool) -> Command {
+    var ref: String?
+    var direction: SplitDirection = .vertical
+    for arg in args {
+        switch arg {
+        case "--vertical":
+            direction = .vertical
+        case "--horizontal":
+            direction = .horizontal
+        default:
+            if arg.hasPrefix("--") {
+                fputs("tongyou: unknown option '\(arg)' for app split\n", stderr)
+                exit(1)
+            }
+            if ref != nil {
+                fputs("tongyou: app split takes a single ref argument\n", stderr)
+                exit(1)
+            }
+            ref = arg
+        }
+    }
+    guard let ref else {
+        fputs("tongyou: app split requires a ref\n", stderr)
+        exit(1)
+    }
+    return .appSplit(ref: ref, direction: direction, json: json)
+}
+
+func parseAppSplitRatio(_ args: [String], json: Bool) -> Command {
+    var ref: String?
+    var ratio: Double?
+    var i = 0
+    while i < args.count {
+        let arg = args[i]
+        if arg == "--ratio", i + 1 < args.count {
+            guard let v = Double(args[i + 1]) else {
+                fputs("tongyou: --ratio requires a number\n", stderr)
+                exit(1)
+            }
+            ratio = v
+            i += 2
+        } else if arg.hasPrefix("--") {
+            fputs("tongyou: unknown option '\(arg)' for app split-ratio\n", stderr)
+            exit(1)
+        } else {
+            if ref != nil {
+                fputs("tongyou: app split-ratio takes a single ref argument\n", stderr)
+                exit(1)
+            }
+            ref = arg
+            i += 1
+        }
+    }
+    guard let ref, let ratio else {
+        fputs("tongyou: app split-ratio requires <pane-ref> --ratio <value>\n", stderr)
+        exit(1)
+    }
+    return .appSplitRatio(ref: ref, ratio: ratio, json: json)
 }
 
 func parseAppCreateArgs(_ args: [String], json: Bool) -> Command {
@@ -169,13 +279,20 @@ func printAppUsage() {
     Control the running TongYou GUI app via the automation socket.
 
     Subcommands:
-      ping                             Verify the GUI is running and reachable.
-      list (ls)                        List all sessions in the GUI.
-      create [name] [--local|--remote] Create a new session; --local is default.
-      close <ref>                      Close the session identified by ref.
-      attach <ref>                     Attach a detached remote session.
-      send <ref> <text>                Send raw UTF-8 text to the target pane (no trailing newline).
-      key <ref> <key>                  Send a key event (e.g. Enter, Ctrl+C, Alt+Left) to the target pane.
+      ping                                 Verify the GUI is running and reachable.
+      list (ls)                            List all sessions in the GUI.
+      create [name] [--local|--remote]     Create a new session; --local is default.
+      close <ref>                          Close the session identified by ref.
+      attach <ref>                         Attach a detached remote session.
+      send <ref> <text>                    Send raw UTF-8 text to the target pane (no trailing newline).
+      key <ref> <key>                      Send a key event (e.g. Enter, Ctrl+C, Alt+Left) to the target pane.
+      new-tab <session-ref>                Create a new tab in the given session.
+      select-tab <session-ref> <index>     Select the tab at the given 0-based position.
+      close-tab <session-ref> <index>      Close the tab at the given 0-based position.
+      split <ref> [--vertical|--horizontal] Split the target pane (default: vertical).
+      focus-pane <pane-ref>                Focus the given pane (brings window forward).
+      close-pane <pane-ref>                Close the given pane.
+      split-ratio <pane-ref> --ratio <v>   Set the split ratio of the pane's parent (0 < v < 1).
     """
     print(usage)
 }
@@ -232,6 +349,13 @@ func printUsage() {
       app attach <ref>               Attach a detached remote session by ref
       app send <ref> <text>          Send text to the target pane (no trailing newline)
       app key <ref> <key>            Send a key event (Enter, Ctrl+C, …) to the target pane
+      app new-tab <session-ref>      Create a new tab in the given session
+      app select-tab <ref> <index>   Select a tab by 0-based position
+      app close-tab <ref> <index>    Close a tab by 0-based position
+      app split <ref> [--horizontal] Split the target pane (default vertical)
+      app focus-pane <pane-ref>      Focus a pane (brings window forward)
+      app close-pane <pane-ref>      Close a pane
+      app split-ratio <pane-ref> --ratio <v>  Set a split's ratio (0 < v < 1)
 
     Other:
       help                      Show this help message
@@ -644,6 +768,133 @@ func appKey(ref: String, key: String, json: Bool) {
     if json { printJSONResult("null") }
 }
 
+private func handleCommandResult(
+    _ action: () throws -> Void,
+    json: Bool,
+    verb: String,
+    successJSON: String = "null"
+) {
+    do {
+        try action()
+    } catch AppControlError.serverError(let code, let message) {
+        if json {
+            printJSONError(code: code, message: message)
+        } else {
+            fputs("tongyou: GUI returned error: \(code): \(message)\n", stderr)
+        }
+        exit(1)
+    } catch {
+        fputs("tongyou: \(verb) failed: \(error)\n", stderr)
+        exit(1)
+    }
+    if json { printJSONResult(successJSON) }
+}
+
+func appNewTab(sessionRef: String, json: Bool) {
+    let client = connectToGUIOrExit()
+    let ref: String
+    do {
+        ref = try client.createTab(sessionRef: sessionRef)
+    } catch AppControlError.serverError(let code, let message) {
+        if json {
+            printJSONError(code: code, message: message)
+        } else {
+            fputs("tongyou: GUI returned error: \(code): \(message)\n", stderr)
+        }
+        exit(1)
+    } catch {
+        fputs("tongyou: new-tab failed: \(error)\n", stderr)
+        exit(1)
+    }
+    if json {
+        printJSONResult(#"{"ref":\#(jsonEscaped(ref))}"#)
+    } else {
+        print(ref)
+    }
+}
+
+func appSelectTab(sessionRef: String, index: UInt, json: Bool) {
+    let client = connectToGUIOrExit()
+    let tabRef = "\(sessionRef)/tab:\(index + 1)"
+    handleCommandResult({ try client.selectTab(ref: tabRef) }, json: json, verb: "select-tab")
+}
+
+func appCloseTab(sessionRef: String, index: UInt, json: Bool) {
+    let client = connectToGUIOrExit()
+    // Resolve position-in-list to a stable tab ref by consulting session.list,
+    // so users can pass visual positions without caring about ref numbering.
+    let response: SessionListResponse
+    do {
+        response = try client.listSessions()
+    } catch AppControlError.serverError(let code, let message) {
+        if json {
+            printJSONError(code: code, message: message)
+        } else {
+            fputs("tongyou: GUI returned error: \(code): \(message)\n", stderr)
+        }
+        exit(1)
+    } catch {
+        fputs("tongyou: close-tab failed: \(error)\n", stderr)
+        exit(1)
+    }
+    guard let session = response.sessions.first(where: { $0.ref == sessionRef || $0.name == sessionRef }) else {
+        if json {
+            printJSONError(code: "SESSION_NOT_FOUND", message: "no session matches '\(sessionRef)'")
+        } else {
+            fputs("tongyou: no session matches '\(sessionRef)'\n", stderr)
+        }
+        exit(1)
+    }
+    guard Int(index) < session.tabs.count else {
+        if json {
+            printJSONError(code: "TAB_NOT_FOUND", message: "tab index \(index) out of range")
+        } else {
+            fputs("tongyou: tab index \(index) out of range\n", stderr)
+        }
+        exit(1)
+    }
+    let tabRef = session.tabs[Int(index)].ref
+    handleCommandResult({ try client.closeTab(ref: tabRef) }, json: json, verb: "close-tab")
+}
+
+func appSplit(ref: String, direction: SplitDirection, json: Bool) {
+    let client = connectToGUIOrExit()
+    let newRef: String
+    do {
+        newRef = try client.splitPane(ref: ref, direction: direction)
+    } catch AppControlError.serverError(let code, let message) {
+        if json {
+            printJSONError(code: code, message: message)
+        } else {
+            fputs("tongyou: GUI returned error: \(code): \(message)\n", stderr)
+        }
+        exit(1)
+    } catch {
+        fputs("tongyou: split failed: \(error)\n", stderr)
+        exit(1)
+    }
+    if json {
+        printJSONResult(#"{"ref":\#(jsonEscaped(newRef))}"#)
+    } else {
+        print(newRef)
+    }
+}
+
+func appFocusPane(ref: String, json: Bool) {
+    let client = connectToGUIOrExit()
+    handleCommandResult({ try client.focusPane(ref: ref) }, json: json, verb: "focus-pane")
+}
+
+func appClosePane(ref: String, json: Bool) {
+    let client = connectToGUIOrExit()
+    handleCommandResult({ try client.closePane(ref: ref) }, json: json, verb: "close-pane")
+}
+
+func appSplitRatio(ref: String, ratio: Double, json: Bool) {
+    let client = connectToGUIOrExit()
+    handleCommandResult({ try client.setSplitRatio(ref: ref, ratio: ratio) }, json: json, verb: "split-ratio")
+}
+
 private func printJSONResult(_ resultFragment: String) {
     print(#"{"ok":true,"result":\#(resultFragment)}"#)
 }
@@ -747,6 +998,20 @@ case .appSend(let ref, let text, let json):
     appSend(ref: ref, text: text, json: json)
 case .appKey(let ref, let key, let json):
     appKey(ref: ref, key: key, json: json)
+case .appNewTab(let sessionRef, let json):
+    appNewTab(sessionRef: sessionRef, json: json)
+case .appSelectTab(let sessionRef, let index, let json):
+    appSelectTab(sessionRef: sessionRef, index: index, json: json)
+case .appCloseTab(let sessionRef, let index, let json):
+    appCloseTab(sessionRef: sessionRef, index: index, json: json)
+case .appSplit(let ref, let direction, let json):
+    appSplit(ref: ref, direction: direction, json: json)
+case .appFocusPane(let ref, let json):
+    appFocusPane(ref: ref, json: json)
+case .appClosePane(let ref, let json):
+    appClosePane(ref: ref, json: json)
+case .appSplitRatio(let ref, let ratio, let json):
+    appSplitRatio(ref: ref, ratio: ratio, json: json)
 case .help:
     printUsage()
 }

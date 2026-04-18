@@ -56,6 +56,41 @@ final class GUIAutomationService {
                 let service = self
                 return service?.handlePaneSendKey(ref: ref, input: input)
                     ?? .failure(.internal("GUIAutomationService deallocated"))
+            },
+            handleTabCreate: { [weak self] ref in
+                let service = self
+                return service?.handleTabCreate(ref: ref)
+                    ?? .failure(.internal("GUIAutomationService deallocated"))
+            },
+            handleTabSelect: { [weak self] ref in
+                let service = self
+                return service?.handleTabSelect(ref: ref)
+                    ?? .failure(.internal("GUIAutomationService deallocated"))
+            },
+            handleTabClose: { [weak self] ref in
+                let service = self
+                return service?.handleTabClose(ref: ref)
+                    ?? .failure(.internal("GUIAutomationService deallocated"))
+            },
+            handlePaneSplit: { [weak self] ref, direction in
+                let service = self
+                return service?.handlePaneSplit(ref: ref, direction: direction)
+                    ?? .failure(.internal("GUIAutomationService deallocated"))
+            },
+            handlePaneFocus: { [weak self] ref in
+                let service = self
+                return service?.handlePaneFocus(ref: ref)
+                    ?? .failure(.internal("GUIAutomationService deallocated"))
+            },
+            handlePaneClose: { [weak self] ref in
+                let service = self
+                return service?.handlePaneClose(ref: ref)
+                    ?? .failure(.internal("GUIAutomationService deallocated"))
+            },
+            handlePaneSplitRatio: { [weak self] ref, ratio in
+                let service = self
+                return service?.handlePaneSplitRatio(ref: ref, ratio: ratio)
+                    ?? .failure(.internal("GUIAutomationService deallocated"))
             }
         )
         let instance = GUIAutomationServer(configuration: config)
@@ -166,6 +201,46 @@ final class GUIAutomationService {
         Self.runOnMain { self.sendKeyOnMain(ref: ref, input: input) }
     }
 
+    // MARK: - tab / pane structure commands (Phase 5)
+    //
+    // Only `pane.focus` is in the focus whitelist — it actively brings the
+    // GUI to the foreground on success. All other tab/pane commands here
+    // mutate model state without activating the window.
+
+    nonisolated private func handleTabCreate(ref: String) -> Result<TabCreateResponse, AutomationError> {
+        Self.runOnMain { self.tabCreateOnMain(ref: ref) }
+    }
+
+    nonisolated private func handleTabSelect(ref: String) -> Result<Void, AutomationError> {
+        Self.runOnMain { self.tabSelectOnMain(ref: ref) }
+    }
+
+    nonisolated private func handleTabClose(ref: String) -> Result<Void, AutomationError> {
+        Self.runOnMain { self.tabCloseOnMain(ref: ref) }
+    }
+
+    nonisolated private func handlePaneSplit(
+        ref: String,
+        direction: SplitDirection
+    ) -> Result<PaneSplitResponse, AutomationError> {
+        Self.runOnMain { self.paneSplitOnMain(ref: ref, direction: direction) }
+    }
+
+    nonisolated private func handlePaneFocus(ref: String) -> Result<Void, AutomationError> {
+        Self.runOnMain { self.paneFocusOnMain(ref: ref) }
+    }
+
+    nonisolated private func handlePaneClose(ref: String) -> Result<Void, AutomationError> {
+        Self.runOnMain { self.paneCloseOnMain(ref: ref) }
+    }
+
+    nonisolated private func handlePaneSplitRatio(
+        ref: String,
+        ratio: Double
+    ) -> Result<Void, AutomationError> {
+        Self.runOnMain { self.paneSplitRatioOnMain(ref: ref, ratio: ratio) }
+    }
+
     // MARK: - MainActor operations
 
     private func createLocalSessionOnMain(name: String?) -> Result<SessionCreateResponse, AutomationError> {
@@ -268,6 +343,296 @@ final class GUIAutomationService {
         case .failure(let err):
             return .failure(err)
         }
+    }
+
+    // MARK: - Phase 5 main-actor operations
+
+    private func tabCreateOnMain(ref: String) -> Result<TabCreateResponse, AutomationError> {
+        let snapshots = Self.collectSnapshots()
+        refStore.refreshRefs(snapshots: snapshots)
+
+        let parsed: AutomationRef
+        do {
+            parsed = try AutomationRef.parse(ref)
+        } catch let err as AutomationError {
+            return .failure(err)
+        } catch {
+            return .failure(.internal("ref parse failed: \(error)"))
+        }
+        guard case .session = parsed else {
+            return .failure(.invalidParams("tab.create requires a session ref"))
+        }
+
+        let target: GUIAutomationRefStore.ResolvedTarget
+        do {
+            target = try refStore.resolve(parsed)
+        } catch let err as AutomationError {
+            return .failure(err)
+        } catch {
+            return .failure(.internal("ref resolution failed: \(error)"))
+        }
+
+        guard let manager = SessionManagerRegistry.shared.manager(owning: target.sessionID) else {
+            return .failure(.sessionNotFound(ref))
+        }
+        guard let session = manager.sessions.first(where: { $0.id == target.sessionID }) else {
+            return .failure(.sessionNotFound(ref))
+        }
+        if session.source.serverSessionID != nil {
+            return .failure(.unsupportedOperation(
+                "tab.create is not yet supported for remote sessions"
+            ))
+        }
+        guard let newTabID = manager.createTab(inSessionID: target.sessionID) else {
+            return .failure(.internal("tab.create failed"))
+        }
+        let postSnapshots = Self.collectSnapshots()
+        refStore.refreshRefs(snapshots: postSnapshots)
+        guard let newRef = refStore.tabRef(sessionID: target.sessionID, tabID: newTabID) else {
+            return .failure(.internal("ref allocation failed for new tab"))
+        }
+        return .success(TabCreateResponse(ref: newRef))
+    }
+
+    private func tabSelectOnMain(ref: String) -> Result<Void, AutomationError> {
+        switch resolveTabTarget(ref: ref) {
+        case .failure(let err): return .failure(err)
+        case .success(let (manager, sessionID, tabIndex)):
+            manager.selectTab(inSessionID: sessionID, at: tabIndex)
+            return .success(())
+        }
+    }
+
+    private func tabCloseOnMain(ref: String) -> Result<Void, AutomationError> {
+        switch resolveTabTarget(ref: ref) {
+        case .failure(let err): return .failure(err)
+        case .success(let (manager, sessionID, tabIndex)):
+            guard manager.closeTab(inSessionID: sessionID, at: tabIndex) else {
+                return .failure(.tabNotFound(ref))
+            }
+            return .success(())
+        }
+    }
+
+    private func paneSplitOnMain(
+        ref: String,
+        direction: SplitDirection
+    ) -> Result<PaneSplitResponse, AutomationError> {
+        let snapshots = Self.collectSnapshots()
+        refStore.refreshRefs(snapshots: snapshots)
+
+        let target: GUIAutomationRefStore.ResolvedTarget
+        do {
+            target = try refStore.resolve(refString: ref)
+        } catch let err as AutomationError {
+            return .failure(err)
+        } catch {
+            return .failure(.internal("ref resolution failed: \(error)"))
+        }
+
+        guard let manager = SessionManagerRegistry.shared.manager(owning: target.sessionID) else {
+            return .failure(.sessionNotFound(ref))
+        }
+        guard let session = manager.sessions.first(where: { $0.id == target.sessionID }) else {
+            return .failure(.sessionNotFound(ref))
+        }
+        if session.source.serverSessionID != nil {
+            return .failure(.unsupportedOperation(
+                "pane.split is not yet supported for remote sessions"
+            ))
+        }
+        // Float panes cannot be split.
+        if target.floatID != nil {
+            return .failure(.unsupportedOperation("cannot split a floating pane"))
+        }
+        // Resolve the pane to split: explicit pane ref, else focused pane of
+        // the session/tab-level ref, falling back to the first tree pane.
+        let paneID: UUID
+        if let explicit = target.paneID {
+            paneID = explicit
+        } else {
+            let tab: TerminalTab?
+            if let tabID = target.tabID {
+                tab = session.tabs.first(where: { $0.id == tabID })
+            } else {
+                tab = session.activeTab
+            }
+            guard let resolvedTab = tab else { return .failure(.paneNotFound(ref)) }
+            if let focused = resolvedTab.focusedPaneID, resolvedTab.paneTree.contains(paneID: focused) {
+                paneID = focused
+            } else {
+                paneID = resolvedTab.paneTree.firstPane.id
+            }
+        }
+
+        let newPane = TerminalPane()
+        guard manager.splitPane(
+            inSessionID: target.sessionID,
+            id: paneID,
+            direction: direction,
+            newPane: newPane
+        ) else {
+            return .failure(.paneNotFound(ref))
+        }
+        let postSnapshots = Self.collectSnapshots()
+        refStore.refreshRefs(snapshots: postSnapshots)
+        guard let newRef = refStore.paneRef(sessionID: target.sessionID, paneID: newPane.id) else {
+            return .failure(.internal("ref allocation failed for new pane"))
+        }
+        return .success(PaneSplitResponse(ref: newRef))
+    }
+
+    private func paneFocusOnMain(ref: String) -> Result<Void, AutomationError> {
+        switch resolveStrictPaneTarget(ref: ref) {
+        case .failure(let err): return .failure(err)
+        case .success(let (manager, sessionID, paneID, tabID, _)):
+            // Bring the owning session / tab forward so the pane actually
+            // becomes visible once focus lands on it.
+            if let idx = manager.sessions.firstIndex(where: { $0.id == sessionID }),
+               idx != manager.activeSessionIndex {
+                manager.selectSession(at: idx)
+            }
+            if let tabID,
+               let session = manager.sessions.first(where: { $0.id == sessionID }),
+               let tabIdx = session.tabs.firstIndex(where: { $0.id == tabID }),
+               session.activeTabIndex != tabIdx {
+                manager.selectTab(inSessionID: sessionID, at: tabIdx)
+            }
+            manager.onFocusPaneRequest?(paneID)
+            manager.notifyPaneFocused(paneID)
+            Self.activateApp()
+            return .success(())
+        }
+    }
+
+    private func paneCloseOnMain(ref: String) -> Result<Void, AutomationError> {
+        switch resolveStrictPaneTarget(ref: ref) {
+        case .failure(let err): return .failure(err)
+        case .success(let (manager, sessionID, paneID, _, isFloat)):
+            if isFloat {
+                return .failure(.unsupportedOperation(
+                    "use floatPane.close for floating panes"
+                ))
+            }
+            _ = manager.closePane(inSessionID: sessionID, id: paneID)
+            return .success(())
+        }
+    }
+
+    private func paneSplitRatioOnMain(
+        ref: String,
+        ratio: Double
+    ) -> Result<Void, AutomationError> {
+        switch resolveStrictPaneTarget(ref: ref) {
+        case .failure(let err): return .failure(err)
+        case .success(let (manager, sessionID, paneID, _, isFloat)):
+            if isFloat {
+                return .failure(.unsupportedOperation(
+                    "floating panes have no split ratio"
+                ))
+            }
+            guard let session = manager.sessions.first(where: { $0.id == sessionID }) else {
+                return .failure(.sessionNotFound(ref))
+            }
+            if session.source.serverSessionID != nil {
+                return .failure(.unsupportedOperation(
+                    "pane.splitRatio is not yet supported for remote sessions"
+                ))
+            }
+            guard manager.updateSplitRatio(
+                inSessionID: sessionID,
+                paneID: paneID,
+                newRatio: CGFloat(ratio)
+            ) else {
+                return .failure(.paneNotFound(ref))
+            }
+            return .success(())
+        }
+    }
+
+    // MARK: - Phase 5 resolution helpers
+
+    /// Resolve a tab-level ref to `(manager, sessionID, tabIndex)`.
+    private func resolveTabTarget(
+        ref: String
+    ) -> Result<(SessionManager, UUID, Int), AutomationError> {
+        let snapshots = Self.collectSnapshots()
+        refStore.refreshRefs(snapshots: snapshots)
+
+        let parsed: AutomationRef
+        do {
+            parsed = try AutomationRef.parse(ref)
+        } catch let err as AutomationError {
+            return .failure(err)
+        } catch {
+            return .failure(.internal("ref parse failed: \(error)"))
+        }
+        guard case .tab = parsed else {
+            return .failure(.invalidParams("expected a tab ref like 'session/tab:N'"))
+        }
+
+        let target: GUIAutomationRefStore.ResolvedTarget
+        do {
+            target = try refStore.resolve(parsed)
+        } catch let err as AutomationError {
+            return .failure(err)
+        } catch {
+            return .failure(.internal("ref resolution failed: \(error)"))
+        }
+
+        guard let manager = SessionManagerRegistry.shared.manager(owning: target.sessionID) else {
+            return .failure(.sessionNotFound(ref))
+        }
+        guard let session = manager.sessions.first(where: { $0.id == target.sessionID }) else {
+            return .failure(.sessionNotFound(ref))
+        }
+        guard let tabID = target.tabID,
+              let tabIndex = session.tabs.firstIndex(where: { $0.id == tabID }) else {
+            return .failure(.tabNotFound(ref))
+        }
+        return .success((manager, target.sessionID, tabIndex))
+    }
+
+    /// Resolve a pane-or-float ref to `(manager, sessionID, paneID, tabID, isFloat)`.
+    /// Rejects session/tab-level refs — callers needing those must handle them directly.
+    private func resolveStrictPaneTarget(
+        ref: String
+    ) -> Result<(SessionManager, UUID, UUID, UUID?, Bool), AutomationError> {
+        let snapshots = Self.collectSnapshots()
+        refStore.refreshRefs(snapshots: snapshots)
+
+        let parsed: AutomationRef
+        do {
+            parsed = try AutomationRef.parse(ref)
+        } catch let err as AutomationError {
+            return .failure(err)
+        } catch {
+            return .failure(.internal("ref parse failed: \(error)"))
+        }
+        let isFloat: Bool
+        switch parsed {
+        case .pane: isFloat = false
+        case .float: isFloat = true
+        default:
+            return .failure(.invalidParams("expected a pane or float ref"))
+        }
+
+        let target: GUIAutomationRefStore.ResolvedTarget
+        do {
+            target = try refStore.resolve(parsed)
+        } catch let err as AutomationError {
+            return .failure(err)
+        } catch {
+            return .failure(.internal("ref resolution failed: \(error)"))
+        }
+
+        guard let manager = SessionManagerRegistry.shared.manager(owning: target.sessionID) else {
+            return .failure(.sessionNotFound(ref))
+        }
+        guard let paneID = target.paneID ?? target.floatID else {
+            return .failure(.paneNotFound(ref))
+        }
+        return .success((manager, target.sessionID, paneID, target.tabID, isFloat))
     }
 
     /// Resolve a ref (session / tab / pane / float) to the `TerminalControlling`

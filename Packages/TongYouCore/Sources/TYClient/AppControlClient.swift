@@ -1,6 +1,7 @@
 import Foundation
 import TYAutomation
 import TYProtocol
+import TYTerminal
 
 /// Errors surfaced by `AppControlClient`.
 public enum AppControlError: Error {
@@ -196,6 +197,90 @@ public final class AppControlClient {
     /// the pane resolved from `ref`.
     public func sendKey(ref: String, key: String) throws {
         let response = try sendCommand("pane.sendKey", params: ["ref": ref, "key": key])
+        if case .error(let code, let message) = response {
+            throw AppControlError.serverError(code: code, message: message)
+        }
+    }
+
+    /// Send `tab.create` — create a new tab in the session resolved from
+    /// `ref` and return the newly allocated tab ref.
+    public func createTab(sessionRef: String) throws -> String {
+        let response = try sendCommand("tab.create", params: ["ref": sessionRef])
+        switch response {
+        case .success(let value):
+            guard case .raw(let data) = value else {
+                throw AppControlError.invalidResponse(raw: "expected object result for tab.create")
+            }
+            do {
+                let decoded = try JSONDecoder().decode(TabCreateResponse.self, from: data)
+                return decoded.ref
+            } catch {
+                throw AppControlError.invalidResponse(raw: String(data: data, encoding: .utf8) ?? "")
+            }
+        case .error(let code, let message):
+            throw AppControlError.serverError(code: code, message: message)
+        }
+    }
+
+    /// Send `tab.select` — make the given tab active.
+    public func selectTab(ref: String) throws {
+        let response = try sendCommand("tab.select", params: ["ref": ref])
+        if case .error(let code, let message) = response {
+            throw AppControlError.serverError(code: code, message: message)
+        }
+    }
+
+    /// Send `tab.close` — close the given tab.
+    public func closeTab(ref: String) throws {
+        let response = try sendCommand("tab.close", params: ["ref": ref])
+        if case .error(let code, let message) = response {
+            throw AppControlError.serverError(code: code, message: message)
+        }
+    }
+
+    /// Send `pane.split` — split the target pane and return the new pane ref.
+    /// `ref` may be a session / tab / pane ref; when session- or tab-level,
+    /// the focused pane (or first tree pane) is split.
+    public func splitPane(ref: String, direction: SplitDirection) throws -> String {
+        let dir: String = direction == .vertical ? "vertical" : "horizontal"
+        let response = try sendCommand("pane.split", params: ["ref": ref, "direction": dir])
+        switch response {
+        case .success(let value):
+            guard case .raw(let data) = value else {
+                throw AppControlError.invalidResponse(raw: "expected object result for pane.split")
+            }
+            do {
+                let decoded = try JSONDecoder().decode(PaneSplitResponse.self, from: data)
+                return decoded.ref
+            } catch {
+                throw AppControlError.invalidResponse(raw: String(data: data, encoding: .utf8) ?? "")
+            }
+        case .error(let code, let message):
+            throw AppControlError.serverError(code: code, message: message)
+        }
+    }
+
+    /// Send `pane.focus` — focus the given pane. This is a focus-whitelisted
+    /// command; the GUI will bring itself to the foreground on success.
+    public func focusPane(ref: String) throws {
+        let response = try sendCommand("pane.focus", params: ["ref": ref])
+        if case .error(let code, let message) = response {
+            throw AppControlError.serverError(code: code, message: message)
+        }
+    }
+
+    /// Send `pane.close` — close the given pane.
+    public func closePane(ref: String) throws {
+        let response = try sendCommand("pane.close", params: ["ref": ref])
+        if case .error(let code, let message) = response {
+            throw AppControlError.serverError(code: code, message: message)
+        }
+    }
+
+    /// Send `pane.splitRatio` — update the split ratio of the parent of the
+    /// given pane. `ratio` must be in the open interval `(0, 1)`.
+    public func setSplitRatio(ref: String, ratio: Double) throws {
+        let response = try sendCommand("pane.splitRatio", params: ["ref": ref, "ratio": ratio])
         if case .error(let code, let message) = response {
             throw AppControlError.serverError(code: code, message: message)
         }

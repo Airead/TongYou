@@ -439,12 +439,27 @@ final class SessionManager {
     /// Create a new tab in the active session.
     /// For remote sessions, sends the request to the server and returns nil —
     /// the tab will be created when the server broadcasts a layoutUpdate.
+    ///
+    /// When `inSessionID` is non-nil, the tab is created in the specified
+    /// session regardless of which session is currently active. When nil,
+    /// behaviour matches the legacy "create in active session" semantics.
     @discardableResult
-    func createTab(title: String = "shell", initialWorkingDirectory: String? = nil) -> UUID? {
-        guard sessions.indices.contains(activeSessionIndex) else {
-            return createSession(initialWorkingDirectory: initialWorkingDirectory)
+    func createTab(
+        inSessionID: UUID? = nil,
+        title: String = "shell",
+        initialWorkingDirectory: String? = nil
+    ) -> UUID? {
+        let targetIndex: Int
+        if let sid = inSessionID {
+            guard let i = sessions.firstIndex(where: { $0.id == sid }) else { return nil }
+            targetIndex = i
+        } else {
+            guard sessions.indices.contains(activeSessionIndex) else {
+                return createSession(initialWorkingDirectory: initialWorkingDirectory)
+            }
+            targetIndex = activeSessionIndex
         }
-        let session = sessions[activeSessionIndex]
+        let session = sessions[targetIndex]
 
         if let serverSessionID = session.source.serverSessionID {
             remoteClient?.createTab(sessionID: SessionID(serverSessionID))
@@ -452,8 +467,8 @@ final class SessionManager {
         }
 
         let tab = TerminalTab(title: title, initialWorkingDirectory: initialWorkingDirectory)
-        sessions[activeSessionIndex].tabs.append(tab)
-        sessions[activeSessionIndex].activeTabIndex = sessions[activeSessionIndex].tabs.count - 1
+        sessions[targetIndex].tabs.append(tab)
+        sessions[targetIndex].activeTabIndex = sessions[targetIndex].tabs.count - 1
         if attachedLocalSessionIDs.contains(session.id) {
             for paneID in tab.allPaneIDsIncludingFloating {
                 _ = ensureLocalController(for: paneID)
@@ -468,12 +483,22 @@ final class SessionManager {
     /// updates when the server broadcasts a layoutUpdate.
     /// When the last tab is closed, the session remains with an empty tab list
     /// — the caller decides whether to close the session.
+    ///
+    /// When `inSessionID` is non-nil, the tab is closed in the specified
+    /// session regardless of which session is active.
     @discardableResult
-    func closeTab(at index: Int) -> Bool {
-        guard sessions.indices.contains(activeSessionIndex),
-              sessions[activeSessionIndex].tabs.indices.contains(index) else { return false }
+    func closeTab(inSessionID: UUID? = nil, at index: Int) -> Bool {
+        let targetIndex: Int
+        if let sid = inSessionID {
+            guard let i = sessions.firstIndex(where: { $0.id == sid }) else { return false }
+            targetIndex = i
+        } else {
+            guard sessions.indices.contains(activeSessionIndex) else { return false }
+            targetIndex = activeSessionIndex
+        }
+        guard sessions[targetIndex].tabs.indices.contains(index) else { return false }
 
-        let session = sessions[activeSessionIndex]
+        let session = sessions[targetIndex]
 
         if let serverSessionID = session.source.serverSessionID,
            let tabIDs = serverTabIDs[session.id],
@@ -482,21 +507,21 @@ final class SessionManager {
             return true
         }
 
-        let removedPaneIDs = sessions[activeSessionIndex].tabs[index].allPaneIDsIncludingFloating
+        let removedPaneIDs = sessions[targetIndex].tabs[index].allPaneIDsIncludingFloating
         for paneID in removedPaneIDs {
             exitedFloatingPanes.removeValue(forKey: paneID)
             stopAllControllers(for: paneID)
         }
 
-        sessions[activeSessionIndex].tabs.remove(at: index)
+        sessions[targetIndex].tabs.remove(at: index)
 
-        let tabCount = sessions[activeSessionIndex].tabs.count
+        let tabCount = sessions[targetIndex].tabs.count
         if tabCount == 0 {
-            sessions[activeSessionIndex].activeTabIndex = 0
-        } else if sessions[activeSessionIndex].activeTabIndex >= tabCount {
-            sessions[activeSessionIndex].activeTabIndex = tabCount - 1
-        } else if sessions[activeSessionIndex].activeTabIndex > index {
-            sessions[activeSessionIndex].activeTabIndex -= 1
+            sessions[targetIndex].activeTabIndex = 0
+        } else if sessions[targetIndex].activeTabIndex >= tabCount {
+            sessions[targetIndex].activeTabIndex = tabCount - 1
+        } else if sessions[targetIndex].activeTabIndex > index {
+            sessions[targetIndex].activeTabIndex -= 1
         }
 
         scheduleLocalSaveIfNeeded(sessionID: session.id)
@@ -511,15 +536,29 @@ final class SessionManager {
 
     // MARK: - Tab Switching
 
-    func selectTab(at index: Int) {
-        guard sessions.indices.contains(activeSessionIndex),
-              !sessions[activeSessionIndex].tabs.isEmpty else { return }
-        let clamped = max(0, min(index, sessions[activeSessionIndex].tabs.count - 1))
-        guard clamped != sessions[activeSessionIndex].activeTabIndex else { return }
-        sessions[activeSessionIndex].activeTabIndex = clamped
-        notifyServerTabSelected(clamped)
-        if sessions[activeSessionIndex].source == .local {
-            scheduleLocalSaveIfNeeded(sessionID: sessions[activeSessionIndex].id)
+    func selectTab(inSessionID: UUID? = nil, at index: Int) {
+        let targetIndex: Int
+        if let sid = inSessionID {
+            guard let i = sessions.firstIndex(where: { $0.id == sid }) else { return }
+            targetIndex = i
+        } else {
+            guard sessions.indices.contains(activeSessionIndex) else { return }
+            targetIndex = activeSessionIndex
+        }
+        guard !sessions[targetIndex].tabs.isEmpty else { return }
+        let clamped = max(0, min(index, sessions[targetIndex].tabs.count - 1))
+        guard clamped != sessions[targetIndex].activeTabIndex else { return }
+        sessions[targetIndex].activeTabIndex = clamped
+        if targetIndex == activeSessionIndex {
+            notifyServerTabSelected(clamped)
+        } else if let serverSessionID = sessions[targetIndex].source.serverSessionID {
+            remoteClient?.selectTab(
+                sessionID: SessionID(serverSessionID),
+                tabIndex: UInt16(clamped)
+            )
+        }
+        if sessions[targetIndex].source == .local {
+            scheduleLocalSaveIfNeeded(sessionID: sessions[targetIndex].id)
         }
     }
 
@@ -612,11 +651,26 @@ final class SessionManager {
 
     /// Split a pane. For remote sessions, sends the request to the server
     /// and returns false — the local tree updates via layoutUpdate.
+    ///
+    /// When `inSessionID` is non-nil, the split is performed against the
+    /// specified session; otherwise the active session is used.
     @discardableResult
-    func splitPane(id paneID: UUID, direction: SplitDirection, newPane: TerminalPane) -> Bool {
-        guard sessions.indices.contains(activeSessionIndex) else { return false }
+    func splitPane(
+        inSessionID: UUID? = nil,
+        id paneID: UUID,
+        direction: SplitDirection,
+        newPane: TerminalPane
+    ) -> Bool {
+        let targetIndex: Int
+        if let sid = inSessionID {
+            guard let i = sessions.firstIndex(where: { $0.id == sid }) else { return false }
+            targetIndex = i
+        } else {
+            guard sessions.indices.contains(activeSessionIndex) else { return false }
+            targetIndex = activeSessionIndex
+        }
 
-        let session = sessions[activeSessionIndex]
+        let session = sessions[targetIndex]
 
         if let sid = session.source.serverSessionID,
            let serverPaneUUID = serverPaneUUID(for: paneID) {
@@ -628,11 +682,11 @@ final class SessionManager {
             return false
         }
 
-        for i in sessions[activeSessionIndex].tabs.indices {
-            if let newTree = sessions[activeSessionIndex].tabs[i].paneTree.split(
+        for i in sessions[targetIndex].tabs.indices {
+            if let newTree = sessions[targetIndex].tabs[i].paneTree.split(
                 paneID: paneID, direction: direction, newPane: newPane
             ) {
-                sessions[activeSessionIndex].tabs[i].paneTree = newTree
+                sessions[targetIndex].tabs[i].paneTree = newTree
                 if attachedLocalSessionIDs.contains(session.id) {
                     _ = ensureLocalController(for: newPane.id)
                 }
@@ -647,11 +701,21 @@ final class SessionManager {
     /// and returns a sentinel value — local state updates via layoutUpdate.
     /// For local sessions, if it's the last pane in its tab, closes the tab.
     /// Returns the ID of a sibling pane to focus, or nil if the tab was closed.
+    ///
+    /// When `inSessionID` is non-nil, the pane is closed in the specified
+    /// session; otherwise the active session is used.
     @discardableResult
-    func closePane(id paneID: UUID) -> UUID? {
-        guard sessions.indices.contains(activeSessionIndex) else { return nil }
+    func closePane(inSessionID: UUID? = nil, id paneID: UUID) -> UUID? {
+        let targetIndex: Int
+        if let sid = inSessionID {
+            guard let i = sessions.firstIndex(where: { $0.id == sid }) else { return nil }
+            targetIndex = i
+        } else {
+            guard sessions.indices.contains(activeSessionIndex) else { return nil }
+            targetIndex = activeSessionIndex
+        }
 
-        let session = sessions[activeSessionIndex]
+        let session = sessions[targetIndex]
 
         if let sid = session.source.serverSessionID,
            let serverPaneUUID = serverPaneUUID(for: paneID) {
@@ -662,20 +726,45 @@ final class SessionManager {
             return nil
         }
 
-        for i in sessions[activeSessionIndex].tabs.indices {
-            guard sessions[activeSessionIndex].tabs[i].paneTree.contains(paneID: paneID)
+        for i in sessions[targetIndex].tabs.indices {
+            guard sessions[targetIndex].tabs[i].paneTree.contains(paneID: paneID)
             else { continue }
             stopAllControllers(for: paneID)
-            if let newTree = sessions[activeSessionIndex].tabs[i].paneTree.removePane(id: paneID) {
-                sessions[activeSessionIndex].tabs[i].paneTree = newTree
+            if let newTree = sessions[targetIndex].tabs[i].paneTree.removePane(id: paneID) {
+                sessions[targetIndex].tabs[i].paneTree = newTree
                 scheduleLocalSaveIfNeeded(sessionID: session.id)
                 return newTree.firstPane.id
             } else {
-                closeTab(at: i)
+                closeTab(inSessionID: session.id, at: i)
                 return nil
             }
         }
         return nil
+    }
+
+    /// Update the split ratio at the node that directly contains `paneID`
+    /// as a leaf child. For local sessions only — remote sessions do not
+    /// yet expose a protocol command for split ratios.
+    /// Returns true if the pane was found and the ratio was updated.
+    @discardableResult
+    func updateSplitRatio(
+        inSessionID: UUID,
+        paneID: UUID,
+        newRatio: CGFloat
+    ) -> Bool {
+        guard let idx = sessions.firstIndex(where: { $0.id == inSessionID }) else { return false }
+        for i in sessions[idx].tabs.indices {
+            guard sessions[idx].tabs[i].paneTree.contains(paneID: paneID) else { continue }
+            let newTree = sessions[idx].tabs[i].paneTree.updateRatio(
+                for: paneID, newRatio: newRatio
+            )
+            sessions[idx].tabs[i].paneTree = newTree
+            if sessions[idx].source == .local {
+                scheduleLocalSaveIfNeeded(sessionID: sessions[idx].id)
+            }
+            return true
+        }
+        return false
     }
 
     /// Replace the active tab's pane tree (e.g. after a divider drag).
@@ -1127,6 +1216,14 @@ final class SessionManager {
     /// behavior while this flag is set — CLI callers want to remove
     /// the session without taking down the window.
     var isAutomationClose: Bool = false
+
+    /// Callback to request that a specific pane receive keyboard focus.
+    /// The view layer wires this to its `FocusManager.focusPane(id:)`,
+    /// which in turn triggers the usual focus-change side effects
+    /// (notifyPaneFocused, floating-pane visibility, etc). Used by
+    /// automation (`pane.focus`, `floatPane.focus`) to drive focus from
+    /// outside the window.
+    var onFocusPaneRequest: ((UUID) -> Void)?
 
     /// Get the remote controller for a pane, if it exists.
     func remoteController(for paneID: UUID) -> ClientTerminalController? {

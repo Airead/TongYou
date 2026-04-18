@@ -52,6 +52,24 @@ public final class GUIAutomationServer: @unchecked Sendable {
         /// Sends a parsed key input (already run through `AutomationKeySpec`)
         /// to the pane resolved from `ref`. Not focus-whitelisted.
         public let handlePaneSendKey: (@Sendable (String, KeyEncoder.KeyInput) -> Result<Void, AutomationError>)?
+        /// Creates a new tab in the session resolved from `ref`. Returns the
+        /// newly allocated tab ref. Not focus-whitelisted.
+        public let handleTabCreate: (@Sendable (String) -> Result<TabCreateResponse, AutomationError>)?
+        /// Selects (makes active) the tab resolved from `ref`. Not focus-whitelisted.
+        public let handleTabSelect: (@Sendable (String) -> Result<Void, AutomationError>)?
+        /// Closes the tab resolved from `ref`. Not focus-whitelisted.
+        public let handleTabClose: (@Sendable (String) -> Result<Void, AutomationError>)?
+        /// Splits the pane resolved from `ref` in the given direction. Returns
+        /// the newly allocated pane ref. Not focus-whitelisted.
+        public let handlePaneSplit: (@Sendable (String, SplitDirection) -> Result<PaneSplitResponse, AutomationError>)?
+        /// Focuses the pane resolved from `ref`. Phase 7 will treat this as a
+        /// focus-whitelisted command — implementations may activate the window.
+        public let handlePaneFocus: (@Sendable (String) -> Result<Void, AutomationError>)?
+        /// Closes the pane resolved from `ref`. Not focus-whitelisted.
+        public let handlePaneClose: (@Sendable (String) -> Result<Void, AutomationError>)?
+        /// Updates the split ratio at the parent of the pane resolved from `ref`.
+        /// `ratio` is a value in `[0.0, 1.0]`. Not focus-whitelisted.
+        public let handlePaneSplitRatio: (@Sendable (String, Double) -> Result<Void, AutomationError>)?
 
         public init(
             socketPath: String = GUIAutomationPaths.socketPath(),
@@ -62,7 +80,14 @@ public final class GUIAutomationServer: @unchecked Sendable {
             handleSessionClose: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
             handleSessionAttach: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
             handlePaneSendText: (@Sendable (String, String) -> Result<Void, AutomationError>)? = nil,
-            handlePaneSendKey: (@Sendable (String, KeyEncoder.KeyInput) -> Result<Void, AutomationError>)? = nil
+            handlePaneSendKey: (@Sendable (String, KeyEncoder.KeyInput) -> Result<Void, AutomationError>)? = nil,
+            handleTabCreate: (@Sendable (String) -> Result<TabCreateResponse, AutomationError>)? = nil,
+            handleTabSelect: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
+            handleTabClose: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
+            handlePaneSplit: (@Sendable (String, SplitDirection) -> Result<PaneSplitResponse, AutomationError>)? = nil,
+            handlePaneFocus: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
+            handlePaneClose: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
+            handlePaneSplitRatio: (@Sendable (String, Double) -> Result<Void, AutomationError>)? = nil
         ) {
             self.socketPath = socketPath
             self.tokenPath = tokenPath
@@ -73,6 +98,13 @@ public final class GUIAutomationServer: @unchecked Sendable {
             self.handleSessionAttach = handleSessionAttach
             self.handlePaneSendText = handlePaneSendText
             self.handlePaneSendKey = handlePaneSendKey
+            self.handleTabCreate = handleTabCreate
+            self.handleTabSelect = handleTabSelect
+            self.handleTabClose = handleTabClose
+            self.handlePaneSplit = handlePaneSplit
+            self.handlePaneFocus = handlePaneFocus
+            self.handlePaneClose = handlePaneClose
+            self.handlePaneSplitRatio = handlePaneSplitRatio
         }
     }
 
@@ -290,6 +322,20 @@ public final class GUIAutomationServer: @unchecked Sendable {
             return handlePaneSendTextCommand(request: request, config: config)
         case "pane.sendKey":
             return handlePaneSendKeyCommand(request: request, config: config)
+        case "tab.create":
+            return handleTabCreateCommand(request: request, config: config)
+        case "tab.select":
+            return handleTabSelectCommand(request: request, config: config)
+        case "tab.close":
+            return handleTabCloseCommand(request: request, config: config)
+        case "pane.split":
+            return handlePaneSplitCommand(request: request, config: config)
+        case "pane.focus":
+            return handlePaneFocusCommand(request: request, config: config)
+        case "pane.close":
+            return handlePaneCloseCommand(request: request, config: config)
+        case "pane.splitRatio":
+            return handlePaneSplitRatioCommand(request: request, config: config)
         default:
             return .error(code: "UNKNOWN_COMMAND", message: "unknown command: \(request.cmd)")
         }
@@ -416,6 +462,159 @@ public final class GUIAutomationServer: @unchecked Sendable {
             return .error(code: "INVALID_PARAMS", message: "failed to parse key: \(error)")
         }
         switch handler(ref, input) {
+        case .success:
+            return .success(.null)
+        case .failure(let error):
+            return .error(code: error.code, message: error.message)
+        }
+    }
+
+    private static func handleTabCreateCommand(
+        request: ParsedRequest,
+        config: Configuration
+    ) -> JSONResponse {
+        guard let handler = config.handleTabCreate else {
+            return .error(code: "INTERNAL_ERROR", message: "tab.create not wired")
+        }
+        guard let ref = request.params["ref"] as? String, !ref.isEmpty else {
+            return .error(code: "INVALID_PARAMS", message: "`ref` is required")
+        }
+        switch handler(ref) {
+        case .success(let payload):
+            return encodeCodableResult(payload)
+        case .failure(let error):
+            return .error(code: error.code, message: error.message)
+        }
+    }
+
+    private static func handleTabSelectCommand(
+        request: ParsedRequest,
+        config: Configuration
+    ) -> JSONResponse {
+        guard let handler = config.handleTabSelect else {
+            return .error(code: "INTERNAL_ERROR", message: "tab.select not wired")
+        }
+        guard let ref = request.params["ref"] as? String, !ref.isEmpty else {
+            return .error(code: "INVALID_PARAMS", message: "`ref` is required")
+        }
+        switch handler(ref) {
+        case .success:
+            return .success(.null)
+        case .failure(let error):
+            return .error(code: error.code, message: error.message)
+        }
+    }
+
+    private static func handleTabCloseCommand(
+        request: ParsedRequest,
+        config: Configuration
+    ) -> JSONResponse {
+        guard let handler = config.handleTabClose else {
+            return .error(code: "INTERNAL_ERROR", message: "tab.close not wired")
+        }
+        guard let ref = request.params["ref"] as? String, !ref.isEmpty else {
+            return .error(code: "INVALID_PARAMS", message: "`ref` is required")
+        }
+        switch handler(ref) {
+        case .success:
+            return .success(.null)
+        case .failure(let error):
+            return .error(code: error.code, message: error.message)
+        }
+    }
+
+    private static func handlePaneSplitCommand(
+        request: ParsedRequest,
+        config: Configuration
+    ) -> JSONResponse {
+        guard let handler = config.handlePaneSplit else {
+            return .error(code: "INTERNAL_ERROR", message: "pane.split not wired")
+        }
+        guard let ref = request.params["ref"] as? String, !ref.isEmpty else {
+            return .error(code: "INVALID_PARAMS", message: "`ref` is required")
+        }
+        let dirRaw = (request.params["direction"] as? String) ?? "vertical"
+        let direction: SplitDirection
+        switch dirRaw {
+        case "vertical": direction = .vertical
+        case "horizontal": direction = .horizontal
+        default:
+            return .error(
+                code: "INVALID_PARAMS",
+                message: "`direction` must be 'vertical' or 'horizontal'"
+            )
+        }
+        switch handler(ref, direction) {
+        case .success(let payload):
+            return encodeCodableResult(payload)
+        case .failure(let error):
+            return .error(code: error.code, message: error.message)
+        }
+    }
+
+    private static func handlePaneFocusCommand(
+        request: ParsedRequest,
+        config: Configuration
+    ) -> JSONResponse {
+        guard let handler = config.handlePaneFocus else {
+            return .error(code: "INTERNAL_ERROR", message: "pane.focus not wired")
+        }
+        guard let ref = request.params["ref"] as? String, !ref.isEmpty else {
+            return .error(code: "INVALID_PARAMS", message: "`ref` is required")
+        }
+        switch handler(ref) {
+        case .success:
+            return .success(.null)
+        case .failure(let error):
+            return .error(code: error.code, message: error.message)
+        }
+    }
+
+    private static func handlePaneCloseCommand(
+        request: ParsedRequest,
+        config: Configuration
+    ) -> JSONResponse {
+        guard let handler = config.handlePaneClose else {
+            return .error(code: "INTERNAL_ERROR", message: "pane.close not wired")
+        }
+        guard let ref = request.params["ref"] as? String, !ref.isEmpty else {
+            return .error(code: "INVALID_PARAMS", message: "`ref` is required")
+        }
+        switch handler(ref) {
+        case .success:
+            return .success(.null)
+        case .failure(let error):
+            return .error(code: error.code, message: error.message)
+        }
+    }
+
+    private static func handlePaneSplitRatioCommand(
+        request: ParsedRequest,
+        config: Configuration
+    ) -> JSONResponse {
+        guard let handler = config.handlePaneSplitRatio else {
+            return .error(code: "INTERNAL_ERROR", message: "pane.splitRatio not wired")
+        }
+        guard let ref = request.params["ref"] as? String, !ref.isEmpty else {
+            return .error(code: "INVALID_PARAMS", message: "`ref` is required")
+        }
+        // `ratio` may arrive as Double, Int, or NSNumber depending on the
+        // JSON parser's promotion; normalize via NSNumber.
+        let ratio: Double
+        if let d = request.params["ratio"] as? Double {
+            ratio = d
+        } else if let n = request.params["ratio"] as? NSNumber {
+            ratio = n.doubleValue
+        } else {
+            return .error(code: "INVALID_PARAMS", message: "`ratio` must be a number")
+        }
+        guard ratio.isFinite, ratio > 0.0, ratio < 1.0 else {
+            return .error(
+                code: "INVALID_PARAMS",
+                message: "`ratio` must be in the open interval (0, 1)"
+            )
+        }
+        switch handler(ref, ratio) {
         case .success:
             return .success(.null)
         case .failure(let error):
