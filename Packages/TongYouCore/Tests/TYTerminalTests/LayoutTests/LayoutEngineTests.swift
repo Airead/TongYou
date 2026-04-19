@@ -1046,6 +1046,62 @@ struct LayoutEngineTests {
         #expect(flat.children.map(\.allPaneIDs) == [[a.id], [b.id], [c.id]])
     }
 
+    @Test func flattenToMasterStackGivesMasterA60PercentShare() {
+        // plan §3.5: weights[0] = 1.5 × stackSum, so master keeps ~60% of the
+        // horizontal space regardless of stack count.
+        let (_, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let tree = container(.horizontal, [leafA, leafB], [1, 1])
+
+        let out = LayoutEngine.flattenToStrategy(tree: tree, newKind: .masterStack)
+        guard case .container(let flat) = out else {
+            Issue.record("expected container"); return
+        }
+        #expect(flat.strategy == .masterStack)
+        // 2 panes → [1.5 × 1, 1] = [1.5, 1]. Master fraction: 1.5 / 2.5 = 60%.
+        #expect(flat.weights == [1.5, 1.0])
+    }
+
+    @Test func flattenToMasterStackScalesMasterWeightWithStackCount() {
+        // 5 panes → stackCount = 4 → [6, 1, 1, 1, 1]. Master fraction:
+        // 6 / 10 = 60%, independent of how many stack panes there are.
+        let (_, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let (_, leafC) = leaf()
+        let (_, leafD) = leaf()
+        let (_, leafE) = leaf()
+        let tree = container(
+            .horizontal,
+            [leafA, leafB, leafC, leafD, leafE],
+            [1, 1, 1, 1, 1]
+        )
+
+        let out = LayoutEngine.flattenToStrategy(tree: tree, newKind: .masterStack)
+        guard case .container(let flat) = out else {
+            Issue.record("expected container"); return
+        }
+        #expect(flat.weights == [6.0, 1.0, 1.0, 1.0, 1.0])
+        let stackSum = flat.weights[1...].reduce(0, +)
+        #expect(flat.weights[0] / (flat.weights[0] + stackSum) == 0.6)
+    }
+
+    @Test func flattenToNonMasterStackStrategiesStayEqualWeight() {
+        // Horizontal / vertical / grid / fibonacci all keep the equal-weight
+        // rule — only master-stack deviates.
+        let (_, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let (_, leafC) = leaf()
+        let tree = container(.horizontal, [leafA, leafB, leafC], [5, 1, 2])
+
+        for kind in [LayoutStrategyKind.vertical, .grid, .fibonacci] {
+            let out = LayoutEngine.flattenToStrategy(tree: tree, newKind: kind)
+            guard case .container(let flat) = out else {
+                Issue.record("expected container for \(kind)"); return
+            }
+            #expect(flat.weights == [1, 1, 1], "equal weights expected for \(kind)")
+        }
+    }
+
     @Test func flattenTabPreservesZoomAndFocus() {
         // Zoomed/focused pane IDs survive because flatten reuses the same
         // TerminalPane values — only their parent container changes.

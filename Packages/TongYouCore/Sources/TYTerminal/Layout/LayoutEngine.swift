@@ -409,10 +409,18 @@ public enum LayoutEngine {
     // MARK: - flattenToStrategy (tree-level)
 
     /// Collapse `tree` into a single flat container with `newKind`, placing
-    /// every leaf as a direct child in depth-first order with equal weights
-    /// (plan §P4.5). This is the "one strategy per tab" rewrite: when the
-    /// user picks a new layout we abandon all prior nesting and weight
-    /// distribution and re-tile every pane under the requested strategy.
+    /// every leaf as a direct child in depth-first order (plan §P4.5). This
+    /// is the "one strategy per tab" rewrite: when the user picks a new
+    /// layout we abandon all prior nesting and weight distribution and
+    /// re-tile every pane under the requested strategy.
+    ///
+    /// Initial weights:
+    /// - `.masterStack` follows plan §3.5 — `weights[0] = 1.5 × stackSum` so
+    ///   the master column stays around 60% regardless of how many stack
+    ///   panes there are. Stack weights are all `1.0`.
+    /// - All other strategies (horizontal / vertical / grid / fibonacci) get
+    ///   equal weights. Grid ignores them entirely; the 1-D strategies
+    ///   evenly divide space.
     ///
     /// The new container gets a fresh UUID — any persisted reference to the
     /// old container IDs (there shouldn't be any outside this engine) becomes
@@ -435,10 +443,17 @@ public enum LayoutEngine {
            c.children.allSatisfy({ if case .leaf = $0 { true } else { false } }) {
             return nil
         }
+        let weights: [CGFloat]
+        if newKind == .masterStack {
+            let stackCount = panes.count - 1
+            weights = [1.5 * CGFloat(stackCount)] + Array(repeating: 1.0, count: stackCount)
+        } else {
+            weights = Array(repeating: 1.0, count: panes.count)
+        }
         return .container(Container(
             strategy: newKind,
             children: panes.map { .leaf($0) },
-            weights: Array(repeating: 1.0, count: panes.count)
+            weights: weights
         ))
     }
 
