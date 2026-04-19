@@ -335,8 +335,11 @@ struct TerminalWindowView: View {
         switch commandPalette.scope {
         case .ssh:
             handleSSHCommit(rows: committed.rows, mode: mode)
+        case .session:
+            handleSessionCommit(rows: committed.rows, mode: mode)
         default:
-            // Phases 7–8 plug in non-SSH scopes; until then, just close.
+            // Phases beyond 8 (profile / tab / command scopes) will plug
+            // in here; until then, just close.
             commandPalette.close()
         }
     }
@@ -401,6 +404,61 @@ struct TerminalWindowView: View {
                     "\"\(failure.target)\": \(failure.error.localizedDescription)"
                 )
             }
+        }
+    }
+
+    // MARK: - Session-scope commit (Phase 8)
+
+    /// Decision surface for a session-scope palette commit. Pure so tests
+    /// can cover the modifier-to-action mapping without spinning up a
+    /// real window / SessionManager.
+    enum SessionCommitAction: Equatable {
+        /// Activate the session whose UUID matches. The palette stuffs
+        /// the session id into the candidate's own `id` field when
+        /// building session rows (session ids are already unique +
+        /// stable).
+        case activate(sessionID: UUID)
+        /// The modifier is not meaningful for sessions (no split / float
+        /// semantics). Caller should toast + close.
+        case notApplicable
+    }
+
+    /// Map a committed palette row + modifier to a session-scope action.
+    /// Plain Enter activates; any modifier is a no-op. Kept static so the
+    /// test does not need to construct a full view.
+    static func sessionCommitAction(
+        for row: PaletteRow,
+        mode: PaletteEnterMode
+    ) -> SessionCommitAction {
+        switch mode {
+        case .plain:
+            return .activate(sessionID: row.candidate.id)
+        case .commandEnter, .shiftEnter, .optionEnter:
+            return .notApplicable
+        }
+    }
+
+    /// Phase 8 session commit. Plain Enter flips `activeSessionIndex` to
+    /// the matching session; if the session has been closed since the
+    /// palette was populated, surface that quietly rather than silently
+    /// doing nothing.
+    private func handleSessionCommit(rows: [PaletteRow], mode: PaletteEnterMode) {
+        guard let row = rows.first else {
+            commandPalette.close()
+            return
+        }
+        commandPalette.close()
+        switch Self.sessionCommitAction(for: row, mode: mode) {
+        case .activate(let sessionID):
+            guard let index = sessionManager.sessions.firstIndex(
+                where: { $0.id == sessionID }
+            ) else {
+                toastPresenter.show("Session: \"\(row.candidate.primaryText)\" is no longer open")
+                return
+            }
+            sessionManager.selectSession(at: index)
+        case .notApplicable:
+            toastPresenter.show("Session scope: only Enter is supported (no split / float)")
         }
     }
 
@@ -1070,9 +1128,12 @@ struct TerminalWindowView: View {
         }
     }
 
-    /// Refresh the palette's SSH-scope data from disk, install the ad-hoc
-    /// fallback, then open. When `session` is true, the palette opens with
-    /// the `s ` prefix pre-filled (Phase 8 will plug in the real list).
+    /// Refresh the palette's data sources (SSH history / rules / ssh_config
+    /// + session list) and open. When `session` is true, the palette opens
+    /// with the `s ` prefix pre-filled so Phase 8's session scope is active
+    /// out of the gate; otherwise the default SSH scope is shown. Either
+    /// scope's prefix remains reachable through normal typing — the flag
+    /// only picks the starting scope.
     private func openCommandPalette(session: Bool) {
         Task { @MainActor in
             await sshLauncher.reload(
@@ -1080,12 +1141,44 @@ struct TerminalWindowView: View {
                 sshConfigURL: SSHConfigHosts.defaultURL
             )
             rewirePaletteForSSH()
+            rewirePaletteForSessions()
             if session {
                 commandPalette.openSessionScope()
             } else {
                 commandPalette.open()
             }
         }
+    }
+
+    /// Snapshot the current session list into palette candidates so the
+    /// session scope has something to fuzzy-match against. Recomputed on
+    /// every palette open — sessions can be opened/closed between opens,
+    /// and the data is small enough that incremental tracking is not worth
+    /// the complexity.
+    private func rewirePaletteForSessions() {
+        commandPalette.sessionCandidates = sessionManager.sessions.map(
+            Self.sessionPaletteCandidate(for:)
+        )
+    }
+
+    /// Build one session-scope palette row. The candidate's `id` reuses
+    /// `session.id` so the commit path can resolve the target directly
+    /// without a parallel lookup table.
+    @MainActor
+    private static func sessionPaletteCandidate(
+        for session: TerminalSession
+    ) -> PaletteCandidate {
+        let sourceLabel = session.source.isRemote ? "remote" : "local"
+        let tabs = session.tabCount
+        let tabsLabel = tabs == 1 ? "1 tab" : "\(tabs) tabs"
+        var subtitle = "\(sourceLabel) · \(tabsLabel)"
+        if session.isAnonymous { subtitle += " · unsaved" }
+        return PaletteCandidate(
+            id: session.id,
+            primaryText: session.name,
+            secondaryText: subtitle,
+            scope: .session
+        )
     }
 
     /// Convert the launcher's current candidate list into `PaletteCandidate`

@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import TongYou
 
@@ -68,6 +69,70 @@ struct CommandPaletteControllerTests {
         #expect(controller.input == "s ")
         #expect(controller.scope == .session)
         #expect(controller.query == "")
+    }
+
+    // MARK: - Session scope (Phase 8)
+
+    @Test func sessionScopeListsAllOpenSessions() {
+        // Opening the palette in session scope with an empty query should
+        // list every injected candidate (no SSH-style ad-hoc fallback).
+        let controller = CommandPaletteController()
+        controller.sessionCandidates = [
+            PaletteCandidate(primaryText: "work", scope: .session),
+            PaletteCandidate(primaryText: "home", scope: .session),
+            PaletteCandidate(primaryText: "lab", scope: .session),
+        ]
+        controller.openSessionScope()
+
+        #expect(controller.rows.count == 3)
+        #expect(controller.rows.map(\.candidate.primaryText) == ["work", "home", "lab"])
+    }
+
+    @Test func sessionFuzzyMatchByDisplayName() {
+        // With the `s ` prefix active, the trailing characters drive fuzzy
+        // matching across the session list.
+        let controller = CommandPaletteController()
+        controller.sessionCandidates = [
+            PaletteCandidate(primaryText: "work", scope: .session),
+            PaletteCandidate(primaryText: "home", scope: .session),
+            PaletteCandidate(primaryText: "lab", scope: .session),
+        ]
+        controller.openSessionScope()
+        controller.input = "s hom"
+
+        #expect(controller.rows.count == 1)
+        #expect(controller.rows.first?.candidate.primaryText == "home")
+    }
+
+    @Test func sessionCommitActionMapsModes() {
+        // Plain Enter activates the session; every modifier variant is a
+        // no-op in session scope (toast + close in the view).
+        let id = UUID()
+        let candidate = PaletteCandidate(
+            id: id,
+            primaryText: "work",
+            scope: .session
+        )
+        let row = PaletteRow(
+            candidate: candidate,
+            match: FuzzyMatcher.Match(score: 0, matchedIndices: [])
+        )
+        #expect(
+            TerminalWindowView.sessionCommitAction(for: row, mode: .plain)
+                == .activate(sessionID: id)
+        )
+        #expect(
+            TerminalWindowView.sessionCommitAction(for: row, mode: .commandEnter)
+                == .notApplicable
+        )
+        #expect(
+            TerminalWindowView.sessionCommitAction(for: row, mode: .shiftEnter)
+                == .notApplicable
+        )
+        #expect(
+            TerminalWindowView.sessionCommitAction(for: row, mode: .optionEnter)
+                == .notApplicable
+        )
     }
 
     // MARK: - Rows + highlight
