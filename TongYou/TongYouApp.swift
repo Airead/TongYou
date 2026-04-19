@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import TYServer
 
@@ -27,6 +28,9 @@ struct TongYouApp: App {
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Retained so the local event monitor is not released.
+    private var debugMarkerMonitor: Any?
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
     }
@@ -34,10 +38,32 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         GUIAutomationService.shared.start()
         installFocusTraceObservers()
+        installDebugMarkerMonitor()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         GUIAutomationService.shared.stop()
+        if let monitor = debugMarkerMonitor {
+            NSEvent.removeMonitor(monitor)
+            debugMarkerMonitor = nil
+        }
+    }
+
+    /// Cmd+. inserts a MARKER line into the GUI log. Used to bracket the
+    /// moment the user observes a rendering glitch so the surrounding
+    /// `[ATLAS]` / `[RENDER]` traces can be located.
+    private func installDebugMarkerMonitor() {
+        debugMarkerMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            if mods == .command && event.charactersIgnoringModifiers == "." {
+                GUILog.debug(
+                    "[MARKER] user pressed cmd+. t=\(Date().timeIntervalSince1970)",
+                    category: .renderer
+                )
+                return nil
+            }
+            return event
+        }
     }
 
     /// Phase 7 debug: log every app/window activation with a short stack.

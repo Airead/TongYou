@@ -24,9 +24,16 @@ struct GlyphCacheKey: Hashable, Equatable {
 }
 
 /// Cache entry wrapping GlyphInfo with LRU tracking.
+///
+/// `font` retains the exact `CTFont` used to rasterize this glyph so
+/// `compact()` can re-rasterize it regardless of whether the font is
+/// the primary or a fallback. Without this, fallback-font entries
+/// (most CJK characters) were silently dropped on every compact,
+/// causing thrash where CJK text kept re-filling the atlas.
 struct GlyphEntry {
     var info: GlyphInfo
     var lastUsedFrame: UInt64
+    var font: CTFont
 }
 
 /// Grayscale glyph texture atlas using shelf (row) packing.
@@ -53,10 +60,29 @@ final class GlyphAtlas {
     /// Whether the atlas texture has been modified since last GPU sync.
     private(set) var isDirty = false
 
+    /// Count of atlas mutations (texture.replace / grow / compact) since last
+    /// `advanceFrame()`. Used by the renderer to emit a conditional
+    /// `[RENDER]` trace only on frames that actually touched the atlas —
+    /// isolates the atlas-write-during-GPU-read race hypothesis.
+    private(set) var atlasWritesThisFrame: UInt32 = 0
+
     /// Number of active (non-evicted) entries.
     var activeEntryCount: Int { cache.count }
 
-    private static let evictionTriggerRatio: Double = 0.75
+    /// Utilization trigger while the atlas can still grow. Fire early
+    /// because doubling the texture is one cheap repack and we want
+    /// headroom for burst rasterization.
+    private static let growTriggerRatio: Double = 0.75
+
+    /// Utilization trigger once the atlas is capped at maxTextureSize.
+    /// Compact can no longer grow, so every percent kept as "safety
+    /// margin" is cache capacity paid for in VRAM but never used. Set
+    /// close to 1.0 to maximize usable cache at the cap. 5% headroom
+    /// still tolerates bursts of ~1200 new glyphs per frame at 4096²
+    /// before rasterization starts failing — well beyond realistic CJK
+    /// paste workloads (typical: <100 new/frame since most chars are
+    /// already cached).
+    private static let evictTriggerRatio: Double = 0.95
 
     private let maxTextureSize: UInt32
 
@@ -66,7 +92,7 @@ final class GlyphAtlas {
     /// Guards against redundant eviction when multiple renderers share this atlas.
     private var lastEvictionFrame: UInt64 = 0
 
-    init(device: MTLDevice, initialSize: UInt32 = 1024, maxTextureSize: UInt32 = 4096) {
+    init(device: MTLDevice, initialSize: UInt32 = 2048, maxTextureSize: UInt32 = 4096) {
         self.device = device
         self.maxTextureSize = maxTextureSize
         self.textureSize = initialSize
@@ -93,6 +119,7 @@ final class GlyphAtlas {
     /// Advance the internal frame counter. Call once per render frame.
     func advanceFrame() {
         frameNumber &+= 1
+        atlasWritesThisFrame = 0
     }
 
     /// Get or rasterize a glyph by character. Resolves the font via FontSystem fallback on cache miss.
@@ -119,7 +146,7 @@ final class GlyphAtlas {
         if let entry = cache[key] {
             // Only update LRU timestamp when stale (avoids dictionary write on every hit)
             if frameNumber &- entry.lastUsedFrame > 60 {
-                cache[key] = GlyphEntry(info: entry.info, lastUsedFrame: frameNumber)
+                cache[key] = GlyphEntry(info: entry.info, lastUsedFrame: frameNumber, font: entry.font)
             }
             return entry.info
         }
@@ -127,7 +154,7 @@ final class GlyphAtlas {
         guard let info = rasterizeGlyph(glyph: glyph, font: font, fontSystem: fontSystem) else {
             return nil
         }
-        cache[key] = GlyphEntry(info: info, lastUsedFrame: frameNumber)
+        cache[key] = GlyphEntry(info: info, lastUsedFrame: frameNumber, font: font)
         return info
     }
 
@@ -206,6 +233,11 @@ final class GlyphAtlas {
         texture.replace(region: mtlRegion, mipmapLevel: 0,
                         withBytes: pixelData, bytesPerRow: bytesPerRow)
         isDirty = true
+        atlasWritesThisFrame &+= 1
+        GUILog.debug(
+            "[ATLAS] glyph=\(glyph) fontID=\(ObjectIdentifier(font)) region=(\(region.x),\(region.y) \(canvasWidth)x\(canvasHeight)) frame=\(frameNumber)",
+            category: .renderer
+        )
 
         // bearingY in top-down coords: baseline - pxY - canvasHeight
         let baselineF = CGFloat(fontSystem.baseline) + fontSystem.baselineFractionalOffset
@@ -284,6 +316,11 @@ final class GlyphAtlas {
         texture = newTexture
         textureSize = newSize
         isDirty = true
+        atlasWritesThisFrame &+= 1
+        GUILog.debug(
+            "[ATLAS] grow oldSize=\(oldSize) newSize=\(newSize) frame=\(frameNumber)",
+            category: .renderer
+        )
         return true
     }
 
@@ -291,13 +328,26 @@ final class GlyphAtlas {
 
     /// Check atlas utilization and evict stale entries if needed.
     /// Call once per frame after all glyphs have been looked up.
-    func evictIfNeeded(fontSystem: FontSystem) {
-        guard cache.count > 0, frameNumber > lastEvictionFrame else { return }
+    ///
+    /// - Returns: `true` if `compact()` ran and cached glyph coordinates
+    ///   were rewritten. Callers holding instance buffers or staged rows
+    ///   keyed on the old coordinates must rebuild them; otherwise GPU
+    ///   draws sample the new texture with stale coordinates and render
+    ///   garbled glyphs for rows that did not get re-shaped this frame.
+    @discardableResult
+    func evictIfNeeded(fontSystem: FontSystem) -> Bool {
+        guard cache.count > 0, frameNumber > lastEvictionFrame else { return false }
         lastEvictionFrame = frameNumber
-        // Utilization = used shelf area / total texture area
+        // Utilization = used shelf area / total texture area. Pick a
+        // looser trigger once the atlas is capped — below cap, fire
+        // early so compact can double the texture; at cap, fire late
+        // to keep more of the fixed capacity actually usable.
         let usedArea = Double(shelfY + shelfHeight) * Double(textureSize)
         let totalArea = Double(textureSize) * Double(textureSize)
-        guard usedArea / totalArea > Self.evictionTriggerRatio else { return }
+        let trigger = (textureSize < maxTextureSize)
+            ? Self.growTriggerRatio
+            : Self.evictTriggerRatio
+        guard usedArea / totalArea > trigger else { return false }
 
         // Evict oldest 25% of cache entries
         let evictCount = max(1, cache.count / 4)
@@ -308,9 +358,16 @@ final class GlyphAtlas {
 
         // Always compact after eviction to reclaim atlas space
         compact(fontSystem: fontSystem)
+        return true
     }
 
     /// Rebuild the atlas from scratch with only active cache entries.
+    ///
+    /// Each entry retains the `CTFont` used to originally rasterize it, so
+    /// both primary and fallback fonts are preserved verbatim — the old
+    /// "drop everything that isn't the primary font" path caused cache
+    /// thrash where CJK (fallback) glyphs were discarded and immediately
+    /// re-rasterized, re-filling the atlas and triggering another compact.
     private func compact(fontSystem: FontSystem) {
         let activeEntries = cache
 
@@ -323,48 +380,37 @@ final class GlyphAtlas {
         textureSize = newSize
         cache.removeAll(keepingCapacity: true)
 
-        // Group entries by fontID and use fontSystem to resolve the font.
-        // Since ObjectIdentifier is used as the key, we need to map back to CTFont.
-        // We use the fontSystem's base font as a fallback; this is acceptable
-        // because compaction happens during normal operation where fonts are stable.
-        var entriesByFontID: [ObjectIdentifier: [(glyph: CGGlyph, entry: GlyphEntry)]] = [:]
         for (key, entry) in activeEntries {
-            entriesByFontID[key.fontID, default: []].append((key.glyph, entry))
-        }
-
-        for (fontID, entries) in entriesByFontID {
-            // Try to use the primary font from fontSystem; if the identifier matches,
-            // use it. Otherwise, we skip since we can't recreate the exact font.
-            let candidateFont = fontSystem.ctFont
-            let font: CTFont
-            if ObjectIdentifier(candidateFont) == fontID {
-                font = candidateFont
-            } else {
-                // Skip fonts that no longer match the current fontSystem
-                continue
-            }
-
-            for (glyph, entry) in entries {
-                if let info = rasterizeGlyph(glyph: glyph, font: font, fontSystem: fontSystem) {
-                    let newKey = GlyphCacheKey(fontID: fontID, glyph: glyph)
-                    cache[newKey] = GlyphEntry(info: info, lastUsedFrame: entry.lastUsedFrame)
-                }
+            if let info = rasterizeGlyph(glyph: key.glyph, font: entry.font, fontSystem: fontSystem) {
+                cache[key] = GlyphEntry(
+                    info: info,
+                    lastUsedFrame: entry.lastUsedFrame,
+                    font: entry.font
+                )
             }
         }
 
         isDirty = true
+        GUILog.debug(
+            "[ATLAS] compact entries=\(activeEntries.count) newSize=\(newSize) frame=\(frameNumber)",
+            category: .renderer
+        )
     }
 
-    /// Choose smallest power-of-two texture size that fits the given entry count.
+    /// Target texture size for `compact()`.
+    ///
+    /// `evictIfNeeded` only calls compact when vertical utilization already
+    /// exceeded the 75% trigger. Staying at the same size just means
+    /// re-hitting the trigger within seconds under sustained CJK input —
+    /// the old entry-count heuristic (based on average ASCII glyph area
+    /// and a 1.5× pixel-headroom) badly underestimated real CJK load and
+    /// ignored shelf-packing waste, producing per-second compact storms.
+    /// Grow whenever we have room; stay put only when already at the cap.
     private func compactTextureSize(entryCount: Int) -> UInt32 {
-        // Estimate needed area: entryCount * average glyph area * 1.5 headroom
-        let avgGlyphArea: Double = 17.0 * 21.0
-        let neededArea = Double(entryCount) * avgGlyphArea * 1.5
-        var size: UInt32 = 1024
-        while Double(size * size) < neededArea && size < maxTextureSize {
-            size *= 2
+        if textureSize < maxTextureSize {
+            return textureSize * 2
         }
-        return size
+        return textureSize
     }
 
     // MARK: - Texture Creation

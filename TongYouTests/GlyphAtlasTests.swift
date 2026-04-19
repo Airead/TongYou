@@ -151,11 +151,146 @@ struct GlyphAtlasTests {
         let countBefore = atlas.activeEntryCount
 
         atlas.advanceFrame()
-        atlas.evictIfNeeded(fontSystem: fontSystem)
+        let compacted = atlas.evictIfNeeded(fontSystem: fontSystem)
         let countAfter = atlas.activeEntryCount
 
         // Some entries should have been evicted
         #expect(countAfter < countBefore)
+        // Eviction implies compaction: the return value must reflect it so
+        // callers can invalidate instance buffers that cached old coords.
+        #expect(compacted == true)
+    }
+
+    @Test func evictReturnsFalseWhenBelowThreshold() {
+        guard let (atlas, fontSystem) = makeAtlas(size: 1024, maxSize: 1024) else {
+            Issue.record("Metal device not available")
+            return
+        }
+
+        // Only a handful of glyphs — utilization stays well below 75%.
+        for ch in "Hello" {
+            _ = atlas.getOrRasterize(
+                character: ch.unicodeScalars.first!,
+                fontSystem: fontSystem
+            )
+        }
+
+        atlas.advanceFrame()
+        let compacted = atlas.evictIfNeeded(fontSystem: fontSystem)
+
+        // No compaction → return false, callers keep their cached instances.
+        #expect(compacted == false)
+    }
+
+    @Test func compactPreservesFallbackFontEntries() {
+        guard let (atlas, fontSystem) = makeAtlas(size: 128, maxSize: 256) else {
+            Issue.record("Metal device not available")
+            return
+        }
+
+        // Mix primary-font ASCII with fallback-font CJK glyphs, fill past 75%.
+        for ch in "abcdefghij" {
+            _ = atlas.getOrRasterize(
+                character: ch.unicodeScalars.first!,
+                fontSystem: fontSystem
+            )
+        }
+        for v: UInt32 in 0x4E00..<0x4E00 + 200 {
+            guard let s = Unicode.Scalar(v) else { continue }
+            _ = atlas.getOrRasterize(character: s, fontSystem: fontSystem)
+        }
+
+        let countBefore = atlas.activeEntryCount
+
+        atlas.advanceFrame()
+        let compacted = atlas.evictIfNeeded(fontSystem: fontSystem)
+        #expect(compacted == true)
+
+        // Eviction drops ~25% of entries; compact must preserve the rest
+        // regardless of whether their font is primary or a CJK fallback.
+        // Pre-fix, compact silently dropped every non-primary entry —
+        // countAfter collapsed to the few ASCII survivors, driving a
+        // thrash loop where CJK refilled the atlas and triggered another
+        // compact seconds later.
+        let countAfter = atlas.activeEntryCount
+        #expect(countAfter >= Int(Double(countBefore) * 0.7))
+    }
+
+    @Test func compactGrowsTextureWhenBelowMaxSize() {
+        guard let (atlas, fontSystem) = makeAtlas(size: 256, maxSize: 1024) else {
+            Issue.record("Metal device not available")
+            return
+        }
+
+        // Fill past the 75% trigger so compact will fire.
+        for v: UInt32 in 0x4E00..<0x4E00 + 200 {
+            guard let s = Unicode.Scalar(v) else { continue }
+            _ = atlas.getOrRasterize(character: s, fontSystem: fontSystem)
+        }
+
+        let sizeBefore = atlas.textureSize
+
+        atlas.advanceFrame()
+        let compacted = atlas.evictIfNeeded(fontSystem: fontSystem)
+        #expect(compacted == true)
+
+        // compact() fires precisely because we were already at >75%
+        // utilization. Staying at the same size just trips the trigger
+        // again within a second, producing the per-second compact storm
+        // observed under CJK load. Require an actual grow.
+        #expect(atlas.textureSize > sizeBefore)
+        #expect(atlas.textureSize <= 1024)
+    }
+
+    @Test func compactDoesNotShrinkTextureSize() {
+        guard let (atlas, fontSystem) = makeAtlas(size: 128, maxSize: 256) else {
+            Issue.record("Metal device not available")
+            return
+        }
+
+        // Fill past the eviction threshold so compact will fire.
+        for v: UInt32 in 0x4E00..<0x4E00 + 200 {
+            guard let s = Unicode.Scalar(v) else { continue }
+            _ = atlas.getOrRasterize(character: s, fontSystem: fontSystem)
+        }
+
+        let sizeBefore = atlas.textureSize
+
+        atlas.advanceFrame()
+        let compacted = atlas.evictIfNeeded(fontSystem: fontSystem)
+        #expect(compacted == true)
+
+        // Post-fix invariant: compact must never shrink below current
+        // textureSize (old code hard-coded the starting size, which could
+        // both overshoot maxTextureSize and drop a grown atlas back down,
+        // causing immediate re-growth on the next frame).
+        #expect(atlas.textureSize >= sizeBefore)
+        #expect(atlas.textureSize <= 256)
+    }
+
+    @Test func compactionReplacesUnderlyingTexture() {
+        guard let (atlas, fontSystem) = makeAtlas(size: 128, maxSize: 256) else {
+            Issue.record("Metal device not available")
+            return
+        }
+
+        // Fill the atlas past the 75% threshold with CJK entries.
+        for v: UInt32 in 0x4E00..<0x4E00 + 200 {
+            guard let s = Unicode.Scalar(v) else { continue }
+            _ = atlas.getOrRasterize(character: s, fontSystem: fontSystem)
+        }
+        let textureBefore = ObjectIdentifier(atlas.texture)
+
+        atlas.advanceFrame()
+        let compacted = atlas.evictIfNeeded(fontSystem: fontSystem)
+        #expect(compacted == true)
+
+        // Compact rebuilds into a fresh MTLTexture. Any in-flight GPU frame
+        // still bound to the old texture would now sample content laid out
+        // against a different coordinate system — this is the invariant the
+        // renderer relies on when it forces a full rebuild on `compacted`.
+        let textureAfter = ObjectIdentifier(atlas.texture)
+        #expect(textureBefore != textureAfter)
     }
 
     @Test func evictionKeepsRecentlyUsedEntries() {
