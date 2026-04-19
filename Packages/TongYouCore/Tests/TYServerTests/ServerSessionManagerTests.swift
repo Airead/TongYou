@@ -264,12 +264,14 @@ struct ServerSessionManagerTests {
         let second = manager.splitPane(
             sessionID: session.id, paneID: first, direction: .vertical
         )!
-        // Initial tree: V[first, second] (vertical container).
+        // Initial tree: V[first, second]. Switch to master-stack — always
+        // reshapes (strategy differs) and picks up the plan §3.5 initial
+        // weights of [1.5 × stackSum, 1].
 
         #expect(manager.changeStrategy(
             sessionID: session.id,
             paneID: first,
-            kind: .grid
+            kind: .masterStack
         ))
 
         let info = manager.sessionInfo(for: session.id)
@@ -277,9 +279,8 @@ struct ServerSessionManagerTests {
                 info?.tabs[0].layout else {
             Issue.record("Expected container layout"); return
         }
-        #expect(strategy == .grid)
-        // Weights preserved verbatim even though grid ignores them.
-        #expect(weights == [1, 1])
+        #expect(strategy == .masterStack)
+        #expect(weights == [1.5, 1])
         let leafIDs = children.compactMap { child -> PaneID? in
             if case .leaf(let id) = child { return id }
             return nil
@@ -326,13 +327,14 @@ struct ServerSessionManagerTests {
         manager.closeSession(id: session.id)
     }
 
-    @Test("changeStrategy flattens nested tree into a single container")
+    @Test("changeStrategy reshapes tree into canonical grid")
     func changeStrategyFlattensNesting() {
         // Build a nested layout:
         //   first vertical-split  →  V[first, second]
         //   split second horizontally → V[first, H[second, third]]
-        // Then change_strategy targets the whole tab: every pane ends up
-        // as a direct child of one grid container.
+        // Then change_strategy targets the whole tab: 3 panes → grid reshape
+        // produces H[V[first, second], third] (row 0 has 2 cells, last row
+        // is a bare leaf spanning the full width).
         let manager = ServerSessionManager()
         let session = manager.createSession(name: "ChangeStrategy Flatten")
         guard case .leaf(let first) = session.tabs[0].layout else {
@@ -350,18 +352,31 @@ struct ServerSessionManagerTests {
         ))
 
         let info = manager.sessionInfo(for: session.id)
-        guard case .container(let strategy, let children, let weights) =
+        guard case .container(let rootStrategy, let rootChildren, let rootWeights) =
                 info?.tabs[0].layout else {
             Issue.record("Expected container layout"); return
         }
-        #expect(strategy == .grid)
-        // Nesting is gone: every child is a leaf.
-        let leafIDs = children.compactMap { child -> PaneID? in
+        #expect(rootStrategy == .horizontal)
+        #expect(rootWeights == [1, 1])
+        #expect(rootChildren.count == 2)
+        // Row 0: V[first, second].
+        guard case .container(let row0Strategy, let row0Children, let row0Weights) =
+                rootChildren[0] else {
+            Issue.record("Expected row 0 to be a .vertical container"); return
+        }
+        #expect(row0Strategy == .vertical)
+        #expect(row0Weights == [1, 1])
+        let row0IDs = row0Children.compactMap { child -> PaneID? in
             if case .leaf(let id) = child { return id }
             return nil
         }
-        #expect(leafIDs == [first, second, third])
-        #expect(weights == [1, 1, 1])
+        #expect(row0IDs == [first, second])
+        // Row 1: bare leaf `third`.
+        if case .leaf(let lastPaneID) = rootChildren[1] {
+            #expect(lastPaneID == third)
+        } else {
+            Issue.record("Expected row 1 to be a bare leaf")
+        }
 
         manager.closeSession(id: session.id)
     }

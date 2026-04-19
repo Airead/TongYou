@@ -325,6 +325,47 @@ struct LayoutEngineTests {
         #expect(rects[c.id] == Rect(x: 50, y: 20, width: 50, height: 20))
     }
 
+    // MARK: - solveRectsReport
+
+    @Test func solveRectsReportNotViolatedWhenAllLeavesMeetMinSize() {
+        let (_, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let tree = container(.vertical, [leafA, leafB], [1, 1])
+        let tab = makeTab(tree)
+        let screen = Rect(x: 0, y: 0, width: 100, height: 40)
+
+        let report = LayoutEngine.solveRectsReport(tab: tab, screenRect: screen)
+        #expect(report.rects.count == 2)
+        #expect(report.violated == false)
+    }
+
+    @Test func solveRectsReportViolatedWhenLeafBelowMinSize() {
+        // Tab shrunk so each child falls under defaultMin (20×3).
+        let (_, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let tree = container(.vertical, [leafA, leafB], [1, 1])
+        let tab = makeTab(tree)
+        // 30 wide → each half is 15 < minSize.width (20).
+        let screen = Rect(x: 0, y: 0, width: 30, height: 10)
+
+        let report = LayoutEngine.solveRectsReport(tab: tab, screenRect: screen)
+        #expect(report.rects.count == 2)
+        #expect(report.violated == true)
+    }
+
+    @Test func solveRectsReportViolatedWhenZoomedScreenBelowMinSize() {
+        let (a, leafA) = leaf()
+        let tree = container(.vertical, [leafA, .leaf(TerminalPane())], [1, 1])
+        var tab = makeTab(tree)
+        tab.zoomedPaneID = a.id
+        // Zoomed pane fills 10×2 — below minSize on both axes.
+        let screen = Rect(x: 0, y: 0, width: 10, height: 2)
+
+        let report = LayoutEngine.solveRectsReport(tab: tab, screenRect: screen)
+        #expect(report.rects == [a.id: screen])
+        #expect(report.violated == true)
+    }
+
     // MARK: - sanitize
 
     @Test func sanitizeLeavesWellFormedTreeUnchanged() {
@@ -990,8 +1031,10 @@ struct LayoutEngineTests {
 
     // MARK: - flattenToStrategy (plan §P4.5)
 
-    @Test func flattenCollapsesNestedTreeIntoFlatContainer() {
-        // H[A, V[B, C]] + flatten → grid → G[A, B, C] with equal weights.
+    @Test func flattenCollapsesNestedTreeIntoGridShape() {
+        // H[A, V[B, C]] + flatten → grid → H[V[A, B], C] (2 rows, last row 1).
+        // Grid reshapes into a row-major nested H/V tree; `.grid` never shows
+        // up as a container strategy in the output.
         let (a, leafA) = leaf()
         let (b, leafB) = leaf()
         let (c, leafC) = leaf()
@@ -1002,16 +1045,24 @@ struct LayoutEngineTests {
         )
 
         let out = LayoutEngine.flattenToStrategy(tree: tree, newKind: .grid)
-        guard case .container(let flat) = out else {
-            Issue.record("expected flat container"); return
+        guard case .container(let root) = out else {
+            Issue.record("expected container root"); return
         }
-        #expect(flat.strategy == .grid)
-        #expect(flat.weights == [1, 1, 1])
-        #expect(flat.children.map(\.allPaneIDs) == [[a.id], [b.id], [c.id]])
-        // Every child is a leaf — no nesting survives.
-        #expect(flat.children.allSatisfy {
-            if case .leaf = $0 { true } else { false }
-        })
+        #expect(root.strategy == .horizontal)
+        #expect(root.weights == [1, 1])
+        #expect(root.children.count == 2)
+        // Row 0: V[A, B].
+        guard case .container(let row0) = root.children[0] else {
+            Issue.record("expected .vertical row 0"); return
+        }
+        #expect(row0.strategy == .vertical)
+        #expect(row0.weights == [1, 1])
+        #expect(row0.children.map(\.allPaneIDs) == [[a.id], [b.id]])
+        // Row 1: bare leaf C (single pane spans full width).
+        guard case .leaf(let leafInLastRow) = root.children[1] else {
+            Issue.record("expected bare leaf in last row"); return
+        }
+        #expect(leafInLastRow.id == c.id)
     }
 
     @Test func flattenReturnsNilForSingleLeafTree() {
@@ -1024,8 +1075,86 @@ struct LayoutEngineTests {
         let (_, leafA) = leaf()
         let (_, leafB) = leaf()
         let (_, leafC) = leaf()
-        let tree = container(.grid, [leafA, leafB, leafC], [1, 1, 1])
+        let tree = container(.horizontal, [leafA, leafB, leafC], [1, 1, 1])
+        #expect(LayoutEngine.flattenToStrategy(tree: tree, newKind: .horizontal) == nil)
+    }
+
+    @Test func flattenToGridBuildsFourPaneSquareRowMajor() {
+        // 4 panes → R=2, C=2 → H[V[A, B], V[C, D]]. Row-major fill: A top-left,
+        // B top-right, C bottom-left, D bottom-right.
+        let (a, leafA) = leaf()
+        let (b, leafB) = leaf()
+        let (c, leafC) = leaf()
+        let (d, leafD) = leaf()
+        let tree = container(
+            .horizontal, [leafA, leafB, leafC, leafD], [1, 1, 1, 1]
+        )
+
+        let out = LayoutEngine.flattenToStrategy(tree: tree, newKind: .grid)
+        guard case .container(let root) = out else {
+            Issue.record("expected container root"); return
+        }
+        #expect(root.strategy == .horizontal)
+        #expect(root.weights == [1, 1])
+        guard case .container(let row0) = root.children[0],
+              case .container(let row1) = root.children[1] else {
+            Issue.record("expected both rows to be .vertical containers"); return
+        }
+        #expect(row0.strategy == .vertical)
+        #expect(row0.children.map(\.allPaneIDs) == [[a.id], [b.id]])
+        #expect(row1.strategy == .vertical)
+        #expect(row1.children.map(\.allPaneIDs) == [[c.id], [d.id]])
+    }
+
+    @Test func flattenToGridTwoPanesCollapsesToSingleRow() {
+        // 2 panes → R=1, C=2. Outer H would wrap a single V, so we collapse
+        // it: result is a plain `.vertical` container with both leaves.
+        let (a, leafA) = leaf()
+        let (b, leafB) = leaf()
+        let tree = container(.horizontal, [leafA, leafB], [1, 1])
+
+        let out = LayoutEngine.flattenToStrategy(tree: tree, newKind: .grid)
+        guard case .container(let root) = out else {
+            Issue.record("expected container root"); return
+        }
+        #expect(root.strategy == .vertical)
+        #expect(root.children.map(\.allPaneIDs) == [[a.id], [b.id]])
+        #expect(root.weights == [1, 1])
+    }
+
+    @Test func flattenToGridReturnsNilForAlreadyCanonicalShape() {
+        // If the tree already has the canonical H[V, V] shape grid would
+        // produce, flatten is a NOOP (returns nil) despite the rebuild
+        // producing fresh container UUIDs — sameShape ignores them.
+        let (_, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let (_, leafC) = leaf()
+        let (_, leafD) = leaf()
+        let row0 = container(.vertical, [leafA, leafB], [1, 1])
+        let row1 = container(.vertical, [leafC, leafD], [1, 1])
+        let tree = container(.horizontal, [row0, row1], [1, 1])
         #expect(LayoutEngine.flattenToStrategy(tree: tree, newKind: .grid) == nil)
+    }
+
+    @Test func flattenToGridRebuildsIfWeightsDiffer() {
+        // Same H[V, V] shape but with non-unit weights → sameShape returns
+        // false → grid re-flatten rewrites weights back to all 1.
+        let (_, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let (_, leafC) = leaf()
+        let (_, leafD) = leaf()
+        let row0 = container(.vertical, [leafA, leafB], [0.7, 0.3])
+        let row1 = container(.vertical, [leafC, leafD], [1, 1])
+        let tree = container(.horizontal, [row0, row1], [2, 3])
+
+        let out = LayoutEngine.flattenToStrategy(tree: tree, newKind: .grid)
+        guard case .container(let root) = out else {
+            Issue.record("expected container root"); return
+        }
+        #expect(root.weights == [1, 1])
+        if case .container(let r0) = root.children[0] {
+            #expect(r0.weights == [1, 1])
+        }
     }
 
     @Test func flattenFlatContainerSwitchesStrategyAndResetsWeights() {
@@ -1086,14 +1215,15 @@ struct LayoutEngineTests {
     }
 
     @Test func flattenToNonMasterStackStrategiesStayEqualWeight() {
-        // Horizontal / vertical / grid / fibonacci all keep the equal-weight
-        // rule — only master-stack deviates.
+        // Horizontal / vertical / fibonacci produce a flat container with
+        // equal weights. `.grid` is handled separately because it reshapes
+        // into nested H/V — see the grid-specific tests above.
         let (_, leafA) = leaf()
         let (_, leafB) = leaf()
         let (_, leafC) = leaf()
         let tree = container(.horizontal, [leafA, leafB, leafC], [5, 1, 2])
 
-        for kind in [LayoutStrategyKind.vertical, .grid, .fibonacci] {
+        for kind in [LayoutStrategyKind.vertical, .fibonacci] {
             let out = LayoutEngine.flattenToStrategy(tree: tree, newKind: kind)
             guard case .container(let flat) = out else {
                 Issue.record("expected container for \(kind)"); return
@@ -1104,7 +1234,7 @@ struct LayoutEngineTests {
 
     @Test func flattenTabPreservesZoomAndFocus() {
         // Zoomed/focused pane IDs survive because flatten reuses the same
-        // TerminalPane values — only their parent container changes.
+        // TerminalPane values — only the container structure changes.
         let (a, leafA) = leaf()
         let (b, leafB) = leaf()
         let (c, leafC) = leaf()
@@ -1121,11 +1251,8 @@ struct LayoutEngineTests {
         }
         #expect(next.focusedPaneID == b.id)
         #expect(next.zoomedPaneID == a.id)
-        guard case .container(let flat) = next.paneTree else {
-            Issue.record("expected flat container"); return
-        }
-        #expect(flat.strategy == .grid)
-        #expect(flat.children.map(\.allPaneIDs) == [[a.id], [b.id], [c.id]])
+        // All 3 panes survive in row-major depth-first order.
+        #expect(next.paneTree.allPaneIDs == [a.id, b.id, c.id])
     }
 
     // MARK: - nextStrategy (plan §P4.5 cycling)

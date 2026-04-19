@@ -5,6 +5,14 @@ import TYTerminal
 /// (`.grid` / `.masterStack` / `.fibonacci`). Lives outside the SwiftUI view
 /// so it can be unit-tested without spinning up a view hierarchy.
 enum ContainerLayout {
+    /// Absolute per-axis point-space floor applied during a divider drag.
+    /// The pre-existing `[10%, 90%]` pair clamp is fraction-based and becomes
+    /// trivially tiny in a small window (e.g. 10% of 200pt is 20pt — half a
+    /// character row tall). Plan §P5 row 3 calls for a hard "拖不动" at
+    /// minSize; this is the point-space equivalent when cell size isn't
+    /// reachable from PaneSplitView. Roughly covers `minSize.defaultMin` at
+    /// typical monospaced font metrics (~20 cols × 3 rows).
+    static let minAxisPoints: CGFloat = 40
     /// Forward `container` to `LayoutDispatch` with `size` as the parent rect.
     /// Returns rects in local coordinates (origin at 0,0). `weights` overrides
     /// `container.weights` during a live divider drag.
@@ -59,7 +67,12 @@ enum ContainerLayout {
 
         let currentWidth = availableWidth * masterW / (masterW + stackSum)
         let rawTarget = currentWidth + delta
-        let targetWidth = min(max(rawTarget, 0.1 * availableWidth), 0.9 * availableWidth)
+        let lower = max(0.1 * availableWidth, minAxisPoints)
+        let upper = availableWidth - lower
+        // Container too narrow to honor both the pct clamp and the absolute
+        // floor — center the divider so neither side collapses.
+        guard lower < upper else { return nil }
+        let targetWidth = min(max(rawTarget, lower), upper)
         let r = targetWidth / availableWidth
         let newMasterWeight = r * stackSum / (1 - r)
 
@@ -91,7 +104,13 @@ enum ContainerLayout {
         let weightPerPixel = stackSum / availableHeight
         let dw = delta * weightPerPixel
         let rawNew = a + dw
-        let clamped = min(max(rawNew, 0.1 * pairSum), 0.9 * pairSum)
+        let minWeight = minAxisPoints * weightPerPixel
+        let lower = max(0.1 * pairSum, minWeight)
+        let upper = pairSum - lower
+        // Pair too thin to honor both the pct clamp and the absolute floor —
+        // freeze the divider so the smaller neighbour doesn't crush away.
+        guard lower < upper else { return nil }
+        let clamped = min(max(rawNew, lower), upper)
         let actualDelta = clamped - a
         var out = start
         out[ci] = a + actualDelta
@@ -464,7 +483,9 @@ private struct ContainerView: View {
         // container's weight budget (a pane's share is `weight_i / sum(all)`,
         // so one pixel corresponds to `sum(all) / available` weight units —
         // not the pair sum, which under-counts when there are 3+ children).
-        // Clamp to [10%, 90%] of the pair's own share.
+        // Clamp to [10%, 90%] of the pair, and to a per-side absolute
+        // point-space floor so "拖不动" kicks in before a neighbour collapses
+        // below minSize (plan §P5 row 3).
         let pairSum = start[i] + start[i + 1]
         guard pairSum > 0 else { return }
         let totalSum = start.reduce(0, +)
@@ -472,7 +493,13 @@ private struct ContainerView: View {
         let weightPerPixel = totalSum / available
         let dw = delta * weightPerPixel
         let rawNew = start[i] + dw
-        let clampedI = min(max(rawNew, 0.1 * pairSum), 0.9 * pairSum)
+        let minWeight = ContainerLayout.minAxisPoints * weightPerPixel
+        let lower = max(0.1 * pairSum, minWeight)
+        let upper = pairSum - lower
+        // Pair total is so small that the absolute floor can't be honored on
+        // both sides — stop moving the divider so neither neighbour crushes.
+        guard lower < upper else { return }
+        let clampedI = min(max(rawNew, lower), upper)
         let actualDelta = clampedI - start[i]
 
         var newWeights = start

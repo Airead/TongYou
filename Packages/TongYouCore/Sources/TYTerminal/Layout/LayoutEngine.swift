@@ -414,13 +414,17 @@ public enum LayoutEngine {
     /// layout we abandon all prior nesting and weight distribution and
     /// re-tile every pane under the requested strategy.
     ///
-    /// Initial weights:
+    /// Initial weights & structure:
     /// - `.masterStack` follows plan §3.5 — `weights[0] = 1.5 × stackSum` so
     ///   the master column stays around 60% regardless of how many stack
     ///   panes there are. Stack weights are all `1.0`.
-    /// - All other strategies (horizontal / vertical / grid / fibonacci) get
-    ///   equal weights. Grid ignores them entirely; the 1-D strategies
-    ///   evenly divide space.
+    /// - `.grid` is a **reshape-only** strategy: the result is a nested
+    ///   `H[V[…], V[…], …]` row-major tree so all runtime layout and
+    ///   divider dragging reuses the 1-D pipeline. `.grid` never appears as
+    ///   a container strategy in the returned tree. `(R, C)` is picked from
+    ///   `round(√N) × ⌈N/R⌉` — pane-count only, no parent-rect dependency.
+    /// - `.horizontal` / `.vertical` / `.fibonacci` get a flat container
+    ///   with equal weights.
     ///
     /// The new container gets a fresh UUID — any persisted reference to the
     /// old container IDs (there shouldn't be any outside this engine) becomes
@@ -431,13 +435,21 @@ public enum LayoutEngine {
     /// - `tree` is a single leaf (single-pane tab — no container exists to
     ///   host a strategy), or
     /// - `tree` is already a flat container (all children leaves) using
-    ///   `newKind`, so flattening would produce the same layout.
+    ///   `newKind`, so flattening would produce the same layout, or
+    /// - `newKind == .grid` and `tree` already matches the canonical nested
+    ///   grid shape for its pane count (ignoring container UUIDs).
     public static func flattenToStrategy(
         tree: PaneNode,
         newKind: LayoutStrategyKind
     ) -> PaneNode? {
         let panes = tree.allPanes
         guard panes.count >= 2 else { return nil }
+
+        if newKind == .grid {
+            let candidate = buildGridTree(panes: panes)
+            return sameShape(tree, candidate) ? nil : candidate
+        }
+
         if case .container(let c) = tree,
            c.strategy == newKind,
            c.children.allSatisfy({ if case .leaf = $0 { true } else { false } }) {
@@ -455,6 +467,66 @@ public enum LayoutEngine {
             children: panes.map { .leaf($0) },
             weights: weights
         ))
+    }
+
+    /// Build the canonical nested grid tree for `panes` in row-major order.
+    /// Outer container is `.horizontal` (rows stacked top-to-bottom); each
+    /// row is a `.vertical` container (panes stacked left-to-right), except
+    /// when a row has a single pane, in which case the bare leaf is used so
+    /// the last-row pane naturally spans the full width.
+    ///
+    /// Special cases:
+    /// - `R == 1`: the outer `.horizontal` would wrap a single child, so we
+    ///   return the inner row directly (a plain `.vertical` for N ≥ 2).
+    /// - Last row with 1 pane: inserted as a bare `.leaf`, not a 1-child
+    ///   container, keeping the tree well-formed.
+    private static func buildGridTree(panes: [TerminalPane]) -> PaneNode {
+        precondition(panes.count >= 2, "grid shape requires at least 2 panes")
+        let n = panes.count
+        let r = max(1, Int(Double(n).squareRoot().rounded()))
+        let c = Int((Double(n) / Double(r)).rounded(.up))
+
+        var rows: [PaneNode] = []
+        var cursor = 0
+        while cursor < n {
+            let rowCount = min(c, n - cursor)
+            let slice = Array(panes[cursor..<(cursor + rowCount)])
+            cursor += rowCount
+            if slice.count == 1 {
+                rows.append(.leaf(slice[0]))
+            } else {
+                rows.append(.container(Container(
+                    strategy: .vertical,
+                    children: slice.map { .leaf($0) },
+                    weights: Array(repeating: 1.0, count: slice.count)
+                )))
+            }
+        }
+        // R == 1 (e.g. N == 2): outer H would wrap a single V — collapse it.
+        if rows.count == 1 { return rows[0] }
+        return .container(Container(
+            strategy: .horizontal,
+            children: rows,
+            weights: Array(repeating: 1.0, count: rows.count)
+        ))
+    }
+
+    /// Tree shape equality that ignores container UUIDs. `flattenToStrategy`
+    /// uses this for grid NOOP detection: the rebuilt tree always has fresh
+    /// container IDs so plain `==` would never match, but structurally the
+    /// trees can still be identical.
+    private static func sameShape(_ a: PaneNode, _ b: PaneNode) -> Bool {
+        switch (a, b) {
+        case (.leaf(let p1), .leaf(let p2)):
+            return p1.id == p2.id
+        case (.container(let c1), .container(let c2)):
+            return c1.strategy == c2.strategy
+                && c1.weights == c2.weights
+                && c1.children.count == c2.children.count
+                && zip(c1.children, c2.children).allSatisfy(sameShape)
+        default:
+            return false
+        }
     }
 
     // MARK: - strategy cycling
@@ -782,6 +854,19 @@ public enum LayoutEngine {
 
     // MARK: - solveRects
 
+    /// Tree-level solve report: per-pane rects plus a violation flag that is
+    /// `true` when any container produced at least one child below `minSize`
+    /// (plan §P5 row 3: surface so the render/PTY layer can log / clamp).
+    public struct LayoutReport: Equatable, Sendable {
+        public let rects: [UUID: Rect]
+        public let violated: Bool
+
+        public init(rects: [UUID: Rect], violated: Bool) {
+            self.rects = rects
+            self.violated = violated
+        }
+    }
+
     /// Map every leaf pane in the tab to its screen rect by recursively
     /// walking the tree and applying `LayoutDispatch.solve` at each
     /// container. Floating panes are out of scope.
@@ -795,18 +880,43 @@ public enum LayoutEngine {
         minSize: Size = .defaultMin,
         dividerSize: Int = 0
     ) -> [UUID: Rect] {
+        solveRectsReport(
+            tab: tab,
+            screenRect: screenRect,
+            minSize: minSize,
+            dividerSize: dividerSize
+        ).rects
+    }
+
+    /// Same traversal as `solveRects` but also reports whether any container
+    /// along the way produced a child below `minSize`. Use this when the
+    /// caller needs to react to the window being shrunk past the layout
+    /// minimum — e.g. surface a warning log, clamp PTY dimensions, or block
+    /// a resize interaction.
+    public static func solveRectsReport(
+        tab: TerminalTab,
+        screenRect: Rect,
+        minSize: Size = .defaultMin,
+        dividerSize: Int = 0
+    ) -> LayoutReport {
         if let zoomed = tab.zoomedPaneID, tab.paneTree.contains(paneID: zoomed) {
-            return [zoomed: screenRect]
+            // Zoomed pane fills the whole screen; violated only if the screen
+            // itself is below minSize.
+            let violated = screenRect.width < minSize.width
+                        || screenRect.height < minSize.height
+            return LayoutReport(rects: [zoomed: screenRect], violated: violated)
         }
-        var result: [UUID: Rect] = [:]
+        var rects: [UUID: Rect] = [:]
+        var violated = false
         solveInto(
             node: tab.paneTree,
             rect: screenRect,
             minSize: minSize,
             dividerSize: dividerSize,
-            into: &result
+            into: &rects,
+            violated: &violated
         )
-        return result
+        return LayoutReport(rects: rects, violated: violated)
     }
 
     private static func solveInto(
@@ -814,11 +924,15 @@ public enum LayoutEngine {
         rect: Rect,
         minSize: Size,
         dividerSize: Int,
-        into result: inout [UUID: Rect]
+        into result: inout [UUID: Rect],
+        violated: inout Bool
     ) {
         switch node {
         case .leaf(let pane):
             result[pane.id] = rect
+            if rect.width < minSize.width || rect.height < minSize.height {
+                violated = true
+            }
         case .container(let c):
             let solved = LayoutDispatch.solve(
                 container: c,
@@ -826,13 +940,15 @@ public enum LayoutEngine {
                 minSize: minSize,
                 dividerSize: dividerSize
             )
+            if solved.violated { violated = true }
             for (child, childRect) in zip(c.children, solved.rects) {
                 solveInto(
                     node: child,
                     rect: childRect,
                     minSize: minSize,
                     dividerSize: dividerSize,
-                    into: &result
+                    into: &result,
+                    violated: &violated
                 )
             }
         }
