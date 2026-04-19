@@ -25,6 +25,13 @@ enum FuzzyMatcher {
     /// Rank all `candidates` against `query`. Empty `query` returns the
     /// candidates in their input order with zero score (no filtering).
     ///
+    /// Whitespace in `query` is treated as an AND-separator — each
+    /// whitespace-delimited token must independently subsequence-match the
+    /// candidate, in any order. This lets users type `"db 01"` and match
+    /// `"prod-db-01"` without having to guess the exact character ordering.
+    /// The match's score is the sum of per-token scores; highlight indices
+    /// are the de-duplicated union.
+    ///
     /// `extract` maps a candidate element to the searchable text. The result
     /// keeps stable sort order for equal scores, matching the caller's input
     /// ordering (which is already sorted by history recency / ssh_config
@@ -34,12 +41,13 @@ enum FuzzyMatcher {
         in candidates: [T],
         extract: (T) -> String
     ) -> [(candidate: T, match: Match)] {
-        if query.isEmpty {
+        let tokens = query.split(whereSeparator: \.isWhitespace).map(String.init)
+        if tokens.isEmpty {
             return candidates.map { ($0, Match(score: 0, matchedIndices: [])) }
         }
         var scored: [(offset: Int, candidate: T, match: Match)] = []
         for (offset, candidate) in candidates.enumerated() {
-            guard let match = self.match(query: query, in: extract(candidate)) else {
+            guard let match = matchAll(tokens: tokens, in: extract(candidate)) else {
                 continue
             }
             scored.append((offset, candidate, match))
@@ -51,6 +59,24 @@ enum FuzzyMatcher {
             return a.offset < b.offset
         }
         return scored.map { ($0.candidate, $0.match) }
+    }
+
+    /// Run every token in `tokens` through `match(query:in:)` and combine
+    /// the results. Returns nil when any token fails to match.
+    private static func matchAll(tokens: [String], in text: String) -> Match? {
+        var totalScore = 0
+        var mergedIndices: [String.Index] = []
+        for token in tokens {
+            guard let hit = match(query: token, in: text) else { return nil }
+            totalScore += hit.score
+            mergedIndices.append(contentsOf: hit.matchedIndices)
+        }
+        // Deduplicate + sort so the view can walk indices monotonically.
+        // Two different tokens may land on the same position (e.g. "d d"
+        // against "d-x") — collapse those so the highlighter doesn't
+        // double-style a character.
+        let unique = Array(Set(mergedIndices)).sorted()
+        return Match(score: totalScore, matchedIndices: unique)
     }
 
     /// Subsequence match of `query` against `text`. Returns nil if any query
