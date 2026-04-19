@@ -1,5 +1,8 @@
+import AppKit
 import Foundation
 import Testing
+import TYConfig
+import TYTerminal
 @testable import TongYou
 
 @MainActor
@@ -426,5 +429,112 @@ struct CommandPaletteControllerTests {
 
         #expect(controller.rows.count == 1)
         #expect(controller.rows[0].candidate.primaryText == "db1")
+    }
+
+    // MARK: - Profile scope
+
+    @Test func profileScopeListsCandidatesWithPrefix() {
+        let controller = CommandPaletteController()
+        controller.profileCandidates = [
+            PaletteCandidate(
+                primaryText: "ssh-prod",
+                secondaryText: "extends ssh · #4a1818",
+                scope: .profile,
+                accentHex: "4a1818",
+                profileID: "ssh-prod"
+            ),
+            PaletteCandidate(
+                primaryText: "default",
+                scope: .profile,
+                profileID: "default"
+            ),
+        ]
+        controller.open()
+        controller.input = "p "
+
+        #expect(controller.scope == .profile)
+        #expect(controller.rows.count == 2)
+        #expect(controller.rows.map(\.candidate.primaryText) == ["ssh-prod", "default"])
+    }
+
+    @Test func profilePaletteCandidateBuildsSubtitle() {
+        // Profile with extends + background → "extends X · #bg".
+        let withParent = TerminalWindowView.profilePaletteCandidate(
+            id: "ssh-prod",
+            raw: RawProfile(id: "ssh-prod", extendsID: "ssh", entries: []),
+            backgroundHex: "4a1818"
+        )
+        #expect(withParent.secondaryText == "extends ssh · #4a1818")
+        #expect(withParent.accentHex == "4a1818")
+        #expect(withParent.profileID == "ssh-prod")
+
+        // Profile with neither extends nor background → nil subtitle.
+        let bare = TerminalWindowView.profilePaletteCandidate(
+            id: "default",
+            raw: RawProfile(id: "default", extendsID: nil, entries: []),
+            backgroundHex: nil
+        )
+        #expect(bare.secondaryText == nil)
+        #expect(bare.accentHex == nil)
+    }
+
+    // MARK: - Command scope
+
+    @Test func commandScopeListsCandidatesWithSubtitle() {
+        let controller = CommandPaletteController()
+        controller.commandCandidates = [
+            PaletteCandidate(
+                primaryText: "Show command palette",
+                secondaryText: "⌘P",
+                scope: .command,
+                commandAction: .showCommandPalette
+            ),
+            PaletteCandidate(
+                primaryText: "New tab",
+                secondaryText: "⌘T",
+                scope: .command,
+                commandAction: .newTab
+            ),
+        ]
+        controller.open()
+        controller.input = "> "
+
+        #expect(controller.scope == .command)
+        #expect(controller.rows.count == 2)
+        #expect(controller.rows[0].candidate.secondaryText == "⌘P")
+    }
+
+    @Test func commandShortcutIndexFormatsGlyphs() {
+        let bindings: [Keybinding] = [
+            Keybinding(modifiers: .command, key: "p", action: .showCommandPalette),
+            Keybinding(modifiers: [.command, .shift], key: "d", action: .splitHorizontal),
+            Keybinding(modifiers: [.command, .option], key: "left", action: .focusPane(.left)),
+        ]
+        let index = TerminalWindowView.shortcutIndex(for: bindings)
+        #expect(index[.showCommandPalette] == "⌘P")
+        #expect(index[.splitHorizontal] == "⇧⌘D")
+        #expect(index[.focusPane(.left)] == "⌥⌘←")
+    }
+
+    @Test func commandShortcutIndexPrefersFirstWhenDuplicated() {
+        // Two bindings point at the same action — the first wins so the
+        // subtitle is deterministic.
+        let bindings: [Keybinding] = [
+            Keybinding(modifiers: .command, key: "h", action: .previousTab),
+            Keybinding(modifiers: [.command, .shift], key: "[", action: .previousTab),
+        ]
+        let index = TerminalWindowView.shortcutIndex(for: bindings)
+        #expect(index[.previousTab] == "⌘H")
+    }
+
+    @Test func paletteDisplayTitleOmitsParameterisedActions() {
+        // Actions with an associated payload that can't be enumerated at
+        // build time must return nil so they never surface in the palette.
+        #expect(Keybinding.Action.gotoTab(3).paletteDisplayTitle == nil)
+        #expect(Keybinding.Action.runInPlace(command: "x", arguments: []).paletteDisplayTitle == nil)
+        #expect(Keybinding.Action.runCommand(command: "x", arguments: [], options: .empty).paletteDisplayTitle == nil)
+        #expect(Keybinding.Action.unbind.paletteDisplayTitle == nil)
+        // Non-parameterised actions do have a title.
+        #expect(Keybinding.Action.newTab.paletteDisplayTitle == "New tab")
     }
 }

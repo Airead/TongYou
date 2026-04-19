@@ -73,6 +73,12 @@ struct PaletteCandidate: Identifiable, Equatable {
     /// `Sendable`/`Equatable`-friendly optional to avoid dragging other
     /// scopes into SSH types.
     let sshResolution: SSHResolution?
+    /// Profile-scope payload — the profile id the commit should spawn
+    /// with. Non-nil only on profile-scope candidates.
+    let profileID: String?
+    /// Command-scope payload — the action the commit should dispatch.
+    /// Non-nil only on command-scope candidates.
+    let commandAction: Keybinding.Action?
 
     init(
         id: UUID = UUID(),
@@ -80,7 +86,9 @@ struct PaletteCandidate: Identifiable, Equatable {
         secondaryText: String? = nil,
         scope: PaletteScope,
         accentHex: String? = nil,
-        sshResolution: SSHResolution? = nil
+        sshResolution: SSHResolution? = nil,
+        profileID: String? = nil,
+        commandAction: Keybinding.Action? = nil
     ) {
         self.id = id
         self.primaryText = primaryText
@@ -88,6 +96,8 @@ struct PaletteCandidate: Identifiable, Equatable {
         self.scope = scope
         self.accentHex = accentHex
         self.sshResolution = sshResolution
+        self.profileID = profileID
+        self.commandAction = commandAction
     }
 }
 
@@ -157,6 +167,19 @@ final class CommandPaletteController {
     /// SessionManager). Kept here so the Phase 5 controller can be tested
     /// end-to-end.
     var sessionCandidates: [PaletteCandidate] = [] {
+        didSet { refreshRows(resetHighlight: true) }
+    }
+
+    /// Candidates for the profile scope — populated by the window layer
+    /// from `ProfileLoader.allRawProfiles` on every palette open.
+    var profileCandidates: [PaletteCandidate] = [] {
+        didSet { refreshRows(resetHighlight: true) }
+    }
+
+    /// Candidates for the command scope — populated by the window layer
+    /// from the available `Keybinding.Action` set, with subtitles showing
+    /// the bound shortcut (if any).
+    var commandCandidates: [PaletteCandidate] = [] {
         didSet { refreshRows(resetHighlight: true) }
     }
 
@@ -319,9 +342,10 @@ final class CommandPaletteController {
         switch scope {
         case .ssh:     return sshCandidates
         case .session: return sessionCandidates
-        // The remaining scopes are intentionally empty in Phase 5; Phase 6+
-        // plug in profile / tab / command enumerations.
-        case .command, .profile, .tab: return []
+        case .profile: return profileCandidates
+        case .command: return commandCandidates
+        // Tab scope is still a future hookup — the palette opens empty.
+        case .tab:     return []
         }
     }
 }

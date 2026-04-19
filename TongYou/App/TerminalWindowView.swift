@@ -1,5 +1,6 @@
 import SwiftUI
 import TYClient
+import TYConfig
 import TYProtocol
 import TYTerminal
 
@@ -347,11 +348,69 @@ struct TerminalWindowView: View {
             handleSSHCommit(rows: committed.rows, mode: mode)
         case .session:
             handleSessionCommit(rows: committed.rows, mode: mode)
-        default:
-            // Phases beyond 8 (profile / tab / command scopes) will plug
-            // in here; until then, just close.
+        case .profile:
+            handleProfileCommit(rows: committed.rows, mode: mode)
+        case .command:
+            handleCommandCommit(rows: committed.rows)
+        case .tab:
+            // Tab scope is still a placeholder — the rewire path leaves
+            // `tabCandidates` empty so this branch is unreachable for now.
             dismissCommandPalette()
         }
+    }
+
+    /// Profile-scope commit. Mirrors the SSH four-Enter mapping: plain
+    /// Enter opens a new tab with the chosen profile; ⌘Enter splits the
+    /// focused pane to the right, ⇧Enter splits below, ⌥Enter opens a
+    /// floating pane. Profiles are non-SSH so we pass an empty variables
+    /// dict — the profile is responsible for having a self-contained
+    /// command.
+    private func handleProfileCommit(rows: [PaletteRow], mode: PaletteEnterMode) {
+        guard let profileID = rows.first?.candidate.profileID else {
+            dismissCommandPalette()
+            return
+        }
+        commandPalette.close()
+        switch mode {
+        case .plain:
+            _ = sessionManager.createTab(profileID: profileID, variables: [:])
+        case .commandEnter:
+            if let parent = focusManager.focusedPaneID {
+                _ = sessionManager.splitPane(
+                    parentPaneID: parent, direction: .vertical,
+                    profileID: profileID, variables: [:]
+                )
+            } else {
+                _ = sessionManager.createTab(profileID: profileID, variables: [:])
+            }
+        case .shiftEnter:
+            if let parent = focusManager.focusedPaneID {
+                _ = sessionManager.splitPane(
+                    parentPaneID: parent, direction: .horizontal,
+                    profileID: profileID, variables: [:]
+                )
+            } else {
+                _ = sessionManager.createTab(profileID: profileID, variables: [:])
+            }
+        case .optionEnter:
+            _ = sessionManager.createFloatingPane(profileID: profileID, variables: [:])
+        }
+    }
+
+    /// Command-scope commit. Plain Enter only — modifiers have no meaning
+    /// in this scope and are ignored. Closes the palette first so the
+    /// dispatched action doesn't fight the overlay for first responder.
+    /// Only actions that map to a `TabAction` can be committed here; the
+    /// candidate builder filters the list to exactly those, so this
+    /// guard exists only as a belt-and-braces runtime check.
+    private func handleCommandCommit(rows: [PaletteRow]) {
+        guard let action = rows.first?.candidate.commandAction,
+              let tabAction = action.tabAction else {
+            dismissCommandPalette()
+            return
+        }
+        dismissCommandPalette()
+        handleTabAction(tabAction)
     }
 
     /// SSH scope commit. With a single row, Phase 6's four Enter variants
@@ -1182,9 +1241,9 @@ struct TerminalWindowView: View {
     }
 
     /// Refresh the palette's data sources (SSH history / rules / ssh_config
-    /// + session list) and open. The palette lands in session scope by
-    /// default; typing `ssh <host>` / `p <profile>` / `t <tab>` / `> cmd`
-    /// switches scopes from inside the input.
+    /// + session list + profiles + commands) and open. The palette lands
+    /// in session scope by default; typing `ssh <host>` / `p <profile>` /
+    /// `t <tab>` / `> cmd` switches scopes from inside the input.
     private func openCommandPalette() {
         Task { @MainActor in
             await sshLauncher.reload(
@@ -1193,6 +1252,8 @@ struct TerminalWindowView: View {
             )
             rewirePaletteForSSH()
             rewirePaletteForSessions()
+            rewirePaletteForProfiles()
+            rewirePaletteForCommands()
             commandPalette.open()
         }
     }
@@ -1229,6 +1290,101 @@ struct TerminalWindowView: View {
             secondaryText: subtitle,
             scope: .session
         )
+    }
+
+    /// Enumerate loaded profiles into palette candidates sorted by id. The
+    /// subtitle shows the `extends` chain + background hex so the user can
+    /// distinguish similar-looking profiles at a glance.
+    private func rewirePaletteForProfiles() {
+        let profiles = configLoader.profileLoader.allRawProfiles
+        let sortedIDs = profiles.keys.sorted()
+        commandPalette.profileCandidates = sortedIDs.map { id in
+            Self.profilePaletteCandidate(
+                id: id,
+                raw: profiles[id],
+                backgroundHex: configLoader.profileLoader.resolvedLive(id: id).scalars["background"]
+            )
+        }
+    }
+
+    /// Build one profile-scope palette candidate. Static so it can be
+    /// unit-tested without a live `ProfileLoader`.
+    @MainActor
+    static func profilePaletteCandidate(
+        id: String,
+        raw: RawProfile?,
+        backgroundHex: String?
+    ) -> PaletteCandidate {
+        let extendsLabel = raw?.extendsID.map { "extends \($0)" }
+        let subtitle: String = {
+            let bgPart = backgroundHex.map { "#\($0)" }
+            let parts = [extendsLabel, bgPart].compactMap { $0 }
+            return parts.isEmpty ? "" : parts.joined(separator: " · ")
+        }()
+        return PaletteCandidate(
+            primaryText: id,
+            secondaryText: subtitle.isEmpty ? nil : subtitle,
+            scope: .profile,
+            accentHex: backgroundHex,
+            profileID: id
+        )
+    }
+
+    /// Build palette candidates for the command scope. Filters out
+    /// parameterized actions (goto_tab:N, run_command, run_in_place) and
+    /// any action whose `tabAction` is nil (those are handled at the
+    /// pane/editor level, not by the window-level dispatcher — offering
+    /// them here would dead-end on commit). Secondary text shows the
+    /// bound shortcut (if any) so the palette doubles as a shortcut
+    /// reference card.
+    private func rewirePaletteForCommands() {
+        let shortcutByAction = Self.shortcutIndex(for: configLoader.config.keybindings)
+        let actions: [Keybinding.Action] = Self.paletteCommandActions
+        commandPalette.commandCandidates = actions.compactMap { action in
+            guard let title = action.paletteDisplayTitle,
+                  action.tabAction != nil else { return nil }
+            return PaletteCandidate(
+                primaryText: title,
+                secondaryText: shortcutByAction[action],
+                scope: .command,
+                commandAction: action
+            )
+        }
+    }
+
+    /// Curated list of non-parameterized actions offered in the command
+    /// scope, in a deliberate order (palette rendering preserves insertion
+    /// order when the query is empty). Parameterized actions (`gotoTab`,
+    /// `runCommand`, `runInPlace`) are intentionally excluded — each one
+    /// would expand to dozens of variants in the flat list.
+    private static let paletteCommandActions: [Keybinding.Action] = [
+        .newSession, .closeSession, .previousSession, .nextSession,
+        .toggleSidebar,
+        .newTab, .closeTab, .previousTab, .nextTab,
+        .splitVertical, .splitHorizontal, .closePane,
+        .focusPane(.left), .focusPane(.right), .focusPane(.up), .focusPane(.down),
+        .movePane(.left), .movePane(.right), .movePane(.up), .movePane(.down),
+        .growPane, .shrinkPane, .toggleZoom,
+        .changeStrategy(.horizontal), .changeStrategy(.vertical),
+        .changeStrategy(.grid), .changeStrategy(.masterStack),
+        .cycleStrategy(forward: true), .cycleStrategy(forward: false),
+        .newFloatingPane, .toggleOrCreateFloatingPane,
+        .listRemoteSessions, .newRemoteSession, .showSessionPicker,
+        .detachSession, .renameSession,
+        .toggleBroadcastInput, .clearPaneSelection,
+        .showCommandPalette,
+    ]
+
+    /// Build `action → shortcut glyph` map from the active keybindings.
+    /// When an action has multiple bindings the first one wins — stable
+    /// enough for a reference display and avoids an ambiguous
+    /// "⌘P or ⌘⇧P" subtitle.
+    static func shortcutIndex(for bindings: [Keybinding]) -> [Keybinding.Action: String] {
+        var result: [Keybinding.Action: String] = [:]
+        for binding in bindings where result[binding.action] == nil {
+            result[binding.action] = binding.shortcutString
+        }
+        return result
     }
 
     /// Convert the launcher's current candidate list into `PaletteCandidate`
