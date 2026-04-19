@@ -292,25 +292,7 @@ public struct BinaryDecoder: Sendable {
             for _ in 0..<count {
                 weights.append(try readFloat())
             }
-            let rowCount = Int(try readUInt32())
-            var gridRowWeights: [Float] = []
-            gridRowWeights.reserveCapacity(rowCount)
-            for _ in 0..<rowCount {
-                gridRowWeights.append(try readFloat())
-            }
-            let colCount = Int(try readUInt32())
-            var gridColWeights: [Float] = []
-            gridColWeights.reserveCapacity(colCount)
-            for _ in 0..<colCount {
-                gridColWeights.append(try readFloat())
-            }
-            return .container(
-                strategy: strategy,
-                children: children,
-                weights: weights,
-                gridRowWeights: gridRowWeights,
-                gridColWeights: gridColWeights
-            )
+            return .container(strategy: strategy, children: children, weights: weights)
         default:
             throw BinaryDecoderError.invalidEnumValue(type: "LayoutTree", rawValue: UInt64(tag))
         }

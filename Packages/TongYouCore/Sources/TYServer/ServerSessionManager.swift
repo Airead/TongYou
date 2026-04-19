@@ -859,7 +859,7 @@ public final class ServerSessionManager {
                 paneID: paneID
             )
             return (.leaf(pane), [paneID: core])
-        case .container(let strategy, let children, let weights, let gridRowWeights, let gridColWeights):
+        case .container(let strategy, let children, let weights):
             var nodes: [PaneNode] = []
             nodes.reserveCapacity(children.count)
             var combinedCores: [PaneID: TerminalCore] = [:]
@@ -875,9 +875,7 @@ public final class ServerSessionManager {
             let node = PaneNode.container(Container(
                 strategy: strategy,
                 children: nodes,
-                weights: weights.map { CGFloat($0) },
-                gridRowWeights: gridRowWeights.map { CGFloat($0) },
-                gridColWeights: gridColWeights.map { CGFloat($0) }
+                weights: weights.map { CGFloat($0) }
             ))
             return (node, combinedCores)
         }

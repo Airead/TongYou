@@ -147,13 +147,7 @@ public struct FloatFrameHint: Equatable, Sendable, Codable {
 /// layout strategy and parallel weights.
 public indirect enum LayoutTree: Sendable, Equatable, Codable {
     case leaf(PaneID)
-    case container(
-        strategy: LayoutStrategyKind,
-        children: [LayoutTree],
-        weights: [Float],
-        gridRowWeights: [Float] = [],
-        gridColWeights: [Float] = []
-    )
+    case container(strategy: LayoutStrategyKind, children: [LayoutTree], weights: [Float])
 
     private enum CodingKeys: String, CodingKey {
         case type
@@ -161,8 +155,6 @@ public indirect enum LayoutTree: Sendable, Equatable, Codable {
         case strategy
         case children
         case weights
-        case gridRowWeights
-        case gridColWeights
     }
 
     private enum LayoutType: String, Codable {
@@ -176,19 +168,11 @@ public indirect enum LayoutTree: Sendable, Equatable, Codable {
         case .leaf(let paneID):
             try container.encode(LayoutType.leaf, forKey: .type)
             try container.encode(paneID, forKey: .paneID)
-        case .container(let strategy, let children, let weights, let gridRowWeights, let gridColWeights):
+        case .container(let strategy, let children, let weights):
             try container.encode(LayoutType.container, forKey: .type)
             try container.encode(strategy, forKey: .strategy)
             try container.encode(children, forKey: .children)
             try container.encode(weights, forKey: .weights)
-            // Only serialize custom grid weights when they're actually set,
-            // so common auto-balanced grids round-trip as compact JSON.
-            if !gridRowWeights.isEmpty {
-                try container.encode(gridRowWeights, forKey: .gridRowWeights)
-            }
-            if !gridColWeights.isEmpty {
-                try container.encode(gridColWeights, forKey: .gridColWeights)
-            }
         }
     }
 
@@ -203,15 +187,7 @@ public indirect enum LayoutTree: Sendable, Equatable, Codable {
             let strategy = try container.decode(LayoutStrategyKind.self, forKey: .strategy)
             let children = try container.decode([LayoutTree].self, forKey: .children)
             let weights = try container.decode([Float].self, forKey: .weights)
-            let gridRowWeights = try container.decodeIfPresent([Float].self, forKey: .gridRowWeights) ?? []
-            let gridColWeights = try container.decodeIfPresent([Float].self, forKey: .gridColWeights) ?? []
-            self = .container(
-                strategy: strategy,
-                children: children,
-                weights: weights,
-                gridRowWeights: gridRowWeights,
-                gridColWeights: gridColWeights
-            )
+            self = .container(strategy: strategy, children: children, weights: weights)
         }
     }
 }

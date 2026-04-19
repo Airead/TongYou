@@ -307,47 +307,6 @@ struct BinaryCoderTests {
         }
     }
 
-    @Test func roundTripLayoutTreeGridRowColWeights() throws {
-        // Customized grid with non-empty gridRowWeights / gridColWeights
-        // must round-trip losslessly — the renderer depends on exact
-        // weight restoration.
-        let panes = [PaneID(), PaneID(), PaneID(), PaneID()]
-        let tree = LayoutTree.container(
-            strategy: .grid,
-            children: panes.map { .leaf($0) },
-            weights: [1.0, 1.0, 1.0, 1.0],
-            gridRowWeights: [1.5, 3.25],
-            gridColWeights: [2.0, 1.0]
-        )
-
-        var encoder = BinaryEncoder()
-        encoder.writeLayoutTree(tree)
-        var decoder = BinaryDecoder(encoder.data)
-        #expect(try decoder.readLayoutTree() == tree)
-    }
-
-    @Test func roundTripLayoutTreeEmptyGridWeightsDefault() throws {
-        // Default auto-balanced grid has no row/col weights; on wire it
-        // still needs the two `UInt32(0)` count prefixes so the format is
-        // consistent regardless of whether the user customized it.
-        let tree = LayoutTree.container(
-            strategy: .grid,
-            children: [.leaf(PaneID()), .leaf(PaneID())],
-            weights: [1.0, 1.0]
-        )
-        var encoder = BinaryEncoder()
-        encoder.writeLayoutTree(tree)
-        var decoder = BinaryDecoder(encoder.data)
-        let decoded = try decoder.readLayoutTree()
-        #expect(decoded == tree)
-        if case .container(_, _, _, let rows, let cols) = decoded {
-            #expect(rows.isEmpty)
-            #expect(cols.isEmpty)
-        } else {
-            Issue.record("expected container")
-        }
-    }
-
     // MARK: - FloatingPaneInfo
 
     @Test func roundTripFloatingPaneInfo() throws {

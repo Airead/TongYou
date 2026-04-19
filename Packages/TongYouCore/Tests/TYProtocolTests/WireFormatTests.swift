@@ -657,47 +657,6 @@ struct WireFormatTests {
         #expect(dKind == kind)
     }
 
-    // MARK: - LayoutTree Codable (JSON persistence)
-
-    @Test func layoutTreeCodableRoundTripWithGridWeights() throws {
-        let panes = [PaneID(), PaneID(), PaneID(), PaneID()]
-        let tree = LayoutTree.container(
-            strategy: .grid,
-            children: panes.map { .leaf($0) },
-            weights: [1, 1, 1, 1],
-            gridRowWeights: [2, 1],
-            gridColWeights: [1, 3]
-        )
-        let data = try JSONEncoder().encode(tree)
-        let decoded = try JSONDecoder().decode(LayoutTree.self, from: data)
-        #expect(decoded == tree)
-    }
-
-    @Test func layoutTreeCodableAcceptsMissingGridWeightsForBackCompat() throws {
-        // Persisted session files written before the grid fields existed
-        // omit `gridRowWeights` / `gridColWeights`. `decodeIfPresent` must
-        // default them to empty so loading doesn't fail.
-        let p1 = PaneID()
-        let p2 = PaneID()
-        // Build the legacy JSON by encoding the leaves the Codable-synthesized
-        // way, then assembling the surrounding container dict without the new
-        // keys.
-        let leaf1Data = try JSONEncoder().encode(LayoutTree.leaf(p1))
-        let leaf2Data = try JSONEncoder().encode(LayoutTree.leaf(p2))
-        let leaf1 = String(data: leaf1Data, encoding: .utf8)!
-        let leaf2 = String(data: leaf2Data, encoding: .utf8)!
-        let json = "{\"type\":\"container\",\"strategy\":\"vertical\",\"children\":[\(leaf1),\(leaf2)],\"weights\":[1,1]}"
-        let decoded = try JSONDecoder().decode(LayoutTree.self, from: Data(json.utf8))
-        guard case .container(let strategy, let children, let weights, let rows, let cols) = decoded else {
-            Issue.record("expected container"); return
-        }
-        #expect(strategy == .vertical)
-        #expect(children.count == 2)
-        #expect(weights == [1, 1])
-        #expect(rows.isEmpty)
-        #expect(cols.isEmpty)
-    }
-
     // MARK: - Unknown Type Codes
 
     @Test func unknownServerTypeThrows() throws {
