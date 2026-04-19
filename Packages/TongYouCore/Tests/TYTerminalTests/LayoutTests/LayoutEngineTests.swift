@@ -325,6 +325,47 @@ struct LayoutEngineTests {
         #expect(rects[c.id] == Rect(x: 50, y: 20, width: 50, height: 20))
     }
 
+    // MARK: - solveRectsReport
+
+    @Test func solveRectsReportNotViolatedWhenAllLeavesMeetMinSize() {
+        let (_, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let tree = container(.vertical, [leafA, leafB], [1, 1])
+        let tab = makeTab(tree)
+        let screen = Rect(x: 0, y: 0, width: 100, height: 40)
+
+        let report = LayoutEngine.solveRectsReport(tab: tab, screenRect: screen)
+        #expect(report.rects.count == 2)
+        #expect(report.violated == false)
+    }
+
+    @Test func solveRectsReportViolatedWhenLeafBelowMinSize() {
+        // Tab shrunk so each child falls under defaultMin (20×3).
+        let (_, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let tree = container(.vertical, [leafA, leafB], [1, 1])
+        let tab = makeTab(tree)
+        // 30 wide → each half is 15 < minSize.width (20).
+        let screen = Rect(x: 0, y: 0, width: 30, height: 10)
+
+        let report = LayoutEngine.solveRectsReport(tab: tab, screenRect: screen)
+        #expect(report.rects.count == 2)
+        #expect(report.violated == true)
+    }
+
+    @Test func solveRectsReportViolatedWhenZoomedScreenBelowMinSize() {
+        let (a, leafA) = leaf()
+        let tree = container(.vertical, [leafA, .leaf(TerminalPane())], [1, 1])
+        var tab = makeTab(tree)
+        tab.zoomedPaneID = a.id
+        // Zoomed pane fills 10×2 — below minSize on both axes.
+        let screen = Rect(x: 0, y: 0, width: 10, height: 2)
+
+        let report = LayoutEngine.solveRectsReport(tab: tab, screenRect: screen)
+        #expect(report.rects == [a.id: screen])
+        #expect(report.violated == true)
+    }
+
     // MARK: - sanitize
 
     @Test func sanitizeLeavesWellFormedTreeUnchanged() {

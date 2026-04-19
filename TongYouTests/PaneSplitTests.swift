@@ -546,6 +546,78 @@ struct PaneSplitTests {
         #expect(downmost?[0] == start[0])
     }
 
+    @Test func masterStackMasterDragClampsToAbsolutePointFloor() {
+        // availableWidth = 200pt → 10% share is 20pt, which is below the
+        // `ContainerLayout.minAxisPoints` (40pt) absolute floor. A fully-left
+        // drag must clamp at 40pt, not 20pt (plan §P5 row 3: "拖不动"
+        // minSize floor should kick in before the pct clamp in a small pane).
+        let start: [CGFloat] = [1.0, 1.0]
+        let availableWidth: CGFloat = 200
+
+        let leftmost = ContainerLayout.masterStackMasterDragWeights(
+            start: start, delta: -10_000, availableWidth: availableWidth
+        )
+        guard let lm = leftmost else {
+            Issue.record("expected non-nil"); return
+        }
+        let leftX = masterColumnWidth(weights: lm, availableWidth: availableWidth)
+        #expect(abs(leftX - ContainerLayout.minAxisPoints) < 0.5)
+
+        let rightmost = ContainerLayout.masterStackMasterDragWeights(
+            start: start, delta: 10_000, availableWidth: availableWidth
+        )
+        guard let rm = rightmost else {
+            Issue.record("expected non-nil"); return
+        }
+        let rightX = masterColumnWidth(weights: rm, availableWidth: availableWidth)
+        #expect(abs(rightX - (availableWidth - ContainerLayout.minAxisPoints)) < 0.5)
+    }
+
+    @Test func masterStackMasterDragRejectsContainerTooNarrowForFloor() {
+        // 60pt container cannot honour 40pt floor on both sides — refuse to
+        // move the divider so neither pane collapses.
+        #expect(ContainerLayout.masterStackMasterDragWeights(
+            start: [1.0, 1.0], delta: 10, availableWidth: 60
+        ) == nil)
+    }
+
+    @Test func masterStackStackDragClampsToAbsolutePointFloor() {
+        // availableHeight = 200, stackSum = 2, pairSum = 2.
+        // weightPerPixel = 2/200 = 0.01. 10% pairSum = 0.2.
+        // minAxisPoints (40) × weightPerPixel = 0.4 — beats pct clamp.
+        let start: [CGFloat] = [1.0, 1.0, 1.0]
+        let availableHeight: CGFloat = 200
+
+        let upmost = ContainerLayout.masterStackStackDragWeights(
+            start: start, stackIndex: 0, delta: -10_000, availableHeight: availableHeight
+        )
+        guard let up = upmost else {
+            Issue.record("expected non-nil"); return
+        }
+        #expect(abs(up[1] - 0.4) < 1e-9)
+        #expect(abs(up[2] - 1.6) < 1e-9)
+        #expect(up[0] == start[0])
+
+        let downmost = ContainerLayout.masterStackStackDragWeights(
+            start: start, stackIndex: 0, delta: 10_000, availableHeight: availableHeight
+        )
+        guard let down = downmost else {
+            Issue.record("expected non-nil"); return
+        }
+        #expect(abs(down[1] - 1.6) < 1e-9)
+        #expect(abs(down[2] - 0.4) < 1e-9)
+        #expect(down[0] == start[0])
+    }
+
+    @Test func masterStackStackDragRejectsPairTooThinForFloor() {
+        // availableHeight 60, stackSum 2 → weightPerPixel 2/60 ≈ 0.0333.
+        // minWeight = 40 × 0.0333 ≈ 1.333, pairSum = 2 → lower 1.333,
+        // upper = 2 − 1.333 ≈ 0.667 < lower → refuse.
+        #expect(ContainerLayout.masterStackStackDragWeights(
+            start: [1.0, 1.0, 1.0], stackIndex: 0, delta: 5, availableHeight: 60
+        ) == nil)
+    }
+
     @Test func masterStackDragRejectsDegenerateInputs() {
         // Too few weights for master drag.
         #expect(ContainerLayout.masterStackMasterDragWeights(

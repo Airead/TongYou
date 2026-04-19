@@ -854,6 +854,19 @@ public enum LayoutEngine {
 
     // MARK: - solveRects
 
+    /// Tree-level solve report: per-pane rects plus a violation flag that is
+    /// `true` when any container produced at least one child below `minSize`
+    /// (plan §P5 row 3: surface so the render/PTY layer can log / clamp).
+    public struct LayoutReport: Equatable, Sendable {
+        public let rects: [UUID: Rect]
+        public let violated: Bool
+
+        public init(rects: [UUID: Rect], violated: Bool) {
+            self.rects = rects
+            self.violated = violated
+        }
+    }
+
     /// Map every leaf pane in the tab to its screen rect by recursively
     /// walking the tree and applying `LayoutDispatch.solve` at each
     /// container. Floating panes are out of scope.
@@ -867,18 +880,43 @@ public enum LayoutEngine {
         minSize: Size = .defaultMin,
         dividerSize: Int = 0
     ) -> [UUID: Rect] {
+        solveRectsReport(
+            tab: tab,
+            screenRect: screenRect,
+            minSize: minSize,
+            dividerSize: dividerSize
+        ).rects
+    }
+
+    /// Same traversal as `solveRects` but also reports whether any container
+    /// along the way produced a child below `minSize`. Use this when the
+    /// caller needs to react to the window being shrunk past the layout
+    /// minimum — e.g. surface a warning log, clamp PTY dimensions, or block
+    /// a resize interaction.
+    public static func solveRectsReport(
+        tab: TerminalTab,
+        screenRect: Rect,
+        minSize: Size = .defaultMin,
+        dividerSize: Int = 0
+    ) -> LayoutReport {
         if let zoomed = tab.zoomedPaneID, tab.paneTree.contains(paneID: zoomed) {
-            return [zoomed: screenRect]
+            // Zoomed pane fills the whole screen; violated only if the screen
+            // itself is below minSize.
+            let violated = screenRect.width < minSize.width
+                        || screenRect.height < minSize.height
+            return LayoutReport(rects: [zoomed: screenRect], violated: violated)
         }
-        var result: [UUID: Rect] = [:]
+        var rects: [UUID: Rect] = [:]
+        var violated = false
         solveInto(
             node: tab.paneTree,
             rect: screenRect,
             minSize: minSize,
             dividerSize: dividerSize,
-            into: &result
+            into: &rects,
+            violated: &violated
         )
-        return result
+        return LayoutReport(rects: rects, violated: violated)
     }
 
     private static func solveInto(
@@ -886,11 +924,15 @@ public enum LayoutEngine {
         rect: Rect,
         minSize: Size,
         dividerSize: Int,
-        into result: inout [UUID: Rect]
+        into result: inout [UUID: Rect],
+        violated: inout Bool
     ) {
         switch node {
         case .leaf(let pane):
             result[pane.id] = rect
+            if rect.width < minSize.width || rect.height < minSize.height {
+                violated = true
+            }
         case .container(let c):
             let solved = LayoutDispatch.solve(
                 container: c,
@@ -898,13 +940,15 @@ public enum LayoutEngine {
                 minSize: minSize,
                 dividerSize: dividerSize
             )
+            if solved.violated { violated = true }
             for (child, childRect) in zip(c.children, solved.rects) {
                 solveInto(
                     node: child,
                     rect: childRect,
                     minSize: minSize,
                     dividerSize: dividerSize,
-                    into: &result
+                    into: &result,
+                    violated: &violated
                 )
             }
         }

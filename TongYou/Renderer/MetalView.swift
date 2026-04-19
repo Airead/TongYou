@@ -67,6 +67,15 @@ final class MetalView: NSView {
 
     // nonisolated(unsafe) because deinit must invalidate without actor hop
     nonisolated(unsafe) private var dragAutoScrollTimer: Timer?
+    /// Pending debounced PTY resize. Divider / window resize fires
+    /// `updateDrawableSize` every drag frame; sending each change straight to
+    /// `TerminalController.resize` means one `ioctl(TIOCSWINSZ)` (and therefore
+    /// one SIGWINCH) per frame. We coalesce by cancelling the prior work and
+    /// scheduling a new one `Self.ptyResizeDebounce` out — the final quiescent
+    /// size reaches the PTY, intermediate frames are discarded.
+    /// Plan §P5 "SIGWINCH 风暴".
+    nonisolated(unsafe) private var pendingPTYResizeWork: DispatchWorkItem?
+    private static let ptyResizeDebounce: TimeInterval = 0.05
     /// Last known drag column (for auto-scroll timer updates).
     private var pendingDragOrigin: (col: Int, row: Int, pixelLocation: NSPoint)?
     private static let dragThresholdSquared: CGFloat = 9  // 3 pixels
@@ -1124,7 +1133,7 @@ final class MetalView: NSView {
         setupTerminalControllerIfNeeded()
 
         if let grid = renderer?.gridSize, let fs = fontSystem {
-            terminalController?.resize(
+            schedulePTYResize(
                 columns: Int(grid.columns),
                 rows: Int(grid.rows),
                 cellWidth: fs.cellSize.width,
@@ -1132,6 +1141,33 @@ final class MetalView: NSView {
             )
         }
         wakeDisplayLink()
+    }
+
+    /// Debounce PTY resize. Metal-layer / renderer updates already happened in
+    /// the caller — this only defers the `TIOCSWINSZ` + SIGWINCH, so visuals
+    /// remain in sync but child processes see only the final stable size.
+    private func schedulePTYResize(
+        columns: Int,
+        rows: Int,
+        cellWidth: UInt32,
+        cellHeight: UInt32
+    ) {
+        pendingPTYResizeWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.pendingPTYResizeWork = nil
+            self.terminalController?.resize(
+                columns: columns,
+                rows: rows,
+                cellWidth: cellWidth,
+                cellHeight: cellHeight
+            )
+        }
+        pendingPTYResizeWork = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.ptyResizeDebounce,
+            execute: work
+        )
     }
 
     private func setupTerminalControllerIfNeeded() {
@@ -1179,6 +1215,8 @@ final class MetalView: NSView {
     deinit {
         cursorBlinkTimer?.invalidate()
         dragAutoScrollTimer?.invalidate()
+        pendingPTYResizeWork?.cancel()
+        pendingPTYResizeWork = nil
         displayLink?.invalidate()
         displayLink = nil
     }
