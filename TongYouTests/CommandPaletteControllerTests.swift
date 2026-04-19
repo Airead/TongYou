@@ -187,4 +187,53 @@ struct CommandPaletteControllerTests {
         controller.open()
         #expect(controller.commit(mode: .plain) == nil)
     }
+
+    // MARK: - SSH ad-hoc fallback (Phase 6)
+
+    @Test func sshAdHocAppearsWhenFuzzyIsEmpty() {
+        let controller = CommandPaletteController()
+        controller.sshCandidates = [
+            PaletteCandidate(primaryText: "db1", scope: .ssh),
+        ]
+        controller.sshAdHocBuilder = { query in
+            PaletteCandidate(
+                primaryText: "Connect ad-hoc: \(query)",
+                scope: .ssh
+            )
+        }
+        controller.open()
+        controller.input = "totally-novel"
+
+        #expect(controller.rows.count == 1)
+        #expect(controller.rows[0].candidate.primaryText == "Connect ad-hoc: totally-novel")
+    }
+
+    @Test func sshAdHocSkippedWhenBuilderReturnsNil() {
+        let controller = CommandPaletteController()
+        controller.sshCandidates = [
+            PaletteCandidate(primaryText: "db1", scope: .ssh),
+        ]
+        controller.sshAdHocBuilder = { _ in nil }
+        controller.open()
+        controller.input = "nope"
+
+        #expect(controller.rows.isEmpty)
+    }
+
+    @Test func sshAdHocOnlyFiresOnEmptyFuzzy() {
+        // Even when the builder is set, a matching candidate suppresses
+        // the ad-hoc row — the user should pick the real one.
+        let controller = CommandPaletteController()
+        controller.sshCandidates = [
+            PaletteCandidate(primaryText: "db1", scope: .ssh),
+        ]
+        controller.sshAdHocBuilder = { q in
+            PaletteCandidate(primaryText: "Connect ad-hoc: \(q)", scope: .ssh)
+        }
+        controller.open()
+        controller.input = "db"
+
+        #expect(controller.rows.count == 1)
+        #expect(controller.rows[0].candidate.primaryText == "db1")
+    }
 }

@@ -29,6 +29,12 @@ struct TerminalWindowView: View {
     @State private var showingSessionPicker = false
     @State private var renamingSessionIndex: Int?
     @State private var commandPalette = CommandPaletteController()
+    /// Shared `SSHLauncher` for the command palette's SSH scope. Built once
+    /// per window so the history and on-disk rule / ssh_config state stay
+    /// in sync across palette opens. Wired in `init` because it needs
+    /// closures that reference the `sessionManager`.
+    @State private var sshLauncher: SSHLauncher
+    @State private var sshHistory = SSHHistory()
 
     /// IDs of panes whose in-pane search bar is currently open. Updated via
     /// `MetalView.onSearchBarToggled`. Consumed by `zoomedPaneView` to hide
@@ -51,9 +57,64 @@ struct TerminalWindowView: View {
     init() {
         let loader = ConfigLoader()
         _configLoader = State(initialValue: loader)
-        _sessionManager = State(initialValue: SessionManager(
-            profileLoader: loader.profileLoader
+        let manager = SessionManager(profileLoader: loader.profileLoader)
+        _sessionManager = State(initialValue: manager)
+        let history = SSHHistory()
+        _sshHistory = State(initialValue: history)
+        _sshLauncher = State(initialValue: SSHLauncher(
+            history: history,
+            validateProfile: { [weak manager] templateID, vars in
+                try manager?.tryResolveProfile(id: templateID, variables: vars)
+            },
+            spawn: { [weak manager] templateID, vars, placement in
+                guard let manager else { return }
+                try Self.spawnSSH(
+                    manager: manager,
+                    templateID: templateID,
+                    variables: vars,
+                    placement: placement
+                )
+            }
         ))
+    }
+
+    /// Launch an SSH session with the resolved template + variables at the
+    /// requested placement. Split into a static helper so `init` can
+    /// capture it without touching `self` (which is a struct; @State isn't
+    /// initialised yet at closure-capture time).
+    @MainActor
+    private static func spawnSSH(
+        manager: SessionManager,
+        templateID: String,
+        variables: [String: String],
+        placement: SSHPlacement
+    ) throws {
+        switch placement {
+        case .newTab:
+            _ = manager.createTab(
+                profileID: templateID,
+                variables: variables
+            )
+        case .splitRight(let parent):
+            _ = manager.splitPane(
+                parentPaneID: parent,
+                direction: .vertical,
+                profileID: templateID,
+                variables: variables
+            )
+        case .splitBelow(let parent), .currentTab(let parent):
+            _ = manager.splitPane(
+                parentPaneID: parent,
+                direction: .horizontal,
+                profileID: templateID,
+                variables: variables
+            )
+        case .floatPane:
+            _ = manager.createFloatingPane(
+                profileID: templateID,
+                variables: variables
+            )
+        }
     }
 
     var body: some View {
@@ -252,12 +313,71 @@ struct TerminalWindowView: View {
                     controller: commandPalette,
                     themeForeground: configLoader.config.foreground,
                     themeBackground: configLoader.config.background,
-                    // Phase 5: commit paths only dismiss. Phase 6–8 plug in
-                    // SSH spawn / session switch / profile open here.
-                    onCommit: { _ in commandPalette.close() },
+                    onCommit: { mode in handlePaletteCommit(mode: mode) },
                     onDismiss: { commandPalette.close() }
                 )
             }
+        }
+    }
+
+    /// Dispatch a palette commit. Phase 6 handles the SSH scope's single-row
+    /// commit for the four Enter variants; other scopes fall through to a
+    /// simple close (they land in Phases 7/8).
+    private func handlePaletteCommit(mode: PaletteEnterMode) {
+        guard let committed = commandPalette.commit(mode: mode) else {
+            commandPalette.close()
+            return
+        }
+        switch commandPalette.scope {
+        case .ssh:
+            handleSSHCommit(rows: committed.rows, mode: mode)
+        default:
+            // Phases 7–8 plug in non-SSH scopes; until then, just close.
+            commandPalette.close()
+        }
+    }
+
+    /// Phase 6 single-row SSH commit. Split variants require a parent
+    /// pane; when no pane is focused we degrade to `newTab` so Enter is
+    /// never a no-op after typing a host.
+    private func handleSSHCommit(rows: [PaletteRow], mode: PaletteEnterMode) {
+        guard let first = rows.first,
+              let resolution = first.candidate.sshResolution else {
+            commandPalette.close()
+            return
+        }
+        let placement = sshPlacement(for: mode)
+        commandPalette.close()
+        Task { @MainActor in
+            do {
+                try await sshLauncher.commit(
+                    resolution: resolution,
+                    placement: placement
+                )
+                rewirePaletteForSSH()
+            } catch let err as SSHLauncherError {
+                toastPresenter.show("SSH: \(err.localizedDescription)")
+            } catch {
+                toastPresenter.show("SSH: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Map Enter + modifier to a Phase 6 placement. Split variants fall
+    /// back to `newTab` when nothing is focused (e.g. a freshly launched
+    /// window with only a zombie pane).
+    private func sshPlacement(for mode: PaletteEnterMode) -> SSHPlacement {
+        switch mode {
+        case .plain:
+            return .newTab
+        case .commandEnter:
+            if let parent = focusManager.focusedPaneID { return .splitRight(parentPaneID: parent) }
+            return .newTab
+        case .shiftEnter:
+            if let parent = focusManager.focusedPaneID { return .splitBelow(parentPaneID: parent) }
+            return .newTab
+        case .optionEnter:
+            return .floatPane
         }
     }
 
@@ -903,10 +1023,89 @@ struct TerminalWindowView: View {
         case .clearPaneSelection:
             clearPaneSelection()
         case .showCommandPalette:
-            commandPalette.open()
+            openCommandPalette(session: false)
         case .showSessionPalette:
-            commandPalette.openSessionScope()
+            openCommandPalette(session: true)
         }
+    }
+
+    /// Refresh the palette's SSH-scope data from disk, install the ad-hoc
+    /// fallback, then open. When `session` is true, the palette opens with
+    /// the `s ` prefix pre-filled (Phase 8 will plug in the real list).
+    private func openCommandPalette(session: Bool) {
+        Task { @MainActor in
+            await sshLauncher.reload(
+                ruleFileURL: ConfigLoader.sshRulesPath(),
+                sshConfigURL: SSHConfigHosts.defaultURL
+            )
+            rewirePaletteForSSH()
+            if session {
+                commandPalette.openSessionScope()
+            } else {
+                commandPalette.open()
+            }
+        }
+    }
+
+    /// Convert the launcher's current candidate list into `PaletteCandidate`
+    /// rows and install the ad-hoc fallback builder. Called whenever the
+    /// palette opens or the launcher's history changes after a successful
+    /// spawn.
+    private func rewirePaletteForSSH() {
+        commandPalette.sshCandidates = sshLauncher.candidates.map(paletteCandidate(for:))
+        commandPalette.sshAdHocBuilder = { [sshLauncher] query in
+            let adHoc = SSHCandidate(target: query, hostname: nil, isAdHoc: true)
+            let resolution = sshLauncher.resolve(candidate: adHoc)
+            return Self.paletteCandidate(
+                for: adHoc,
+                resolution: resolution,
+                backgroundHex: { template in
+                    configLoader.profileLoader.resolvedLive(id: template).scalars["background"]
+                }
+            )
+        }
+    }
+
+    /// Convert one launcher `SSHCandidate` into a palette row, capturing the
+    /// template choice + background swatch in the process.
+    private func paletteCandidate(for candidate: SSHCandidate) -> PaletteCandidate {
+        let resolution = sshLauncher.resolve(candidate: candidate)
+        return Self.paletteCandidate(
+            for: candidate,
+            resolution: resolution,
+            backgroundHex: { template in
+                configLoader.profileLoader.resolvedLive(id: template).scalars["background"]
+            }
+        )
+    }
+
+    /// Shared conversion used by both the normal candidate path and the
+    /// ad-hoc builder. Kept static so the ad-hoc closure doesn't capture
+    /// `self` implicitly.
+    @MainActor
+    private static func paletteCandidate(
+        for candidate: SSHCandidate,
+        resolution: SSHResolution,
+        backgroundHex: (String) -> String?
+    ) -> PaletteCandidate {
+        let primary: String
+        if candidate.isAdHoc {
+            primary = "Connect ad-hoc: \(candidate.target)"
+        } else {
+            primary = candidate.target
+        }
+        let hex = backgroundHex(resolution.templateID)
+        let subtitle: String = {
+            if let hex { return "\(resolution.templateID) · #\(hex)" }
+            return resolution.templateID
+        }()
+        return PaletteCandidate(
+            primaryText: primary,
+            secondaryText: subtitle,
+            scope: .ssh,
+            accentHex: hex,
+            sshResolution: resolution
+        )
     }
 
     /// Drop the active tab's multi-pane selection (and stop broadcasting if

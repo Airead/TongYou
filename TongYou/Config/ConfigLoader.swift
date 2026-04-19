@@ -170,6 +170,13 @@ final class ConfigLoader {
         configDirectory().appendingPathComponent("profiles")
     }
 
+    /// Returns the SSH template rules path (`~/.config/tongyou/ssh-rules.txt`).
+    /// The file is optional; `SSHRuleMatcher.load` returns an empty matcher
+    /// when it doesn't exist (see plan Phase 2 / Phase 9).
+    static func sshRulesPath() -> URL {
+        configDirectory().appendingPathComponent("ssh-rules.txt")
+    }
+
     // MARK: - System Config Generation
 
     /// Load the system config template from the bundle or source directory.

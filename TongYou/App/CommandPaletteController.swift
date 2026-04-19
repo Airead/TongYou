@@ -57,17 +57,30 @@ struct PaletteCandidate: Identifiable, Equatable {
     let primaryText: String
     let secondaryText: String?
     let scope: PaletteScope
+    /// Optional accent color rendered as a small swatch next to the
+    /// secondary text. SSH rows use it to show the template's background
+    /// ("this will turn red") before Enter is pressed (plan Phase 6.5).
+    let accentHex: String?
+    /// Opaque per-scope payload. SSH scope stores the full `SSHResolution`
+    /// here so the commit path can spawn without re-resolving. Kept as
+    /// `Sendable`/`Equatable`-friendly optional to avoid dragging other
+    /// scopes into SSH types.
+    let sshResolution: SSHResolution?
 
     init(
         id: UUID = UUID(),
         primaryText: String,
         secondaryText: String? = nil,
-        scope: PaletteScope
+        scope: PaletteScope,
+        accentHex: String? = nil,
+        sshResolution: SSHResolution? = nil
     ) {
         self.id = id
         self.primaryText = primaryText
         self.secondaryText = secondaryText
         self.scope = scope
+        self.accentHex = accentHex
+        self.sshResolution = sshResolution
     }
 }
 
@@ -126,6 +139,12 @@ final class CommandPaletteController {
     var sshCandidates: [PaletteCandidate] = [] {
         didSet { refreshRows(resetHighlight: true) }
     }
+
+    /// Phase 6 hook: when `scope == .ssh`, the fuzzy match yields no rows,
+    /// and `query` is non-empty, the palette asks this closure for a
+    /// synthesised "Connect ad-hoc: <query>" candidate. Returning nil
+    /// leaves the list empty (the "No matches" placeholder renders).
+    var sshAdHocBuilder: ((_ query: String) -> PaletteCandidate?)?
 
     /// Candidates for the session scope (Phase 8 will feed this from
     /// SessionManager). Kept here so the Phase 5 controller can be tested
@@ -220,7 +239,23 @@ final class CommandPaletteController {
         query = parsed.query
         let pool = candidates(for: scope)
         let ranked = FuzzyMatcher.rank(query: query, in: pool, extract: { $0.primaryText })
-        rows = ranked.map { PaletteRow(candidate: $0.candidate, match: $0.match) }
+        var built = ranked.map { PaletteRow(candidate: $0.candidate, match: $0.match) }
+
+        // SSH ad-hoc fallback (Phase 6): when no real candidate matched
+        // and the user typed something, offer a synthesised row so Enter
+        // still spawns against the literal input.
+        if built.isEmpty, scope == .ssh, !query.isEmpty,
+           let adHoc = sshAdHocBuilder?(query) {
+            // Empty match = entire string is "highlighted" trivially;
+            // we pass an empty index list and render it with the default
+            // style so the row is visually distinct from a ranked hit.
+            built = [PaletteRow(
+                candidate: adHoc,
+                match: FuzzyMatcher.Match(score: 0, matchedIndices: [])
+            )]
+        }
+
+        rows = built
         if resetHighlight {
             highlightedIndex = rows.isEmpty ? -1 : 0
         } else if highlightedIndex >= rows.count {

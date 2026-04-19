@@ -547,6 +547,7 @@ final class SessionManager {
         title: String = "shell",
         profileID: String? = nil,
         overrides: [String] = [],
+        variables: [String: String] = [:],
         initialWorkingDirectory: String? = nil
     ) -> UUID? {
         let targetIndex: Int
@@ -565,6 +566,7 @@ final class SessionManager {
             let bundle = resolveRemoteStartupBundle(
                 profileID: profileID ?? TerminalPane.defaultProfileID,
                 overrides: overrides,
+                variables: variables,
                 initialWorkingDirectory: initialWorkingDirectory
             )
             remoteClient?.createTab(
@@ -583,6 +585,7 @@ final class SessionManager {
         let initialPane = createPane(
             profileID: effectiveProfileID,
             overrides: overrides,
+            variables: variables,
             initialWorkingDirectory: initialWorkingDirectory
         )
         let tab = TerminalTab(title: title, initialPane: initialPane)
@@ -841,6 +844,7 @@ final class SessionManager {
         direction: SplitDirection,
         profileID: String? = nil,
         overrides: [String] = [],
+        variables: [String: String] = [:],
         initialWorkingDirectory: String? = nil
     ) -> UUID? {
         let targetIndex: Int
@@ -865,6 +869,7 @@ final class SessionManager {
             let bundle = resolveRemoteStartupBundle(
                 profileID: inheritedProfileID,
                 overrides: overrides,
+                variables: variables,
                 initialWorkingDirectory: initialWorkingDirectory
             )
             remoteClient?.splitPane(
@@ -884,6 +889,7 @@ final class SessionManager {
         let newPane = createPane(
             profileID: inheritedProfileID,
             overrides: overrides,
+            variables: variables,
             initialWorkingDirectory: initialWorkingDirectory
         )
 
@@ -1193,6 +1199,7 @@ final class SessionManager {
     func createFloatingPane(
         profileID: String? = nil,
         overrides: [String] = [],
+        variables: [String: String] = [:],
         initialWorkingDirectory: String? = nil
     ) -> UUID? {
         guard sessions.indices.contains(activeSessionIndex),
@@ -1213,6 +1220,7 @@ final class SessionManager {
             let bundle = resolveRemoteStartupBundle(
                 profileID: effectiveProfileID,
                 overrides: overrides,
+                variables: variables,
                 initialWorkingDirectory: initialWorkingDirectory
             )
             remoteClient?.createFloatingPane(
@@ -1235,6 +1243,7 @@ final class SessionManager {
         let pane = createPane(
             profileID: effectiveProfileID,
             overrides: overrides,
+            variables: variables,
             initialWorkingDirectory: initialWorkingDirectory
         )
         let floating = FloatingPane(pane: pane, frame: activeFloatingPanes.nextCascadedFrame(), zIndex: activeFloatingPanes.nextZIndex)
@@ -1326,6 +1335,17 @@ final class SessionManager {
         _ = try profileMerger.resolve(profileID: id, overrides: overrides)
     }
 
+    /// Probe `profileID` + `variables` without building a pane. Used by the
+    /// SSH palette (Phase 6) to surface `.undefinedVariable` etc. before it
+    /// invokes `createTab` (which would silently fall back to `default`).
+    func tryResolveProfile(
+        id: String,
+        overrides: [String] = [],
+        variables: [String: String]
+    ) throws {
+        _ = try profileMerger.resolve(profileID: id, overrides: overrides, variables: variables)
+    }
+
     /// Resolved pieces the remote-create path needs to send over the wire.
     /// `profileID` is the id the server should record as a label (may fall
     /// back to `default` if the requested id could not be resolved);
@@ -1348,6 +1368,7 @@ final class SessionManager {
     func resolveRemoteStartupBundle(
         profileID: String?,
         overrides: [String],
+        variables: [String: String] = [:],
         initialWorkingDirectory: String?
     ) -> RemoteStartupBundle {
         let requestedID: String = {
@@ -1363,7 +1384,7 @@ final class SessionManager {
 
         let resolved: ResolvedProfile
         do {
-            resolved = try profileMerger.resolve(profileID: requestedID, overrides: overrides)
+            resolved = try profileMerger.resolve(profileID: requestedID, overrides: overrides, variables: variables)
         } catch {
             NSLog("SessionManager: remote profile '%@' resolve failed (%@); sending bare request",
                   requestedID, String(describing: error))
@@ -1409,6 +1430,7 @@ final class SessionManager {
     func createPane(
         profileID: String? = nil,
         overrides: [String] = [],
+        variables: [String: String] = [:],
         initialWorkingDirectory: String? = nil
     ) -> TerminalPane {
         let requestedID: String = {
@@ -1424,7 +1446,7 @@ final class SessionManager {
 
         let resolved: ResolvedProfile
         do {
-            resolved = try profileMerger.resolve(profileID: requestedID, overrides: overrides)
+            resolved = try profileMerger.resolve(profileID: requestedID, overrides: overrides, variables: variables)
         } catch {
             NSLog("SessionManager: profile '%@' resolve failed (%@); falling back to default",
                   requestedID, String(describing: error))

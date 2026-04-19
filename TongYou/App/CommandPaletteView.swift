@@ -166,6 +166,20 @@ struct CommandPaletteView: View {
     /// expected to narrow with the query.
     private var rowsListMaxHeight: CGFloat { 8 * 30 + 8 }
 
+    /// Parse a "rrggbb" / "#rrggbb" string into a SwiftUI Color. Returns
+    /// nil for malformed hex so the swatch simply does not render.
+    /// `nonisolated` so SwiftUI can pass it through `flatMap` in a
+    /// synchronous context.
+    nonisolated static func colorFromHex(_ hex: String) -> Color? {
+        var cleaned = hex
+        if cleaned.hasPrefix("#") { cleaned.removeFirst() }
+        guard cleaned.count == 6, let value = UInt32(cleaned, radix: 16) else { return nil }
+        let r = Double((value >> 16) & 0xff) / 255
+        let g = Double((value >> 8) & 0xff) / 255
+        let b = Double(value & 0xff) / 255
+        return Color(red: r, green: g, blue: b)
+    }
+
     @ViewBuilder
     private func paletteRowView(row: PaletteRow, index: Int, fgColor: Color) -> some View {
         let isHighlighted = controller.highlightedIndex == index
@@ -186,6 +200,16 @@ struct CommandPaletteView: View {
                 .lineLimit(1)
 
             Spacer(minLength: 8)
+
+            if let accent = row.candidate.accentHex.flatMap(Self.colorFromHex) {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(accent)
+                    .frame(width: 12, height: 12)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 2)
+                            .stroke(fgColor.opacity(0.35), lineWidth: 0.5)
+                    )
+            }
 
             if let subtitle = row.candidate.secondaryText, !subtitle.isEmpty {
                 Text(subtitle)
