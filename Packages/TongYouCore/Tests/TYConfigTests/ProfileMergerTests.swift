@@ -453,6 +453,167 @@ struct ProfileMergerTests {
         #expect(resolved.live.scalars["theme"] == "base-theme")
     }
 
+    // MARK: - Variable expansion
+
+    @Test func variablesExpandInScalars() throws {
+        let env = try makeEnv { dir in
+            try self.write(dir: dir, id: "p", """
+            command = /usr/bin/${TOOL}
+            cwd = /home/${USER}
+            """)
+        }
+
+        let resolved = try env.merger.resolve(
+            profileID: "p",
+            variables: ["TOOL": "ssh", "USER": "alice"]
+        )
+        #expect(resolved.startup.command == "/usr/bin/ssh")
+        #expect(resolved.startup.cwd == "/home/alice")
+    }
+
+    @Test func variablesExpandInLiveScalars() throws {
+        let env = try makeEnv { dir in
+            try self.write(dir: dir, id: "p", """
+            background = ${BG}
+            """)
+        }
+
+        let resolved = try env.merger.resolve(
+            profileID: "p",
+            variables: ["BG": "1a0a0a"]
+        )
+        #expect(resolved.live.scalars["background"] == "1a0a0a")
+    }
+
+    @Test func variablesExpandInListItems() throws {
+        let env = try makeEnv { dir in
+            try self.write(dir: dir, id: "p", """
+            args = -t
+            args = ${USER}@${HOST}
+            """)
+        }
+
+        let resolved = try env.merger.resolve(
+            profileID: "p",
+            variables: ["USER": "bob", "HOST": "db1.example.com"]
+        )
+        #expect(resolved.startup.args == ["-t", "bob@db1.example.com"])
+    }
+
+    @Test func variablesExpandInEnvValues() throws {
+        let env = try makeEnv { dir in
+            try self.write(dir: dir, id: "p", """
+            env = HOSTNAME=${HOST}
+            env = ${HOST}=literal-key
+            """)
+        }
+
+        let resolved = try env.merger.resolve(
+            profileID: "p",
+            variables: ["HOST": "db1.example.com"]
+        )
+        let dict = Dictionary(uniqueKeysWithValues: resolved.startup.env.map { ($0.key, $0.value) })
+        #expect(dict["HOSTNAME"] == "db1.example.com")
+        // Env keys are not expanded — the literal `${HOST}` key stays as-is.
+        #expect(dict["${HOST}"] == "literal-key")
+    }
+
+    @Test func undefinedVariableThrows() throws {
+        let env = try makeEnv { dir in
+            try self.write(dir: dir, id: "p", """
+            command = /usr/bin/ssh
+            args = ${HOST}
+            """)
+        }
+
+        #expect(throws: ProfileResolveError.self) {
+            try env.merger.resolve(profileID: "p", variables: [:])
+        }
+    }
+
+    @Test func dollarEscape() throws {
+        let env = try makeEnv { dir in
+            try self.write(dir: dir, id: "p", """
+            command = $$HOME/bin/run
+            args = cost: $$5
+            args = ${VAL}
+            args = $5
+            args = ${
+            args = ${}
+            """)
+        }
+
+        let resolved = try env.merger.resolve(
+            profileID: "p",
+            variables: ["VAL": "ok"]
+        )
+        #expect(resolved.startup.command == "$HOME/bin/run")
+        #expect(resolved.startup.args == ["cost: $5", "ok", "$5", "${", "${}"])
+    }
+
+    @Test func variableNameIsCaseSensitive() throws {
+        let env = try makeEnv { dir in
+            try self.write(dir: dir, id: "p", "command = ${HOST}")
+        }
+
+        // Only lowercase `host` is defined — uppercase `HOST` must throw.
+        #expect(throws: ProfileResolveError.self) {
+            try env.merger.resolve(profileID: "p", variables: ["host": "foo"])
+        }
+    }
+
+    @Test func extendsChainVariables() throws {
+        let env = try makeEnv { dir in
+            try self.write(dir: dir, id: "base", """
+            command = /usr/bin/ssh
+            args = -t
+            args = ${HOST}
+            """)
+            try self.write(dir: dir, id: "leaf", """
+            extends = base
+            env = HOSTNAME=${HOST}
+            """)
+        }
+
+        let resolved = try env.merger.resolve(
+            profileID: "leaf",
+            variables: ["HOST": "db1.example.com"]
+        )
+        #expect(resolved.startup.command == "/usr/bin/ssh")
+        #expect(resolved.startup.args == ["-t", "db1.example.com"])
+        let dict = Dictionary(uniqueKeysWithValues: resolved.startup.env.map { ($0.key, $0.value) })
+        #expect(dict["HOSTNAME"] == "db1.example.com")
+    }
+
+    @Test func overrideCanReferenceVariable() throws {
+        let env = try makeEnv { dir in
+            try self.write(dir: dir, id: "p", "args = placeholder")
+        }
+
+        let resolved = try env.merger.resolve(
+            profileID: "p",
+            overrides: ["args = ${HOST}"],
+            variables: ["HOST": "db1.example.com"]
+        )
+        #expect(resolved.startup.args == ["db1.example.com"])
+    }
+
+    @Test func noVariablesUsedKeepsExistingBehavior() throws {
+        // Resolving without passing `variables:` (default empty) must not
+        // throw for profiles that happen to contain no `${…}` placeholders.
+        let env = try makeEnv { dir in
+            try self.write(dir: dir, id: "p", """
+            command = /usr/bin/ssh
+            args = -t
+            args = db1.example.com
+            """)
+        }
+
+        let resolved = try env.merger.resolve(profileID: "p")
+        #expect(resolved.startup.command == "/usr/bin/ssh")
+        #expect(resolved.startup.args == ["-t", "db1.example.com"])
+    }
+
     // MARK: - Helpers
 
     private struct Env {

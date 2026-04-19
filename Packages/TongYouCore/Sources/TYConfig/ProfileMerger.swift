@@ -6,6 +6,7 @@ public enum ProfileResolveError: Error, CustomStringConvertible, Sendable {
     case circularExtends(chain: [String])
     case extendsDepthExceeded(chain: [String])
     case invalidOverrideLine(index: Int, line: String)
+    case undefinedVariable(name: String)
 
     public var description: String {
         switch self {
@@ -17,6 +18,8 @@ public enum ProfileResolveError: Error, CustomStringConvertible, Sendable {
             return "Profile extends depth exceeded: \(chain.joined(separator: " -> "))"
         case .invalidOverrideLine(let index, let line):
             return "Invalid override line at index \(index): '\(line)'"
+        case .undefinedVariable(let name):
+            return "Undefined variable in profile: '${\(name)}'"
         }
     }
 }
@@ -37,9 +40,16 @@ public struct ProfileMerger: Sendable {
     /// Resolve `profileID` against the current raw profiles and the given
     /// call-site overrides (one `key = value` line each, parsed with the same
     /// semantics as a profile file).
+    ///
+    /// `variables` feeds `${NAME}` placeholders in scalar values, list items,
+    /// and map values (including env values). Map sub-keys / env keys are not
+    /// expanded. `$$` escapes to a literal `$`. Unknown `${NAME}` throws
+    /// `.undefinedVariable` so misconfiguration fails loudly instead of, say,
+    /// SSH-ing to a literal `${HOST}`.
     public func resolve(
         profileID: String,
-        overrides: [String] = []
+        overrides: [String] = [],
+        variables: [String: String] = [:]
     ) throws -> ResolvedProfile {
         let layers = try buildExtendsChain(rootID: profileID)
         let overrideEntries = try parseOverrides(overrides)
@@ -61,7 +71,9 @@ public struct ProfileMerger: Sendable {
             }
         }
 
-        return accumulator.build(profileID: profileID, warnings: warnings)
+        var resolved = accumulator.build(profileID: profileID, warnings: warnings)
+        try Self.expandVariables(in: &resolved, variables: variables)
+        return resolved
     }
 
     // MARK: - Extends chain
@@ -202,6 +214,156 @@ public struct ProfileMerger: Sendable {
 
             acc.setMapEntry(key, subKey: resolvedSubKey, value: resolvedValue)
         }
+    }
+
+    // MARK: - Variable expansion
+
+    private static func expandVariables(
+        in resolved: inout ResolvedProfile,
+        variables: [String: String]
+    ) throws {
+        try expandStartup(&resolved.startup, variables: variables)
+        try expandLive(&resolved.live, variables: variables)
+    }
+
+    private static func expandStartup(
+        _ s: inout ResolvedStartupFields,
+        variables: [String: String]
+    ) throws {
+        if let v = s.command { s.command = try expand(v, variables: variables) }
+        if let v = s.cwd { s.cwd = try expand(v, variables: variables) }
+        if let v = s.closeOnExit { s.closeOnExit = try expand(v, variables: variables) }
+        if let v = s.initialX { s.initialX = try expand(v, variables: variables) }
+        if let v = s.initialY { s.initialY = try expand(v, variables: variables) }
+        if let v = s.initialWidth { s.initialWidth = try expand(v, variables: variables) }
+        if let v = s.initialHeight { s.initialHeight = try expand(v, variables: variables) }
+
+        var newArgs: [String] = []
+        newArgs.reserveCapacity(s.args.count)
+        for arg in s.args {
+            newArgs.append(try expand(arg, variables: variables))
+        }
+        s.args = newArgs
+
+        var newEnv: [(key: String, value: String)] = []
+        newEnv.reserveCapacity(s.env.count)
+        for pair in s.env {
+            newEnv.append((key: pair.key, value: try expand(pair.value, variables: variables)))
+        }
+        s.env = newEnv
+    }
+
+    private static func expandLive(
+        _ live: inout ResolvedLiveFields,
+        variables: [String: String]
+    ) throws {
+        var newScalars: [String: String] = [:]
+        newScalars.reserveCapacity(live.scalars.count)
+        for (k, v) in live.scalars {
+            newScalars[k] = try expand(v, variables: variables)
+        }
+        live.scalars = newScalars
+
+        var newLists: [String: [String]] = [:]
+        newLists.reserveCapacity(live.lists.count)
+        for (k, list) in live.lists {
+            var items: [String] = []
+            items.reserveCapacity(list.count)
+            for v in list {
+                items.append(try expand(v, variables: variables))
+            }
+            newLists[k] = items
+        }
+        live.lists = newLists
+
+        var newMaps: [String: [String: String]] = [:]
+        newMaps.reserveCapacity(live.maps.count)
+        for (canonicalKey, table) in live.maps {
+            var newTable: [String: String] = [:]
+            newTable.reserveCapacity(table.count)
+            for (subKey, v) in table {
+                newTable[subKey] = try expand(v, variables: variables)
+            }
+            newMaps[canonicalKey] = newTable
+        }
+        live.maps = newMaps
+    }
+
+    /// Expand `${NAME}` placeholders in `s`. `$$` escapes to a literal `$`.
+    /// A `$` that is not part of `${NAME}` or `$$` is preserved verbatim
+    /// (e.g. `$5`, `${`, `${}`). Variable names are case-sensitive and must
+    /// match `[A-Za-z_][A-Za-z0-9_]*`; a well-formed `${NAME}` whose key is
+    /// missing from `variables` throws `.undefinedVariable`.
+    private static func expand(
+        _ s: String,
+        variables: [String: String]
+    ) throws -> String {
+        if !s.contains("$") { return s }
+
+        var result = ""
+        result.reserveCapacity(s.count)
+        var i = s.startIndex
+        while i < s.endIndex {
+            let ch = s[i]
+            if ch != "$" {
+                result.append(ch)
+                i = s.index(after: i)
+                continue
+            }
+            let next = s.index(after: i)
+            if next == s.endIndex {
+                // Trailing lone $
+                result.append("$")
+                i = next
+                continue
+            }
+            let nc = s[next]
+            if nc == "$" {
+                result.append("$")
+                i = s.index(after: next)
+                continue
+            }
+            if nc == "{" {
+                let nameStart = s.index(after: next)
+                var j = nameStart
+                while j < s.endIndex && s[j] != "}" {
+                    j = s.index(after: j)
+                }
+                if j < s.endIndex {
+                    let name = String(s[nameStart..<j])
+                    if isValidVariableName(name) {
+                        guard let value = variables[name] else {
+                            throw ProfileResolveError.undefinedVariable(name: name)
+                        }
+                        result.append(value)
+                        i = s.index(after: j)
+                        continue
+                    }
+                }
+                // Unterminated or invalid name → keep literally.
+            }
+            // Plain $ followed by something we don't special-case.
+            result.append("$")
+            i = next
+        }
+        return result
+    }
+
+    private static func isValidVariableName(_ name: String) -> Bool {
+        guard !name.isEmpty else { return false }
+        for (idx, c) in name.enumerated() {
+            guard let a = c.asciiValue else { return false }
+            let isUpper = a >= 0x41 && a <= 0x5A
+            let isLower = a >= 0x61 && a <= 0x7A
+            let isDigit = a >= 0x30 && a <= 0x39
+            let isUnderscore = a == 0x5F
+            if idx == 0 {
+                if !(isUpper || isLower || isUnderscore) { return false }
+            } else {
+                if !(isUpper || isLower || isDigit || isUnderscore) { return false }
+            }
+        }
+        return true
     }
 }
 
