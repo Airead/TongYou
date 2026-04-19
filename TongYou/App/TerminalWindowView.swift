@@ -1177,19 +1177,15 @@ struct TerminalWindowView: View {
         case .clearPaneSelection:
             clearPaneSelection()
         case .showCommandPalette:
-            openCommandPalette(session: false)
-        case .showSessionPalette:
-            openCommandPalette(session: true)
+            openCommandPalette()
         }
     }
 
     /// Refresh the palette's data sources (SSH history / rules / ssh_config
-    /// + session list) and open. When `session` is true, the palette opens
-    /// with the `s ` prefix pre-filled so Phase 8's session scope is active
-    /// out of the gate; otherwise the default SSH scope is shown. Either
-    /// scope's prefix remains reachable through normal typing — the flag
-    /// only picks the starting scope.
-    private func openCommandPalette(session: Bool) {
+    /// + session list) and open. The palette lands in session scope by
+    /// default; typing `ssh <host>` / `p <profile>` / `t <tab>` / `> cmd`
+    /// switches scopes from inside the input.
+    private func openCommandPalette() {
         Task { @MainActor in
             await sshLauncher.reload(
                 ruleFileURL: ConfigLoader.sshRulesPath(),
@@ -1197,11 +1193,7 @@ struct TerminalWindowView: View {
             )
             rewirePaletteForSSH()
             rewirePaletteForSessions()
-            if session {
-                commandPalette.openSessionScope()
-            } else {
-                commandPalette.open()
-            }
+            commandPalette.open()
         }
     }
 

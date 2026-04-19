@@ -9,9 +9,10 @@ struct CommandPaletteControllerTests {
     // MARK: - Scope parsing
 
     @Test func paletteScopeFromPrefix() {
-        // Default scope is SSH.
-        #expect(PaletteScope.parse(input: "").scope == .ssh)
-        #expect(PaletteScope.parse(input: "db").scope == .ssh)
+        // Default scope is session — an empty input (or any unprefixed text)
+        // fuzzy-matches against the open sessions list.
+        #expect(PaletteScope.parse(input: "").scope == .session)
+        #expect(PaletteScope.parse(input: "work").scope == .session)
 
         // Recognised prefixes switch scope.
         #expect(PaletteScope.parse(input: "> restart").scope == .command)
@@ -23,15 +24,24 @@ struct CommandPaletteControllerTests {
 
     @Test func paletteScopeRemovesPrefixForFuzzy() {
         // The query fed to fuzzy matching must have the prefix stripped so
-        // "s db" filters sessions by "db", not by the literal "s db".
+        // "ssh db" filters SSH hosts by "db", not by the literal "ssh db".
         #expect(PaletteScope.parse(input: "s db").query == "db")
         #expect(PaletteScope.parse(input: "> restart").query == "restart")
         #expect(PaletteScope.parse(input: "p home").query == "home")
         #expect(PaletteScope.parse(input: "t 2").query == "2")
         #expect(PaletteScope.parse(input: "ssh host1").query == "host1")
 
-        // Unprefixed SSH scope passes the query through verbatim.
-        #expect(PaletteScope.parse(input: "host1").query == "host1")
+        // Unprefixed session scope passes the query through verbatim.
+        #expect(PaletteScope.parse(input: "work").query == "work")
+    }
+
+    @Test func paletteBareSshWordStaysInSessionScope() {
+        // Only `ssh ` (with trailing space) flips the palette to SSH scope.
+        // Typing the bare word `ssh` should keep the session list in view
+        // — so the user's in-progress typing doesn't yank the candidates
+        // before they've committed to the SSH prefix.
+        #expect(PaletteScope.parse(input: "ssh").scope == .session)
+        #expect(PaletteScope.parse(input: "ssh").query == "ssh")
     }
 
     @Test func paletteScopeRecognisesLoneCommandSigil() {
@@ -46,8 +56,8 @@ struct CommandPaletteControllerTests {
 
     @Test func paletteClosesOnEscape() {
         let controller = CommandPaletteController()
-        controller.sshCandidates = [
-            PaletteCandidate(primaryText: "db1", scope: .ssh),
+        controller.sessionCandidates = [
+            PaletteCandidate(primaryText: "work", scope: .session),
         ]
 
         controller.open()
@@ -60,13 +70,13 @@ struct CommandPaletteControllerTests {
         #expect(controller.rows.isEmpty)
     }
 
-    @Test func paletteSessionScopeOpensWithPrefix() {
-        // ⌘R pre-fills the input so the panel starts in session scope and
-        // the first keystroke filters by session name.
+    @Test func paletteOpensInSessionScopeByDefault() {
+        // ⌘P lands in session scope with an empty input; the first keystroke
+        // filters by session name unless the user types a scope prefix.
         let controller = CommandPaletteController()
-        controller.openSessionScope()
+        controller.open()
         #expect(controller.isOpen)
-        #expect(controller.input == "s ")
+        #expect(controller.input == "")
         #expect(controller.scope == .session)
         #expect(controller.query == "")
     }
@@ -74,31 +84,31 @@ struct CommandPaletteControllerTests {
     // MARK: - Session scope (Phase 8)
 
     @Test func sessionScopeListsAllOpenSessions() {
-        // Opening the palette in session scope with an empty query should
-        // list every injected candidate (no SSH-style ad-hoc fallback).
+        // Opening the palette with an empty query (default session scope)
+        // should list every injected candidate.
         let controller = CommandPaletteController()
         controller.sessionCandidates = [
             PaletteCandidate(primaryText: "work", scope: .session),
             PaletteCandidate(primaryText: "home", scope: .session),
             PaletteCandidate(primaryText: "lab", scope: .session),
         ]
-        controller.openSessionScope()
+        controller.open()
 
         #expect(controller.rows.count == 3)
         #expect(controller.rows.map(\.candidate.primaryText) == ["work", "home", "lab"])
     }
 
     @Test func sessionFuzzyMatchByDisplayName() {
-        // With the `s ` prefix active, the trailing characters drive fuzzy
-        // matching across the session list.
+        // Typing straight into the default session scope (no prefix) drives
+        // fuzzy matching across the session list.
         let controller = CommandPaletteController()
         controller.sessionCandidates = [
             PaletteCandidate(primaryText: "work", scope: .session),
             PaletteCandidate(primaryText: "home", scope: .session),
             PaletteCandidate(primaryText: "lab", scope: .session),
         ]
-        controller.openSessionScope()
-        controller.input = "s hom"
+        controller.open()
+        controller.input = "hom"
 
         #expect(controller.rows.count == 1)
         #expect(controller.rows.first?.candidate.primaryText == "home")
@@ -145,7 +155,7 @@ struct CommandPaletteControllerTests {
             PaletteCandidate(primaryText: "db-prod-1", scope: .ssh),
         ]
         controller.open()
-        controller.input = "db"
+        controller.input = "ssh db"
 
         #expect(controller.rows.count == 2)
         let names = controller.rows.map(\.candidate.primaryText)
@@ -162,10 +172,11 @@ struct CommandPaletteControllerTests {
             PaletteCandidate(primaryText: "db3", scope: .ssh),
         ]
         controller.open()
+        controller.input = "ssh "
         controller.moveHighlight(by: 2)
         #expect(controller.highlightedIndex == 2)
 
-        controller.input = "d"
+        controller.input = "ssh d"
         #expect(controller.highlightedIndex == 0)
     }
 
@@ -175,6 +186,7 @@ struct CommandPaletteControllerTests {
             PaletteCandidate(primaryText: "host\($0)", scope: .ssh)
         }
         controller.open()
+        controller.input = "ssh "
         #expect(controller.highlightedIndex == 0)
 
         controller.moveHighlight(by: -1)   // wraps to last
@@ -198,6 +210,7 @@ struct CommandPaletteControllerTests {
             PaletteCandidate(primaryText: "h\($0)", scope: .ssh)
         }
         controller.open()
+        controller.input = "ssh "
         #expect(controller.selection.isEmpty)
 
         // Highlight row 0, add it.
@@ -223,6 +236,7 @@ struct CommandPaletteControllerTests {
             PaletteCandidate(primaryText: "h\($0)", scope: .ssh)
         }
         controller.open()
+        controller.input = "ssh "
         controller.toggleSelection()
         #expect(controller.selection.count == 1)
 
@@ -236,6 +250,7 @@ struct CommandPaletteControllerTests {
             PaletteCandidate(primaryText: "h\($0)", scope: .ssh)
         }
         controller.open()
+        controller.input = "ssh "
         controller.moveHighlight(by: 1)
 
         let commit = controller.commit(mode: .plain)
@@ -251,6 +266,7 @@ struct CommandPaletteControllerTests {
             PaletteCandidate(primaryText: "h\($0)", scope: .ssh)
         }
         controller.open()
+        controller.input = "ssh "
         // Select row 0 and row 2 (via Tab + arrow).
         controller.toggleSelection()
         controller.moveHighlight(by: 2)
@@ -282,7 +298,7 @@ struct CommandPaletteControllerTests {
             )
         }
         controller.open()
-        controller.input = "totally-novel"
+        controller.input = "ssh totally-novel"
 
         #expect(controller.rows.count == 1)
         #expect(controller.rows[0].candidate.primaryText == "Connect ad-hoc: totally-novel")
@@ -295,7 +311,7 @@ struct CommandPaletteControllerTests {
         ]
         controller.sshAdHocBuilder = { _ in nil }
         controller.open()
-        controller.input = "nope"
+        controller.input = "ssh nope"
 
         #expect(controller.rows.isEmpty)
     }
@@ -321,6 +337,7 @@ struct CommandPaletteControllerTests {
         var deleted: [String] = []
         controller.onDeleteHistory = { deleted.append($0) }
         controller.open()
+        controller.input = "ssh "
 
         let consumed = controller.deleteHighlighted()
         #expect(consumed == true)
@@ -351,7 +368,7 @@ struct CommandPaletteControllerTests {
         var deleted: [String] = []
         controller.onDeleteHistory = { deleted.append($0) }
         controller.open()
-        controller.input = "never-seen"
+        controller.input = "ssh never-seen"
 
         #expect(controller.rows.count == 1)
         let consumed = controller.deleteHighlighted()
@@ -367,7 +384,7 @@ struct CommandPaletteControllerTests {
         ]
         var deleted: [UUID] = []
         controller.onDeleteSession = { deleted.append($0) }
-        controller.openSessionScope()
+        controller.open()
 
         let consumed = controller.deleteHighlighted()
         #expect(consumed == true)
@@ -405,7 +422,7 @@ struct CommandPaletteControllerTests {
             PaletteCandidate(primaryText: "Connect ad-hoc: \(q)", scope: .ssh)
         }
         controller.open()
-        controller.input = "db"
+        controller.input = "ssh db"
 
         #expect(controller.rows.count == 1)
         #expect(controller.rows[0].candidate.primaryText == "db1")

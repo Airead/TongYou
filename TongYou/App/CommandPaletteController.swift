@@ -5,7 +5,7 @@ import Foundation
 /// Derived from the current input's leading prefix — see
 /// ``PaletteScope/parse(input:)``.
 enum PaletteScope: Equatable {
-    /// SSH connection (default, no prefix).
+    /// SSH connection (`ssh ` prefix).
     case ssh
     /// Command / action enumeration (`> ` prefix).
     case command
@@ -13,12 +13,19 @@ enum PaletteScope: Equatable {
     case profile
     /// Already-open tab switcher (`t ` prefix).
     case tab
-    /// Already-open session switcher (`s ` prefix, or entered via ⌘R).
+    /// Already-open session switcher (default, no prefix).
     case session
 
     /// Parse the visible input into a `(scope, fuzzyText)` pair. `fuzzyText`
     /// is what gets fed to the fuzzy matcher — the prefix is stripped so
     /// `"s db"` searches "db" inside sessions, not "s db" literally.
+    ///
+    /// Session is the default scope: an empty input or any leading text that
+    /// doesn't start with a known prefix fuzzy-matches against the open
+    /// sessions list. SSH is reached via `"ssh <query>"`; the bare word
+    /// `"ssh"` (no trailing space) stays in session scope so typing the
+    /// three letters without committing to an SSH doesn't rip the list
+    /// out from under the user.
     static func parse(input: String) -> (scope: PaletteScope, query: String) {
         if let tail = matchPrefix(input, prefix: "> ") { return (.command, tail) }
         if input == ">" { return (.command, "") }
@@ -26,7 +33,7 @@ enum PaletteScope: Equatable {
         if let tail = matchPrefix(input, prefix: "t ") { return (.tab, tail) }
         if let tail = matchPrefix(input, prefix: "s ") { return (.session, tail) }
         if let tail = matchPrefix(input, prefix: "ssh ") { return (.ssh, tail) }
-        return (.ssh, input)
+        return (.session, input)
     }
 
     private static func matchPrefix(_ s: String, prefix: String) -> String? {
@@ -111,7 +118,7 @@ final class CommandPaletteController {
     }
 
     /// Derived from `input`. Re-evaluated on every text change.
-    private(set) var scope: PaletteScope = .ssh
+    private(set) var scope: PaletteScope = .session
 
     /// Text fed to the fuzzy matcher — `input` with any scope prefix removed.
     private(set) var query: String = ""
@@ -210,19 +217,9 @@ final class CommandPaletteController {
 
     // MARK: - Open / close
 
-    /// Open the palette in SSH scope with an empty input.
+    /// Open the palette in session scope (the default) with an empty input.
     func open() {
-        openWithInitialInput("")
-    }
-
-    /// Open the palette pre-filled with `s ` so the first keystroke starts
-    /// filtering sessions. The cursor caret ends up after the space.
-    func openSessionScope() {
-        openWithInitialInput("s ")
-    }
-
-    private func openWithInitialInput(_ initial: String) {
-        input = initial
+        input = ""
         selection = []
         isOpen = true
         refreshRows(resetHighlight: true)

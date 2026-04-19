@@ -76,7 +76,7 @@ struct CommandPaletteView: View {
                 .font(.system(size: 13))
                 .frame(width: 16)
 
-            if controller.scope != .ssh {
+            if controller.scope != .session {
                 scopeBadge(fgColor: fgColor)
             }
 
@@ -107,11 +107,11 @@ struct CommandPaletteView: View {
 
     private var placeholderText: String {
         switch controller.scope {
-        case .ssh: return "Connect to… (type host, or > for commands, s for sessions)"
+        case .ssh: return "Connect to… (host, user@host)"
         case .command: return "Run a command…"
         case .profile: return "Open profile…"
         case .tab: return "Go to tab…"
-        case .session: return "Switch session…"
+        case .session: return "Switch session… (type > cmd, p profile, t tab, ssh host)"
         }
     }
 
@@ -319,6 +319,13 @@ private struct PaletteTextField: NSViewRepresentable {
                 field.currentEditor()?.selectedRange = NSRange(location: field.stringValue.count, length: 0)
             }
         }
+        // AppKit's field editor only dispatches `insertNewline:` for a bare
+        // Return key; ⌘/⇧/⌥ + Return never reach `doCommandBy` as a
+        // newline. Intercept them at keyDown so ⌘⏎ (split right), ⇧⏎
+        // (split below), and ⌥⏎ (float) all trigger the palette commit.
+        field.onModifiedReturn = { [onCommit] event in
+            onCommit(Coordinator.enterMode(from: event))
+        }
 
         NotificationCenter.default.addObserver(
             context.coordinator,
@@ -408,7 +415,7 @@ private struct PaletteTextField: NSViewRepresentable {
             }
         }
 
-        private static func enterMode(from event: NSEvent?) -> PaletteEnterMode {
+        static func enterMode(from event: NSEvent?) -> PaletteEnterMode {
             guard let flags = event?.modifierFlags else { return .plain }
             if flags.contains(.command) { return .commandEnter }
             if flags.contains(.shift)   { return .shiftEnter }
@@ -419,12 +426,32 @@ private struct PaletteTextField: NSViewRepresentable {
 }
 
 /// NSTextField subclass that fires a callback when it is added to a window,
-/// so the representable can promote it to first responder.
+/// so the representable can promote it to first responder. Also intercepts
+/// ⌘/⇧/⌥ + Return at keyDown so the palette can dispatch split-right /
+/// split-below / float commits — AppKit's field editor never forwards
+/// those modified Returns as `insertNewline:`, so the delegate path alone
+/// would miss them.
 private final class ActivatingPaletteField: NSTextField {
     var onDidMoveToWindow: (() -> Void)?
+    var onModifiedReturn: ((NSEvent) -> Void)?
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window != nil { onDidMoveToWindow?() }
+    }
+
+    override func keyDown(with event: NSEvent) {
+        // Key code 36 is Return; 76 is the numpad Enter. Both should count.
+        let isReturn = event.keyCode == 36 || event.keyCode == 76
+        // Only the primary four modifiers matter here — filter out
+        // capsLock/numericPad/function bits that can arrive unrelated to
+        // the user's intent.
+        let relevant: NSEvent.ModifierFlags = [.command, .shift, .option, .control]
+        let mods = event.modifierFlags.intersection(relevant)
+        if isReturn, !mods.isEmpty, let handler = onModifiedReturn {
+            handler(event)
+            return
+        }
+        super.keyDown(with: event)
     }
 }
