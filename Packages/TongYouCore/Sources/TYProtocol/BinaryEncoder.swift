@@ -136,6 +136,15 @@ public struct BinaryEncoder: Sendable {
         }
     }
 
+    public mutating func writeFocusDirection(_ direction: FocusDirection) {
+        switch direction {
+        case .left:  writeUInt8(0)
+        case .right: writeUInt8(1)
+        case .up:    writeUInt8(2)
+        case .down:  writeUInt8(3)
+        }
+    }
+
     public mutating func writeLayoutStrategyKind(_ kind: LayoutStrategyKind) {
         switch kind {
         case .horizontal:  writeUInt8(0)
@@ -560,6 +569,12 @@ public struct BinaryEncoder: Sendable {
         case .rerunPane(let sessionID, let paneID):
             writeSessionID(sessionID)
             writePaneID(paneID)
+
+        case .movePane(let sessionID, let sourcePaneID, let targetPaneID, let side):
+            writeSessionID(sessionID)
+            writePaneID(sourcePaneID)
+            writePaneID(targetPaneID)
+            writeFocusDirection(side)
         }
     }
 }

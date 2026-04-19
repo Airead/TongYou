@@ -384,6 +384,32 @@ public final class ServerSessionManager {
         return newPaneID
     }
 
+    /// Relocate `sourcePaneID` next to `targetPaneID` within the same tab
+    /// (plan §P4.3). Both panes must live in the same tab; mismatched tabs
+    /// or missing panes are treated as no-op. Returns `true` on success so
+    /// the caller can broadcast a `layoutUpdate`.
+    @discardableResult
+    public func movePane(
+        sessionID: SessionID,
+        sourcePaneID: PaneID,
+        targetPaneID: PaneID,
+        side: FocusDirection
+    ) -> Bool {
+        guard var session = sessions[sessionID] else { return false }
+        guard let tabIndex = session.tabIndex(for: sourcePaneID),
+              session.tabIndex(for: targetPaneID) == tabIndex else { return false }
+        guard let newTree = LayoutEngine.movePane(
+            tree: session.tabs[tabIndex].paneTree,
+            sourceID: sourcePaneID.uuid,
+            targetID: targetPaneID.uuid,
+            side: side
+        ) else { return false }
+        session.tabs[tabIndex].paneTree = newTree
+        sessions[sessionID] = session
+        saveSession(id: sessionID)
+        return true
+    }
+
     public func closePane(sessionID: SessionID, paneID: PaneID) {
         guard var session = sessions[sessionID] else { return }
         guard let tabIndex = session.tabIndex(for: paneID) else { return }

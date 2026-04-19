@@ -641,6 +641,195 @@ struct LayoutEngineTests {
         #expect(LayoutEngine.focusNeighbor(tab: tab, screenRect: canvas, from: UUID(), direction: .right) == nil)
     }
 
+    // MARK: - swapPanes (plan §P4.3)
+
+    @Test func swapTwoLeavesInSameContainer() {
+        let (a, leafA) = leaf()
+        let (b, leafB) = leaf()
+        let tree = container(.vertical, [leafA, leafB], [1, 2])
+        let out = LayoutEngine.swapPanes(tree: tree, a: a.id, b: b.id)
+        guard case .container(let c) = out else {
+            Issue.record("expected container"); return
+        }
+        // Topology and weights preserved; leaf positions swapped.
+        #expect(c.weights == [1, 2])
+        #expect(c.children[0].allPaneIDs == [b.id])
+        #expect(c.children[1].allPaneIDs == [a.id])
+    }
+
+    @Test func swapAcrossNestedContainers() {
+        let (a, leafA) = leaf()
+        let (b, leafB) = leaf()
+        let (c, leafC) = leaf()
+        let tree = container(
+            .vertical,
+            [leafA, container(.horizontal, [leafB, leafC], [1, 1])],
+            [1, 1]
+        )
+        let out = LayoutEngine.swapPanes(tree: tree, a: a.id, b: c.id)
+        // A now sits in the inner container's bottom slot; C is the outer left.
+        guard case .container(let outer) = out else {
+            Issue.record("expected outer container"); return
+        }
+        #expect(outer.children[0].allPaneIDs == [c.id])
+        guard case .container(let inner) = outer.children[1] else {
+            Issue.record("expected inner container"); return
+        }
+        #expect(inner.children[0].allPaneIDs == [b.id])
+        #expect(inner.children[1].allPaneIDs == [a.id])
+    }
+
+    @Test func swapSamePaneIsNoOp() {
+        let (a, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let tree = container(.vertical, [leafA, leafB], [1, 1])
+        #expect(LayoutEngine.swapPanes(tree: tree, a: a.id, b: a.id) == tree)
+    }
+
+    @Test func swapReturnsNilForUnknownPane() {
+        let (a, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let tree = container(.vertical, [leafA, leafB], [1, 1])
+        #expect(LayoutEngine.swapPanes(tree: tree, a: a.id, b: UUID()) == nil)
+    }
+
+    // MARK: - movePane (plan §P4.3)
+
+    @Test func moveWithinFlatContainerReorders() {
+        // V[A, B, C] — move A to the right of C → V[B, C, A]
+        let (a, leafA) = leaf()
+        let (b, leafB) = leaf()
+        let (c, leafC) = leaf()
+        let tree = container(.vertical, [leafA, leafB, leafC], [1, 1, 1])
+        let out = LayoutEngine.movePane(tree: tree, sourceID: a.id, targetID: c.id, side: .right)
+        guard case .container(let container) = out else {
+            Issue.record("expected container"); return
+        }
+        #expect(container.strategy == .vertical)
+        #expect(container.children.map(\.allPaneIDs) == [[b.id], [c.id], [a.id]])
+    }
+
+    @Test func moveBetweenContainersFlattensWhenStrategyMatches() {
+        // V[A, V[B, C]] — should never exist after splitPane but canonicalizes
+        // through sanitize to V[A, B, C]. Moving A to right of C then yields
+        // V[B, C, A] (all flat).
+        let (a, leafA) = leaf()
+        let (b, leafB) = leaf()
+        let (c, leafC) = leaf()
+        let tree = container(
+            .vertical,
+            [leafA, container(.vertical, [leafB, leafC], [1, 1])],
+            [1, 1]
+        )
+        let out = LayoutEngine.movePane(tree: tree, sourceID: a.id, targetID: c.id, side: .right)
+        guard case .container(let container) = out else {
+            Issue.record("expected container"); return
+        }
+        #expect(container.strategy == .vertical)
+        #expect(container.children.map(\.allPaneIDs) == [[b.id], [c.id], [a.id]])
+    }
+
+    @Test func moveWrapsTargetWhenStrategyMismatches() {
+        // V[A, B] — move A down-of-B → V becomes single-child V[H[B, A]] → H[B, A]
+        let (a, leafA) = leaf()
+        let (b, leafB) = leaf()
+        let tree = container(.vertical, [leafA, leafB], [1, 1])
+        let out = LayoutEngine.movePane(tree: tree, sourceID: a.id, targetID: b.id, side: .down)
+        guard case .container(let container) = out else {
+            Issue.record("expected container"); return
+        }
+        #expect(container.strategy == .horizontal)
+        #expect(container.children.map(\.allPaneIDs) == [[b.id], [a.id]])
+    }
+
+    @Test func moveLeavesSourceIDInvariantAfter() {
+        // The moved pane keeps its UUID — focus state on the client side
+        // should survive the operation.
+        let (a, leafA) = leaf()
+        let (b, leafB) = leaf()
+        let tree = container(.vertical, [leafA, leafB], [1, 1])
+        let out = LayoutEngine.movePane(tree: tree, sourceID: a.id, targetID: b.id, side: .down)
+        #expect(out?.contains(paneID: a.id) == true)
+    }
+
+    @Test func moveReturnsNilWhenSourceEqualsTarget() {
+        let (a, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let tree = container(.vertical, [leafA, leafB], [1, 1])
+        #expect(LayoutEngine.movePane(tree: tree, sourceID: a.id, targetID: a.id, side: .right) == nil)
+    }
+
+    @Test func moveReturnsNilWhenPaneMissing() {
+        let (a, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let tree = container(.vertical, [leafA, leafB], [1, 1])
+        #expect(LayoutEngine.movePane(tree: tree, sourceID: a.id, targetID: UUID(), side: .right) == nil)
+        #expect(LayoutEngine.movePane(tree: tree, sourceID: UUID(), targetID: a.id, side: .right) == nil)
+    }
+
+    // MARK: - sanitize with merge (plan §五 rule 3)
+
+    @Test func sanitizeMergesSameStrategyChildContainer() {
+        // V[A, V[B, C]] → V[A, B, C]; A's slot weight (1) stays, the inner
+        // V (slot weight 2) distributes proportionally to B and C (1:1) →
+        // each gets 1.0.
+        let (a, leafA) = leaf()
+        let (b, leafB) = leaf()
+        let (c, leafC) = leaf()
+        let inner = container(.vertical, [leafB, leafC], [1, 1])
+        let tree = container(.vertical, [leafA, inner], [1, 2])
+        let out = LayoutEngine.sanitize(tree: tree)
+        guard case .container(let container) = out else {
+            Issue.record("expected container"); return
+        }
+        #expect(container.strategy == .vertical)
+        #expect(container.children.map(\.allPaneIDs) == [[a.id], [b.id], [c.id]])
+        #expect(container.weights == [1.0, 1.0, 1.0])
+    }
+
+    @Test func sanitizeMergesDeeplyNested() {
+        // V[A, V[B, V[C, D]]] → V[A, B, C, D]
+        let (a, leafA) = leaf()
+        let (b, leafB) = leaf()
+        let (c, leafC) = leaf()
+        let (d, leafD) = leaf()
+        let innerInner = container(.vertical, [leafC, leafD], [1, 1])
+        let inner = container(.vertical, [leafB, innerInner], [1, 1])
+        let tree = container(.vertical, [leafA, inner], [1, 1])
+        let out = LayoutEngine.sanitize(tree: tree)
+        guard case .container(let container) = out else {
+            Issue.record("expected container"); return
+        }
+        #expect(container.children.map(\.allPaneIDs) == [[a.id], [b.id], [c.id], [d.id]])
+    }
+
+    @Test func sanitizeLeavesDifferentStrategyNestingAlone() {
+        // V[A, H[B, C]] — outer V and inner H differ; no merge.
+        let (_, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let (_, leafC) = leaf()
+        let inner = container(.horizontal, [leafB, leafC], [1, 1])
+        let tree = container(.vertical, [leafA, inner], [1, 1])
+        let out = LayoutEngine.sanitize(tree: tree)
+        #expect(out == tree)
+    }
+
+    @Test func sanitizeCollapseAndMergeCompose() {
+        // V[A, V[B]] — inner V collapses to B, then outer V[A, B] is already
+        // flat so nothing left to merge. Final: V[A, B].
+        let (a, leafA) = leaf()
+        let (b, leafB) = leaf()
+        let innerSingle = PaneNode.container(Container(
+            strategy: .vertical, children: [leafB], weights: [1]
+        ))
+        let tree = container(.vertical, [leafA, innerSingle], [1, 1])
+        let out = LayoutEngine.sanitize(tree: tree)
+        guard case .container(let container) = out else {
+            Issue.record("expected container"); return
+        }
+        #expect(container.children.map(\.allPaneIDs) == [[a.id], [b.id]])
+    }
+
     @Test func focusNeighborIgnoresCornerOnlyTouch() {
         // H[V[A, C], V[D, B]] — four quadrants: A top-left, C top-right,
         // D bottom-left, B bottom-right. A's bottom-right corner touches

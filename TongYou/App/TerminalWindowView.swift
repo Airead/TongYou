@@ -775,6 +775,8 @@ struct TerminalWindowView: View {
             closePane()
         case .focusPane(let direction):
             moveFocus(direction)
+        case .movePane(let direction):
+            movePane(direction)
         case .paneExited(let paneID, let exitCode):
             handlePTYExit(id: paneID, exitCode: exitCode)
         case .growPane:
@@ -839,13 +841,35 @@ struct TerminalWindowView: View {
 
     private func moveFocus(_ direction: FocusDirection) {
         guard let activeTab = sessionManager.activeTab else { return }
-        // TODO(plan §315): once `PaneSplitView` consumes `LayoutEngine.solveRects`
-        // directly, plumb the tab's real cell-grid rect through here. Until then
-        // a synthetic large canvas is fine — focusNeighbor only cares about
-        // relative geometry, which is weight-dominated at this scale.
-        let canvas = Rect(x: 0, y: 0, width: 10_000, height: 10_000)
-        focusManager.moveFocus(direction: direction, in: activeTab, screenRect: canvas)
+        focusManager.moveFocus(direction: direction, in: activeTab, screenRect: Self.focusCanvas)
     }
+
+    /// Relocate the focused pane next to its visual neighbor in `direction`
+    /// (plan §P4.3). Neighbor lookup reuses `focusNeighbor` so the UX
+    /// mirrors focus navigation: the pane "jumps past" its cardinal
+    /// neighbor and lands on that neighbor's far side. No-op at the edge
+    /// or when no pane is focused.
+    private func movePane(_ direction: FocusDirection) {
+        guard let activeTab = sessionManager.activeTab else { return }
+        guard let sourceID = focusManager.focusedPaneID else { return }
+        guard let targetID = LayoutEngine.focusNeighbor(
+            tab: activeTab,
+            screenRect: Self.focusCanvas,
+            from: sourceID,
+            direction: direction
+        ) else { return }
+        sessionManager.movePane(
+            sourcePaneID: sourceID,
+            targetPaneID: targetID,
+            side: direction
+        )
+    }
+
+    /// Synthetic canvas for engine-level neighbor/rect lookups until the
+    /// render layer consumes `LayoutEngine.solveRects` directly (plan §315
+    /// step 7). Large enough that weights dominate and min-size clamping is
+    /// irrelevant — only relative geometry matters for focus/move.
+    private static let focusCanvas = Rect(x: 0, y: 0, width: 10_000, height: 10_000)
 
     // MARK: - Helpers
 

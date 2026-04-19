@@ -612,6 +612,30 @@ struct WireFormatTests {
         #expect(dPid == pid)
     }
 
+    @Test(arguments: [
+        FocusDirection.left,
+        FocusDirection.right,
+        FocusDirection.up,
+        FocusDirection.down,
+    ])
+    func roundTripMovePane(side: FocusDirection) throws {
+        let sid = SessionID()
+        let source = PaneID()
+        let target = PaneID()
+        let msg = ClientMessage.movePane(
+            sid, sourcePaneID: source, targetPaneID: target, side: side
+        )
+        let decoded = try encodeAndDecode(clientMessage: msg)
+        guard case .movePane(let dSid, let dSource, let dTarget, let dSide) = decoded else {
+            Issue.record("Expected .movePane")
+            return
+        }
+        #expect(dSid == sid)
+        #expect(dSource == source)
+        #expect(dTarget == target)
+        #expect(dSide == side)
+    }
+
     // MARK: - Unknown Type Codes
 
     @Test func unknownServerTypeThrows() throws {

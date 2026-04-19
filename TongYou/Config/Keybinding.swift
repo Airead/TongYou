@@ -130,6 +130,8 @@ struct Keybinding: Equatable {
         case splitHorizontal
         case closePane
         case focusPane(FocusDirection)
+        // Pane reordering (plan §P4.3)
+        case movePane(FocusDirection)
         // Pane resize
         case growPane
         case shrinkPane
@@ -179,6 +181,13 @@ struct Keybinding: Equatable {
                 case .right: "focus_pane_right"
                 case .up: "focus_pane_up"
                 case .down: "focus_pane_down"
+                }
+            case .movePane(let dir):
+                switch dir {
+                case .left: "move_pane_left"
+                case .right: "move_pane_right"
+                case .up: "move_pane_up"
+                case .down: "move_pane_down"
                 }
             case .growPane: "grow_pane"
             case .shrinkPane: "shrink_pane"
@@ -268,6 +277,7 @@ struct Keybinding: Equatable {
             case .splitHorizontal: .splitHorizontal
             case .closePane: .closePane
             case .focusPane(let dir): .focusPane(dir)
+            case .movePane(let dir): .movePane(dir)
             case .growPane: .growPane
             case .shrinkPane: .shrinkPane
             case .toggleZoom: .toggleZoom
@@ -314,6 +324,10 @@ struct Keybinding: Equatable {
             case "focus_pane_right": self = .focusPane(.right)
             case "focus_pane_up": self = .focusPane(.up)
             case "focus_pane_down": self = .focusPane(.down)
+            case "move_pane_left": self = .movePane(.left)
+            case "move_pane_right": self = .movePane(.right)
+            case "move_pane_up": self = .movePane(.up)
+            case "move_pane_down": self = .movePane(.down)
             case "grow_pane": self = .growPane
             case "shrink_pane": self = .shrinkPane
             case "toggle_zoom": self = .toggleZoom
@@ -410,6 +424,11 @@ struct Keybinding: Equatable {
         Keybinding(modifiers: [.command, .option], key: "right", action: .focusPane(.right)),
         Keybinding(modifiers: [.command, .option], key: "up", action: .focusPane(.up)),
         Keybinding(modifiers: [.command, .option], key: "down", action: .focusPane(.down)),
+        // Pane reordering — Ctrl+Cmd+Arrow (plan §P4.3)
+        Keybinding(modifiers: [.command, .control], key: "left", action: .movePane(.left)),
+        Keybinding(modifiers: [.command, .control], key: "right", action: .movePane(.right)),
+        Keybinding(modifiers: [.command, .control], key: "up", action: .movePane(.up)),
+        Keybinding(modifiers: [.command, .control], key: "down", action: .movePane(.down)),
         // Pane resize
         Keybinding(modifiers: .option, key: "=", action: .growPane),
         Keybinding(modifiers: .option, key: "-", action: .shrinkPane),

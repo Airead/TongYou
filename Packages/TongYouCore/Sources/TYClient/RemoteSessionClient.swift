@@ -214,6 +214,24 @@ public final class RemoteSessionClient: @unchecked Sendable {
         connection?.send(.setSplitRatio(sessionID, paneID, ratio: ratio))
     }
 
+    /// Ask the server to relocate `sourcePaneID` to the given `side` of
+    /// `targetPaneID`. The server updates the tree and broadcasts a
+    /// `layoutUpdate`; focus stays on the source pane because its UUID
+    /// survives the move (plan §P4.3).
+    public func movePane(
+        sessionID: SessionID,
+        sourcePaneID: PaneID,
+        targetPaneID: PaneID,
+        side: FocusDirection
+    ) {
+        connection?.send(.movePane(
+            sessionID,
+            sourcePaneID: sourcePaneID,
+            targetPaneID: targetPaneID,
+            side: side
+        ))
+    }
+
     // MARK: - Floating Pane Operations
 
     public func createFloatingPane(

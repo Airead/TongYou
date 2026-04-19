@@ -81,6 +81,9 @@ public enum ClientMessageType: UInt16, Sendable {
     /// `StartupSnapshot`. The server keeps the `PaneID` stable; the
     /// existing `TerminalCore` is stopped and replaced. Phase 8.2.
     case rerunPane                     = 0x0230
+    /// Move a pane within its tab's tree, landing on a specific side of
+    /// the target pane. Plan §P4.3.
+    case movePane                      = 0x0231
 }
 
 // MARK: - Server Messages
@@ -229,6 +232,10 @@ public enum ClientMessage: Sendable {
     /// path; server keeps the `PaneID` stable so the client does not
     /// rebuild the layout.
     case rerunPane(SessionID, PaneID)
+    /// Relocate `source` so it sits on `side` of `target` in the same
+    /// tab (plan §P4.3). Both panes must already exist in the tab's tree.
+    /// The server updates the tree and broadcasts `layoutUpdate`.
+    case movePane(SessionID, sourcePaneID: PaneID, targetPaneID: PaneID, side: FocusDirection)
 
     /// Human-readable summary for debug logging. Long payloads are truncated.
     public var debugDescription: String {
@@ -292,6 +299,8 @@ public enum ClientMessage: Sendable {
             return "restartFloatingPaneCommand(session=\(sid), pane=\(pid), cmd=\(truncate(cmd, maxLength: 80)), args=\(args))"
         case .rerunPane(let sid, let pid):
             return "rerunPane(session=\(sid), pane=\(pid))"
+        case .movePane(let sid, let source, let target, let side):
+            return "movePane(session=\(sid), source=\(source), target=\(target), side=\(side))"
         }
     }
 
@@ -326,6 +335,7 @@ public enum ClientMessage: Sendable {
         case .runRemoteCommand:        return .runRemoteCommand
         case .restartFloatingPaneCommand:    return .restartFloatingPaneCommand
         case .rerunPane:                     return .rerunPane
+        case .movePane:                      return .movePane
         }
     }
 }

@@ -999,6 +999,62 @@ final class SessionManager {
         return false
     }
 
+    /// Move `sourcePaneID` next to `targetPaneID` within the tab that owns
+    /// them (plan §P4.3). For remote sessions the request is forwarded to
+    /// the server and the tree lands locally via `layoutUpdate`; for local
+    /// sessions the engine runs in-process and the tab is rewritten.
+    ///
+    /// Returns `true` when the move was applied or dispatched; `false`
+    /// when the inputs are invalid (missing session/panes, same pane,
+    /// different tab, unsupported source kind, etc.).
+    @discardableResult
+    func movePane(
+        inSessionID: UUID? = nil,
+        sourcePaneID: UUID,
+        targetPaneID: UUID,
+        side: FocusDirection
+    ) -> Bool {
+        guard sourcePaneID != targetPaneID else { return false }
+
+        let targetIndex: Int
+        if let sid = inSessionID {
+            guard let i = sessions.firstIndex(where: { $0.id == sid }) else { return false }
+            targetIndex = i
+        } else {
+            guard sessions.indices.contains(activeSessionIndex) else { return false }
+            targetIndex = activeSessionIndex
+        }
+
+        let session = sessions[targetIndex]
+
+        if let sid = session.source.serverSessionID,
+           let serverSource = serverPaneUUID(for: sourcePaneID),
+           let serverTarget = serverPaneUUID(for: targetPaneID) {
+            remoteClient?.movePane(
+                sessionID: SessionID(sid),
+                sourcePaneID: PaneID(serverSource),
+                targetPaneID: PaneID(serverTarget),
+                side: side
+            )
+            return true
+        }
+
+        for i in sessions[targetIndex].tabs.indices {
+            let tab = sessions[targetIndex].tabs[i]
+            guard tab.hasPane(id: sourcePaneID), tab.hasPane(id: targetPaneID) else { continue }
+            guard let newTab = LayoutEngine.movePane(
+                tab: tab,
+                sourceID: sourcePaneID,
+                targetID: targetPaneID,
+                side: side
+            ) else { return false }
+            sessions[targetIndex].tabs[i] = newTab
+            scheduleLocalSaveIfNeeded(sessionID: session.id)
+            return true
+        }
+        return false
+    }
+
     /// Replace the active tab's pane tree (e.g. after a divider drag), then
     /// run `LayoutEngine.sanitize` so any externally-produced invariant
     /// violations (stray empty / single-child containers) are cleaned up
@@ -1478,7 +1534,7 @@ final class SessionManager {
             // Session-level actions are handled by TerminalWindowView.
             return false
         case .splitVertical, .splitHorizontal, .closePane,
-             .focusPane, .paneExited, .growPane, .shrinkPane, .toggleZoom,
+             .focusPane, .movePane, .paneExited, .growPane, .shrinkPane, .toggleZoom,
              .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane,
              .rerunFloatingPaneCommand, .dismissExitedPane, .rerunExitedPaneCommand,
              .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession,

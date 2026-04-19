@@ -166,20 +166,169 @@ public enum LayoutEngine {
         return tree.updateRatio(for: paneID, newRatio: newRatio)
     }
 
+    // MARK: - swapPanes (tree-level)
+
+    /// Swap the TerminalPane payloads between two leaves in `tree`. Tree
+    /// topology and container identity are untouched — only the pane that
+    /// sits at each leaf changes. `a == b` is a no-op.
+    ///
+    /// Returns `nil` when either pane is not in the tree.
+    public static func swapPanes(tree: PaneNode, a: UUID, b: UUID) -> PaneNode? {
+        if a == b { return tree }
+        guard let paneA = tree.findPane(id: a),
+              let paneB = tree.findPane(id: b) else { return nil }
+        return swapLeaves(node: tree, idA: a, paneA: paneA, idB: b, paneB: paneB)
+    }
+
+    private static func swapLeaves(
+        node: PaneNode,
+        idA: UUID, paneA: TerminalPane,
+        idB: UUID, paneB: TerminalPane
+    ) -> PaneNode {
+        switch node {
+        case .leaf(let pane):
+            if pane.id == idA { return .leaf(paneB) }
+            if pane.id == idB { return .leaf(paneA) }
+            return node
+        case .container(let c):
+            let newChildren = c.children.map {
+                swapLeaves(node: $0, idA: idA, paneA: paneA, idB: idB, paneB: paneB)
+            }
+            if newChildren == c.children { return node }
+            return .container(Container(
+                id: c.id,
+                strategy: c.strategy,
+                children: newChildren,
+                weights: c.weights
+            ))
+        }
+    }
+
+    // MARK: - movePane (tree-level)
+
+    /// Remove `sourceID` from its current container and reinsert it on the
+    /// requested side of `targetID` (plan §P4.3). The removal path runs
+    /// through `sanitize` so pruning, collapsing, and rule-3 merging apply;
+    /// insertion flattens into `targetID`'s parent when the container
+    /// strategy already matches the requested axis.
+    ///
+    /// Returns `nil` when:
+    /// - `sourceID == targetID`
+    /// - either pane is not in `tree`
+    /// - removal would empty the tree (should be unreachable since the
+    ///   target pane guarantees at least one remaining leaf)
+    public static func movePane(
+        tree: PaneNode,
+        sourceID: UUID,
+        targetID: UUID,
+        side: FocusDirection
+    ) -> PaneNode? {
+        guard sourceID != targetID else { return nil }
+        guard let sourcePane = tree.findPane(id: sourceID),
+              tree.contains(paneID: targetID) else { return nil }
+        guard let removed = tree.removePane(id: sourceID) else { return nil }
+        let cleanedTree = sanitize(tree: removed)
+        guard let inserted = insertAdjacent(
+            node: cleanedTree,
+            targetID: targetID,
+            side: side,
+            newPane: sourcePane
+        ) else { return nil }
+        return sanitize(tree: inserted)
+    }
+
+    private static func insertAdjacent(
+        node: PaneNode,
+        targetID: UUID,
+        side: FocusDirection,
+        newPane: TerminalPane
+    ) -> PaneNode? {
+        let newStrategy: LayoutStrategyKind
+        switch side {
+        case .left, .right: newStrategy = .vertical
+        case .up, .down:    newStrategy = .horizontal
+        }
+        let insertAfter = (side == .right || side == .down)
+        return insertAdjacentRecurse(
+            node: node,
+            targetID: targetID,
+            newStrategy: newStrategy,
+            insertAfter: insertAfter,
+            newPane: newPane
+        )
+    }
+
+    private static func insertAdjacentRecurse(
+        node: PaneNode,
+        targetID: UUID,
+        newStrategy: LayoutStrategyKind,
+        insertAfter: Bool,
+        newPane: TerminalPane
+    ) -> PaneNode? {
+        switch node {
+        case .leaf(let pane):
+            guard pane.id == targetID else { return nil }
+            let children: [PaneNode] = insertAfter
+                ? [.leaf(pane), .leaf(newPane)]
+                : [.leaf(newPane), .leaf(pane)]
+            return .container(Container(
+                strategy: newStrategy,
+                children: children,
+                weights: [1.0, 1.0]
+            ))
+        case .container(let c):
+            if c.strategy == newStrategy {
+                for (i, child) in c.children.enumerated() {
+                    guard case .leaf(let pane) = child, pane.id == targetID else { continue }
+                    var newChildren = c.children
+                    var newWeights = c.weights
+                    let insertIdx = insertAfter ? i + 1 : i
+                    newChildren.insert(.leaf(newPane), at: insertIdx)
+                    newWeights.insert(1.0, at: insertIdx)
+                    return .container(Container(
+                        id: c.id,
+                        strategy: c.strategy,
+                        children: newChildren,
+                        weights: newWeights
+                    ))
+                }
+            }
+            for (i, child) in c.children.enumerated() {
+                guard let replaced = insertAdjacentRecurse(
+                    node: child,
+                    targetID: targetID,
+                    newStrategy: newStrategy,
+                    insertAfter: insertAfter,
+                    newPane: newPane
+                ) else { continue }
+                var newChildren = c.children
+                newChildren[i] = replaced
+                return .container(Container(
+                    id: c.id,
+                    strategy: c.strategy,
+                    children: newChildren,
+                    weights: c.weights
+                ))
+            }
+            return nil
+        }
+    }
+
     // MARK: - sanitize (tree-level)
 
-    /// Re-establish `Container` invariants without mutating weights:
-    /// containers with no children are removed, single-child containers are
-    /// replaced by their sole child. Used on the `updateActivePaneTree` path
-    /// where external code (e.g. the drag handler) writes a tree back
-    /// wholesale.
+    /// Re-establish `Container` invariants:
+    /// - Rule 1: containers with no leaves are removed.
+    /// - Rule 2: single-child containers are replaced by their sole child.
+    /// - Rule 3: a container whose child is a container with the same
+    ///   strategy is flattened; the child's weights scale so the group's
+    ///   cumulative share matches the original slot weight.
     ///
-    /// Same-strategy adjacent-container merging (plan §五 rule 3) is
-    /// intentionally not performed here — P3 relies on `splitPane`'s
-    /// flattening to keep the tree well-shaped; rule 3 arrives with P4's
-    /// `movePane`.
+    /// Called internally after `movePane`'s removal phase and after the
+    /// reinsertion phase; also invoked by `updateActivePaneTree`-style
+    /// external writes.
     public static func sanitize(tree: PaneNode) -> PaneNode {
-        cleaned(node: tree) ?? tree
+        let cleanedTree = cleaned(node: tree) ?? tree
+        return merged(node: cleanedTree)
     }
 
     private static func cleaned(node: PaneNode) -> PaneNode? {
@@ -198,6 +347,42 @@ public enum LayoutEngine {
             if newChildren.isEmpty { return nil }
             if newChildren.count == 1 { return newChildren[0] }
             if newChildren == c.children { return node }
+            return .container(Container(
+                id: c.id,
+                strategy: c.strategy,
+                children: newChildren,
+                weights: newWeights
+            ))
+        }
+    }
+
+    /// Bottom-up rule-3 merge. A container whose child is another container
+    /// with matching strategy absorbs the child's children in place. The
+    /// absorbed sub-weights are scaled by `slot_weight / sub_total` so the
+    /// combined share of the injected children equals the slot the merged
+    /// container used to occupy.
+    private static func merged(node: PaneNode) -> PaneNode {
+        switch node {
+        case .leaf:
+            return node
+        case .container(let c):
+            let recursed = c.children.map { merged(node: $0) }
+            var newChildren: [PaneNode] = []
+            var newWeights: [CGFloat] = []
+            for (child, weight) in zip(recursed, c.weights) {
+                if case .container(let sub) = child, sub.strategy == c.strategy {
+                    let subTotal = sub.weights.reduce(0, +)
+                    let scale = subTotal > 0 ? weight / subTotal : 0
+                    for (subChild, subWeight) in zip(sub.children, sub.weights) {
+                        newChildren.append(subChild)
+                        newWeights.append(subWeight * scale)
+                    }
+                } else {
+                    newChildren.append(child)
+                    newWeights.append(weight)
+                }
+            }
+            guard newChildren != c.children else { return node }
             return .container(Container(
                 id: c.id,
                 strategy: c.strategy,
@@ -260,6 +445,34 @@ public enum LayoutEngine {
             tree: tab.paneTree,
             paneID: paneID,
             newRatio: newRatio
+        ) else { return nil }
+        var next = tab
+        next.paneTree = newTree
+        return next
+    }
+
+    /// `TerminalTab` convenience over `swapPanes(tree:…)`.
+    public static func swapPanes(tab: TerminalTab, a: UUID, b: UUID) -> TerminalTab? {
+        guard let newTree = swapPanes(tree: tab.paneTree, a: a, b: b) else { return nil }
+        var next = tab
+        next.paneTree = newTree
+        return next
+    }
+
+    /// `TerminalTab` convenience over `movePane(tree:…)`. `focusedPaneID`
+    /// is preserved: the source pane keeps its UUID across the move, so if
+    /// focus was on it, the tab's recorded focus stays valid.
+    public static func movePane(
+        tab: TerminalTab,
+        sourceID: UUID,
+        targetID: UUID,
+        side: FocusDirection
+    ) -> TerminalTab? {
+        guard let newTree = movePane(
+            tree: tab.paneTree,
+            sourceID: sourceID,
+            targetID: targetID,
+            side: side
         ) else { return nil }
         var next = tab
         next.paneTree = newTree

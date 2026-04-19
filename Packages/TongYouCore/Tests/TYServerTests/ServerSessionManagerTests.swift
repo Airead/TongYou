@@ -218,6 +218,75 @@ struct ServerSessionManagerTests {
         manager.closeSession(id: session.id)
     }
 
+    @Test("movePane relocates pane within the tab")
+    func movePane() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "Move Pane Test")
+        guard case .leaf(let first) = session.tabs[0].layout else {
+            Issue.record("Expected leaf layout"); return
+        }
+        let second = manager.splitPane(
+            sessionID: session.id, paneID: first, direction: .vertical
+        )!
+        let third = manager.splitPane(
+            sessionID: session.id, paneID: second, direction: .vertical
+        )!
+        // After two vertical splits flattening kicks in → V[first, second, third].
+        #expect(manager.movePane(
+            sessionID: session.id,
+            sourcePaneID: first,
+            targetPaneID: third,
+            side: .right
+        ))
+
+        let info = manager.sessionInfo(for: session.id)
+        guard case .container(let strategy, let children, _) = info?.tabs[0].layout else {
+            Issue.record("Expected container layout"); return
+        }
+        #expect(strategy == .vertical)
+        // Children flattened with first pushed past third to the right end.
+        let leafIDs = children.compactMap { child -> PaneID? in
+            if case .leaf(let id) = child { return id }
+            return nil
+        }
+        #expect(leafIDs == [second, third, first])
+
+        manager.closeSession(id: session.id)
+    }
+
+    @Test("movePane rejects missing or same-pane inputs")
+    func movePaneRejectsInvalid() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "Move Pane Reject")
+        guard case .leaf(let first) = session.tabs[0].layout else {
+            Issue.record("Expected leaf layout"); return
+        }
+        let second = manager.splitPane(
+            sessionID: session.id, paneID: first, direction: .vertical
+        )!
+
+        #expect(!manager.movePane(
+            sessionID: session.id,
+            sourcePaneID: first,
+            targetPaneID: first,
+            side: .right
+        ))
+        #expect(!manager.movePane(
+            sessionID: session.id,
+            sourcePaneID: first,
+            targetPaneID: PaneID(),
+            side: .right
+        ))
+        #expect(!manager.movePane(
+            sessionID: session.id,
+            sourcePaneID: PaneID(),
+            targetPaneID: second,
+            side: .right
+        ))
+
+        manager.closeSession(id: session.id)
+    }
+
     @Test("Close pane removes from tree")
     func closePane() {
         let manager = ServerSessionManager()

@@ -227,6 +227,18 @@ public struct BinaryDecoder: Sendable {
         }
     }
 
+    public mutating func readFocusDirection() throws -> FocusDirection {
+        let raw = try readUInt8()
+        switch raw {
+        case 0: return .left
+        case 1: return .right
+        case 2: return .up
+        case 3: return .down
+        default:
+            throw BinaryDecoderError.invalidEnumValue(type: "FocusDirection", rawValue: UInt64(raw))
+        }
+    }
+
     public mutating func readLayoutStrategyKind() throws -> LayoutStrategyKind {
         let raw = try readUInt8()
         switch raw {
@@ -762,6 +774,18 @@ public struct BinaryDecoder: Sendable {
             let sessionID = try readSessionID()
             let paneID = try readPaneID()
             return .rerunPane(sessionID, paneID)
+
+        case .movePane:
+            let sessionID = try readSessionID()
+            let sourcePaneID = try readPaneID()
+            let targetPaneID = try readPaneID()
+            let side = try readFocusDirection()
+            return .movePane(
+                sessionID,
+                sourcePaneID: sourcePaneID,
+                targetPaneID: targetPaneID,
+                side: side
+            )
         }
     }
 }

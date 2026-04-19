@@ -323,10 +323,25 @@ struct PaneSplitTests {
         let actions: [Keybinding.Action] = [
             .splitVertical, .splitHorizontal, .closePane,
             .focusPane(.left), .focusPane(.right), .focusPane(.up), .focusPane(.down),
+            .movePane(.left), .movePane(.right), .movePane(.up), .movePane(.down),
         ]
         for action in actions {
             let parsed = Keybinding.Action(rawValue: action.rawValue)
             #expect(parsed == action, "Round-trip failed for \(action.rawValue)")
+        }
+    }
+
+    @Test func defaultsBindCtrlCmdArrowsToMovePane() {
+        let expected: [(String, FocusDirection)] = [
+            ("left", .left), ("right", .right), ("up", .up), ("down", .down),
+        ]
+        for (key, dir) in expected {
+            let match = Keybinding.defaults.first {
+                $0.key == key
+                    && $0.modifiers == [.command, .control]
+                    && $0.action == .movePane(dir)
+            }
+            #expect(match != nil, "missing default binding Ctrl+Cmd+\(key) → movePane(\(dir))")
         }
     }
 }
