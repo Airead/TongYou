@@ -53,6 +53,12 @@ final class GlyphAtlas {
     /// Whether the atlas texture has been modified since last GPU sync.
     private(set) var isDirty = false
 
+    /// Count of atlas mutations (texture.replace / grow / compact) since last
+    /// `advanceFrame()`. Used by the renderer to emit a conditional
+    /// `[RENDER]` trace only on frames that actually touched the atlas —
+    /// isolates the atlas-write-during-GPU-read race hypothesis.
+    private(set) var atlasWritesThisFrame: UInt32 = 0
+
     /// Number of active (non-evicted) entries.
     var activeEntryCount: Int { cache.count }
 
@@ -93,6 +99,7 @@ final class GlyphAtlas {
     /// Advance the internal frame counter. Call once per render frame.
     func advanceFrame() {
         frameNumber &+= 1
+        atlasWritesThisFrame = 0
     }
 
     /// Get or rasterize a glyph by character. Resolves the font via FontSystem fallback on cache miss.
@@ -206,6 +213,11 @@ final class GlyphAtlas {
         texture.replace(region: mtlRegion, mipmapLevel: 0,
                         withBytes: pixelData, bytesPerRow: bytesPerRow)
         isDirty = true
+        atlasWritesThisFrame &+= 1
+        GUILog.debug(
+            "[ATLAS] glyph=\(glyph) fontID=\(ObjectIdentifier(font)) region=(\(region.x),\(region.y) \(canvasWidth)x\(canvasHeight)) frame=\(frameNumber)",
+            category: .renderer
+        )
 
         // bearingY in top-down coords: baseline - pxY - canvasHeight
         let baselineF = CGFloat(fontSystem.baseline) + fontSystem.baselineFractionalOffset
@@ -284,6 +296,11 @@ final class GlyphAtlas {
         texture = newTexture
         textureSize = newSize
         isDirty = true
+        atlasWritesThisFrame &+= 1
+        GUILog.debug(
+            "[ATLAS] grow oldSize=\(oldSize) newSize=\(newSize) frame=\(frameNumber)",
+            category: .renderer
+        )
         return true
     }
 
@@ -291,13 +308,20 @@ final class GlyphAtlas {
 
     /// Check atlas utilization and evict stale entries if needed.
     /// Call once per frame after all glyphs have been looked up.
-    func evictIfNeeded(fontSystem: FontSystem) {
-        guard cache.count > 0, frameNumber > lastEvictionFrame else { return }
+    ///
+    /// - Returns: `true` if `compact()` ran and cached glyph coordinates
+    ///   were rewritten. Callers holding instance buffers or staged rows
+    ///   keyed on the old coordinates must rebuild them; otherwise GPU
+    ///   draws sample the new texture with stale coordinates and render
+    ///   garbled glyphs for rows that did not get re-shaped this frame.
+    @discardableResult
+    func evictIfNeeded(fontSystem: FontSystem) -> Bool {
+        guard cache.count > 0, frameNumber > lastEvictionFrame else { return false }
         lastEvictionFrame = frameNumber
         // Utilization = used shelf area / total texture area
         let usedArea = Double(shelfY + shelfHeight) * Double(textureSize)
         let totalArea = Double(textureSize) * Double(textureSize)
-        guard usedArea / totalArea > Self.evictionTriggerRatio else { return }
+        guard usedArea / totalArea > Self.evictionTriggerRatio else { return false }
 
         // Evict oldest 25% of cache entries
         let evictCount = max(1, cache.count / 4)
@@ -308,6 +332,7 @@ final class GlyphAtlas {
 
         // Always compact after eviction to reclaim atlas space
         compact(fontSystem: fontSystem)
+        return true
     }
 
     /// Rebuild the atlas from scratch with only active cache entries.
@@ -353,6 +378,10 @@ final class GlyphAtlas {
         }
 
         isDirty = true
+        GUILog.debug(
+            "[ATLAS] compact entries=\(activeEntries.count) newSize=\(newSize) frame=\(frameNumber)",
+            category: .renderer
+        )
     }
 
     /// Choose smallest power-of-two texture size that fits the given entry count.

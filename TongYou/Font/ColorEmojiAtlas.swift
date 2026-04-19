@@ -47,6 +47,10 @@ final class ColorEmojiAtlas {
     /// Whether the atlas texture has been modified since last GPU sync.
     private(set) var isDirty = false
 
+    /// Count of atlas mutations (texture.replace / grow / compact) since last
+    /// `advanceFrame()`. See `GlyphAtlas.atlasWritesThisFrame` for rationale.
+    private(set) var atlasWritesThisFrame: UInt32 = 0
+
     /// Number of active (non-evicted) entries.
     var activeEntryCount: Int { cache.count }
 
@@ -90,6 +94,7 @@ final class ColorEmojiAtlas {
     /// Advance the internal frame counter. Call once per render frame.
     func advanceFrame() {
         frameNumber &+= 1
+        atlasWritesThisFrame = 0
     }
 
     /// Get or rasterize an emoji glyph. Returns nil if the cluster is not an emoji.
@@ -235,6 +240,11 @@ final class ColorEmojiAtlas {
         texture.replace(region: mtlRegion, mipmapLevel: 0,
                        withBytes: pixelData, bytesPerRow: bytesPerRow)
         isDirty = true
+        atlasWritesThisFrame &+= 1
+        GUILog.debug(
+            "[ATLAS-EMOJI] cluster=\(cluster) region=(\(region.x),\(region.y) \(canvasWidth)x\(canvasHeight)) frame=\(frameNumber)",
+            category: .renderer
+        )
 
         // Calculate bearing from top
         let baselineF = CGFloat(fontSystem.baseline) + fontSystem.baselineFractionalOffset
@@ -322,6 +332,11 @@ final class ColorEmojiAtlas {
         texture = newTexture
         textureSize = newSize
         isDirty = true
+        atlasWritesThisFrame &+= 1
+        GUILog.debug(
+            "[ATLAS-EMOJI] grow oldSize=\(oldSize) newSize=\(newSize) frame=\(frameNumber)",
+            category: .renderer
+        )
         return true
     }
 
@@ -329,13 +344,18 @@ final class ColorEmojiAtlas {
 
     /// Check atlas utilization and evict stale entries if needed.
     /// Call once per frame after all glyphs have been looked up.
-    func evictIfNeeded(fontSystem: FontSystem) {
-        guard cache.count > 0, frameNumber > lastEvictionFrame else { return }
+    ///
+    /// - Returns: `true` if `compact()` ran. See `GlyphAtlas.evictIfNeeded`
+    ///   for why callers must invalidate any instance buffers that cached
+    ///   atlas coordinates.
+    @discardableResult
+    func evictIfNeeded(fontSystem: FontSystem) -> Bool {
+        guard cache.count > 0, frameNumber > lastEvictionFrame else { return false }
         lastEvictionFrame = frameNumber
         // Utilization = used shelf area / total texture area
         let usedArea = Double(shelfY + shelfHeight) * Double(textureSize)
         let totalArea = Double(textureSize) * Double(textureSize)
-        guard usedArea / totalArea > Self.evictionTriggerRatio else { return }
+        guard usedArea / totalArea > Self.evictionTriggerRatio else { return false }
 
         // Evict oldest 25% of cache entries
         let evictCount = max(1, cache.count / 4)
@@ -346,6 +366,7 @@ final class ColorEmojiAtlas {
 
         // Always compact after eviction to reclaim atlas space
         compact(fontSystem: fontSystem)
+        return true
     }
 
     /// Rebuild the atlas from scratch with only active cache entries.
@@ -368,6 +389,10 @@ final class ColorEmojiAtlas {
         }
 
         isDirty = true
+        GUILog.debug(
+            "[ATLAS-EMOJI] compact entries=\(activeEntries.count) newSize=\(newSize) frame=\(frameNumber)",
+            category: .renderer
+        )
     }
 
     /// Choose smallest power-of-two texture size that fits the given entry count.

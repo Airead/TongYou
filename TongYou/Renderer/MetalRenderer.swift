@@ -572,19 +572,10 @@ final class MetalRenderer {
         let selectionChanged = currentSnapshot?.selection != snapshot.selection
         currentSnapshot = snapshot
 
-        let preMergeFullRebuild = pendingDirtyRegion.fullRebuild
-        let preMergeScrollDelta = pendingDirtyRegion.scrollDelta
-        let preMergeDirtyCount = pendingDirtyRegion.dirtyCount
-
         pendingDirtyRegion.merge(snapshot.dirtyRegion)
         if selectionChanged {
             pendingDirtyRegion.markFull()
         }
-
-        GUILog.debug(
-            "setContent: partial=\(snapshot.isPartial) snapshotDirtyRows=\(snapshot.dirtyRows) scrollDelta=\(snapshot.dirtyRegion.scrollDelta) fullRebuild=\(snapshot.dirtyRegion.fullRebuild) | preMerge: full=\(preMergeFullRebuild) scroll=\(preMergeScrollDelta) dirty=\(preMergeDirtyCount) | postMerge: full=\(pendingDirtyRegion.fullRebuild) scroll=\(pendingDirtyRegion.scrollDelta) dirtyRows=\(pendingDirtyRegion.dirtyRows)",
-            category: .renderer
-        )
 
         if snapshot.isPartial {
             // Size match is guaranteed by the early guard at the top of setContent.
@@ -612,10 +603,6 @@ final class MetalRenderer {
                 backingCells.replaceSubrange(dst..<(dst + backingColumns), with: cells)
             }
             let copiedCount = snapshot.partialRows.map { $0.cells.count }.reduce(0, +)
-            GUILog.debug(
-                "setContent partial: copiedRows=\(snapshot.partialRows.map { $0.row }) copiedCells=\(copiedCount) backingSize=\(backingColumns)x\(backingRows)",
-                category: .renderer
-            )
             frameMetrics?.recordSnapshotCellCopyCount(copiedCount)
         } else {
             let count = snapshot.cells.count
@@ -637,7 +624,6 @@ final class MetalRenderer {
         }
 
         if pendingDirtyRegion.fullRebuild {
-            GUILog.debug("setContent: pendingDirtyRegion.fullRebuild → markAllFramesDirty", category: .renderer)
             markAllFramesDirty()
         } else {
             instanceRebuildCounter = 1
@@ -645,7 +631,6 @@ final class MetalRenderer {
             for i in frameStateDirtyRegions.indices {
                 frameStateDirtyRegions[i].merge(snapshot.dirtyRegion)
             }
-            GUILog.debug("setContent: partial path → instanceRebuildCounter=1", category: .renderer)
         }
     }
 
@@ -705,10 +690,34 @@ final class MetalRenderer {
             frameStateDirtyRegions[frameIndex] = .clean
         }
 
-        GUILog.debug(
-            "render: rebuildInstances=\(rebuildInstances) frameIdx=\(frameIndex) dirtyRegion: full=\(dirtyRegion.fullRebuild) scrollDelta=\(dirtyRegion.scrollDelta) dirtyRows=\(dirtyRegion.dirtyRows.prefix(10)) dirtyCount=\(dirtyRegion.dirtyCount)",
-            category: .renderer
-        )
+        // Run atlas eviction BEFORE taking exclusive access on
+        // `frameStates[frameIndex]` below. If compact() ran, all cached
+        // glyph coords are invalid; we must clear every frame state's
+        // staged rows and mark all swap-chain frames dirty so later
+        // frames re-shape instead of sampling the new texture with old
+        // coords (that was the garbled-row bug). Doing this inside the
+        // `withUnsafeMutablePointer` closure would re-enter the array
+        // under an active exclusive access and trip Swift's exclusivity
+        // check (fatalError → abort).
+        if rebuildInstances && textContentDirty {
+            let glyphCompacted = glyphAtlas.evictIfNeeded(fontSystem: fontSystem)
+            let emojiCompacted = emojiAtlas.evictIfNeeded(fontSystem: fontSystem)
+            if glyphCompacted || emojiCompacted {
+                dirtyRegion.markFull()
+                for i in frameStates.indices {
+                    frameStates[i].stagedRowInstances.removeAll()
+                    frameStates[i].textRowOffsets.removeAll()
+                    frameStates[i].emojiRowOffsets.removeAll()
+                    frameStates[i].boxDrawRowOffsets.removeAll()
+                    frameStates[i].arcCornerRowOffsets.removeAll()
+                }
+                markAllFramesDirty()
+                GUILog.debug(
+                    "[ATLAS] compact invalidation: glyph=\(glyphCompacted) emoji=\(emojiCompacted) — forcing full rebuild across all swap-chain frames",
+                    category: .renderer
+                )
+            }
+        }
 
         withUnsafeMutablePointer(to: &frameStates[frameIndex]) { frame in
             if rebuildInstances {
@@ -720,10 +729,6 @@ final class MetalRenderer {
                 fillBgInstanceBuffer(frame: frame, grid: currentGrid, snapshot: snapshot,
                                      dirtyRegion: dirtyRegion, searchLineMap: searchMap)
                 fillDecorationInstanceBuffers(frame: frame, grid: currentGrid, snapshot: snapshot, url: currentHighlightedURL)
-                if textContentDirty {
-                    glyphAtlas.evictIfNeeded(fontSystem: fontSystem)
-                    emojiAtlas.evictIfNeeded(fontSystem: fontSystem)
-                }
                 fillTextInstanceBuffer(frame: frame, grid: currentGrid, snapshot: snapshot,
                                        dirtyRegion: dirtyRegion, searchLineMap: searchMap)
                 frameMetrics?.endInstanceBuild()
@@ -839,6 +844,19 @@ final class MetalRenderer {
 
         encoder.endEncoding()
         frameMetrics?.endFrame()
+
+        // Conditional trace: only emit when this frame actually mutated an
+        // atlas texture. These are exactly the frames where a
+        // texture.replace could race with an in-flight GPU read.
+        let glyphWrites = glyphAtlas.atlasWritesThisFrame
+        let emojiWrites = emojiAtlas.atlasWritesThisFrame
+        if glyphWrites > 0 || emojiWrites > 0 {
+            GUILog.debug(
+                "[RENDER] frameIdx=\(frameIndex) glyphFrameNum=\(glyphAtlas.frameNumber) atlasWrites: glyph=\(glyphWrites) emoji=\(emojiWrites) textInstances=\(frame.textInstanceCount) emojiInstances=\(frame.emojiInstanceCount)",
+                category: .renderer
+            )
+        }
+
         commandBuffer.present(drawable)
         commandBuffer.commit()
     }
@@ -945,11 +963,6 @@ final class MetalRenderer {
         let snapCols = min(cols, backingColumns)
         let defaultBg = colorPalette.defaultBg
         let palette = colorPalette
-
-        GUILog.debug(
-            "fillBg: fullRebuild=\(dirtyRegion.fullRebuild) scrollDelta=\(dirtyRegion.scrollDelta) dirtyRows=\(dirtyRegion.dirtyRows.prefix(10)) rows=\(rows) backingRows=\(backingRows)",
-            category: .renderer
-        )
 
         // Cursor state
         let cursorVisible = snapshot?.cursorVisible ?? false
@@ -1464,11 +1477,6 @@ final class MetalRenderer {
         let fullRebuild = dirtyRegion.fullRebuild
             || frame.pointee.stagedRowInstances.count != rows
             || frame.pointee.stagedRowInstances.isEmpty
-
-        GUILog.debug(
-            "fillText: fullRebuild=\(fullRebuild) (region.full=\(dirtyRegion.fullRebuild) stagedCount=\(frame.pointee.stagedRowInstances.count) rows=\(rows)) dirtyRows=\(dirtyRegion.dirtyRows.prefix(10)) scrollDelta=\(dirtyRegion.scrollDelta)",
-            category: .renderer
-        )
 
         let colorState = makeTextColorState(snapshot: snapshot, searchLineMap: searchLineMap)
         let cellWidth = Float(fontSystem.cellSize.width)

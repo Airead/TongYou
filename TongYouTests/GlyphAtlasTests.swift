@@ -151,11 +151,60 @@ struct GlyphAtlasTests {
         let countBefore = atlas.activeEntryCount
 
         atlas.advanceFrame()
-        atlas.evictIfNeeded(fontSystem: fontSystem)
+        let compacted = atlas.evictIfNeeded(fontSystem: fontSystem)
         let countAfter = atlas.activeEntryCount
 
         // Some entries should have been evicted
         #expect(countAfter < countBefore)
+        // Eviction implies compaction: the return value must reflect it so
+        // callers can invalidate instance buffers that cached old coords.
+        #expect(compacted == true)
+    }
+
+    @Test func evictReturnsFalseWhenBelowThreshold() {
+        guard let (atlas, fontSystem) = makeAtlas(size: 1024, maxSize: 1024) else {
+            Issue.record("Metal device not available")
+            return
+        }
+
+        // Only a handful of glyphs — utilization stays well below 75%.
+        for ch in "Hello" {
+            _ = atlas.getOrRasterize(
+                character: ch.unicodeScalars.first!,
+                fontSystem: fontSystem
+            )
+        }
+
+        atlas.advanceFrame()
+        let compacted = atlas.evictIfNeeded(fontSystem: fontSystem)
+
+        // No compaction → return false, callers keep their cached instances.
+        #expect(compacted == false)
+    }
+
+    @Test func compactionReplacesUnderlyingTexture() {
+        guard let (atlas, fontSystem) = makeAtlas(size: 128, maxSize: 256) else {
+            Issue.record("Metal device not available")
+            return
+        }
+
+        // Fill the atlas past the 75% threshold with CJK entries.
+        for v: UInt32 in 0x4E00..<0x4E00 + 200 {
+            guard let s = Unicode.Scalar(v) else { continue }
+            _ = atlas.getOrRasterize(character: s, fontSystem: fontSystem)
+        }
+        let textureBefore = ObjectIdentifier(atlas.texture)
+
+        atlas.advanceFrame()
+        let compacted = atlas.evictIfNeeded(fontSystem: fontSystem)
+        #expect(compacted == true)
+
+        // Compact rebuilds into a fresh MTLTexture. Any in-flight GPU frame
+        // still bound to the old texture would now sample content laid out
+        // against a different coordinate system — this is the invariant the
+        // renderer relies on when it forces a full rebuild on `compacted`.
+        let textureAfter = ObjectIdentifier(atlas.texture)
+        #expect(textureBefore != textureAfter)
     }
 
     @Test func evictionKeepsRecentlyUsedEntries() {
