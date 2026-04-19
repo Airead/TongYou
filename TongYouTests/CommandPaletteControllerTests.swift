@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwiftUI
 import Testing
 import TYConfig
 import TYTerminal
@@ -536,5 +537,214 @@ struct CommandPaletteControllerTests {
         #expect(Keybinding.Action.unbind.paletteDisplayTitle == nil)
         // Non-parameterised actions do have a title.
         #expect(Keybinding.Action.newTab.paletteDisplayTitle == "New tab")
+    }
+}
+
+// MARK: - Keyboard routing (PaletteTextField)
+
+/// Covers the AppKit key path that distinguishes the four Enter variants
+/// (plain, ⌘⏎, ⇧⏎, ⌥⏎). Previously ⌘⏎ hit AppKit's no-responder beep and
+/// ⇧⏎ / ⌥⏎ inserted a literal newline into the palette search box because
+/// the field editor's `insertLineBreak:` / `insertNewlineIgnoringFieldEditor:`
+/// dispatches were not intercepted.
+@MainActor
+@Suite("PaletteTextField keyboard routing")
+struct PaletteTextFieldKeyboardTests {
+
+    private func returnEvent(_ modifiers: NSEvent.ModifierFlags) -> NSEvent? {
+        NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: modifiers,
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "\r",
+            charactersIgnoringModifiers: "\r",
+            isARepeat: false,
+            keyCode: 36
+        )
+    }
+
+    @Test func enterModeMapsModifierFlags() {
+        typealias Coordinator = PaletteTextField.Coordinator
+        #expect(Coordinator.enterMode(from: nil) == .plain)
+        #expect(Coordinator.enterMode(from: returnEvent([])) == .plain)
+        #expect(Coordinator.enterMode(from: returnEvent(.command)) == .commandEnter)
+        #expect(Coordinator.enterMode(from: returnEvent(.shift)) == .shiftEnter)
+        #expect(Coordinator.enterMode(from: returnEvent(.option)) == .optionEnter)
+        // Command takes precedence over other modifiers so ⌘⇧⏎ still
+        // reads as a command-enter (split-right) commit, not shift-enter.
+        #expect(Coordinator.enterMode(from: returnEvent([.command, .shift])) == .commandEnter)
+    }
+
+    @Test func doCommandByRoutesAllNewlineSelectorsToCommit() {
+        // Plain ⏎ → `insertNewline:`; ⇧⏎ / ⌥⏎ typically arrive as
+        // `insertLineBreak:` or `insertNewlineIgnoringFieldEditor:`.
+        // All three must commit so the palette reacts instead of the
+        // field editor inserting a literal newline in the search box.
+        var commits = 0
+        var cancels = 0
+        var deletes = 0
+        let coordinator = PaletteTextField.Coordinator(
+            text: .constant(""),
+            onCommit: { _ in commits += 1 },
+            onCancel: { cancels += 1 },
+            onDelete: { deletes += 1 }
+        )
+        let control = NSTextField()
+        let textView = NSTextView()
+
+        let newlineSelectors: [Selector] = [
+            #selector(NSResponder.insertNewline(_:)),
+            #selector(NSResponder.insertLineBreak(_:)),
+            #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)),
+        ]
+        for sel in newlineSelectors {
+            #expect(
+                coordinator.control(control, textView: textView, doCommandBy: sel) == true,
+                "selector \(sel) should be claimed"
+            )
+        }
+        #expect(commits == newlineSelectors.count)
+        #expect(cancels == 0)
+        #expect(deletes == 0)
+    }
+
+    @Test func doCommandByRoutesCancelAndDelete() {
+        var commits = 0
+        var cancels = 0
+        var deletes = 0
+        let coordinator = PaletteTextField.Coordinator(
+            text: .constant(""),
+            onCommit: { _ in commits += 1 },
+            onCancel: { cancels += 1 },
+            onDelete: { deletes += 1 }
+        )
+        let control = NSTextField()
+        let textView = NSTextView()
+
+        #expect(
+            coordinator.control(
+                control, textView: textView,
+                doCommandBy: #selector(NSResponder.cancelOperation(_:))
+            ) == true
+        )
+        #expect(
+            coordinator.control(
+                control, textView: textView,
+                doCommandBy: #selector(NSResponder.deleteToBeginningOfLine(_:))
+            ) == true
+        )
+        #expect(cancels == 1)
+        #expect(deletes == 1)
+        #expect(commits == 0)
+    }
+
+    @Test func doCommandByLetsNavigationBubble() {
+        // Up/down/tab must return false so SwiftUI's outer `onKeyPress`
+        // handlers move the highlight / toggle selection.
+        let coordinator = PaletteTextField.Coordinator(
+            text: .constant(""),
+            onCommit: { _ in },
+            onCancel: {},
+            onDelete: {}
+        )
+        let control = NSTextField()
+        let textView = NSTextView()
+
+        let bubbling: [Selector] = [
+            #selector(NSResponder.moveUp(_:)),
+            #selector(NSResponder.moveDown(_:)),
+            #selector(NSResponder.insertTab(_:)),
+            #selector(NSResponder.insertBacktab(_:)),
+        ]
+        for sel in bubbling {
+            #expect(
+                coordinator.control(control, textView: textView, doCommandBy: sel) == false,
+                "selector \(sel) should bubble to SwiftUI"
+            )
+        }
+    }
+
+    @Test func performKeyEquivalentClaimsCommandReturnWhenFocused() {
+        // ⌘⏎ is delivered to `performKeyEquivalent` (not `keyDown` on the
+        // text field, because the field editor owns first responder once
+        // the field is focused). The subclass must claim the event and
+        // invoke `onModifiedReturn`, otherwise AppKit emits the
+        // no-responder beep.
+        let field = ActivatingPaletteField()
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 200, height: 40),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: true
+        )
+        window.contentView?.addSubview(field)
+        _ = window.makeFirstResponder(field)
+
+        var receivedMode: PaletteEnterMode?
+        field.onModifiedReturn = { event in
+            receivedMode = PaletteTextField.Coordinator.enterMode(from: event)
+        }
+
+        guard let event = returnEvent(.command) else {
+            Issue.record("could not synthesise NSEvent for ⌘⏎")
+            return
+        }
+        #expect(field.performKeyEquivalent(with: event) == true)
+        #expect(receivedMode == .commandEnter)
+    }
+
+    @Test func performKeyEquivalentIgnoresPlainReturn() {
+        // Plain ⏎ must stay on the `keyDown` → `doCommandBy` path; if
+        // `performKeyEquivalent` claimed it the palette would double-commit
+        // (once here, once from `insertNewline:`).
+        let field = ActivatingPaletteField()
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 200, height: 40),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: true
+        )
+        window.contentView?.addSubview(field)
+        _ = window.makeFirstResponder(field)
+
+        var called = false
+        field.onModifiedReturn = { _ in called = true }
+
+        guard let event = returnEvent([]) else {
+            Issue.record("could not synthesise NSEvent for ⏎")
+            return
+        }
+        #expect(field.performKeyEquivalent(with: event) == false)
+        #expect(called == false)
+    }
+
+    @Test func performKeyEquivalentIgnoresWhenNotFocused() {
+        // If another view owns first responder, this field must not eat
+        // the ⌘⏎ — otherwise two palettes in the view tree would fight
+        // for the event.
+        let field = ActivatingPaletteField()
+        let sibling = NSTextField()
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 200, height: 40),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: true
+        )
+        window.contentView?.addSubview(field)
+        window.contentView?.addSubview(sibling)
+        _ = window.makeFirstResponder(sibling)
+
+        var called = false
+        field.onModifiedReturn = { _ in called = true }
+
+        guard let event = returnEvent(.command) else {
+            Issue.record("could not synthesise NSEvent for ⌘⏎")
+            return
+        }
+        #expect(field.performKeyEquivalent(with: event) == false)
+        #expect(called == false)
     }
 }

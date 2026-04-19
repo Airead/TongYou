@@ -285,7 +285,7 @@ struct CommandPaletteView: View {
 /// - Maps Enter / ⌘Enter / ⇧Enter / ⌥Enter to the four palette commit modes.
 /// - Swallows Up/Down/Tab so they bubble to the SwiftUI `onKeyPress` handlers
 ///   attached to the outer panel.
-private struct PaletteTextField: NSViewRepresentable {
+struct PaletteTextField: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
     let textColor: NSColor
@@ -319,10 +319,11 @@ private struct PaletteTextField: NSViewRepresentable {
                 field.currentEditor()?.selectedRange = NSRange(location: field.stringValue.count, length: 0)
             }
         }
-        // AppKit's field editor only dispatches `insertNewline:` for a bare
-        // Return key; ⌘/⇧/⌥ + Return never reach `doCommandBy` as a
-        // newline. Intercept them at keyDown so ⌘⏎ (split right), ⇧⏎
-        // (split below), and ⌥⏎ (float) all trigger the palette commit.
+        // ⌘⏎ travels through `performKeyEquivalent` — AppKit's field
+        // editor never forwards Cmd-modified Returns to `doCommandBy`,
+        // so without this hook it would hit the no-responder beep.
+        // ⇧⏎ / ⌥⏎ are handled separately via `doCommandBy` selectors
+        // (`insertLineBreak:` / `insertNewlineIgnoringFieldEditor:`).
         field.onModifiedReturn = { [onCommit] event in
             onCommit(Coordinator.enterMode(from: event))
         }
@@ -393,7 +394,15 @@ private struct PaletteTextField: NSViewRepresentable {
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             switch commandSelector {
-            case #selector(NSResponder.insertNewline(_:)):
+            case #selector(NSResponder.insertNewline(_:)),
+                 #selector(NSResponder.insertLineBreak(_:)),
+                 #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):
+                // Plain ⏎ → `insertNewline:`. ⇧⏎ and ⌥⏎ usually arrive
+                // as `insertLineBreak:` / `insertNewlineIgnoringFieldEditor:`
+                // — without intercepting them the field editor inserts a
+                // literal newline into the search box. Route all three
+                // through the same commit path; `enterMode(from:)` reads
+                // the current event's modifier flags to distinguish them.
                 onCommit(Self.enterMode(from: NSApp.currentEvent))
                 return true
             case #selector(NSResponder.cancelOperation(_:)):
@@ -426,12 +435,14 @@ private struct PaletteTextField: NSViewRepresentable {
 }
 
 /// NSTextField subclass that fires a callback when it is added to a window,
-/// so the representable can promote it to first responder. Also intercepts
-/// ⌘/⇧/⌥ + Return at keyDown so the palette can dispatch split-right /
-/// split-below / float commits — AppKit's field editor never forwards
-/// those modified Returns as `insertNewline:`, so the delegate path alone
-/// would miss them.
-private final class ActivatingPaletteField: NSTextField {
+/// so the representable can promote it to first responder. Also catches
+/// ⌘⏎ via `performKeyEquivalent` — once the field is focused its field
+/// editor (an NSTextView) becomes the first responder, so `keyDown`
+/// overrides on the NSTextField subclass never fire. Cmd-modified keys
+/// still travel through `performKeyEquivalent` on the key view hierarchy,
+/// which is the one reliable seam to intercept ⌘⏎ before it reaches
+/// the no-responder beep.
+final class ActivatingPaletteField: NSTextField {
     var onDidMoveToWindow: (() -> Void)?
     var onModifiedReturn: ((NSEvent) -> Void)?
 
@@ -440,18 +451,21 @@ private final class ActivatingPaletteField: NSTextField {
         if window != nil { onDidMoveToWindow?() }
     }
 
-    override func keyDown(with event: NSEvent) {
-        // Key code 36 is Return; 76 is the numpad Enter. Both should count.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // Key code 36 is Return; 76 is the numpad Enter.
         let isReturn = event.keyCode == 36 || event.keyCode == 76
-        // Only the primary four modifiers matter here — filter out
-        // capsLock/numericPad/function bits that can arrive unrelated to
-        // the user's intent.
-        let relevant: NSEvent.ModifierFlags = [.command, .shift, .option, .control]
+        let relevant: NSEvent.ModifierFlags = [.command, .control]
         let mods = event.modifierFlags.intersection(relevant)
-        if isReturn, !mods.isEmpty, let handler = onModifiedReturn {
+        // Only claim the event when the field actually owns input focus.
+        // Otherwise a palette-less window could still funnel ⌘⏎ through
+        // this branch if another ActivatingPaletteField lingered in the
+        // view tree.
+        let owns = window?.firstResponder === self
+            || window?.firstResponder === currentEditor()
+        if isReturn, !mods.isEmpty, owns, let handler = onModifiedReturn {
             handler(event)
-            return
+            return true
         }
-        super.keyDown(with: event)
+        return super.performKeyEquivalent(with: event)
     }
 }
