@@ -181,6 +181,8 @@ final class GUIAutomationService {
                 return .invalidParams("profile extends depth exceeded: \(chain.joined(separator: " -> "))")
             case .invalidOverrideLine(let index, let line):
                 return .invalidParams("overrides[\(index)] invalid: '\(line)'")
+            case .undefinedVariable(let name):
+                return .invalidParams("undefined profile variable: '${\(name)}'")
             }
         } catch {
             return .internal("profile resolve failed: \(error)")
