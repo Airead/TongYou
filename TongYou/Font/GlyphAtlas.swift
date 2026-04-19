@@ -69,7 +69,20 @@ final class GlyphAtlas {
     /// Number of active (non-evicted) entries.
     var activeEntryCount: Int { cache.count }
 
-    private static let evictionTriggerRatio: Double = 0.75
+    /// Utilization trigger while the atlas can still grow. Fire early
+    /// because doubling the texture is one cheap repack and we want
+    /// headroom for burst rasterization.
+    private static let growTriggerRatio: Double = 0.75
+
+    /// Utilization trigger once the atlas is capped at maxTextureSize.
+    /// Compact can no longer grow, so every percent kept as "safety
+    /// margin" is cache capacity paid for in VRAM but never used. Set
+    /// close to 1.0 to maximize usable cache at the cap. 5% headroom
+    /// still tolerates bursts of ~1200 new glyphs per frame at 4096²
+    /// before rasterization starts failing — well beyond realistic CJK
+    /// paste workloads (typical: <100 new/frame since most chars are
+    /// already cached).
+    private static let evictTriggerRatio: Double = 0.95
 
     private let maxTextureSize: UInt32
 
@@ -325,10 +338,16 @@ final class GlyphAtlas {
     func evictIfNeeded(fontSystem: FontSystem) -> Bool {
         guard cache.count > 0, frameNumber > lastEvictionFrame else { return false }
         lastEvictionFrame = frameNumber
-        // Utilization = used shelf area / total texture area
+        // Utilization = used shelf area / total texture area. Pick a
+        // looser trigger once the atlas is capped — below cap, fire
+        // early so compact can double the texture; at cap, fire late
+        // to keep more of the fixed capacity actually usable.
         let usedArea = Double(shelfY + shelfHeight) * Double(textureSize)
         let totalArea = Double(textureSize) * Double(textureSize)
-        guard usedArea / totalArea > Self.evictionTriggerRatio else { return false }
+        let trigger = (textureSize < maxTextureSize)
+            ? Self.growTriggerRatio
+            : Self.evictTriggerRatio
+        guard usedArea / totalArea > trigger else { return false }
 
         // Evict oldest 25% of cache entries
         let evictCount = max(1, cache.count / 4)
@@ -378,21 +397,20 @@ final class GlyphAtlas {
         )
     }
 
-    /// Choose smallest power-of-two texture size that fits the given entry count.
+    /// Target texture size for `compact()`.
     ///
-    /// Never returns smaller than the current `textureSize` — once the atlas
-    /// has grown (via `grow()` or a previous compact), we keep that capacity.
-    /// Shrinking back down would immediately fill up again under CJK input
-    /// and trigger the next compact, causing cache churn for no benefit.
+    /// `evictIfNeeded` only calls compact when vertical utilization already
+    /// exceeded the 75% trigger. Staying at the same size just means
+    /// re-hitting the trigger within seconds under sustained CJK input —
+    /// the old entry-count heuristic (based on average ASCII glyph area
+    /// and a 1.5× pixel-headroom) badly underestimated real CJK load and
+    /// ignored shelf-packing waste, producing per-second compact storms.
+    /// Grow whenever we have room; stay put only when already at the cap.
     private func compactTextureSize(entryCount: Int) -> UInt32 {
-        // Estimate needed area: entryCount * average glyph area * 1.5 headroom
-        let avgGlyphArea: Double = 17.0 * 21.0
-        let neededArea = Double(entryCount) * avgGlyphArea * 1.5
-        var size: UInt32 = textureSize
-        while Double(size * size) < neededArea && size < maxTextureSize {
-            size *= 2
+        if textureSize < maxTextureSize {
+            return textureSize * 2
         }
-        return size
+        return textureSize
     }
 
     // MARK: - Texture Creation

@@ -54,7 +54,9 @@ final class ColorEmojiAtlas {
     /// Number of active (non-evicted) entries.
     var activeEntryCount: Int { cache.count }
 
-    private static let evictionTriggerRatio: Double = 0.75
+    /// See `GlyphAtlas.growTriggerRatio` / `evictTriggerRatio` for rationale.
+    private static let growTriggerRatio: Double = 0.75
+    private static let evictTriggerRatio: Double = 0.95
 
     private let maxTextureSize: UInt32
 
@@ -352,10 +354,14 @@ final class ColorEmojiAtlas {
     func evictIfNeeded(fontSystem: FontSystem) -> Bool {
         guard cache.count > 0, frameNumber > lastEvictionFrame else { return false }
         lastEvictionFrame = frameNumber
-        // Utilization = used shelf area / total texture area
+        // Utilization = used shelf area / total texture area. Looser
+        // trigger at maxTextureSize — see GlyphAtlas for rationale.
         let usedArea = Double(shelfY + shelfHeight) * Double(textureSize)
         let totalArea = Double(textureSize) * Double(textureSize)
-        guard usedArea / totalArea > Self.evictionTriggerRatio else { return false }
+        let trigger = (textureSize < maxTextureSize)
+            ? Self.growTriggerRatio
+            : Self.evictTriggerRatio
+        guard usedArea / totalArea > trigger else { return false }
 
         // Evict oldest 25% of cache entries
         let evictCount = max(1, cache.count / 4)
@@ -395,20 +401,13 @@ final class ColorEmojiAtlas {
         )
     }
 
-    /// Choose smallest power-of-two texture size that fits the given entry count.
-    ///
-    /// Never shrinks below the current `textureSize` — see the matching
-    /// note on `GlyphAtlas.compactTextureSize` for rationale.
+    /// Target texture size for `compact()`. Grows whenever possible —
+    /// see the matching note on `GlyphAtlas.compactTextureSize`.
     private func compactTextureSize(entryCount: Int) -> UInt32 {
-        // Estimate needed area: entryCount * average emoji area * 1.5 headroom
-        // Emoji are typically larger than text glyphs (approx 64x64 at retina)
-        let avgEmojiArea: Double = 64.0 * 64.0
-        let neededArea = Double(entryCount) * avgEmojiArea * 1.5
-        var size: UInt32 = textureSize
-        while Double(size * size) < neededArea && size < maxTextureSize {
-            size *= 2
+        if textureSize < maxTextureSize {
+            return textureSize * 2
         }
-        return size
+        return textureSize
     }
 
     // MARK: - Texture Creation

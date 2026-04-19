@@ -216,6 +216,32 @@ struct GlyphAtlasTests {
         #expect(countAfter >= Int(Double(countBefore) * 0.7))
     }
 
+    @Test func compactGrowsTextureWhenBelowMaxSize() {
+        guard let (atlas, fontSystem) = makeAtlas(size: 256, maxSize: 1024) else {
+            Issue.record("Metal device not available")
+            return
+        }
+
+        // Fill past the 75% trigger so compact will fire.
+        for v: UInt32 in 0x4E00..<0x4E00 + 200 {
+            guard let s = Unicode.Scalar(v) else { continue }
+            _ = atlas.getOrRasterize(character: s, fontSystem: fontSystem)
+        }
+
+        let sizeBefore = atlas.textureSize
+
+        atlas.advanceFrame()
+        let compacted = atlas.evictIfNeeded(fontSystem: fontSystem)
+        #expect(compacted == true)
+
+        // compact() fires precisely because we were already at >75%
+        // utilization. Staying at the same size just trips the trigger
+        // again within a second, producing the per-second compact storm
+        // observed under CJK load. Require an actual grow.
+        #expect(atlas.textureSize > sizeBefore)
+        #expect(atlas.textureSize <= 1024)
+    }
+
     @Test func compactDoesNotShrinkTextureSize() {
         guard let (atlas, fontSystem) = makeAtlas(size: 128, maxSize: 256) else {
             Issue.record("Metal device not available")

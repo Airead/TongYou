@@ -204,12 +204,16 @@ struct ColorEmojiAtlasTests {
     }
 
     @Test func evictionRemovesStaleEntries() {
-        guard let (atlas, fontSystem) = makeAtlas(size: 128, maxSize: 256) else {
+        // Let the atlas grow so it exercises the 0.75 grow-trigger
+        // (the 0.95 at-max trigger requires very dense packing that's
+        // hard to hit with our fixed emoji set). Emoji sizes vary with
+        // font metrics — fill one-per-frame and stop the moment
+        // evictIfNeeded fires, then verify some entries were dropped.
+        guard let (atlas, fontSystem) = makeAtlas(size: 128, maxSize: 1024) else {
             Issue.record("Metal device not available")
             return
         }
 
-        // Fill atlas with many emojis, including larger ZWJ sequences
         let emojis: [GraphemeCluster] = [
             "😀", "😃", "😄", "😁", "😆", "😅", "😂", "🤣", "😊", "😇",
             "🙂", "🙃", "😉", "😌", "😍", "🥰", "😘", "😗", "😙", "😚",
@@ -222,17 +226,23 @@ struct ColorEmojiAtlasTests {
             "🤐", "🥴", "🤢", "🤮", "🤧", "😷", "🤒", "🤕", "🤑", "🤠",
         ].map { GraphemeCluster(Character($0)) }
 
+        var countBefore = 0
+        var countAfter = 0
+        var evictionFired = false
         for cluster in emojis {
             atlas.advanceFrame()
             _ = atlas.getOrRasterize(cluster: cluster, fontSystem: fontSystem)
+            let before = atlas.activeEntryCount
+            atlas.advanceFrame()
+            if atlas.evictIfNeeded(fontSystem: fontSystem) {
+                countBefore = before
+                countAfter = atlas.activeEntryCount
+                evictionFired = true
+                break
+            }
         }
 
-        let countBefore = atlas.activeEntryCount
-        atlas.advanceFrame()
-        atlas.evictIfNeeded(fontSystem: fontSystem)
-        let countAfter = atlas.activeEntryCount
-
-        // Some entries should have been evicted
+        #expect(evictionFired)
         #expect(countAfter < countBefore)
     }
 
