@@ -7,6 +7,35 @@ public enum SplitDirection: Equatable, Sendable, Codable {
     case vertical    // left / right
 }
 
+/// N-ary container node in the pane tree. Holds children under a given layout
+/// strategy with parallel relative weights. Invariant: `children.count ==
+/// weights.count && children.count >= 1`. The tree-pruning rule in the
+/// `LayoutEngine` collapses containers whose `children.count < 2`.
+///
+/// Introduced in P2 alongside the N-ary `PaneNode` migration. The BSP
+/// `.split` case remains as the current enum case until the enum is flipped
+/// in a subsequent commit.
+public struct Container: Equatable, Sendable, Identifiable {
+    public let id: UUID
+    public var strategy: LayoutStrategyKind
+    public var children: [PaneNode]
+    public var weights: [CGFloat]
+
+    public init(
+        id: UUID = UUID(),
+        strategy: LayoutStrategyKind,
+        children: [PaneNode],
+        weights: [CGFloat]
+    ) {
+        precondition(children.count == weights.count, "children.count must equal weights.count")
+        precondition(!children.isEmpty, "Container must have at least one child")
+        self.id = id
+        self.strategy = strategy
+        self.children = children
+        self.weights = weights
+    }
+}
+
 /// Binary tree representing the pane layout within a tab.
 ///
 /// - `.leaf`: A single terminal pane.
