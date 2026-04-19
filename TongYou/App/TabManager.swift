@@ -24,6 +24,7 @@ enum TabAction {
     case paneExited(UUID, exitCode: Int32)
     case growPane
     case shrinkPane
+    case toggleZoom
     // Floating pane management
     case newFloatingPane
     case closeFloatingPane(UUID)
@@ -313,7 +314,7 @@ final class TabManager {
             // Session actions are handled by SessionManager / TerminalWindowView.
             return false
         case .splitVertical, .splitHorizontal, .closePane,
-             .focusPane, .paneExited, .growPane, .shrinkPane,
+             .focusPane, .paneExited, .growPane, .shrinkPane, .toggleZoom,
              .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane,
              .rerunFloatingPaneCommand, .dismissExitedPane, .rerunExitedPaneCommand,
              .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession,

@@ -99,6 +99,11 @@ final class MetalView: NSView {
     /// Callback when this pane receives focus (mouse click).
     var onFocused: (() -> Void)?
 
+    /// Callback fired whenever the in-pane search bar opens or closes.
+    /// Consumed by `TerminalWindowView` to hide the zoom badge while search
+    /// is active (would otherwise visually conflict with the full-width bar).
+    var onSearchBarToggled: ((Bool) -> Void)?
+
     // MARK: - IME State
 
     /// Stores the in-progress composition text from the input method.
@@ -422,15 +427,18 @@ final class MetalView: NSView {
 
         searchBar = bar
         bar.activate()
+        onSearchBarToggled?(true)
     }
 
     private func closeSearchBar() {
+        let wasOpen = searchBar != nil
         searchBar?.removeFromSuperview()
         searchBar = nil
         searchResult = .empty
         renderer?.searchResult = nil  // didSet triggers markDirty
         wakeDisplayLink()
         window?.makeFirstResponder(self)
+        if wasOpen { onSearchBarToggled?(false) }
     }
 
     private func performSearch(query: String) {

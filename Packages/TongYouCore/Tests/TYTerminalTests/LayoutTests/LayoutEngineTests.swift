@@ -402,6 +402,137 @@ struct LayoutEngineTests {
         #expect(c.weights == [0.25, 0.75])
     }
 
+    // MARK: - toggleZoom / solveRects with zoom
+
+    @Test func toggleZoomSetsFieldOnFirstCall() {
+        let (a, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let tree = container(.vertical, [leafA, leafB], [1, 1])
+        let tab = makeTab(tree)
+
+        let zoomed = LayoutEngine.toggleZoom(tab: tab, paneID: a.id)
+        #expect(zoomed?.zoomedPaneID == a.id)
+    }
+
+    @Test func toggleZoomClearsWhenAlreadyZoomedPane() {
+        let (a, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let tree = container(.vertical, [leafA, leafB], [1, 1])
+        var tab = makeTab(tree)
+        tab.zoomedPaneID = a.id
+
+        let out = LayoutEngine.toggleZoom(tab: tab, paneID: a.id)
+        #expect(out?.zoomedPaneID == nil)
+    }
+
+    @Test func toggleZoomSwitchesToAnotherPane() {
+        // Zooming a different pane while one is already zoomed switches —
+        // it does not clear.
+        let (a, leafA) = leaf()
+        let (b, leafB) = leaf()
+        let tree = container(.vertical, [leafA, leafB], [1, 1])
+        var tab = makeTab(tree)
+        tab.zoomedPaneID = a.id
+
+        let out = LayoutEngine.toggleZoom(tab: tab, paneID: b.id)
+        #expect(out?.zoomedPaneID == b.id)
+    }
+
+    @Test func toggleZoomReturnsNilForUnknownPane() {
+        let (_, leafA) = leaf()
+        let tab = makeTab(leafA)
+        #expect(LayoutEngine.toggleZoom(tab: tab, paneID: UUID()) == nil)
+    }
+
+    @Test func solveRectsHonorsZoomedPaneID() {
+        // With zoomedPaneID set, every other pane drops out of the result
+        // and the zoomed pane fills the full screen rect.
+        let (a, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let (_, leafC) = leaf()
+        let tree = container(.vertical, [leafA, leafB, leafC], [1, 1, 1])
+        var tab = makeTab(tree)
+        tab.zoomedPaneID = a.id
+
+        let screen = Rect(x: 0, y: 0, width: 120, height: 40)
+        let rects = LayoutEngine.solveRects(tab: tab, screenRect: screen)
+        #expect(rects == [a.id: screen])
+    }
+
+    @Test func solveRectsIgnoresStaleZoomedPaneID() {
+        // zoomedPaneID points to a pane no longer in the tree → normal
+        // tiled layout is returned.
+        let (a, leafA) = leaf()
+        let (b, leafB) = leaf()
+        let tree = container(.vertical, [leafA, leafB], [1, 1])
+        var tab = makeTab(tree)
+        tab.zoomedPaneID = UUID()  // unknown
+
+        let screen = Rect(x: 0, y: 0, width: 100, height: 30)
+        let rects = LayoutEngine.solveRects(tab: tab, screenRect: screen)
+        #expect(rects[a.id] == Rect(x: 0, y: 0, width: 50, height: 30))
+        #expect(rects[b.id] == Rect(x: 50, y: 0, width: 50, height: 30))
+        #expect(rects.count == 2)
+    }
+
+    @Test func closePaneClearsZoomWhenZoomedPaneRemoved() {
+        let (a, leafA) = leaf()
+        let (b, leafB) = leaf()
+        let tree = container(.vertical, [leafA, leafB], [1, 1])
+        var tab = makeTab(tree)
+        tab.zoomedPaneID = a.id
+
+        guard case .closed(let newTab, _) = LayoutEngine.closePane(tab: tab, paneID: a.id) else {
+            Issue.record("expected .closed"); return
+        }
+        #expect(newTab.zoomedPaneID == nil)
+        // Zoom was on A; surviving tree is just leaf B.
+        if case .leaf(let p) = newTab.paneTree {
+            #expect(p.id == b.id)
+        } else {
+            Issue.record("expected collapsed leaf")
+        }
+    }
+
+    @Test func closePaneKeepsZoomWhenOtherPaneRemoved() {
+        let (a, leafA) = leaf()
+        let (b, leafB) = leaf()
+        let (_, leafC) = leaf()
+        let tree = container(.vertical, [leafA, leafB, leafC], [1, 1, 1])
+        var tab = makeTab(tree)
+        tab.zoomedPaneID = a.id
+
+        guard case .closed(let newTab, _) = LayoutEngine.closePane(tab: tab, paneID: b.id) else {
+            Issue.record("expected .closed"); return
+        }
+        #expect(newTab.zoomedPaneID == a.id)
+    }
+
+    @Test func sanitizeDropsStaleZoomedPaneID() {
+        // External tree write leaves `zoomedPaneID` pointing at a UUID that
+        // no longer exists in the tree → sanitize clears it.
+        let (_, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let tree = container(.vertical, [leafA, leafB], [1, 1])
+        var tab = makeTab(tree)
+        tab.zoomedPaneID = UUID()  // stale
+
+        let out = LayoutEngine.sanitize(tab: tab)
+        #expect(out.zoomedPaneID == nil)
+        #expect(out.paneTree == tree)
+    }
+
+    @Test func sanitizePreservesValidZoomedPaneID() {
+        let (a, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let tree = container(.vertical, [leafA, leafB], [1, 1])
+        var tab = makeTab(tree)
+        tab.zoomedPaneID = a.id
+
+        let out = LayoutEngine.sanitize(tab: tab)
+        #expect(out.zoomedPaneID == a.id)
+    }
+
     @Test func treeSanitizeCollapsesSingleChildContainer() {
         // Construct a deliberately-invalid tree: outer container with a
         // single child (should collapse under sanitize).

@@ -230,7 +230,8 @@ public enum LayoutEngine {
 
     /// `TerminalTab` convenience over `closePane(tree:…)`. Additionally
     /// keeps `focusedPaneID` consistent: if the tab was focused on the
-    /// closed pane, it is advanced to the promoted pane.
+    /// closed pane, it is advanced to the promoted pane. Exits zoom when
+    /// the zoomed pane is the one being closed (plan §P4.1).
     public static func closePane(tab: TerminalTab, paneID: UUID) -> CloseOutcome? {
         guard let outcome = closePane(tree: tab.paneTree, paneID: paneID) else { return nil }
         switch outcome {
@@ -241,6 +242,9 @@ public enum LayoutEngine {
             next.paneTree = newTree
             if next.focusedPaneID == paneID {
                 next.focusedPaneID = promoted
+            }
+            if next.zoomedPaneID == paneID {
+                next.zoomedPaneID = nil
             }
             return .closed(tab: next, promotedFocusID: promoted)
         }
@@ -262,12 +266,28 @@ public enum LayoutEngine {
         return next
     }
 
-    /// `TerminalTab` convenience over `sanitize(tree:…)`.
+    /// `TerminalTab` convenience over `sanitize(tree:…)`. Also drops
+    /// `zoomedPaneID` if the referenced pane has vanished from the tree
+    /// (e.g. external tree write deleted it).
     public static func sanitize(tab: TerminalTab) -> TerminalTab {
         let cleaned = sanitize(tree: tab.paneTree)
-        guard cleaned != tab.paneTree else { return tab }
+        let staleZoom = tab.zoomedPaneID.map { !cleaned.contains(paneID: $0) } ?? false
+        guard cleaned != tab.paneTree || staleZoom else { return tab }
         var next = tab
         next.paneTree = cleaned
+        if staleZoom { next.zoomedPaneID = nil }
+        return next
+    }
+
+    // MARK: - toggleZoom (tab-level)
+
+    /// Toggle the zoom / monocle state for `paneID` in `tab` (plan §P4.1).
+    /// When the pane is already zoomed, clears the flag; otherwise sets it.
+    /// Returns `nil` when `paneID` is not in `tab.paneTree`.
+    public static func toggleZoom(tab: TerminalTab, paneID: UUID) -> TerminalTab? {
+        guard tab.paneTree.contains(paneID: paneID) else { return nil }
+        var next = tab
+        next.zoomedPaneID = (tab.zoomedPaneID == paneID) ? nil : paneID
         return next
     }
 
@@ -275,14 +295,20 @@ public enum LayoutEngine {
 
     /// Map every leaf pane in the tab to its screen rect by recursively
     /// walking the tree and applying `LayoutDispatch.solve` at each
-    /// container. Floating panes and zoom state are out of scope in P3 —
-    /// `TerminalTab.zoomedPaneID` handling lands with P4.1.
+    /// container. Floating panes are out of scope.
+    ///
+    /// When `tab.zoomedPaneID` is set and still points to a pane in the
+    /// tree, only that pane is returned — filling the entire `screenRect`
+    /// (plan §P4.1). A stale `zoomedPaneID` is ignored.
     public static func solveRects(
         tab: TerminalTab,
         screenRect: Rect,
         minSize: Size = .defaultMin,
         dividerSize: Int = 0
     ) -> [UUID: Rect] {
+        if let zoomed = tab.zoomedPaneID, tab.paneTree.contains(paneID: zoomed) {
+            return [zoomed: screenRect]
+        }
         var result: [UUID: Rect] = [:]
         solveInto(
             node: tab.paneTree,

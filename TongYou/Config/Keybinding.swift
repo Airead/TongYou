@@ -132,6 +132,8 @@ struct Keybinding: Equatable {
         // Pane resize
         case growPane
         case shrinkPane
+        // Pane zoom / monocle
+        case toggleZoom
         // Floating pane management
         case newFloatingPane
         case toggleOrCreateFloatingPane
@@ -179,6 +181,7 @@ struct Keybinding: Equatable {
                 }
             case .growPane: "grow_pane"
             case .shrinkPane: "shrink_pane"
+            case .toggleZoom: "toggle_zoom"
             case .newFloatingPane: "new_floating_pane"
             case .toggleOrCreateFloatingPane: "toggle_or_create_floating_pane"
             case .listRemoteSessions: "list_remote_sessions"
@@ -266,6 +269,7 @@ struct Keybinding: Equatable {
             case .focusPane(let dir): .focusPane(dir)
             case .growPane: .growPane
             case .shrinkPane: .shrinkPane
+            case .toggleZoom: .toggleZoom
             case .newFloatingPane: .newFloatingPane
             case .toggleOrCreateFloatingPane: .toggleOrCreateFloatingPane
             case .listRemoteSessions: .listRemoteSessions
@@ -311,6 +315,7 @@ struct Keybinding: Equatable {
             case "focus_pane_down": self = .focusPane(.down)
             case "grow_pane": self = .growPane
             case "shrink_pane": self = .shrinkPane
+            case "toggle_zoom": self = .toggleZoom
             case "new_floating_pane": self = .newFloatingPane
             case "toggle_or_create_floating_pane": self = .toggleOrCreateFloatingPane
             case "list_remote_sessions": self = .listRemoteSessions
@@ -407,6 +412,8 @@ struct Keybinding: Equatable {
         // Pane resize
         Keybinding(modifiers: .option, key: "=", action: .growPane),
         Keybinding(modifiers: .option, key: "-", action: .shrinkPane),
+        // Pane zoom / monocle
+        Keybinding(modifiers: [.command, .shift], key: "f", action: .toggleZoom),
         // Floating pane management
         Keybinding(modifiers: .option, key: "f", action: .toggleOrCreateFloatingPane),
         Keybinding(modifiers: .option, key: "n", action: .newFloatingPane),

@@ -972,6 +972,33 @@ final class SessionManager {
         return false
     }
 
+    /// Toggle the zoom / monocle state of `paneID` within its owning tab
+    /// (plan §P4.1). When `inSessionID` is non-nil the lookup is scoped to
+    /// that session, otherwise the active session is used.
+    ///
+    /// Zoom is client-only UI state: not forwarded to the server. Remote
+    /// sessions zoom locally too so the keybinding feels consistent.
+    @discardableResult
+    func toggleZoom(inSessionID: UUID? = nil, paneID: UUID) -> Bool {
+        let targetIndex: Int
+        if let sid = inSessionID {
+            guard let i = sessions.firstIndex(where: { $0.id == sid }) else { return false }
+            targetIndex = i
+        } else {
+            guard sessions.indices.contains(activeSessionIndex) else { return false }
+            targetIndex = activeSessionIndex
+        }
+
+        for i in sessions[targetIndex].tabs.indices {
+            let tab = sessions[targetIndex].tabs[i]
+            guard let newTab = LayoutEngine.toggleZoom(tab: tab, paneID: paneID)
+            else { continue }
+            sessions[targetIndex].tabs[i] = newTab
+            return true
+        }
+        return false
+    }
+
     /// Replace the active tab's pane tree (e.g. after a divider drag), then
     /// run `LayoutEngine.sanitize` so any externally-produced invariant
     /// violations (stray empty / single-child containers) are cleaned up
@@ -1451,7 +1478,7 @@ final class SessionManager {
             // Session-level actions are handled by TerminalWindowView.
             return false
         case .splitVertical, .splitHorizontal, .closePane,
-             .focusPane, .paneExited, .growPane, .shrinkPane,
+             .focusPane, .paneExited, .growPane, .shrinkPane, .toggleZoom,
              .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane,
              .rerunFloatingPaneCommand, .dismissExitedPane, .rerunExitedPaneCommand,
              .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession,
