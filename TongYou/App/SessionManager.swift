@@ -151,9 +151,9 @@ final class SessionManager {
     /// Local session persistence store.
     private let localSessionStore: SessionStore
 
-    /// Debounced save work items per local session.
-    private var pendingLocalSaves: [UUID: DispatchWorkItem] = [:]
-    private let pendingLocalSavesLock = NSLock()
+    /// Debounced persistence: coalesces rapid mutation-triggered saves
+    /// into one disk write per ~0.5s per local session.
+    private var localSaveScheduler: DebouncedSaver<UUID>!
 
     /// Sidebar session sort order persisted alongside local sessions.
     private var sessionSortOrder: [UUID] = []
@@ -181,6 +181,10 @@ final class SessionManager {
         }
         self.profileLoader = loader
         self.profileMerger = ProfileMerger(loader: loader)
+
+        self.localSaveScheduler = DebouncedSaver<UUID> { [weak self] id in
+            self?.flushLocalSave(sessionID: id)
+        }
 
         MainActor.assumeIsolated {
             SessionManagerRegistry.shared.register(self)
@@ -2421,32 +2425,15 @@ final class SessionManager {
     }
 
     private func scheduleLocalSave(sessionID: UUID) {
-        pendingLocalSavesLock.lock()
-        pendingLocalSaves[sessionID]?.cancel()
-        let workItem = DispatchWorkItem { [weak self] in
-            self?.flushLocalSave(sessionID: sessionID)
-        }
-        pendingLocalSaves[sessionID] = workItem
-        pendingLocalSavesLock.unlock()
-
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.5, execute: workItem)
+        localSaveScheduler.schedule(sessionID)
     }
 
     private func cancelPendingLocalSave(sessionID: UUID) {
-        pendingLocalSavesLock.lock()
-        pendingLocalSaves.removeValue(forKey: sessionID)?.cancel()
-        pendingLocalSavesLock.unlock()
+        localSaveScheduler.cancel(sessionID)
     }
 
     func flushPendingLocalSaves() {
-        let ids: [UUID]
-        pendingLocalSavesLock.lock()
-        ids = Array(pendingLocalSaves.keys)
-        pendingLocalSaves.removeAll()
-        pendingLocalSavesLock.unlock()
-        for id in ids {
-            flushLocalSave(sessionID: id)
-        }
+        localSaveScheduler.flushAll()
     }
 
     private func flushLocalSave(sessionID: UUID) {
@@ -2540,24 +2527,13 @@ final class SessionManager {
         return nil
     }
 
-    private func resolvedUserShell() -> String {
-        if let shell = ProcessInfo.processInfo.environment["SHELL"], !shell.isEmpty {
-            return shell
-        }
-        return "/bin/zsh"
-    }
-
-    private func shellEscape(_ value: String) -> String {
-        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-
     private func resolveCommandPath(_ command: String, workingDirectory: String?) async -> String {
         let command = (command as NSString).expandingTildeInPath
         guard !command.contains("/") else { return command }
-        let shell = resolvedUserShell()
+        let shell = LoginShell.userShell(default: "/bin/zsh")
         let process = Process()
         process.executableURL = URL(fileURLWithPath: shell)
-        process.arguments = ["-l", "-c", "which \(shellEscape(command))"]
+        process.arguments = ["-l", "-c", "which \(LoginShell.escape(command))"]
         if let cwd = workingDirectory {
             process.currentDirectoryURL = URL(fileURLWithPath: cwd)
         }
@@ -2583,13 +2559,6 @@ final class SessionManager {
         }
     }
 
-    private func wrapCommandInLoginShell(_ command: String, arguments: [String]) -> (command: String, arguments: [String]) {
-        let shell = resolvedUserShell()
-        let parts = [command] + arguments
-        let escaped = parts.map(shellEscape).joined(separator: " ")
-        return (shell, ["-l", "-c", "exec \(escaped)"])
-    }
-
     func runInPlace(at paneID: UUID, command: String, arguments: [String] = []) async {
         // Remote pane: forward to daemon.
         if let remote = remoteControllers[paneID] {
@@ -2607,7 +2576,12 @@ final class SessionManager {
         active.suspend()
 
         let resolvedCommand = await resolveCommandPath(command, workingDirectory: active.currentWorkingDirectory)
-        let wrapped = wrapCommandInLoginShell(resolvedCommand, arguments: arguments)
+        let wrapped = LoginShell.wrap(
+            command: resolvedCommand,
+            arguments: arguments,
+            expandTilde: false,
+            defaultShell: "/bin/zsh"
+        )
 
         let dims = active.dimensions
         let controller = TerminalController(columns: dims.columns, rows: dims.rows)
@@ -2641,7 +2615,12 @@ final class SessionManager {
                 // Local floating pane — get cwd from whichever controller owns this pane.
                 let cwd = activeController(for: paneID)?.currentWorkingDirectory
                 let resolvedCommand = await resolveCommandPath(command, workingDirectory: cwd)
-                let wrapped = wrapCommandInLoginShell(resolvedCommand, arguments: arguments)
+                let wrapped = LoginShell.wrap(
+                command: resolvedCommand,
+                arguments: arguments,
+                expandTilde: false,
+                defaultShell: "/bin/zsh"
+            )
                 return createLocalCommandFloat(workingDirectory: cwd, command: wrapped.command, arguments: wrapped.arguments, closeOnExit: options.closeOnExit, customFrame: options.paneFrame)
             } else {
                 await runCommandInFloatingPane(at: paneID, command: command, arguments: arguments, closeOnExit: options.closeOnExit, customFrame: options.paneFrame)
@@ -2660,7 +2639,12 @@ final class SessionManager {
         } else {
             let cwd = activeController(for: paneID)?.currentWorkingDirectory
             let resolvedCommand = await resolveCommandPath(command, workingDirectory: cwd)
-            let wrapped = wrapCommandInLoginShell(resolvedCommand, arguments: arguments)
+            let wrapped = LoginShell.wrap(
+                command: resolvedCommand,
+                arguments: arguments,
+                expandTilde: false,
+                defaultShell: "/bin/zsh"
+            )
 
             let process = Process()
             process.executableURL = URL(fileURLWithPath: wrapped.command)

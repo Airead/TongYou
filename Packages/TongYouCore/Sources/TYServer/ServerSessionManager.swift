@@ -150,9 +150,9 @@ public final class ServerSessionManager {
     /// the original core is preserved here and restored when the overlay exits.
     private var overlayStacks: [PaneID: [TerminalCore]] = [:]
 
-    /// Debounced save work items per session to avoid synchronous disk I/O on every mutation.
-    private var pendingSaves: [SessionID: DispatchWorkItem] = [:]
-    private let pendingSavesLock = NSLock()
+    /// Debounced persistence: batches mutation-triggered saves so we
+    /// only write to disk at most once per 0.5s per session.
+    private var saveScheduler: DebouncedSaver<SessionID>!
 
     var onScreenDirty: ((SessionID, PaneID) -> Void)?
     var onTitleChanged: ((SessionID, PaneID, String) -> Void)?
@@ -167,13 +167,20 @@ public final class ServerSessionManager {
     public init(config: ServerConfig) {
         self.config = config
         if let directory = config.persistenceDirectory {
-            let store = SessionStore(directory: directory)
-            self.sessionStore = store
-            for persisted in store.loadAll() {
-                restoreSession(from: persisted)
-            }
+            self.sessionStore = SessionStore(directory: directory)
         } else {
             self.sessionStore = nil
+        }
+        // Initialise the scheduler before restoring so that any
+        // save-triggering code paths reached during restoration find
+        // a live scheduler instead of a nil IUO.
+        self.saveScheduler = DebouncedSaver<SessionID> { [weak self] id in
+            self?.flushSession(id: id)
+        }
+        if let sessionStore {
+            for persisted in sessionStore.loadAll() {
+                restoreSession(from: persisted)
+            }
         }
     }
 
@@ -239,10 +246,7 @@ public final class ServerSessionManager {
     }
 
     public func stopAllSessions() {
-        pendingSavesLock.lock()
-        for (_, item) in pendingSaves { item.cancel() }
-        pendingSaves.removeAll()
-        pendingSavesLock.unlock()
+        saveScheduler.cancelAll()
 
         for (_, session) in sessions {
             for tab in session.tabs { teardownAllPanes(in: tab) }
@@ -763,33 +767,15 @@ public final class ServerSessionManager {
 
     private func saveSession(id: SessionID) {
         guard sessions[id] != nil, sessionStore != nil else { return }
-
-        pendingSavesLock.lock()
-        pendingSaves[id]?.cancel()
-        let workItem = DispatchWorkItem { [weak self] in
-            self?.flushSession(id: id)
-        }
-        pendingSaves[id] = workItem
-        pendingSavesLock.unlock()
-
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.5, execute: workItem)
+        saveScheduler.schedule(id)
     }
 
     private func cancelPendingSave(id: SessionID) {
-        pendingSavesLock.lock()
-        pendingSaves.removeValue(forKey: id)?.cancel()
-        pendingSavesLock.unlock()
+        saveScheduler.cancel(id)
     }
 
     internal func flushPendingSaves() {
-        let ids: [SessionID]
-        pendingSavesLock.lock()
-        ids = Array(pendingSaves.keys)
-        pendingSaves.removeAll()
-        pendingSavesLock.unlock()
-        for id in ids {
-            flushSession(id: id)
-        }
+        saveScheduler.flushAll()
     }
 
     private func flushSession(id: SessionID) {
@@ -911,7 +897,7 @@ public final class ServerSessionManager {
         let cols = UInt16(clamping: originalCore.columns)
         let rows = UInt16(clamping: originalCore.rows)
 
-        let wrapped = wrapCommandInLoginShell(command, arguments: arguments)
+        let wrapped = LoginShell.wrap(command: command, arguments: arguments)
 
         let overlayCore = TerminalCore(
             columns: Int(cols),
@@ -976,7 +962,7 @@ public final class ServerSessionManager {
     public func runRemoteCommand(paneID: PaneID, command: String, arguments: [String]) {
         let cwd = resolvedWorkingDirectory(coreLookup[paneID]?.currentWorkingDirectory)
 
-        let wrapped = wrapCommandInLoginShell(command, arguments: arguments)
+        let wrapped = LoginShell.wrap(command: command, arguments: arguments)
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: wrapped.command)
@@ -1026,7 +1012,7 @@ public final class ServerSessionManager {
         wireStandardCallbacks(core, sessionID: sessionID, paneID: paneID)
         coreLookup[paneID] = core
 
-        let wrapped = wrapCommandInLoginShell(command, arguments: arguments)
+        let wrapped = LoginShell.wrap(command: command, arguments: arguments)
         do {
             try core.start(
                 command: wrapped.command, arguments: wrapped.arguments,
@@ -1080,29 +1066,10 @@ public final class ServerSessionManager {
     }
 
     private func resolvedWorkingDirectory(_ preferred: String? = nil) -> String {
-        preferred
-            ?? config.defaultWorkingDirectory
-            ?? ProcessInfo.processInfo.environment["HOME"]
-            ?? "/"
-    }
-
-    private func resolvedUserShell() -> String {
-        if let shell = ProcessInfo.processInfo.environment["SHELL"], !shell.isEmpty {
-            return shell
-        }
-        return "/bin/sh"
-    }
-
-    private func shellEscape(_ value: String) -> String {
-        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-
-    private func wrapCommandInLoginShell(_ command: String, arguments: [String]) -> (command: String, arguments: [String]) {
-        let shell = resolvedUserShell()
-        let expanded = (command as NSString).expandingTildeInPath
-        let parts = [expanded] + arguments
-        let escaped = parts.map(shellEscape).joined(separator: " ")
-        return (shell, ["-l", "-c", "exec \(escaped)"])
+        WorkingDirectory.resolved(
+            preferred: preferred,
+            defaultCwd: config.defaultWorkingDirectory
+        )
     }
 
     /// Create a new pane with its TerminalCore and start the PTY.
