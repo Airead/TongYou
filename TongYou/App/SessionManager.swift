@@ -547,6 +547,7 @@ final class SessionManager {
         title: String = "shell",
         profileID: String? = nil,
         overrides: [String] = [],
+        variables: [String: String] = [:],
         initialWorkingDirectory: String? = nil
     ) -> UUID? {
         let targetIndex: Int
@@ -565,12 +566,14 @@ final class SessionManager {
             let bundle = resolveRemoteStartupBundle(
                 profileID: profileID ?? TerminalPane.defaultProfileID,
                 overrides: overrides,
+                variables: variables,
                 initialWorkingDirectory: initialWorkingDirectory
             )
             remoteClient?.createTab(
                 sessionID: SessionID(serverSessionID),
                 profileID: bundle.profileID,
-                snapshot: bundle.snapshot
+                snapshot: bundle.snapshot,
+                variables: variables
             )
             return nil
         }
@@ -583,9 +586,109 @@ final class SessionManager {
         let initialPane = createPane(
             profileID: effectiveProfileID,
             overrides: overrides,
+            variables: variables,
             initialWorkingDirectory: initialWorkingDirectory
         )
         let tab = TerminalTab(title: title, initialPane: initialPane)
+        sessions[targetIndex].tabs.append(tab)
+        if GUIAutomationPolicy.shouldTakeViewFocus() {
+            sessions[targetIndex].activeTabIndex = sessions[targetIndex].tabs.count - 1
+        }
+        if attachedLocalSessionIDs.contains(session.id) {
+            for paneID in tab.allPaneIDsIncludingFloating {
+                _ = ensureLocalController(for: paneID)
+            }
+        }
+        scheduleLocalSaveIfNeeded(sessionID: session.id)
+        return tab.id
+    }
+
+    /// Spec for one pane in a batch grid tab. Mirrors the protocol-layer
+    /// `GridPaneSpec` but keeps the inputs as a client-facing profile id +
+    /// variables pair — `createTabWithGridPanes` resolves each spec
+    /// locally and threads it into either the `TerminalPane` tree (local
+    /// session) or the wire message (remote session).
+    struct GridPaneRequest: Equatable {
+        var profileID: String?
+        var variables: [String: String]
+        var overrides: [String]
+        var initialWorkingDirectory: String?
+
+        init(
+            profileID: String? = nil,
+            variables: [String: String] = [:],
+            overrides: [String] = [],
+            initialWorkingDirectory: String? = nil
+        ) {
+            self.profileID = profileID
+            self.variables = variables
+            self.overrides = overrides
+            self.initialWorkingDirectory = initialWorkingDirectory
+        }
+    }
+
+    /// Create a new tab seeded with N panes arranged as a canonical grid.
+    /// For local sessions the tree is materialised in one update so SwiftUI
+    /// lays out every pane at its final frame on the first pass (one PTY
+    /// resize per pane instead of one per intermediate split). For remote
+    /// sessions a single `createTabWithGridPanes` message is sent so the
+    /// server does the same work before broadcasting `layoutUpdate`.
+    ///
+    /// Returns the new tab's id when the caller can observe it locally
+    /// (local session, single pane). Remote sessions return nil — the tab
+    /// materialises when the server broadcasts `layoutUpdate`.
+    @discardableResult
+    func createTabWithGridPanes(
+        inSessionID: UUID? = nil,
+        title: String = "shell",
+        requests: [GridPaneRequest]
+    ) -> UUID? {
+        guard !requests.isEmpty else { return nil }
+        let targetIndex: Int
+        if let sid = inSessionID {
+            guard let i = sessions.firstIndex(where: { $0.id == sid }) else { return nil }
+            targetIndex = i
+        } else {
+            guard sessions.indices.contains(activeSessionIndex) else { return nil }
+            targetIndex = activeSessionIndex
+        }
+        let session = sessions[targetIndex]
+
+        if let serverSessionID = session.source.serverSessionID {
+            let specs = requests.map { req -> GridPaneSpec in
+                let bundle = resolveRemoteStartupBundle(
+                    profileID: req.profileID ?? TerminalPane.defaultProfileID,
+                    overrides: req.overrides,
+                    variables: req.variables,
+                    initialWorkingDirectory: req.initialWorkingDirectory
+                )
+                return GridPaneSpec(
+                    profileID: bundle.profileID,
+                    snapshot: bundle.snapshot,
+                    variables: req.variables
+                )
+            }
+            remoteClient?.createTabWithGridPanes(
+                sessionID: SessionID(serverSessionID),
+                specs: specs
+            )
+            return nil
+        }
+
+        let panes: [TerminalPane] = requests.map { req in
+            createPane(
+                profileID: req.profileID ?? TerminalPane.defaultProfileID,
+                overrides: req.overrides,
+                variables: req.variables,
+                initialWorkingDirectory: req.initialWorkingDirectory
+            )
+        }
+        let paneTree = LayoutEngine.canonicalGridTree(panes: panes)
+        let tab = TerminalTab(
+            id: UUID(),
+            title: title,
+            paneTree: paneTree
+        )
         sessions[targetIndex].tabs.append(tab)
         if GUIAutomationPolicy.shouldTakeViewFocus() {
             sessions[targetIndex].activeTabIndex = sessions[targetIndex].tabs.count - 1
@@ -841,6 +944,7 @@ final class SessionManager {
         direction: SplitDirection,
         profileID: String? = nil,
         overrides: [String] = [],
+        variables: [String: String] = [:],
         initialWorkingDirectory: String? = nil
     ) -> UUID? {
         let targetIndex: Int
@@ -862,9 +966,17 @@ final class SessionManager {
             let inheritedProfileID = profileID
                 ?? self.profileID(ofPane: parentPaneID)
                 ?? TerminalPane.defaultProfileID
+            // When the caller supplied no variables, propagate the parent
+            // pane's captured variables so templated profiles (ssh-prod
+            // etc.) can still resolve `${HOST}` / `${USER}` on the child
+            // split without making the user retype the target.
+            let inheritedVariables = variables.isEmpty
+                ? (self.variables(ofPane: parentPaneID) ?? [:])
+                : variables
             let bundle = resolveRemoteStartupBundle(
                 profileID: inheritedProfileID,
                 overrides: overrides,
+                variables: inheritedVariables,
                 initialWorkingDirectory: initialWorkingDirectory
             )
             remoteClient?.splitPane(
@@ -872,7 +984,8 @@ final class SessionManager {
                 paneID: PaneID(serverPaneUUID),
                 direction: direction,
                 profileID: bundle.profileID,
-                snapshot: bundle.snapshot
+                snapshot: bundle.snapshot,
+                variables: inheritedVariables
             )
             return nil
         }
@@ -880,10 +993,14 @@ final class SessionManager {
         let inheritedProfileID = profileID
             ?? self.profileID(ofPane: parentPaneID)
             ?? TerminalPane.defaultProfileID
+        let inheritedVariables = variables.isEmpty
+            ? (self.variables(ofPane: parentPaneID) ?? [:])
+            : variables
 
         let newPane = createPane(
             profileID: inheritedProfileID,
             overrides: overrides,
+            variables: inheritedVariables,
             initialWorkingDirectory: initialWorkingDirectory
         )
 
@@ -1193,6 +1310,7 @@ final class SessionManager {
     func createFloatingPane(
         profileID: String? = nil,
         overrides: [String] = [],
+        variables: [String: String] = [:],
         initialWorkingDirectory: String? = nil
     ) -> UUID? {
         guard sessions.indices.contains(activeSessionIndex),
@@ -1207,12 +1325,18 @@ final class SessionManager {
             let activeTab = session.activeTab
             let parentProfileID = activeTab?.focusedPaneID.flatMap { self.profileID(ofPane: $0) }
                 ?? activeTab?.paneTree.firstPane.profileID
+            let parentVariables = activeTab?.focusedPaneID.flatMap { self.variables(ofPane: $0) }
+                ?? activeTab?.paneTree.firstPane.variables
             let effectiveProfileID = profileID
                 ?? parentProfileID
                 ?? TerminalPane.defaultProfileID
+            let effectiveVariables = variables.isEmpty
+                ? (parentVariables ?? [:])
+                : variables
             let bundle = resolveRemoteStartupBundle(
                 profileID: effectiveProfileID,
                 overrides: overrides,
+                variables: effectiveVariables,
                 initialWorkingDirectory: initialWorkingDirectory
             )
             remoteClient?.createFloatingPane(
@@ -1220,6 +1344,7 @@ final class SessionManager {
                 tabID: tabIDs[session.activeTabIndex],
                 profileID: bundle.profileID,
                 snapshot: bundle.snapshot,
+                variables: effectiveVariables,
                 frameHint: bundle.frameHint
             )
             return nil
@@ -1228,13 +1353,19 @@ final class SessionManager {
         let activeTab = session.activeTab
         let parentProfileID = activeTab?.focusedPaneID.flatMap { self.profileID(ofPane: $0) }
             ?? activeTab?.paneTree.firstPane.profileID
+        let parentVariables = activeTab?.focusedPaneID.flatMap { self.variables(ofPane: $0) }
+            ?? activeTab?.paneTree.firstPane.variables
         let effectiveProfileID = profileID
             ?? parentProfileID
             ?? TerminalPane.defaultProfileID
+        let effectiveVariables = variables.isEmpty
+            ? (parentVariables ?? [:])
+            : variables
 
         let pane = createPane(
             profileID: effectiveProfileID,
             overrides: overrides,
+            variables: effectiveVariables,
             initialWorkingDirectory: initialWorkingDirectory
         )
         let floating = FloatingPane(pane: pane, frame: activeFloatingPanes.nextCascadedFrame(), zIndex: activeFloatingPanes.nextZIndex)
@@ -1314,6 +1445,13 @@ final class SessionManager {
         findPane(id: paneID)?.profileID
     }
 
+    /// Look up the variables (e.g. `${HOST}` / `${USER}`) captured on an
+    /// existing pane when it was created. Returns nil when the pane is
+    /// unknown; callers treat nil as "no variables" (empty dict).
+    func variables(ofPane paneID: UUID) -> [String: String]? {
+        findPane(id: paneID)?.variables
+    }
+
     /// Probe a profile id + overrides combination against the shared
     /// `ProfileMerger` without building a pane. Used by the automation
     /// layer to surface `PROFILE_NOT_FOUND` / `INVALID_PARAMS` *before*
@@ -1324,6 +1462,17 @@ final class SessionManager {
     /// appropriate transport-layer error.
     func tryResolveProfile(id: String, overrides: [String] = []) throws {
         _ = try profileMerger.resolve(profileID: id, overrides: overrides)
+    }
+
+    /// Probe `profileID` + `variables` without building a pane. Used by the
+    /// SSH palette (Phase 6) to surface `.undefinedVariable` etc. before it
+    /// invokes `createTab` (which would silently fall back to `default`).
+    func tryResolveProfile(
+        id: String,
+        overrides: [String] = [],
+        variables: [String: String]
+    ) throws {
+        _ = try profileMerger.resolve(profileID: id, overrides: overrides, variables: variables)
     }
 
     /// Resolved pieces the remote-create path needs to send over the wire.
@@ -1348,6 +1497,7 @@ final class SessionManager {
     func resolveRemoteStartupBundle(
         profileID: String?,
         overrides: [String],
+        variables: [String: String] = [:],
         initialWorkingDirectory: String?
     ) -> RemoteStartupBundle {
         let requestedID: String = {
@@ -1363,7 +1513,7 @@ final class SessionManager {
 
         let resolved: ResolvedProfile
         do {
-            resolved = try profileMerger.resolve(profileID: requestedID, overrides: overrides)
+            resolved = try profileMerger.resolve(profileID: requestedID, overrides: overrides, variables: variables)
         } catch {
             NSLog("SessionManager: remote profile '%@' resolve failed (%@); sending bare request",
                   requestedID, String(describing: error))
@@ -1409,6 +1559,7 @@ final class SessionManager {
     func createPane(
         profileID: String? = nil,
         overrides: [String] = [],
+        variables: [String: String] = [:],
         initialWorkingDirectory: String? = nil
     ) -> TerminalPane {
         let requestedID: String = {
@@ -1424,7 +1575,7 @@ final class SessionManager {
 
         let resolved: ResolvedProfile
         do {
-            resolved = try profileMerger.resolve(profileID: requestedID, overrides: overrides)
+            resolved = try profileMerger.resolve(profileID: requestedID, overrides: overrides, variables: variables)
         } catch {
             NSLog("SessionManager: profile '%@' resolve failed (%@); falling back to default",
                   requestedID, String(describing: error))
@@ -1455,6 +1606,7 @@ final class SessionManager {
         return TerminalPane(
             profileID: resolved.profileID,
             startupSnapshot: snapshot,
+            variables: variables,
             initialWorkingDirectory: initialWorkingDirectory ?? snapshot.cwd
         )
     }
@@ -1634,7 +1786,8 @@ final class SessionManager {
              .rerunFloatingPaneCommand, .dismissExitedPane, .rerunExitedPaneCommand,
              .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession,
              .renameSession, .runInPlace(_, _), .runCommand(_, _, _),
-             .paneNotification, .toggleBroadcastInput, .clearPaneSelection:
+             .paneNotification, .toggleBroadcastInput, .clearPaneSelection,
+             .showCommandPalette:
             // Pane/remote actions are handled by TerminalWindowView.
             return false
         }

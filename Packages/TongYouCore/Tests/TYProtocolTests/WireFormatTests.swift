@@ -305,15 +305,31 @@ struct WireFormatTests {
 
     @Test func roundTripCreateTab() throws {
         let sid = SessionID()
-        let msg = ClientMessage.createTab(sid, profileID: nil, snapshot: nil)
+        let msg = ClientMessage.createTab(sid, profileID: nil, snapshot: nil, variables: [:])
         let decoded = try encodeAndDecode(clientMessage: msg)
-        guard case .createTab(let id, let profileID, let snapshot) = decoded else {
+        guard case .createTab(let id, let profileID, let snapshot, let variables) = decoded else {
             Issue.record("Expected .createTab")
             return
         }
         #expect(id == sid)
         #expect(profileID == nil)
         #expect(snapshot == nil)
+        #expect(variables.isEmpty)
+    }
+
+    @Test func roundTripCreateTabWithVariables() throws {
+        // Variables round-trip with keys/values intact and order-independent
+        // (sorted on the wire, reconstructed as a dict).
+        let sid = SessionID()
+        let vars = ["HOST": "db1.prod", "USER": "alice"]
+        let msg = ClientMessage.createTab(sid, profileID: "ssh-prod", snapshot: nil, variables: vars)
+        let decoded = try encodeAndDecode(clientMessage: msg)
+        guard case .createTab(_, let profileID, _, let variables) = decoded else {
+            Issue.record("Expected .createTab")
+            return
+        }
+        #expect(profileID == "ssh-prod")
+        #expect(variables == vars)
     }
 
     @Test func roundTripCloseTab() throws {
@@ -332,15 +348,19 @@ struct WireFormatTests {
     @Test func roundTripSplitPane() throws {
         let sid = SessionID()
         let pid = PaneID()
-        let msg = ClientMessage.splitPane(sid, pid, .horizontal, profileID: nil, snapshot: nil)
+        let msg = ClientMessage.splitPane(
+            sid, pid, .horizontal,
+            profileID: nil, snapshot: nil, variables: [:]
+        )
         let decoded = try encodeAndDecode(clientMessage: msg)
-        guard case .splitPane(_, _, let dir, let profileID, let snapshot) = decoded else {
+        guard case .splitPane(_, _, let dir, let profileID, let snapshot, let variables) = decoded else {
             Issue.record("Expected .splitPane")
             return
         }
         #expect(dir == .horizontal)
         #expect(profileID == nil)
         #expect(snapshot == nil)
+        #expect(variables.isEmpty)
     }
 
     @Test func roundTripClosePane() throws {
@@ -698,10 +718,11 @@ struct WireFormatTests {
             sid, tid,
             profileID: "ci",
             snapshot: snapshot,
+            variables: [:],
             frameHint: frameHint
         )
         let decoded = try encodeAndDecode(clientMessage: msg)
-        guard case .createFloatingPane(let dSid, let dTid, let profileID, let decodedSnap, let decodedHint) = decoded else {
+        guard case .createFloatingPane(let dSid, let dTid, let profileID, let decodedSnap, _, let decodedHint) = decoded else {
             Issue.record("Expected .createFloatingPane")
             return
         }
@@ -715,9 +736,12 @@ struct WireFormatTests {
     @Test func roundTripCreateFloatingPaneMinimal() throws {
         let sid = SessionID()
         let tid = TabID()
-        let msg = ClientMessage.createFloatingPane(sid, tid, profileID: nil, snapshot: nil, frameHint: nil)
+        let msg = ClientMessage.createFloatingPane(
+            sid, tid,
+            profileID: nil, snapshot: nil, variables: [:], frameHint: nil
+        )
         let decoded = try encodeAndDecode(clientMessage: msg)
-        guard case .createFloatingPane(_, _, let profileID, let snapshot, let frameHint) = decoded else {
+        guard case .createFloatingPane(_, _, let profileID, let snapshot, _, let frameHint) = decoded else {
             Issue.record("Expected .createFloatingPane")
             return
         }

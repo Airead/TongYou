@@ -115,6 +115,7 @@ final class ConfigLoader {
     /// Always overwrites `system_config.txt` with the bundled template.
     func load() {
         writeSystemConfig()
+        Self.seedProfiles(into: Self.configDirectory())
         let (newConfig, entries, paths) = loadFromDisk()
         config = newConfig
         globalEntries = entries
@@ -170,6 +171,13 @@ final class ConfigLoader {
         configDirectory().appendingPathComponent("profiles")
     }
 
+    /// Returns the SSH template rules path (`~/.config/tongyou/ssh-rules.txt`).
+    /// The file is optional; `SSHRuleMatcher.load` returns an empty matcher
+    /// when it doesn't exist (see plan Phase 2 / Phase 9).
+    static func sshRulesPath() -> URL {
+        configDirectory().appendingPathComponent("ssh-rules.txt")
+    }
+
     // MARK: - System Config Generation
 
     /// Load the system config template from the bundle or source directory.
@@ -189,6 +197,88 @@ final class ConfigLoader {
         }
 
         fatalError("SystemConfig.txt is missing from the bundle and source directory.")
+    }
+
+    /// Seed the bundled profile templates (default + SSH variants + rules)
+    /// into the user's config directory the first time they are missing.
+    /// Unlike `system_config.txt`, these files are **not** overwritten on
+    /// subsequent launches — the user is expected to customise them.
+    ///
+    /// Each template is resolved from the app bundle first, then from the
+    /// adjacent source directory (dev / unit-test fallback, mirroring
+    /// `generateSystemConfig()`). A missing template logs a warning but
+    /// never aborts launch.
+    static func seedProfiles(into directory: URL) {
+        let fm = FileManager.default
+        do {
+            try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+            let profilesDir = directory.appendingPathComponent("profiles", isDirectory: true)
+            try fm.createDirectory(at: profilesDir, withIntermediateDirectories: true)
+        } catch {
+            print("[config] warning: could not create profile directories: \(error)")
+            return
+        }
+
+        let targets: [(resource: String, subpath: String)] = [
+            ("default", "profiles/default.txt"),
+            ("ssh", "profiles/ssh.txt"),
+            ("ssh-dev", "profiles/ssh-dev.txt"),
+            ("ssh-prod", "profiles/ssh-prod.txt"),
+            ("ssh-rules", "ssh-rules.txt"),
+        ]
+
+        for (resource, subpath) in targets {
+            let target = directory.appendingPathComponent(subpath)
+            // Respect any user-authored version — never overwrite.
+            if fm.fileExists(atPath: target.path) { continue }
+            guard let contents = loadBundledProfileTemplate(resource: resource) else {
+                print("[config] warning: bundled template '\(resource).txt' missing; skipping seed")
+                continue
+            }
+            do {
+                try contents.write(to: target, atomically: true, encoding: .utf8)
+            } catch {
+                print("[config] warning: could not seed \(subpath): \(error)")
+            }
+        }
+    }
+
+    /// Read a bundled profile template file (without the `.txt` suffix) from
+    /// the app bundle or, when running from SwiftPM / tests, from the source
+    /// tree next to this file. Returns nil when neither location has it so
+    /// callers can log and continue.
+    ///
+    /// Profile templates live under `TongYou/Config/Profiles/` in source;
+    /// inside the built .app they land at the bundle root (the synchronized
+    /// file system group flattens the directory structure). The lookup
+    /// tries the bundle-flat name first, then the source-tree subdirectory.
+    private static func loadBundledProfileTemplate(resource: String) -> String? {
+        let profileResources: Set<String> = ["default", "ssh", "ssh-dev", "ssh-prod"]
+        let bundleSubdir: String? = profileResources.contains(resource) ? "Profiles" : nil
+
+        let bundleCandidates: [URL] = [
+            Bundle.main.url(forResource: resource, withExtension: "txt"),
+            bundleSubdir.flatMap { Bundle.main.url(forResource: resource, withExtension: "txt", subdirectory: $0) },
+        ].compactMap { $0 }
+
+        for url in bundleCandidates {
+            if let content = try? String(contentsOf: url, encoding: .utf8) {
+                return content
+            }
+        }
+
+        // Dev / test fallback: walk up from this source file.
+        let sourceFile = URL(fileURLWithPath: #file)
+        let configDir = sourceFile.deletingLastPathComponent()
+        let devCandidates: [URL] = profileResources.contains(resource)
+            ? [configDir.appendingPathComponent("Profiles/\(resource).txt")]
+            : [configDir.appendingPathComponent("\(resource).txt")]
+        for url in devCandidates {
+            if let content = try? String(contentsOf: url, encoding: .utf8) {
+                return content
+            }
+        }
+        return nil
     }
 
     /// Overwrite system_config.txt with the bundled template on every launch.

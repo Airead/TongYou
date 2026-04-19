@@ -17,11 +17,39 @@ public struct RemotePaneMetadata: Equatable, Sendable, Codable {
     /// means "unspecified by server"; the client treats it the same as
     /// the default (tear down).
     public var closeOnExit: Bool?
+    /// Profile variables (e.g. `${HOST}`, `${USER}`) captured at pane
+    /// creation time. Needed so child splits can re-resolve the parent's
+    /// templated profile without the user having to re-type the target.
+    /// Empty dict is equivalent to "no variables".
+    public var variables: [String: String]
 
-    public init(cwd: String? = nil, profileID: String? = nil, closeOnExit: Bool? = nil) {
+    public init(
+        cwd: String? = nil,
+        profileID: String? = nil,
+        closeOnExit: Bool? = nil,
+        variables: [String: String] = [:]
+    ) {
         self.cwd = cwd
         self.profileID = profileID
         self.closeOnExit = closeOnExit
+        self.variables = variables
+    }
+
+    // Backwards-compatible decoding: older payloads without `variables`
+    // deserialise to an empty dict rather than failing.
+    private enum CodingKeys: String, CodingKey {
+        case cwd
+        case profileID
+        case closeOnExit
+        case variables
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.cwd = try container.decodeIfPresent(String.self, forKey: .cwd)
+        self.profileID = try container.decodeIfPresent(String.self, forKey: .profileID)
+        self.closeOnExit = try container.decodeIfPresent(Bool.self, forKey: .closeOnExit)
+        self.variables = try container.decodeIfPresent([String: String].self, forKey: .variables) ?? [:]
     }
 }
 
@@ -92,6 +120,28 @@ public struct FloatingPaneInfo: Equatable, Sendable, Codable {
         self.isPinned = isPinned
         self.isVisible = isVisible
         self.title = title
+    }
+}
+
+/// One pane to spawn as part of a batch `createTabWithGridPanes` request.
+/// Mirrors the fields `createTab` already carries, packaged so the wire
+/// format can ship an arbitrary-sized list in one message. The server
+/// spawns every spec up front, arranges them into a canonical grid tree,
+/// and sends a single `layoutUpdate` back — avoiding the N resize
+/// passes that sequential `splitPane` would cause.
+public struct GridPaneSpec: Equatable, Sendable {
+    public var profileID: String?
+    public var snapshot: StartupSnapshot?
+    public var variables: [String: String]
+
+    public init(
+        profileID: String? = nil,
+        snapshot: StartupSnapshot? = nil,
+        variables: [String: String] = [:]
+    ) {
+        self.profileID = profileID
+        self.snapshot = snapshot
+        self.variables = variables
     }
 }
 

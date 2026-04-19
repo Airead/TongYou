@@ -1,5 +1,6 @@
 import SwiftUI
 import TYClient
+import TYConfig
 import TYProtocol
 import TYTerminal
 
@@ -28,6 +29,13 @@ struct TerminalWindowView: View {
     @State private var suppressAutoSidebar = true
     @State private var showingSessionPicker = false
     @State private var renamingSessionIndex: Int?
+    @State private var commandPalette = CommandPaletteController()
+    /// Shared `SSHLauncher` for the command palette's SSH scope. Built once
+    /// per window so the history and on-disk rule / ssh_config state stay
+    /// in sync across palette opens. Wired in `init` because it needs
+    /// closures that reference the `sessionManager`.
+    @State private var sshLauncher: SSHLauncher
+    @State private var sshHistory = SSHHistory()
 
     /// IDs of panes whose in-pane search bar is currently open. Updated via
     /// `MetalView.onSearchBarToggled`. Consumed by `zoomedPaneView` to hide
@@ -50,9 +58,68 @@ struct TerminalWindowView: View {
     init() {
         let loader = ConfigLoader()
         _configLoader = State(initialValue: loader)
-        _sessionManager = State(initialValue: SessionManager(
-            profileLoader: loader.profileLoader
+        let manager = SessionManager(profileLoader: loader.profileLoader)
+        _sessionManager = State(initialValue: manager)
+        let history = SSHHistory()
+        _sshHistory = State(initialValue: history)
+        _sshLauncher = State(initialValue: SSHLauncher(
+            history: history,
+            validateProfile: { [weak manager] templateID, vars in
+                try manager?.tryResolveProfile(id: templateID, variables: vars)
+            },
+            spawn: { [weak manager] templateID, vars, placement in
+                guard let manager else { return nil }
+                return try Self.spawnSSH(
+                    manager: manager,
+                    templateID: templateID,
+                    variables: vars,
+                    placement: placement
+                )
+            }
         ))
+    }
+
+    /// Launch an SSH session with the resolved template + variables at the
+    /// requested placement. Returns the new pane's UUID when the underlying
+    /// SessionManager call exposes one synchronously (local sessions), nil
+    /// for remote sessions (server allocates asynchronously via
+    /// layoutUpdate) or when the split target could not be resolved.
+    /// Split into a static helper so `init` can capture it without
+    /// touching `self` (which is a struct; @State isn't initialised yet at
+    /// closure-capture time).
+    @MainActor
+    private static func spawnSSH(
+        manager: SessionManager,
+        templateID: String,
+        variables: [String: String],
+        placement: SSHPlacement
+    ) throws -> UUID? {
+        switch placement {
+        case .newTab:
+            return manager.createTab(
+                profileID: templateID,
+                variables: variables
+            )
+        case .splitRight(let parent), .currentTab(let parent):
+            return manager.splitPane(
+                parentPaneID: parent,
+                direction: .vertical,
+                profileID: templateID,
+                variables: variables
+            )
+        case .splitBelow(let parent):
+            return manager.splitPane(
+                parentPaneID: parent,
+                direction: .horizontal,
+                profileID: templateID,
+                variables: variables
+            )
+        case .floatPane:
+            return manager.createFloatingPane(
+                profileID: templateID,
+                variables: variables
+            )
+        }
     }
 
     var body: some View {
@@ -146,47 +213,7 @@ struct TerminalWindowView: View {
             }
         }
         .overlay {
-            if showingSessionPicker {
-                modalOverlay(onDismiss: { showingSessionPicker = false }) {
-                    SessionPickerView(
-                        sessions: sessionManager.sessions,
-                        activeSessionIndex: sessionManager.activeSessionIndex,
-                        attachedSessionIDs: sessionManager.allAttachedSessionIDs,
-                        onSelect: { index in
-                            switchToSessionFromPicker(at: index)
-                        },
-                        onDismiss: {
-                            showingSessionPicker = false
-                        },
-                        themeForeground: configLoader.config.foreground,
-                        themeBackground: configLoader.config.background
-                    )
-                }
-            }
-
-            if let index = renamingSessionIndex,
-               sessionManager.sessions.indices.contains(index) {
-                modalOverlay(onDismiss: { dismissRenamePanel() }) {
-                    SessionRenameView(
-                        currentName: sessionManager.sessions[index].name,
-                        onConfirm: { newName in
-                            sessionManager.renameSession(at: index, to: newName)
-                        },
-                        onDismiss: {
-                            dismissRenamePanel()
-                        }
-                    )
-                }
-            }
-
-            if sessionManager.connectionStatus != .idle {
-                DaemonConnectingOverlayView(
-                    status: sessionManager.connectionStatus,
-                    onDismiss: {
-                        sessionManager.dismissConnectionStatus()
-                    }
-                )
-            }
+            modalOverlays
         }
         .background(WindowConfigurator(
             backgroundColor: windowBackgroundColor,
@@ -245,6 +272,341 @@ struct TerminalWindowView: View {
                 let shouldShow = newIDs.contains(paneID) && paneID != focusManager.focusedPaneID
                 view.setNotificationRing(visible: shouldShow)
             }
+        }
+    }
+
+    /// All modal overlays (session picker, rename, daemon connecting, command
+    /// palette). Extracted out of `body` because inlining the chain exceeds
+    /// SwiftUI's type-checking budget.
+    @ViewBuilder
+    private var modalOverlays: some View {
+        if showingSessionPicker {
+            modalOverlay(onDismiss: { showingSessionPicker = false }) {
+                SessionPickerView(
+                    sessions: sessionManager.sessions,
+                    activeSessionIndex: sessionManager.activeSessionIndex,
+                    attachedSessionIDs: sessionManager.allAttachedSessionIDs,
+                    onSelect: { index in switchToSessionFromPicker(at: index) },
+                    onDismiss: { showingSessionPicker = false },
+                    themeForeground: configLoader.config.foreground,
+                    themeBackground: configLoader.config.background
+                )
+            }
+        }
+
+        if let index = renamingSessionIndex,
+           sessionManager.sessions.indices.contains(index) {
+            modalOverlay(onDismiss: { dismissRenamePanel() }) {
+                SessionRenameView(
+                    currentName: sessionManager.sessions[index].name,
+                    onConfirm: { newName in sessionManager.renameSession(at: index, to: newName) },
+                    onDismiss: { dismissRenamePanel() }
+                )
+            }
+        }
+
+        if sessionManager.connectionStatus != .idle {
+            DaemonConnectingOverlayView(
+                status: sessionManager.connectionStatus,
+                onDismiss: { sessionManager.dismissConnectionStatus() }
+            )
+        }
+
+        if commandPalette.isOpen {
+            modalOverlay(onDismiss: { dismissCommandPalette() }) {
+                CommandPaletteView(
+                    controller: commandPalette,
+                    themeForeground: configLoader.config.foreground,
+                    themeBackground: configLoader.config.background,
+                    onCommit: { mode in handlePaletteCommit(mode: mode) },
+                    onDismiss: { dismissCommandPalette() }
+                )
+            }
+        }
+    }
+
+    /// Single close path for the command palette. Restores first-responder
+    /// focus to the active tab's last-focused pane so keystrokes land on
+    /// the terminal immediately after the overlay goes away. Callers that
+    /// spawn a fresh pane (SSH commit) should *not* use this — the new
+    /// pane is focused by the commit path itself.
+    private func dismissCommandPalette() {
+        commandPalette.close()
+        restoreTabFocusedPane()
+    }
+
+    /// Dispatch a palette commit. Phase 6 handles the SSH scope's single-row
+    /// commit for the four Enter variants; Phase 7 adds a batch path for
+    /// multi-select. Other scopes fall through to a simple close (Phase 8).
+    private func handlePaletteCommit(mode: PaletteEnterMode) {
+        guard let committed = commandPalette.commit(mode: mode) else {
+            dismissCommandPalette()
+            return
+        }
+        switch commandPalette.scope {
+        case .ssh:
+            handleSSHCommit(rows: committed.rows, mode: mode)
+        case .session:
+            handleSessionCommit(rows: committed.rows, mode: mode)
+        case .profile:
+            handleProfileCommit(rows: committed.rows, mode: mode)
+        case .command:
+            handleCommandCommit(rows: committed.rows)
+        case .tab:
+            // Tab scope is still a placeholder — the rewire path leaves
+            // `tabCandidates` empty so this branch is unreachable for now.
+            dismissCommandPalette()
+        }
+    }
+
+    /// Profile-scope commit. Mirrors the SSH four-Enter mapping: plain
+    /// Enter opens a new tab with the chosen profile; ⌘Enter splits the
+    /// focused pane to the right, ⇧Enter splits below, ⌥Enter opens a
+    /// floating pane. Profiles are non-SSH so we pass an empty variables
+    /// dict — the profile is responsible for having a self-contained
+    /// command.
+    private func handleProfileCommit(rows: [PaletteRow], mode: PaletteEnterMode) {
+        guard let profileID = rows.first?.candidate.profileID else {
+            dismissCommandPalette()
+            return
+        }
+        commandPalette.close()
+        switch mode {
+        case .plain:
+            _ = sessionManager.createTab(profileID: profileID, variables: [:])
+        case .commandEnter:
+            if let parent = focusManager.focusedPaneID {
+                _ = sessionManager.splitPane(
+                    parentPaneID: parent, direction: .vertical,
+                    profileID: profileID, variables: [:]
+                )
+            } else {
+                _ = sessionManager.createTab(profileID: profileID, variables: [:])
+            }
+        case .shiftEnter:
+            if let parent = focusManager.focusedPaneID {
+                _ = sessionManager.splitPane(
+                    parentPaneID: parent, direction: .horizontal,
+                    profileID: profileID, variables: [:]
+                )
+            } else {
+                _ = sessionManager.createTab(profileID: profileID, variables: [:])
+            }
+        case .optionEnter:
+            _ = sessionManager.createFloatingPane(profileID: profileID, variables: [:])
+        }
+    }
+
+    /// Command-scope commit. Plain Enter only — modifiers have no meaning
+    /// in this scope and are ignored. Closes the palette first so the
+    /// dispatched action doesn't fight the overlay for first responder.
+    /// Only actions that map to a `TabAction` can be committed here; the
+    /// candidate builder filters the list to exactly those, so this
+    /// guard exists only as a belt-and-braces runtime check.
+    private func handleCommandCommit(rows: [PaletteRow]) {
+        guard let action = rows.first?.candidate.commandAction,
+              let tabAction = action.tabAction else {
+            dismissCommandPalette()
+            return
+        }
+        dismissCommandPalette()
+        handleTabAction(tabAction)
+    }
+
+    /// SSH scope commit. With a single row, Phase 6's four Enter variants
+    /// dispatch to new tab / split-right / split-below / float. With
+    /// multiple rows (Tab-multi-select), Phase 7 always runs the chained
+    /// right-split column regardless of modifier — the other variants are
+    /// reserved for future phases.
+    private func handleSSHCommit(rows: [PaletteRow], mode: PaletteEnterMode) {
+        let resolutions = rows.compactMap { $0.candidate.sshResolution }
+        guard !resolutions.isEmpty else {
+            dismissCommandPalette()
+            return
+        }
+        // The spawn path focuses the freshly created pane itself, so this
+        // close deliberately skips `dismissCommandPalette`'s focus-restore
+        // to avoid fighting with the new pane for first responder.
+        commandPalette.close()
+        if resolutions.count == 1 {
+            handleSingleSSHCommit(resolution: resolutions[0], mode: mode)
+        } else {
+            handleBatchSSHCommit(resolutions: resolutions)
+        }
+    }
+
+    /// Phase 6 single-row path. Split variants require a parent pane; when
+    /// no pane is focused we degrade to `newTab` so Enter is never a no-op
+    /// after typing a host.
+    private func handleSingleSSHCommit(resolution: SSHResolution, mode: PaletteEnterMode) {
+        let placement = sshPlacement(for: mode)
+        Task { @MainActor in
+            do {
+                try await sshLauncher.commit(
+                    resolution: resolution,
+                    placement: placement
+                )
+                rewirePaletteForSSH()
+            } catch let err as SSHLauncherError {
+                toastPresenter.show("SSH: \(err.localizedDescription)")
+            } catch {
+                toastPresenter.show("SSH: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Batch path. Opens every `resolution` in a brand-new tab, arranged
+    /// as a canonical grid in one shot — SessionManager builds the tree
+    /// before SwiftUI lays panes out, so every PTY sees exactly one
+    /// resize instead of one per intermediate split. Fails fast on the
+    /// first unresolvable profile and does **not** open any panes in that
+    /// case (toast only). Focus lands on the first pane of the new tab.
+    private func handleBatchSSHCommit(resolutions: [SSHResolution]) {
+        switch sshLauncher.validateBatch(resolutions: resolutions) {
+        case .failure(let failure):
+            toastPresenter.show(
+                "SSH: \"\(failure.target)\": \(failure.error.localizedDescription)"
+            )
+            return
+        case .success(let resolved):
+            let requests = resolved.map { resolution in
+                SessionManager.GridPaneRequest(
+                    profileID: resolution.templateID,
+                    variables: resolution.variables
+                )
+            }
+            let createdTabID = sessionManager.createTabWithGridPanes(
+                requests: requests
+            )
+            Task { @MainActor in
+                await sshLauncher.recordBatchHistory(resolutions: resolved)
+                rewirePaletteForSSH()
+                // Local sessions: focus the first pane of the new tab
+                // (canonicalGridTree's row-major order) so the user lands
+                // on the top-left terminal. Remote sessions return nil —
+                // the server broadcasts a layoutUpdate that lights up
+                // the new tab and restores focus naturally.
+                if let tabID = createdTabID,
+                   let tab = sessionManager.tabs.first(where: { $0.id == tabID }),
+                   let firstPaneID = tab.paneTree.allPaneIDs.first {
+                    focusManager.focusPane(id: firstPaneID)
+                }
+            }
+        }
+    }
+
+    // MARK: - Session-scope commit (Phase 8)
+
+    /// Decision surface for a session-scope palette commit. Pure so tests
+    /// can cover the modifier-to-action mapping without spinning up a
+    /// real window / SessionManager.
+    enum SessionCommitAction: Equatable {
+        /// Activate the session whose UUID matches. The palette stuffs
+        /// the session id into the candidate's own `id` field when
+        /// building session rows (session ids are already unique +
+        /// stable).
+        case activate(sessionID: UUID)
+        /// The modifier is not meaningful for sessions (no split / float
+        /// semantics). Caller should toast + close.
+        case notApplicable
+    }
+
+    /// Map a committed palette row + modifier to a session-scope action.
+    /// Plain Enter activates; any modifier is a no-op. Kept static so the
+    /// test does not need to construct a full view.
+    static func sessionCommitAction(
+        for row: PaletteRow,
+        mode: PaletteEnterMode
+    ) -> SessionCommitAction {
+        switch mode {
+        case .plain:
+            return .activate(sessionID: row.candidate.id)
+        case .commandEnter, .shiftEnter, .optionEnter:
+            return .notApplicable
+        }
+    }
+
+    /// Phase 8 session commit. Plain Enter flips `activeSessionIndex` to
+    /// the matching session; if the session has been closed since the
+    /// palette was populated, surface that quietly rather than silently
+    /// doing nothing. Detached sessions are attached before switching so
+    /// the user sees a live pane immediately — matching the quick-picker
+    /// behaviour in `switchToSessionFromPicker`.
+    private func handleSessionCommit(rows: [PaletteRow], mode: PaletteEnterMode) {
+        guard let row = rows.first else {
+            dismissCommandPalette()
+            return
+        }
+        dismissCommandPalette()
+        switch Self.sessionCommitAction(for: row, mode: mode) {
+        case .activate(let sessionID):
+            guard let index = sessionManager.sessions.firstIndex(
+                where: { $0.id == sessionID }
+            ) else {
+                toastPresenter.show("Session: \"\(row.candidate.primaryText)\" is no longer open")
+                return
+            }
+            if sessionManager.isSessionDetached(at: index) {
+                attachSessionAtIndex(index)
+            } else {
+                switchToSession(at: index)
+            }
+        case .notApplicable:
+            toastPresenter.show("Session scope: only Enter is supported (no split / float)")
+        }
+    }
+
+    /// Handle a ⌘⌫ inside the SSH scope: drop every history record whose
+    /// target matches, refresh the candidate list, and re-focus the
+    /// palette input so the user can keep pruning. Silent no-op when the
+    /// target has no history (ssh_config-only row) — the row stays
+    /// because ssh_config is the source of truth, not ours.
+    private func deleteSSHHistoryFromPalette(target: String) {
+        Task { @MainActor in
+            let dropped = await sshLauncher.deleteHistory(target: target)
+            rewirePaletteForSSH()
+            if dropped == 0 {
+                toastPresenter.show("SSH: \"\(target)\" 没有历史记录可删除")
+            }
+            commandPalette.requestRefocusInput()
+        }
+    }
+
+    /// Handle a ⌘⌫ inside the session scope: close the non-active session
+    /// with the given id and refresh candidates. Refuses to close the
+    /// currently active session — by design, palette delete must not
+    /// yank the pane the user is actively driving.
+    private func deleteSessionFromPalette(sessionID: UUID) {
+        guard let index = sessionManager.sessions.firstIndex(where: { $0.id == sessionID }) else {
+            rewirePaletteForSessions()
+            commandPalette.requestRefocusInput()
+            return
+        }
+        if index == sessionManager.activeSessionIndex {
+            toastPresenter.show("Session: 当前激活的 session 不能从面板删除")
+            commandPalette.requestRefocusInput()
+            return
+        }
+        closeSession(at: index, pickNext: false)
+        rewirePaletteForSessions()
+        commandPalette.requestRefocusInput()
+    }
+
+    /// Map Enter + modifier to a Phase 6 placement. Split variants fall
+    /// back to `newTab` when nothing is focused (e.g. a freshly launched
+    /// window with only a zombie pane).
+    private func sshPlacement(for mode: PaletteEnterMode) -> SSHPlacement {
+        switch mode {
+        case .plain:
+            return .newTab
+        case .commandEnter:
+            if let parent = focusManager.focusedPaneID { return .splitRight(parentPaneID: parent) }
+            return .newTab
+        case .shiftEnter:
+            if let parent = focusManager.focusedPaneID { return .splitBelow(parentPaneID: parent) }
+            return .newTab
+        case .optionEnter:
+            return .floatPane
         }
     }
 
@@ -889,7 +1251,220 @@ struct TerminalWindowView: View {
             toggleBroadcastInput()
         case .clearPaneSelection:
             clearPaneSelection()
+        case .showCommandPalette:
+            openCommandPalette()
         }
+    }
+
+    /// Refresh the palette's data sources (SSH history / rules / ssh_config
+    /// + session list + profiles + commands) and open. The palette lands
+    /// in session scope by default; typing `ssh <host>` / `p <profile>` /
+    /// `t <tab>` / `> cmd` switches scopes from inside the input.
+    private func openCommandPalette() {
+        Task { @MainActor in
+            await sshLauncher.reload(
+                ruleFileURL: ConfigLoader.sshRulesPath(),
+                sshConfigURL: SSHConfigHosts.defaultURL
+            )
+            rewirePaletteForSSH()
+            rewirePaletteForSessions()
+            rewirePaletteForProfiles()
+            rewirePaletteForCommands()
+            commandPalette.open()
+        }
+    }
+
+    /// Snapshot the current session list into palette candidates so the
+    /// session scope has something to fuzzy-match against. Recomputed on
+    /// every palette open — sessions can be opened/closed between opens,
+    /// and the data is small enough that incremental tracking is not worth
+    /// the complexity.
+    private func rewirePaletteForSessions() {
+        commandPalette.sessionCandidates = sessionManager.sessions.map(
+            Self.sessionPaletteCandidate(for:)
+        )
+        commandPalette.onDeleteSession = { sessionID in
+            self.deleteSessionFromPalette(sessionID: sessionID)
+        }
+    }
+
+    /// Build one session-scope palette row. The candidate's `id` reuses
+    /// `session.id` so the commit path can resolve the target directly
+    /// without a parallel lookup table.
+    @MainActor
+    private static func sessionPaletteCandidate(
+        for session: TerminalSession
+    ) -> PaletteCandidate {
+        let sourceLabel = session.source.isRemote ? "remote" : "local"
+        let tabs = session.tabCount
+        let tabsLabel = tabs == 1 ? "1 tab" : "\(tabs) tabs"
+        var subtitle = "\(sourceLabel) · \(tabsLabel)"
+        if session.isAnonymous { subtitle += " · unsaved" }
+        return PaletteCandidate(
+            id: session.id,
+            primaryText: session.name,
+            secondaryText: subtitle,
+            scope: .session
+        )
+    }
+
+    /// Enumerate loaded profiles into palette candidates sorted by id. The
+    /// subtitle shows the `extends` chain + background hex so the user can
+    /// distinguish similar-looking profiles at a glance.
+    private func rewirePaletteForProfiles() {
+        let profiles = configLoader.profileLoader.allRawProfiles
+        let sortedIDs = profiles.keys.sorted()
+        commandPalette.profileCandidates = sortedIDs.map { id in
+            Self.profilePaletteCandidate(
+                id: id,
+                raw: profiles[id],
+                backgroundHex: configLoader.profileLoader.resolvedLive(id: id).scalars["background"]
+            )
+        }
+    }
+
+    /// Build one profile-scope palette candidate. Static so it can be
+    /// unit-tested without a live `ProfileLoader`.
+    @MainActor
+    static func profilePaletteCandidate(
+        id: String,
+        raw: RawProfile?,
+        backgroundHex: String?
+    ) -> PaletteCandidate {
+        let extendsLabel = raw?.extendsID.map { "extends \($0)" }
+        let subtitle: String = {
+            let bgPart = backgroundHex.map { "#\($0)" }
+            let parts = [extendsLabel, bgPart].compactMap { $0 }
+            return parts.isEmpty ? "" : parts.joined(separator: " · ")
+        }()
+        return PaletteCandidate(
+            primaryText: id,
+            secondaryText: subtitle.isEmpty ? nil : subtitle,
+            scope: .profile,
+            accentHex: backgroundHex,
+            profileID: id
+        )
+    }
+
+    /// Build palette candidates for the command scope. Filters out
+    /// parameterized actions (goto_tab:N, run_command, run_in_place) and
+    /// any action whose `tabAction` is nil (those are handled at the
+    /// pane/editor level, not by the window-level dispatcher — offering
+    /// them here would dead-end on commit). Secondary text shows the
+    /// bound shortcut (if any) so the palette doubles as a shortcut
+    /// reference card.
+    private func rewirePaletteForCommands() {
+        let shortcutByAction = Self.shortcutIndex(for: configLoader.config.keybindings)
+        let actions: [Keybinding.Action] = Self.paletteCommandActions
+        commandPalette.commandCandidates = actions.compactMap { action in
+            guard let title = action.paletteDisplayTitle,
+                  action.tabAction != nil else { return nil }
+            return PaletteCandidate(
+                primaryText: title,
+                secondaryText: shortcutByAction[action],
+                scope: .command,
+                commandAction: action
+            )
+        }
+    }
+
+    /// Curated list of non-parameterized actions offered in the command
+    /// scope, in a deliberate order (palette rendering preserves insertion
+    /// order when the query is empty). Parameterized actions (`gotoTab`,
+    /// `runCommand`, `runInPlace`) are intentionally excluded — each one
+    /// would expand to dozens of variants in the flat list.
+    private static let paletteCommandActions: [Keybinding.Action] = [
+        .newSession, .closeSession, .previousSession, .nextSession,
+        .toggleSidebar,
+        .newTab, .closeTab, .previousTab, .nextTab,
+        .splitVertical, .splitHorizontal, .closePane,
+        .focusPane(.left), .focusPane(.right), .focusPane(.up), .focusPane(.down),
+        .movePane(.left), .movePane(.right), .movePane(.up), .movePane(.down),
+        .growPane, .shrinkPane, .toggleZoom,
+        .changeStrategy(.horizontal), .changeStrategy(.vertical),
+        .changeStrategy(.grid), .changeStrategy(.masterStack),
+        .cycleStrategy(forward: true), .cycleStrategy(forward: false),
+        .newFloatingPane, .toggleOrCreateFloatingPane,
+        .listRemoteSessions, .newRemoteSession, .showSessionPicker,
+        .detachSession, .renameSession,
+        .toggleBroadcastInput, .clearPaneSelection,
+        .showCommandPalette,
+    ]
+
+    /// Build `action → shortcut glyph` map from the active keybindings.
+    /// When an action has multiple bindings the first one wins — stable
+    /// enough for a reference display and avoids an ambiguous
+    /// "⌘P or ⌘⇧P" subtitle.
+    static func shortcutIndex(for bindings: [Keybinding]) -> [Keybinding.Action: String] {
+        var result: [Keybinding.Action: String] = [:]
+        for binding in bindings where result[binding.action] == nil {
+            result[binding.action] = binding.shortcutString
+        }
+        return result
+    }
+
+    /// Convert the launcher's current candidate list into `PaletteCandidate`
+    /// rows and install the ad-hoc fallback builder. Called whenever the
+    /// palette opens or the launcher's history changes after a successful
+    /// spawn.
+    private func rewirePaletteForSSH() {
+        commandPalette.sshCandidates = sshLauncher.candidates.map(paletteCandidate(for:))
+        commandPalette.sshAdHocBuilder = { [sshLauncher] query in
+            let adHoc = SSHCandidate(target: query, hostname: nil, isAdHoc: true)
+            let resolution = sshLauncher.resolve(candidate: adHoc)
+            return Self.paletteCandidate(
+                for: adHoc,
+                resolution: resolution,
+                backgroundHex: { template in
+                    configLoader.profileLoader.resolvedLive(id: template).scalars["background"]
+                }
+            )
+        }
+        commandPalette.onDeleteHistory = { target in
+            self.deleteSSHHistoryFromPalette(target: target)
+        }
+    }
+
+    /// Convert one launcher `SSHCandidate` into a palette row, capturing the
+    /// template choice + background swatch in the process.
+    private func paletteCandidate(for candidate: SSHCandidate) -> PaletteCandidate {
+        let resolution = sshLauncher.resolve(candidate: candidate)
+        return Self.paletteCandidate(
+            for: candidate,
+            resolution: resolution,
+            backgroundHex: { template in
+                configLoader.profileLoader.resolvedLive(id: template).scalars["background"]
+            }
+        )
+    }
+
+    /// Shared conversion used by both the normal candidate path and the
+    /// ad-hoc builder. Kept static so the ad-hoc closure doesn't capture
+    /// `self` implicitly.
+    @MainActor
+    private static func paletteCandidate(
+        for candidate: SSHCandidate,
+        resolution: SSHResolution,
+        backgroundHex: (String) -> String?
+    ) -> PaletteCandidate {
+        let primary: String
+        if candidate.isAdHoc {
+            primary = "Connect ad-hoc: \(candidate.target)"
+        } else {
+            primary = candidate.target
+        }
+        let hex = backgroundHex(resolution.templateID)
+        let subtitle: String = {
+            if let hex { return "\(resolution.templateID) · #\(hex)" }
+            return resolution.templateID
+        }()
+        return PaletteCandidate(
+            primaryText: primary,
+            secondaryText: subtitle,
+            scope: .ssh,
+            accentHex: hex,
+            sshResolution: resolution
+        )
     }
 
     /// Drop the active tab's multi-pane selection (and stop broadcasting if

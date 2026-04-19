@@ -1,0 +1,9 @@
+# SSH template for production environments.
+#
+# Inherits command/args/close-on-exit from `ssh` and overlays a dark-red
+# background. The visible colour difference is the primary safeguard
+# against running destructive commands in the wrong pane — keep it.
+
+extends = ssh
+background = 4a1818
+description = SSH prod: ${HOST}

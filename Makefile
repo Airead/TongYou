@@ -48,6 +48,8 @@ clean:
 	@echo "Cleaning SPM build artifacts..."
 	rm -rf .build build/spn $(PKG_DIR)/.build
 	rm -f *.d *.dia *.swiftdeps *.swiftmodule
+	@echo "Cleaning Xcode DerivedData for this project..."
+	rm -rf $(HOME)/Library/Developer/Xcode/DerivedData/TongYou-* $(HOME)/Library/Developer/Xcode/DerivedData/TongYouCore-*
 	@echo "Clean complete."
 
 run: build

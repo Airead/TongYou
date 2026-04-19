@@ -6,7 +6,7 @@ import TYTerminal
 /// Examples:
 /// - `run_local_command[pane]:git:status`       → `pane: true`
 /// - `run_local_command[output=pane]:git:log`    → `output: "pane"`
-struct CommandOptions: Equatable, Sendable {
+struct CommandOptions: Equatable, Hashable, Sendable {
     private var storage: [String: String] = [:]
 
     nonisolated static let empty = CommandOptions()
@@ -103,8 +103,42 @@ struct Keybinding: Equatable {
     /// The action to perform.
     let action: Action
 
+    /// Human-readable shortcut string (e.g. `⌘P`, `⌃⌥⇧G`). Used by the
+    /// command palette to render the accelerator next to the action name.
+    /// Named keys like `"left"` are rendered with the matching arrow glyph.
+    var shortcutString: String {
+        var parts = ""
+        if modifiers.contains(.control) { parts += "⌃" }
+        if modifiers.contains(.option)  { parts += "⌥" }
+        if modifiers.contains(.shift)   { parts += "⇧" }
+        if modifiers.contains(.command) { parts += "⌘" }
+        parts += Self.displayKey(for: key)
+        return parts
+    }
+
+    /// Map the config-file key token to the glyph shown in the palette.
+    /// Single-character tokens are uppercased; named keys (`"left"`,
+    /// `"return"`, …) get a prettier glyph where one exists.
+    private static func displayKey(for key: String) -> String {
+        switch key {
+        case "left":      return "←"
+        case "right":     return "→"
+        case "up":        return "↑"
+        case "down":      return "↓"
+        case "return":    return "↩"
+        case "enter":     return "⌤"
+        case "escape":    return "⎋"
+        case "tab":       return "⇥"
+        case "space":     return "␣"
+        case "delete", "backspace": return "⌫"
+        default:
+            // Single printable characters: uppercase so `⌘P` reads right.
+            return key.count == 1 ? key.uppercased() : key
+        }
+    }
+
     /// Actions that can be triggered by keybindings.
-    enum Action: Equatable {
+    enum Action: Equatable, Hashable {
         // Session management
         case newSession
         case closeSession
@@ -155,6 +189,10 @@ struct Keybinding: Equatable {
         case toggleBroadcastInput
         // Clear the multi-pane selection (and broadcast) for the active tab.
         case clearPaneSelection
+        // Command palette (⌘P). Opens the fuzzy command panel in session
+        // scope (the default). Prefixes inside the input switch to command
+        // / profile / tab / ssh scopes.
+        case showCommandPalette
         // Pass through to PTY (disables the keybinding)
         case unbind
 
@@ -216,6 +254,7 @@ struct Keybinding: Equatable {
                 Self.formatPrefixedAction(prefix: "run_command", command: cmd, arguments: args, options: opts)
             case .toggleBroadcastInput: "toggle_broadcast_input"
             case .clearPaneSelection: "clear_pane_selection"
+            case .showCommandPalette: "show_command_palette"
             case .unbind: "unbind"
             }
         }
@@ -334,10 +373,72 @@ struct Keybinding: Equatable {
             case .runCommand(let cmd, let args, let opts): .runCommand(command: cmd, arguments: args, options: opts)
             case .toggleBroadcastInput: .toggleBroadcastInput
             case .clearPaneSelection: .clearPaneSelection
+            case .showCommandPalette: .showCommandPalette
             case .copy, .paste, .search, .searchNext, .searchPrevious,
                  .resetFontSize, .increaseFontSize, .decreaseFontSize,
                  .unbind:
                 nil
+            }
+        }
+
+        /// Human-readable title shown in the command palette. Nil when the
+        /// action is parameterized (goto_tab:N, run_command, run_in_place,
+        /// unbind) — those are filtered out of the palette list.
+        var paletteDisplayTitle: String? {
+            switch self {
+            case .newSession: return "New session"
+            case .closeSession: return "Close session"
+            case .previousSession: return "Previous session"
+            case .nextSession: return "Next session"
+            case .toggleSidebar: return "Toggle sidebar"
+            case .newTab: return "New tab"
+            case .closeTab: return "Close tab"
+            case .previousTab: return "Previous tab"
+            case .nextTab: return "Next tab"
+            case .copy: return "Copy"
+            case .paste: return "Paste"
+            case .search: return "Find"
+            case .searchNext: return "Find next"
+            case .searchPrevious: return "Find previous"
+            case .resetFontSize: return "Reset font size"
+            case .increaseFontSize: return "Increase font size"
+            case .decreaseFontSize: return "Decrease font size"
+            case .splitVertical: return "Split pane right"
+            case .splitHorizontal: return "Split pane below"
+            case .closePane: return "Close pane"
+            case .focusPane(let dir):
+                switch dir {
+                case .left: return "Focus pane left"
+                case .right: return "Focus pane right"
+                case .up: return "Focus pane up"
+                case .down: return "Focus pane down"
+                }
+            case .movePane(let dir):
+                switch dir {
+                case .left: return "Move pane left"
+                case .right: return "Move pane right"
+                case .up: return "Move pane up"
+                case .down: return "Move pane down"
+                }
+            case .growPane: return "Grow pane"
+            case .shrinkPane: return "Shrink pane"
+            case .toggleZoom: return "Toggle pane zoom"
+            case .changeStrategy(let kind):
+                return "Layout: \(Self.strategyToken(for: kind).replacingOccurrences(of: "_", with: " "))"
+            case .cycleStrategy(let forward):
+                return forward ? "Next layout" : "Previous layout"
+            case .newFloatingPane: return "New floating pane"
+            case .toggleOrCreateFloatingPane: return "Toggle floating pane"
+            case .listRemoteSessions: return "List remote sessions"
+            case .newRemoteSession: return "New remote session"
+            case .showSessionPicker: return "Show session picker"
+            case .detachSession: return "Detach session"
+            case .renameSession: return "Rename session"
+            case .toggleBroadcastInput: return "Toggle broadcast input"
+            case .clearPaneSelection: return "Clear pane selection"
+            case .showCommandPalette: return "Show command palette"
+            case .gotoTab, .runInPlace, .runCommand, .unbind:
+                return nil
             }
         }
 
@@ -386,6 +487,7 @@ struct Keybinding: Equatable {
             case "rename_session": self = .renameSession
             case "toggle_broadcast_input": self = .toggleBroadcastInput
             case "clear_pane_selection": self = .clearPaneSelection
+            case "show_command_palette": self = .showCommandPalette
             case "unbind": self = .unbind
             default:
                 if rawValue.hasPrefix("goto_tab:"),
@@ -510,11 +612,12 @@ struct Keybinding: Equatable {
         // Remote session management
         Keybinding(modifiers: .command, key: "y", action: .listRemoteSessions),
         Keybinding(modifiers: [.command, .shift], key: "i", action: .newRemoteSession),
-        Keybinding(modifiers: .command, key: "r", action: .showSessionPicker),
         Keybinding(modifiers: [.command, .shift], key: "k", action: .detachSession),
         Keybinding(modifiers: [.command, .shift], key: "r", action: .renameSession),
         // Multi-pane selection
         Keybinding(modifiers: [.command, .option], key: ".", action: .clearPaneSelection),
+        // Command palette
+        Keybinding(modifiers: .command, key: "p", action: .showCommandPalette),
     ]
 
     /// Parse a keybinding string like "cmd+shift+t=new_tab".

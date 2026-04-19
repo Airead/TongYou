@@ -172,9 +172,23 @@ public final class RemoteSessionClient: @unchecked Sendable {
     public func createTab(
         sessionID: SessionID,
         profileID: String?,
-        snapshot: StartupSnapshot?
+        snapshot: StartupSnapshot?,
+        variables: [String: String] = [:]
     ) {
-        connection?.send(.createTab(sessionID, profileID: profileID, snapshot: snapshot))
+        connection?.send(.createTab(
+            sessionID, profileID: profileID, snapshot: snapshot, variables: variables
+        ))
+    }
+
+    /// Ship a batch `createTabWithGridPanes` request. The server spawns
+    /// every pane in one go, arranges them in a canonical grid, and emits
+    /// a single `layoutUpdate` — used by the command palette's batch SSH
+    /// path to avoid per-split resize churn on the remote side.
+    public func createTabWithGridPanes(
+        sessionID: SessionID,
+        specs: [GridPaneSpec]
+    ) {
+        connection?.send(.createTabWithGridPanes(sessionID, specs))
     }
 
     public func closeTab(sessionID: SessionID, tabID: TabID) {
@@ -186,12 +200,14 @@ public final class RemoteSessionClient: @unchecked Sendable {
         paneID: PaneID,
         direction: SplitDirection,
         profileID: String?,
-        snapshot: StartupSnapshot?
+        snapshot: StartupSnapshot?,
+        variables: [String: String] = [:]
     ) {
         connection?.send(.splitPane(
             sessionID, paneID, direction,
             profileID: profileID,
-            snapshot: snapshot
+            snapshot: snapshot,
+            variables: variables
         ))
     }
 
@@ -254,12 +270,14 @@ public final class RemoteSessionClient: @unchecked Sendable {
         tabID: TabID,
         profileID: String?,
         snapshot: StartupSnapshot?,
+        variables: [String: String] = [:],
         frameHint: FloatFrameHint?
     ) {
         connection?.send(.createFloatingPane(
             sessionID, tabID,
             profileID: profileID,
             snapshot: snapshot,
+            variables: variables,
             frameHint: frameHint
         ))
     }

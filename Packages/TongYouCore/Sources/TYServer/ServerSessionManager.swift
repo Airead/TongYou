@@ -16,6 +16,10 @@ struct ServerTab {
     /// panes only exist as `FloatingPaneInfo` (id + geometry), so we keep the
     /// profile association here and surface it through `toSessionInfo`.
     var floatingPaneProfileIDs: [PaneID: String] = [:]
+    /// Profile variables associated with each floating pane, keyed by paneID.
+    /// Parallels `floatingPaneProfileIDs` — tree panes carry `variables` on
+    /// `TerminalPane` directly, floating panes only have a geometry record.
+    var floatingPaneVariables: [PaneID: [String: String]] = [:]
     /// `closeOnExit` associated with each floating pane, keyed by paneID.
     /// Only populated when the originating `StartupSnapshot.closeOnExit` was
     /// explicitly set; a missing entry means "unspecified" (nil on the wire).
@@ -40,6 +44,18 @@ struct ServerTab {
             return pane.profileID
         }
         return floatingPaneProfileIDs[target]
+    }
+
+    /// Variables captured on the focused pane. Mirrors
+    /// `focusedPaneProfileID()` — checks the tree first and falls back to
+    /// the floating-pane table. Empty dict when the focused pane is a
+    /// non-templated profile (the usual case for `default`).
+    func focusedPaneVariables() -> [String: String] {
+        let target = focusedPaneID ?? PaneID(paneTree.firstPane.id)
+        if let pane = paneTree.findPane(id: target.uuid) {
+            return pane.variables
+        }
+        return floatingPaneVariables[target] ?? [:]
     }
 }
 
@@ -68,23 +84,28 @@ struct ServerSession {
         // Collect pane metadata from all tree panes and floating panes.
         var metadata: [PaneID: RemotePaneMetadata] = [:]
         for tab in tabs {
-            // Tree panes carry profileID + startupSnapshot directly on TerminalPane.
+            // Tree panes carry profileID + startupSnapshot + variables
+            // directly on TerminalPane.
             var treeProfileIDs: [PaneID: String] = [:]
             var treeCloseOnExit: [PaneID: Bool?] = [:]
+            var treeVariables: [PaneID: [String: String]] = [:]
             for pane in tab.paneTree.allPanes {
                 treeProfileIDs[PaneID(pane.id)] = pane.profileID
                 treeCloseOnExit[PaneID(pane.id)] = pane.startupSnapshot.closeOnExit
+                treeVariables[PaneID(pane.id)] = pane.variables
             }
             for paneUUID in tab.paneTree.allPaneIDs {
                 let pid = PaneID(paneUUID)
                 let cwd = coreLookup[pid]?.currentWorkingDirectory
                 let profileID = treeProfileIDs[pid]
                 let closeOnExit = treeCloseOnExit[pid] ?? nil
-                if cwd != nil || profileID != nil || closeOnExit != nil {
+                let variables = treeVariables[pid] ?? [:]
+                if cwd != nil || profileID != nil || closeOnExit != nil || !variables.isEmpty {
                     metadata[pid] = RemotePaneMetadata(
                         cwd: cwd,
                         profileID: profileID,
-                        closeOnExit: closeOnExit
+                        closeOnExit: closeOnExit,
+                        variables: variables
                     )
                 }
             }
@@ -92,11 +113,13 @@ struct ServerSession {
                 let cwd = coreLookup[fp.paneID]?.currentWorkingDirectory
                 let profileID = tab.floatingPaneProfileIDs[fp.paneID]
                 let closeOnExit = tab.floatingPaneCloseOnExit[fp.paneID]
-                if cwd != nil || profileID != nil || closeOnExit != nil {
+                let variables = tab.floatingPaneVariables[fp.paneID] ?? [:]
+                if cwd != nil || profileID != nil || closeOnExit != nil || !variables.isEmpty {
                     metadata[fp.paneID] = RemotePaneMetadata(
                         cwd: cwd,
                         profileID: profileID,
-                        closeOnExit: closeOnExit
+                        closeOnExit: closeOnExit,
+                        variables: variables
                     )
                 }
             }
@@ -275,7 +298,8 @@ public final class ServerSessionManager {
     public func createTab(
         sessionID: SessionID,
         profileID: String? = nil,
-        snapshot: StartupSnapshot? = nil
+        snapshot: StartupSnapshot? = nil,
+        variables: [String: String] = [:]
     ) -> TabID? {
         guard let session = sessions[sessionID] else { return nil }
 
@@ -289,7 +313,8 @@ public final class ServerSessionManager {
             sessionID: sessionID,
             workingDirectory: effectiveCwd,
             snapshot: snapshot,
-            profileID: profileID
+            profileID: profileID,
+            variables: variables
         )
         let paneTree = PaneNode.leaf(pane)
 
@@ -304,6 +329,50 @@ public final class ServerSessionManager {
         sessions[sessionID]!.activeTabIndex = sessions[sessionID]!.tabs.count - 1
         saveSession(id: sessionID)
         Log.info("Tab created: \(tabID) in session \(sessionID)", category: .session)
+        return tabID
+    }
+
+    /// Create a new tab seeded with N panes arranged as a canonical grid.
+    /// Each spec is spawned in order, then `LayoutEngine.canonicalGridTree`
+    /// builds the final tree in one shot; the single resulting layout is
+    /// broadcast so clients only reshape once rather than after every
+    /// individual pane creation. Empty spec list is a no-op (returns nil).
+    @discardableResult
+    public func createTabWithGridPanes(
+        sessionID: SessionID,
+        specs: [GridPaneSpec]
+    ) -> TabID? {
+        guard sessions[sessionID] != nil, !specs.isEmpty else { return nil }
+
+        let tabID = TabID()
+        var panes: [TerminalPane] = []
+        var cores: [PaneID: TerminalCore] = [:]
+        panes.reserveCapacity(specs.count)
+        for spec in specs {
+            let (paneID, pane, core) = createAndStartPane(
+                sessionID: sessionID,
+                snapshot: spec.snapshot,
+                profileID: spec.profileID,
+                variables: spec.variables
+            )
+            panes.append(pane)
+            cores[paneID] = core
+        }
+
+        let paneTree = LayoutEngine.canonicalGridTree(panes: panes)
+        let tab = ServerTab(
+            id: tabID,
+            title: "Tab",
+            paneTree: paneTree,
+            terminalCores: cores
+        )
+        sessions[sessionID]!.tabs.append(tab)
+        sessions[sessionID]!.activeTabIndex = sessions[sessionID]!.tabs.count - 1
+        saveSession(id: sessionID)
+        Log.info(
+            "Tab created with \(panes.count) grid panes: \(tabID) in session \(sessionID)",
+            category: .session
+        )
         return tabID
     }
 
@@ -354,24 +423,29 @@ public final class ServerSessionManager {
         paneID: PaneID,
         direction: SplitDirection,
         profileID: String? = nil,
-        snapshot: StartupSnapshot? = nil
+        snapshot: StartupSnapshot? = nil,
+        variables: [String: String] = [:]
     ) -> PaneID? {
         guard var session = sessions[sessionID] else { return nil }
         guard let tabIndex = session.tabIndex(for: paneID) else { return nil }
 
         // If the caller provided a snapshot, let it drive launch entirely.
-        // Otherwise inherit cwd + profileID from the parent pane (current behavior).
-        let parentProfileID = session.tabs[tabIndex].paneTree
-            .findPane(id: paneID.uuid)?.profileID
+        // Otherwise inherit cwd + profileID + variables from the parent
+        // pane so templated profiles keep their `${HOST}` substitution.
+        let parentPane = session.tabs[tabIndex].paneTree.findPane(id: paneID.uuid)
+        let parentProfileID = parentPane?.profileID
+        let parentVariables = parentPane?.variables ?? [:]
         let sourceCwd = coreLookup[paneID]?.currentWorkingDirectory
         let effectiveProfileID = profileID ?? parentProfileID
+        let effectiveVariables = variables.isEmpty ? parentVariables : variables
         let effectiveCwd = snapshot == nil ? sourceCwd : nil
 
         let (newPaneID, newPane, core) = createAndStartPane(
             sessionID: sessionID,
             workingDirectory: effectiveCwd,
             snapshot: snapshot,
-            profileID: effectiveProfileID
+            profileID: effectiveProfileID,
+            variables: effectiveVariables
         )
 
         guard let newTree = LayoutEngine.splitPane(
@@ -617,23 +691,28 @@ public final class ServerSessionManager {
         tabID: TabID,
         profileID: String? = nil,
         snapshot: StartupSnapshot? = nil,
+        variables: [String: String] = [:],
         frameHint: FloatFrameHint? = nil
     ) -> PaneID? {
         guard var session = sessions[sessionID] else { return nil }
         guard let tabIndex = session.tabs.firstIndex(where: { $0.id == tabID }) else { return nil }
 
         // If caller provided a snapshot, let it drive launch. Otherwise
-        // inherit cwd + profile from the focused pane of the target tab.
+        // inherit cwd + profile + variables from the focused pane of the
+        // target tab.
         let focusedCwd = session.tabs[tabIndex].focusedPaneCwd(coreLookup: coreLookup)
         let parentProfileID = session.tabs[tabIndex].focusedPaneProfileID()
+        let parentVariables = session.tabs[tabIndex].focusedPaneVariables()
         let effectiveProfileID = profileID ?? parentProfileID
+        let effectiveVariables = variables.isEmpty ? parentVariables : variables
         let effectiveCwd = snapshot == nil ? focusedCwd : nil
 
         let (paneID, pane, core) = createAndStartPane(
             sessionID: sessionID,
             workingDirectory: effectiveCwd,
             snapshot: snapshot,
-            profileID: effectiveProfileID
+            profileID: effectiveProfileID,
+            variables: effectiveVariables
         )
         let nextZ = (session.tabs[tabIndex].floatingPanes.max(by: { $0.zIndex < $1.zIndex })?.zIndex ?? -1) + 1
         var fp = FloatingPaneInfo(paneID: paneID, zIndex: nextZ)
@@ -647,6 +726,9 @@ public final class ServerSessionManager {
         session.tabs[tabIndex].floatingPanes.append(fp)
         session.tabs[tabIndex].floatingPaneCores[paneID] = core
         session.tabs[tabIndex].floatingPaneProfileIDs[paneID] = pane.profileID
+        if !pane.variables.isEmpty {
+            session.tabs[tabIndex].floatingPaneVariables[paneID] = pane.variables
+        }
         if let explicitCloseOnExit = pane.startupSnapshot.closeOnExit {
             session.tabs[tabIndex].floatingPaneCloseOnExit[paneID] = explicitCloseOnExit
         }
@@ -665,6 +747,7 @@ public final class ServerSessionManager {
         }
         session.tabs[tabIndex].floatingPanes.removeAll { $0.paneID == paneID }
         session.tabs[tabIndex].floatingPaneProfileIDs.removeValue(forKey: paneID)
+        session.tabs[tabIndex].floatingPaneVariables.removeValue(forKey: paneID)
         session.tabs[tabIndex].floatingPaneCloseOnExit.removeValue(forKey: paneID)
         sessions[sessionID] = session
         saveSession(id: sessionID)
@@ -1089,7 +1172,8 @@ public final class ServerSessionManager {
         workingDirectory: String? = nil,
         paneID: PaneID? = nil,
         snapshot: StartupSnapshot? = nil,
-        profileID: String? = nil
+        profileID: String? = nil,
+        variables: [String: String] = [:]
     ) -> (PaneID, TerminalPane, TerminalCore) {
         let effectiveProfileID = profileID ?? TerminalPane.defaultProfileID
         let resolvedSnapshot = snapshot ?? StartupSnapshot(cwd: workingDirectory)
@@ -1102,12 +1186,14 @@ public final class ServerSessionManager {
                 id: paneID.uuid,
                 profileID: effectiveProfileID,
                 startupSnapshot: resolvedSnapshot,
+                variables: variables,
                 initialWorkingDirectory: workingDirectory
             )
         } else {
             pane = TerminalPane(
                 profileID: effectiveProfileID,
                 startupSnapshot: resolvedSnapshot,
+                variables: variables,
                 initialWorkingDirectory: workingDirectory
             )
             actualPaneID = PaneID(pane.id)

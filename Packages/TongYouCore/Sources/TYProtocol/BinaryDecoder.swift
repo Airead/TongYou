@@ -130,6 +130,20 @@ public struct BinaryDecoder: Sendable {
         return result
     }
 
+    /// Read a count-prefixed `[String: String]` map (UInt16 count + key/value
+    /// length-prefixed strings). Mirrors `BinaryEncoder.writeStringMap`.
+    public mutating func readStringMap() throws -> [String: String] {
+        let count = Int(try readUInt16())
+        var result: [String: String] = [:]
+        result.reserveCapacity(count)
+        for _ in 0..<count {
+            let key = try readString()
+            let value = try readString()
+            result[key] = value
+        }
+        return result
+    }
+
     /// Read a length-prefixed byte array (UInt32 length + bytes).
     public mutating func readBytes() throws -> [UInt8] {
         let length = Int(try readUInt32())
@@ -528,7 +542,13 @@ public struct BinaryDecoder: Sendable {
                 rawValue: UInt64(closeOnExitRaw)
             )
         }
-        return RemotePaneMetadata(cwd: cwd, profileID: profileID, closeOnExit: closeOnExit)
+        let variables = try readStringMap()
+        return RemotePaneMetadata(
+            cwd: cwd,
+            profileID: profileID,
+            closeOnExit: closeOnExit,
+            variables: variables
+        )
     }
 
     /// Decode a `TabInfo` from the buffer.
@@ -676,7 +696,8 @@ public struct BinaryDecoder: Sendable {
             let sessionID = try readSessionID()
             let profileID = try readOptionalString()
             let snapshot = try readOptionalStartupSnapshot()
-            return .createTab(sessionID, profileID: profileID, snapshot: snapshot)
+            let variables = try readStringMap()
+            return .createTab(sessionID, profileID: profileID, snapshot: snapshot, variables: variables)
 
         case .closeTab:
             let sessionID = try readSessionID()
@@ -689,7 +710,8 @@ public struct BinaryDecoder: Sendable {
             let direction = try readSplitDirection()
             let profileID = try readOptionalString()
             let snapshot = try readOptionalStartupSnapshot()
-            return .splitPane(sessionID, paneID, direction, profileID: profileID, snapshot: snapshot)
+            let variables = try readStringMap()
+            return .splitPane(sessionID, paneID, direction, profileID: profileID, snapshot: snapshot, variables: variables)
 
         case .closePane:
             let sessionID = try readSessionID()
@@ -717,11 +739,13 @@ public struct BinaryDecoder: Sendable {
             let tabID = try readTabID()
             let profileID = try readOptionalString()
             let snapshot = try readOptionalStartupSnapshot()
+            let variables = try readStringMap()
             let frameHint = try readOptionalFloatFrameHint()
             return .createFloatingPane(
                 sessionID, tabID,
                 profileID: profileID,
                 snapshot: snapshot,
+                variables: variables,
                 frameHint: frameHint
             )
 
@@ -792,6 +816,23 @@ public struct BinaryDecoder: Sendable {
             let paneID = try readPaneID()
             let kind = try readLayoutStrategyKind()
             return .changeStrategy(sessionID, paneID, kind)
+
+        case .createTabWithGridPanes:
+            let sessionID = try readSessionID()
+            let count = Int(try readUInt16())
+            var specs: [GridPaneSpec] = []
+            specs.reserveCapacity(count)
+            for _ in 0..<count {
+                let profileID = try readOptionalString()
+                let snapshot = try readOptionalStartupSnapshot()
+                let variables = try readStringMap()
+                specs.append(GridPaneSpec(
+                    profileID: profileID,
+                    snapshot: snapshot,
+                    variables: variables
+                ))
+            }
+            return .createTabWithGridPanes(sessionID, specs)
         }
     }
 }

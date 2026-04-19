@@ -470,6 +470,17 @@ public enum LayoutEngine {
     }
 
     /// Build the canonical nested grid tree for `panes` in row-major order.
+    /// Callers that want a grid shape built from fresh panes (e.g. the
+    /// command palette's batch SSH flow) should use this directly instead
+    /// of splitting one pane at a time — it avoids the per-split resize
+    /// churn.
+    public static func canonicalGridTree(panes: [TerminalPane]) -> PaneNode {
+        precondition(panes.count >= 1, "grid tree requires at least one pane")
+        if panes.count == 1 { return .leaf(panes[0]) }
+        return buildGridTree(panes: panes)
+    }
+
+    /// Build the canonical nested grid tree for `panes` in row-major order.
     /// Outer container is `.horizontal` (rows stacked top-to-bottom); each
     /// row is a `.vertical` container (panes stacked left-to-right), except
     /// when a row has a single pane, in which case the bare leaf is used so
