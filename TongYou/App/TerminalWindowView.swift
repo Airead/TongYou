@@ -887,7 +887,19 @@ struct TerminalWindowView: View {
             }
         case .toggleBroadcastInput:
             toggleBroadcastInput()
+        case .clearPaneSelection:
+            clearPaneSelection()
         }
+    }
+
+    /// Drop the active tab's multi-pane selection (and stop broadcasting if
+    /// it was on). No-op when nothing was selected — we stay silent instead
+    /// of flashing a misleading toast.
+    private func clearPaneSelection() {
+        guard let activeTab = sessionManager.activeTab else { return }
+        let wasBroadcasting = paneSelectionManager.isBroadcasting(tab: activeTab.id)
+        guard paneSelectionManager.clearSelection(inTab: activeTab.id) else { return }
+        toastPresenter.show(wasBroadcasting ? "已清空选中 · 广播关闭" : "已清空选中")
     }
 
     /// Flip broadcast-input on the active tab. When no explicit selection

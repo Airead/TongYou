@@ -140,7 +140,7 @@ daemon-auto-exit-on-no-sessions = false
 #   detach_session, rename_session,
 #   run_in_place:command, run_in_place:command:arg1,arg2,
 #   run_command[opts]:command, run_command[opts]:command:arg1,arg2,
-#   toggle_broadcast_input,
+#   toggle_broadcast_input, clear_pane_selection,
 #   unbind
 #
 # run_in_place    – Suspend the active shell, run command full-screen,
@@ -261,7 +261,9 @@ keybind = cmd+shift+r=rename_session
 # Broadcast input: sync typing across panes in the active tab.
 # Cmd+Alt+click a pane to toggle its membership in the selection; if no
 # panes are pre-selected the shortcut defaults to "all panes in this tab".
+# Cmd+Alt+. clears the selection (and turns off broadcasting if on).
 keybind = cmd+alt+i=toggle_broadcast_input
+keybind = cmd+alt+.=clear_pane_selection
 
 # ── Auto Passthrough ─────────────────────────────────────────────
 # Comma-separated list of program names that automatically receive

@@ -125,6 +125,46 @@ struct PaneSelectionManagerTests {
         #expect(mgr.broadcastTargets(from: panes[0], inTab: tabID) == nil)
     }
 
+    // MARK: - Clear selection
+
+    @Test func clearSelectionDropsSelectionAndBroadcast() {
+        let mgr = PaneSelectionManager()
+        let tabID = UUID()
+        let panes = [UUID(), UUID()]
+
+        _ = mgr.toggleBroadcast(tab: tabID, candidatePanes: panes)
+        #expect(mgr.isBroadcasting(tab: tabID))
+
+        let changed = mgr.clearSelection(inTab: tabID)
+
+        #expect(changed)
+        #expect(mgr.selection(inTab: tabID).isEmpty)
+        #expect(!mgr.isBroadcasting(tab: tabID))
+    }
+
+    @Test func clearSelectionOnEmptyTabReturnsFalse() {
+        let mgr = PaneSelectionManager()
+        let tabID = UUID()
+
+        #expect(!mgr.clearSelection(inTab: tabID))
+    }
+
+    @Test func clearSelectionDoesNotTouchOtherTabs() {
+        let mgr = PaneSelectionManager()
+        let tabA = UUID()
+        let tabB = UUID()
+        let paneA = UUID()
+        let paneB = UUID()
+
+        mgr.togglePane(paneA, inTab: tabA)
+        mgr.togglePane(paneB, inTab: tabB)
+
+        _ = mgr.clearSelection(inTab: tabA)
+
+        #expect(mgr.selection(inTab: tabA).isEmpty)
+        #expect(mgr.isSelected(pane: paneB, inTab: tabB))
+    }
+
     // MARK: - Cleanup
 
     @Test func didRemovePaneDropsFromEveryTab() {

@@ -153,6 +153,8 @@ struct Keybinding: Equatable {
         case runCommand(command: String, arguments: [String], options: CommandOptions)
         // Toggle broadcast-input for the active tab (sync typing across selected panes).
         case toggleBroadcastInput
+        // Clear the multi-pane selection (and broadcast) for the active tab.
+        case clearPaneSelection
         // Pass through to PTY (disables the keybinding)
         case unbind
 
@@ -213,6 +215,7 @@ struct Keybinding: Equatable {
             case .runCommand(let cmd, let args, let opts):
                 Self.formatPrefixedAction(prefix: "run_command", command: cmd, arguments: args, options: opts)
             case .toggleBroadcastInput: "toggle_broadcast_input"
+            case .clearPaneSelection: "clear_pane_selection"
             case .unbind: "unbind"
             }
         }
@@ -330,6 +333,7 @@ struct Keybinding: Equatable {
             case .runInPlace(let cmd, let args): .runInPlace(command: cmd, arguments: args)
             case .runCommand(let cmd, let args, let opts): .runCommand(command: cmd, arguments: args, options: opts)
             case .toggleBroadcastInput: .toggleBroadcastInput
+            case .clearPaneSelection: .clearPaneSelection
             case .copy, .paste, .search, .searchNext, .searchPrevious,
                  .resetFontSize, .increaseFontSize, .decreaseFontSize,
                  .unbind:
@@ -381,6 +385,7 @@ struct Keybinding: Equatable {
             case "detach_session": self = .detachSession
             case "rename_session": self = .renameSession
             case "toggle_broadcast_input": self = .toggleBroadcastInput
+            case "clear_pane_selection": self = .clearPaneSelection
             case "unbind": self = .unbind
             default:
                 if rawValue.hasPrefix("goto_tab:"),
@@ -508,6 +513,8 @@ struct Keybinding: Equatable {
         Keybinding(modifiers: .command, key: "r", action: .showSessionPicker),
         Keybinding(modifiers: [.command, .shift], key: "k", action: .detachSession),
         Keybinding(modifiers: [.command, .shift], key: "r", action: .renameSession),
+        // Multi-pane selection
+        Keybinding(modifiers: [.command, .option], key: ".", action: .clearPaneSelection),
     ]
 
     /// Parse a keybinding string like "cmd+shift+t=new_tab".

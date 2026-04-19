@@ -68,6 +68,16 @@ final class PaneSelectionManager {
         }
     }
 
+    /// Drop the selection for `tabID` and turn off broadcasting for that tab.
+    /// Returns whether any state actually changed, so callers can skip the
+    /// "cleared" toast when there was nothing to clear.
+    @discardableResult
+    func clearSelection(inTab tabID: UUID) -> Bool {
+        let hadSelection = selections.removeValue(forKey: tabID) != nil
+        let wasBroadcasting = broadcasting.remove(tabID) != nil
+        return hadSelection || wasBroadcasting
+    }
+
     /// Attempt to toggle broadcasting for `tab`. Returns the resulting state:
     /// - `.enabled`: broadcasting is now on; selection contains `selected`.
     /// - `.disabled`: broadcasting is now off; selection retained verbatim.
