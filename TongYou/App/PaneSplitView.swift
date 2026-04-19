@@ -1,6 +1,35 @@
 import SwiftUI
 import TYTerminal
 
+/// Pure helper: compute per-child rects for 2D container strategies
+/// (`.grid` / `.masterStack` / `.fibonacci`). Lives outside the SwiftUI view
+/// so it can be unit-tested without spinning up a view hierarchy.
+enum ContainerLayout {
+    /// Forward `container` to `LayoutDispatch` with `size` as the parent rect.
+    /// Returns rects in local coordinates (origin at 0,0).
+    static func rects(for container: Container, in size: CGSize) -> [CGRect] {
+        let w = max(0, Int(size.width.rounded()))
+        let h = max(0, Int(size.height.rounded()))
+        let parentRect = Rect(x: 0, y: 0, width: w, height: h)
+        let result = LayoutDispatch.solve(
+            kind: container.strategy,
+            parentRect: parentRect,
+            childCount: container.children.count,
+            weights: container.weights,
+            minSize: Size(width: 1, height: 1),
+            dividerSize: 0
+        )
+        return result.rects.map {
+            CGRect(
+                x: CGFloat($0.x),
+                y: CGFloat($0.y),
+                width: CGFloat($0.width),
+                height: CGFloat($0.height)
+            )
+        }
+    }
+}
+
 /// Recursively renders a `PaneNode` tree with draggable dividers and focus highlighting.
 struct PaneSplitView: View {
 
@@ -105,10 +134,19 @@ private struct ContainerView: View {
 
     /// Whether this container splits along the horizontal (x) axis.
     /// `.vertical` strategy stacks children left/right; `.horizontal` stacks
-    /// top/bottom. Fall back to horizontal for grid / masterStack / fibonacci
-    /// until their renderers arrive in P4.
+    /// top/bottom. `.grid` / `.masterStack` / `.fibonacci` are true 2D and
+    /// take the absolute-positioning path below instead.
     private var isHorizontalAxis: Bool {
         container.strategy == .vertical
+    }
+
+    /// Strategies that cannot be expressed as a single HStack/VStack and must
+    /// be rendered via absolute positioning using solver-computed rects.
+    private var is2DStrategy: Bool {
+        switch container.strategy {
+        case .horizontal, .vertical: return false
+        case .grid, .masterStack, .fibonacci: return true
+        }
     }
 
     private var layout: AnyLayout {
@@ -126,6 +164,21 @@ private struct ContainerView: View {
     }
 
     var body: some View {
+        Group {
+            if is2DStrategy {
+                twoDimensionalBody
+            } else {
+                oneDimensionalBody
+            }
+        }
+        .onChange(of: container.weights) { _, _ in
+            if dragStartWeights == nil {
+                liveWeights = nil
+            }
+        }
+    }
+
+    private var oneDimensionalBody: some View {
         GeometryReader { geometry in
             let axisSize = isHorizontalAxis ? geometry.size.width : geometry.size.height
             let dividerCount = max(0, container.children.count - 1)
@@ -153,10 +206,23 @@ private struct ContainerView: View {
                 }
             }
         }
-        .onChange(of: container.weights) { _, _ in
-            if dragStartWeights == nil {
-                liveWeights = nil
+    }
+
+    /// Absolute-positioning path for true 2D strategies. Dividers are omitted
+    /// for now — grid ignores weights entirely, and master-stack divider
+    /// dragging will land in a follow-up.
+    private var twoDimensionalBody: some View {
+        GeometryReader { geometry in
+            let rects = ContainerLayout.rects(for: container, in: geometry.size)
+            ZStack(alignment: .topLeading) {
+                ForEach(Array(container.children.enumerated()), id: \.element.nodeID) { offset, child in
+                    let rect = offset < rects.count ? rects[offset] : .zero
+                    childView(index: offset, child: child)
+                        .frame(width: rect.width, height: rect.height)
+                        .offset(x: rect.minX, y: rect.minY)
+                }
             }
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
         }
     }
 

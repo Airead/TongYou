@@ -344,4 +344,101 @@ struct PaneSplitTests {
             #expect(match != nil, "missing default binding Ctrl+Cmd+\(key) → movePane(\(dir))")
         }
     }
+
+    // MARK: - ContainerLayout (2D rendering path)
+    //
+    // Regression coverage for the bug where `.grid` / `.masterStack` containers
+    // with 2 panes rendered one pane taking almost all of the tab. Root cause
+    // was `ContainerView` running them through a 1D HStack/VStack. These tests
+    // exercise the pure helper that the 2D render path now feeds from.
+
+    private func flatContainer(
+        strategy: LayoutStrategyKind,
+        paneCount: Int
+    ) -> Container {
+        Container(
+            strategy: strategy,
+            children: (0..<paneCount).map { _ in .leaf(TerminalPane()) },
+            weights: Array(repeating: 1.0, count: paneCount)
+        )
+    }
+
+    @Test func gridTwoPanesSplitEvenlySideBySide() {
+        let container = flatContainer(strategy: .grid, paneCount: 2)
+        let rects = ContainerLayout.rects(
+            for: container,
+            in: CGSize(width: 800, height: 600)
+        )
+
+        #expect(rects.count == 2)
+        // 1 row × 2 columns → equal widths, full height each.
+        #expect(abs(rects[0].width - rects[1].width) <= 1)
+        #expect(rects[0].height == 600)
+        #expect(rects[1].height == 600)
+        // Neither pane should be degenerate (<10% of parent width).
+        #expect(rects[0].width > 80)
+        #expect(rects[1].width > 80)
+        // Side-by-side, no overlap.
+        #expect(rects[0].minX == 0)
+        #expect(rects[1].minX >= rects[0].maxX - 1)
+    }
+
+    @Test func masterStackTwoPanesSplitEvenlyLeftRight() {
+        let container = flatContainer(strategy: .masterStack, paneCount: 2)
+        let rects = ContainerLayout.rects(
+            for: container,
+            in: CGSize(width: 800, height: 600)
+        )
+
+        #expect(rects.count == 2)
+        // master weight = stack weight = 1 → 50/50 horizontally, full height.
+        #expect(abs(rects[0].width - rects[1].width) <= 1)
+        #expect(rects[0].height == 600)
+        #expect(rects[1].height == 600)
+        #expect(rects[0].width > 80)
+        #expect(rects[1].width > 80)
+        #expect(rects[0].minX == 0)
+        #expect(rects[1].minX >= rects[0].maxX - 1)
+    }
+
+    @Test func gridFourPanesForm2x2() {
+        let container = flatContainer(strategy: .grid, paneCount: 4)
+        let rects = ContainerLayout.rects(
+            for: container,
+            in: CGSize(width: 800, height: 600)
+        )
+
+        #expect(rects.count == 4)
+        // 2×2 grid: two distinct y rows, two distinct x columns.
+        let ys = Set(rects.map { $0.minY })
+        let xs = Set(rects.map { $0.minX })
+        #expect(ys.count == 2)
+        #expect(xs.count == 2)
+        // All cells roughly equal area.
+        let areas = rects.map { $0.width * $0.height }
+        let maxArea = areas.max()!
+        let minArea = areas.min()!
+        #expect(minArea > 0)
+        #expect(maxArea / minArea < 1.1)
+    }
+
+    @Test func masterStackThreePanesMasterPlusTwoStack() {
+        let container = flatContainer(strategy: .masterStack, paneCount: 3)
+        let rects = ContainerLayout.rects(
+            for: container,
+            in: CGSize(width: 900, height: 600)
+        )
+
+        #expect(rects.count == 3)
+        // Master (index 0) runs full height; stack panes sit to its right,
+        // stacked vertically with equal heights.
+        #expect(rects[0].height == 600)
+        #expect(rects[0].minX == 0)
+        // Stack panes share the same x column, each roughly half-height.
+        #expect(rects[1].minX == rects[2].minX)
+        #expect(rects[1].minX >= rects[0].maxX - 1)
+        #expect(abs(rects[1].height - rects[2].height) <= 1)
+        #expect(rects[1].minY == 0)
+        #expect(rects[2].minY >= rects[1].maxY - 1)
+    }
 }
