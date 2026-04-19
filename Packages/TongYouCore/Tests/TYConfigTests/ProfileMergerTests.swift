@@ -408,6 +408,24 @@ struct ProfileMergerTests {
 
     // MARK: - Unknown key
 
+    @Test func descriptionIsRecognisedLiveScalar() throws {
+        // Phase 9 seeds ssh / ssh-dev / ssh-prod profiles with a
+        // `description` line. The parser must accept it without warning and
+        // stash the value on the live scalars so future UI can read it.
+        let env = try makeEnv { dir in
+            try self.write(dir: dir, id: "p", """
+            description = SSH to ${HOST}
+            """)
+        }
+
+        let resolved = try env.merger.resolve(
+            profileID: "p",
+            variables: ["HOST": "db1"]
+        )
+        #expect(resolved.warnings.isEmpty)
+        #expect(resolved.live.scalars["description"] == "SSH to db1")
+    }
+
     @Test func unknownKeyRecordsWarningAndIsIgnored() throws {
         let env = try makeEnv { dir in
             try self.write(dir: dir, id: "p", """

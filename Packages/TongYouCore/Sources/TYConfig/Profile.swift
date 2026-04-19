@@ -95,7 +95,12 @@ public enum FieldRegistry {
             mapSubKeySource: .fromValueBeforeEquals
         )
 
-        // Live — scalars (minimal Phase 1 set; extend in later phases)
+        // Live — scalars (minimal Phase 1 set; extend in later phases).
+        // `description` is profile metadata rather than a rendering field,
+        // but parking it in the Live-scalars grab-bag lets the parser
+        // accept the key (no "Unknown profile key" warning on the seeded
+        // ssh / ssh-dev / ssh-prod templates) and gives future UI — e.g.
+        // palette subtitle, sidebar tooltip — a single place to look it up.
         for key in ["theme",
                     "font-family", "font-size",
                     "background", "foreground",
@@ -103,7 +108,8 @@ public enum FieldRegistry {
                     "cursor-style", "cursor-blink",
                     "selection-background", "selection-foreground",
                     "scrollback-limit", "tab-width",
-                    "bell", "option-as-alt"] {
+                    "bell", "option-as-alt",
+                    "description"] {
             table[key] = FieldDescriptor(
                 canonicalKey: key,
                 kind: .scalar,
