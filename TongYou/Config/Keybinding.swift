@@ -485,7 +485,11 @@ struct Keybinding: Equatable {
         event: NSEvent,
         in bindings: [Keybinding]
     ) -> Action? {
-        let eventMods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        // Arrow / function keys arrive with the `function` bit (and sometimes
+        // `numericPad`) set in addition to the user-meaningful modifiers.
+        // Strict equality vs. a binding declared as `[.command, .option]`
+        // fails unless we narrow the mask to the flags configs care about.
+        let eventMods = event.modifierFlags.intersection(.relevantFlags)
         let rawKey = event.charactersIgnoringModifiers?.lowercased() ?? ""
         let eventKey = normalizedKey(from: rawKey)
 

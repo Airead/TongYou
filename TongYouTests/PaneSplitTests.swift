@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 import TYTerminal
@@ -286,6 +287,22 @@ struct PaneSplitTests {
         // Ordinary characters must pass through unchanged.
         #expect(Keybinding.normalizedKey(from: "a") == "a")
         #expect(Keybinding.normalizedKey(from: "left") == "left")
+    }
+
+    @Test func modifierMaskStripsFunctionAndNumpadBits() {
+        // Arrow keys arrive with `.function` (and often `.numericPad`) set
+        // alongside the user-pressed modifiers. Strict equality against a
+        // binding declared as `[.command, .option]` fails unless we first
+        // mask down to the modifiers configs actually care about.
+        let arrowKeyFlags: NSEvent.ModifierFlags = [.command, .option, .function, .numericPad]
+        let masked = arrowKeyFlags.intersection(.relevantFlags)
+        #expect(masked == [.command, .option])
+
+        // `.relevantFlags` itself must not include the extraneous bits.
+        #expect(!NSEvent.ModifierFlags.relevantFlags.contains(.function))
+        #expect(!NSEvent.ModifierFlags.relevantFlags.contains(.numericPad))
+        #expect(NSEvent.ModifierFlags.relevantFlags.contains(.command))
+        #expect(NSEvent.ModifierFlags.relevantFlags.contains(.option))
     }
 
     // MARK: - Keybinding Action Parsing
