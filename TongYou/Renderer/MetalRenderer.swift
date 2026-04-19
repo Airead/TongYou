@@ -536,9 +536,13 @@ final class MetalRenderer {
         padding = Padding.balanced(screen: screen, grid: gridSize, cell: fontSystem.cellSize)
         shrinkBuffersIfNeeded()
         if oldGrid != gridSize {
-            backingCells.removeAll()
-            backingColumns = 0
-            backingRows = 0
+            // Keep backingCells/backingColumns/backingRows intact: the terminal
+            // backend still produces partial snapshots at its old size during
+            // the debounced PTY resize window (see MetalView.schedulePTYResize),
+            // and those partials must land on a matching backing. setContent's
+            // else branch rebases backing once the full snapshot at the new
+            // size arrives (Screen.resize marks fullRebuild, forcing the next
+            // snapshot to be non-partial).
             for i in frameStates.indices {
                 frameStates[i].stagedRowInstances.removeAll()
                 frameStates[i].textRowOffsets.removeAll()
@@ -552,6 +556,19 @@ final class MetalRenderer {
 
     /// Update the terminal content to render.
     func setContent(_ snapshot: ScreenSnapshot) {
+        // Defensive: a partial snapshot can only be applied when its grid size
+        // matches our backing. Drop mismatched partials (e.g. from an out-of-order
+        // stream) and keep the last consistent state; pendingDirtyRegion is already
+        // marked fullRebuild by resize(), so the next full snapshot will converge.
+        if snapshot.isPartial
+            && (snapshot.columns != backingColumns || snapshot.rows != backingRows) {
+            GUILog.warning(
+                "setContent: dropping partial snapshot — size \(snapshot.columns)x\(snapshot.rows) != backing \(backingColumns)x\(backingRows)",
+                category: .renderer
+            )
+            return
+        }
+
         let selectionChanged = currentSnapshot?.selection != snapshot.selection
         currentSnapshot = snapshot
 
@@ -570,8 +587,7 @@ final class MetalRenderer {
         )
 
         if snapshot.isPartial {
-            assert(snapshot.columns == backingColumns && snapshot.rows == backingRows,
-                   "Partial snapshot size mismatch: expected \(backingColumns)x\(backingRows), got \(snapshot.columns)x\(snapshot.rows)")
+            // Size match is guaranteed by the early guard at the top of setContent.
 
             // Shift backingCells up by scrollDelta so non-dirty rows reflect
             // the scrolled content before we patch dirty rows on top.
