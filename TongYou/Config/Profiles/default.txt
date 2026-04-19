@@ -1,0 +1,23 @@
+# TongYou default profile.
+#
+# This file is seeded on first launch and never overwritten, so your edits
+# are preserved. Any pane created without an explicit profile falls back
+# to this one.
+#
+# Leaving `command` unset lets TongYou auto-launch the user's login shell
+# (value of $SHELL, or /bin/sh as a last resort). Uncomment and edit the
+# fields below to customize.
+#
+# command = /bin/zsh
+# args    = -l
+# cwd     = ~
+# close-on-exit = false
+# description   = Default shell
+#
+# Colors (hex, no leading '#'):
+# background = 1e1e1e
+# foreground = d4d4d4
+# cursor     = d4d4d4
+#
+# See ssh.txt / ssh-dev.txt / ssh-prod.txt for the SSH-template variants
+# that the command palette dispatches to when you type `ssh <host>`.

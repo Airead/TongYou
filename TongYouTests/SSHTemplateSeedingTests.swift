@@ -2,19 +2,19 @@ import Foundation
 import Testing
 @testable import TongYou
 
-/// Exercises `ConfigLoader.seedSSHTemplates(into:)` in isolation against
+/// Exercises `ConfigLoader.seedProfiles(into:)` in isolation against
 /// a per-test temporary directory, so the user's real `~/.config/tongyou`
 /// is never touched (mandatory per CLAUDE.md testing rules).
-@Suite("SSH template seeding", .serialized)
+@Suite("Profile template seeding", .serialized)
 struct SSHTemplateSeedingTests {
 
     @Test func seedsDefaultsWhenMissing() throws {
         let env = makeEnv()
         defer { env.cleanup() }
 
-        ConfigLoader.seedSSHTemplates(into: env.directory)
+        ConfigLoader.seedProfiles(into: env.directory)
 
-        // All four expected files should now exist under the injected dir.
+        // All expected files should now exist under the injected dir.
         for relative in Self.expectedTemplates {
             let url = env.directory.appendingPathComponent(relative)
             #expect(FileManager.default.fileExists(atPath: url.path),
@@ -34,28 +34,44 @@ struct SSHTemplateSeedingTests {
             encoding: .utf8
         )
         #expect(prodContent.contains("extends = ssh"))
-        #expect(prodContent.contains("background = 1a0a0a"))
+        #expect(prodContent.contains("background = 4a1818"))
 
         let rulesContent = try String(
             contentsOf: env.directory.appendingPathComponent("ssh-rules.txt"),
             encoding: .utf8
         )
         #expect(rulesContent.contains("First matching rule wins"))
+
+        // The default profile should also be seeded as a commented skeleton.
+        let defaultContent = try String(
+            contentsOf: env.directory.appendingPathComponent("profiles/default.txt"),
+            encoding: .utf8
+        )
+        #expect(defaultContent.contains("TongYou default profile"))
+        // The skeleton intentionally leaves `command` commented out so the
+        // runtime falls back to `$SHELL` — guard against a future edit that
+        // accidentally hard-codes a shell path.
+        #expect(!defaultContent.contains("\ncommand ="))
     }
 
     @Test func doesNotOverwriteExistingFiles() throws {
         let env = makeEnv()
         defer { env.cleanup() }
 
-        // Pre-create the profiles dir + user-edited ssh.txt + ssh-rules.txt.
+        // Pre-create the profiles dir + user-edited ssh.txt / default.txt / ssh-rules.txt.
         let profilesDir = env.directory.appendingPathComponent("profiles", isDirectory: true)
         try FileManager.default.createDirectory(
             at: profilesDir, withIntermediateDirectories: true
         )
         let customSSH = "# user override\ncommand = /usr/local/bin/ssh\n"
+        let customDefault = "# user default\ncommand = /bin/fish\n"
         let customRules = "# my rules\nssh-prod *.mine.io\n"
         try customSSH.write(
             to: profilesDir.appendingPathComponent("ssh.txt"),
+            atomically: true, encoding: .utf8
+        )
+        try customDefault.write(
+            to: profilesDir.appendingPathComponent("default.txt"),
             atomically: true, encoding: .utf8
         )
         try customRules.write(
@@ -63,7 +79,7 @@ struct SSHTemplateSeedingTests {
             atomically: true, encoding: .utf8
         )
 
-        ConfigLoader.seedSSHTemplates(into: env.directory)
+        ConfigLoader.seedProfiles(into: env.directory)
 
         // User-edited files must be preserved verbatim.
         let sshContent = try String(
@@ -71,6 +87,12 @@ struct SSHTemplateSeedingTests {
             encoding: .utf8
         )
         #expect(sshContent == customSSH)
+
+        let defaultContent = try String(
+            contentsOf: profilesDir.appendingPathComponent("default.txt"),
+            encoding: .utf8
+        )
+        #expect(defaultContent == customDefault)
 
         let rulesContent = try String(
             contentsOf: env.directory.appendingPathComponent("ssh-rules.txt"),
@@ -96,7 +118,7 @@ struct SSHTemplateSeedingTests {
         let profilesDir = env.directory.appendingPathComponent("profiles", isDirectory: true)
         #expect(!FileManager.default.fileExists(atPath: profilesDir.path))
 
-        ConfigLoader.seedSSHTemplates(into: env.directory)
+        ConfigLoader.seedProfiles(into: env.directory)
 
         var isDir: ObjCBool = false
         let exists = FileManager.default.fileExists(atPath: profilesDir.path, isDirectory: &isDir)
@@ -106,6 +128,7 @@ struct SSHTemplateSeedingTests {
     // MARK: - Helpers
 
     private static let expectedTemplates: [String] = [
+        "profiles/default.txt",
         "profiles/ssh.txt",
         "profiles/ssh-dev.txt",
         "profiles/ssh-prod.txt",

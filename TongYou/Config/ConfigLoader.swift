@@ -115,7 +115,7 @@ final class ConfigLoader {
     /// Always overwrites `system_config.txt` with the bundled template.
     func load() {
         writeSystemConfig()
-        Self.seedSSHTemplates(into: Self.configDirectory())
+        Self.seedProfiles(into: Self.configDirectory())
         let (newConfig, entries, paths) = loadFromDisk()
         config = newConfig
         globalEntries = entries
@@ -199,8 +199,8 @@ final class ConfigLoader {
         fatalError("SystemConfig.txt is missing from the bundle and source directory.")
     }
 
-    /// Seed the SSH palette's template files (profiles + rules) into the
-    /// user's config directory the first time it sees them missing.
+    /// Seed the bundled profile templates (default + SSH variants + rules)
+    /// into the user's config directory the first time they are missing.
     /// Unlike `system_config.txt`, these files are **not** overwritten on
     /// subsequent launches — the user is expected to customise them.
     ///
@@ -208,18 +208,19 @@ final class ConfigLoader {
     /// adjacent source directory (dev / unit-test fallback, mirroring
     /// `generateSystemConfig()`). A missing template logs a warning but
     /// never aborts launch.
-    static func seedSSHTemplates(into directory: URL) {
+    static func seedProfiles(into directory: URL) {
         let fm = FileManager.default
         do {
             try fm.createDirectory(at: directory, withIntermediateDirectories: true)
             let profilesDir = directory.appendingPathComponent("profiles", isDirectory: true)
             try fm.createDirectory(at: profilesDir, withIntermediateDirectories: true)
         } catch {
-            print("[config] warning: could not create SSH template directories: \(error)")
+            print("[config] warning: could not create profile directories: \(error)")
             return
         }
 
         let targets: [(resource: String, subpath: String)] = [
+            ("default", "profiles/default.txt"),
             ("ssh", "profiles/ssh.txt"),
             ("ssh-dev", "profiles/ssh-dev.txt"),
             ("ssh-prod", "profiles/ssh-prod.txt"),
@@ -230,7 +231,7 @@ final class ConfigLoader {
             let target = directory.appendingPathComponent(subpath)
             // Respect any user-authored version — never overwrite.
             if fm.fileExists(atPath: target.path) { continue }
-            guard let contents = loadBundledSSHTemplate(resource: resource) else {
+            guard let contents = loadBundledProfileTemplate(resource: resource) else {
                 print("[config] warning: bundled template '\(resource).txt' missing; skipping seed")
                 continue
             }
@@ -242,8 +243,8 @@ final class ConfigLoader {
         }
     }
 
-    /// Read a bundled SSH template file (without the `.txt` suffix) from the
-    /// app bundle or, when running from SwiftPM / tests, from the source
+    /// Read a bundled profile template file (without the `.txt` suffix) from
+    /// the app bundle or, when running from SwiftPM / tests, from the source
     /// tree next to this file. Returns nil when neither location has it so
     /// callers can log and continue.
     ///
@@ -251,8 +252,8 @@ final class ConfigLoader {
     /// inside the built .app they land at the bundle root (the synchronized
     /// file system group flattens the directory structure). The lookup
     /// tries the bundle-flat name first, then the source-tree subdirectory.
-    private static func loadBundledSSHTemplate(resource: String) -> String? {
-        let profileResources: Set<String> = ["ssh", "ssh-dev", "ssh-prod"]
+    private static func loadBundledProfileTemplate(resource: String) -> String? {
+        let profileResources: Set<String> = ["default", "ssh", "ssh-dev", "ssh-prod"]
         let bundleSubdir: String? = profileResources.contains(resource) ? "Profiles" : nil
 
         let bundleCandidates: [URL] = [
