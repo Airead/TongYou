@@ -88,11 +88,15 @@ struct GUIAutomationRefStoreTests {
     private func makeTab(title: String = "shell", panes: [TerminalPane]? = nil, floats: [FloatingPane] = []) -> TerminalTab {
         let tree: PaneNode
         if let panes, panes.count > 1 {
-            // Build a left-leaning split chain so DFS(left-first) yields
+            // Build a left-leaning container chain so DFS(left-first) yields
             // the input order.
             var node: PaneNode = .leaf(panes[0])
             for p in panes.dropFirst() {
-                node = .split(direction: .vertical, ratio: 0.5, first: node, second: .leaf(p))
+                node = .container(Container(
+                    strategy: .vertical,
+                    children: [node, .leaf(p)],
+                    weights: [1.0, 1.0]
+                ))
             }
             tree = node
         } else if let first = panes?.first {
@@ -218,12 +222,11 @@ struct GUIAutomationRefStoreTests {
 
         // Simulate a split: pane1 stays, pane2 added; keep the same tab ID.
         let pane2 = makePane()
-        let splitTree: PaneNode = .split(
-            direction: .vertical,
-            ratio: 0.5,
-            first: .leaf(pane1),
-            second: .leaf(pane2)
-        )
+        let splitTree: PaneNode = .container(Container(
+            strategy: .vertical,
+            children: [.leaf(pane1), .leaf(pane2)],
+            weights: [1.0, 1.0]
+        ))
         let splitTab = TerminalTab(
             id: tab.id,
             title: tab.title,
@@ -303,7 +306,11 @@ struct GUIAutomationRefStoreTests {
         let splitTab = TerminalTab(
             id: tab.id,
             title: tab.title,
-            paneTree: .split(direction: .vertical, ratio: 0.5, first: .leaf(pane2), second: .leaf(pane3)),
+            paneTree: .container(Container(
+                strategy: .vertical,
+                children: [.leaf(pane2), .leaf(pane3)],
+                weights: [1.0, 1.0]
+            )),
             floatingPanes: []
         )
         let s3 = makeSession(id: sid, name: "dev", tabs: [splitTab])
@@ -384,10 +391,18 @@ struct GUIAutomationRefStoreTests {
 
     @Test func paneNumberingFollowsDFSLeftFirst() {
         let store = GUIAutomationRefStore()
-        // Build tree: split(split(A, B), C) — DFS yields A, B, C.
+        // Build tree: container(container(A, B), C) — DFS yields A, B, C.
         let a = makePane(); let b = makePane(); let c = makePane()
-        let inner: PaneNode = .split(direction: .vertical, ratio: 0.5, first: .leaf(a), second: .leaf(b))
-        let tree: PaneNode = .split(direction: .horizontal, ratio: 0.5, first: inner, second: .leaf(c))
+        let inner: PaneNode = .container(Container(
+            strategy: .vertical,
+            children: [.leaf(a), .leaf(b)],
+            weights: [1.0, 1.0]
+        ))
+        let tree: PaneNode = .container(Container(
+            strategy: .horizontal,
+            children: [inner, .leaf(c)],
+            weights: [1.0, 1.0]
+        ))
         let tab = TerminalTab(id: UUID(), title: "t", paneTree: tree)
         let sid = UUID()
         let s = makeSession(id: sid, name: "dev", tabs: [tab])

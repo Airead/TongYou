@@ -136,6 +136,16 @@ public struct BinaryEncoder: Sendable {
         }
     }
 
+    public mutating func writeLayoutStrategyKind(_ kind: LayoutStrategyKind) {
+        switch kind {
+        case .horizontal:  writeUInt8(0)
+        case .vertical:    writeUInt8(1)
+        case .grid:        writeUInt8(2)
+        case .masterStack: writeUInt8(3)
+        case .fibonacci:   writeUInt8(4)
+        }
+    }
+
     public mutating func writeFloatingPaneInfo(_ info: FloatingPaneInfo) {
         writePaneID(info.paneID)
         writeFloat(info.frameX)
@@ -153,12 +163,16 @@ public struct BinaryEncoder: Sendable {
         case .leaf(let paneID):
             writeUInt8(0)  // tag: leaf
             writePaneID(paneID)
-        case .split(let direction, let ratio, let first, let second):
-            writeUInt8(1)  // tag: split
-            writeSplitDirection(direction)
-            writeFloat(ratio)
-            writeLayoutTree(first)
-            writeLayoutTree(second)
+        case .container(let strategy, let children, let weights):
+            writeUInt8(1)  // tag: container
+            writeLayoutStrategyKind(strategy)
+            writeUInt32(UInt32(children.count))
+            for child in children {
+                writeLayoutTree(child)
+            }
+            for weight in weights {
+                writeFloat(weight)
+            }
         }
     }
 

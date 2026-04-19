@@ -227,6 +227,19 @@ public struct BinaryDecoder: Sendable {
         }
     }
 
+    public mutating func readLayoutStrategyKind() throws -> LayoutStrategyKind {
+        let raw = try readUInt8()
+        switch raw {
+        case 0: return .horizontal
+        case 1: return .vertical
+        case 2: return .grid
+        case 3: return .masterStack
+        case 4: return .fibonacci
+        default:
+            throw BinaryDecoderError.invalidEnumValue(type: "LayoutStrategyKind", rawValue: UInt64(raw))
+        }
+    }
+
     public mutating func readFloatingPaneInfo() throws -> FloatingPaneInfo {
         let paneID = try readPaneID()
         let frameX = try readFloat()
@@ -254,12 +267,20 @@ public struct BinaryDecoder: Sendable {
         case 0:  // leaf
             let paneID = try readPaneID()
             return .leaf(paneID)
-        case 1:  // split
-            let direction = try readSplitDirection()
-            let ratio = try readFloat()
-            let first = try readLayoutTree()
-            let second = try readLayoutTree()
-            return .split(direction: direction, ratio: ratio, first: first, second: second)
+        case 1:  // container
+            let strategy = try readLayoutStrategyKind()
+            let count = Int(try readUInt32())
+            var children: [LayoutTree] = []
+            children.reserveCapacity(count)
+            for _ in 0..<count {
+                children.append(try readLayoutTree())
+            }
+            var weights: [Float] = []
+            weights.reserveCapacity(count)
+            for _ in 0..<count {
+                weights.append(try readFloat())
+            }
+            return .container(strategy: strategy, children: children, weights: weights)
         default:
             throw BinaryDecoderError.invalidEnumValue(type: "LayoutTree", rawValue: UInt64(tag))
         }

@@ -815,24 +815,25 @@ public final class ServerSessionManager {
                 paneID: paneID
             )
             return (.leaf(pane), [paneID: core])
-        case .split(let direction, let ratio, let firstLayout, let secondLayout):
-            let (firstNode, firstCores) = restorePaneTree(
-                layout: firstLayout,
-                contexts: contexts,
-                sessionID: sessionID
-            )
-            let (secondNode, secondCores) = restorePaneTree(
-                layout: secondLayout,
-                contexts: contexts,
-                sessionID: sessionID
-            )
-            let node = PaneNode.split(
-                direction: direction,
-                ratio: CGFloat(ratio),
-                first: firstNode,
-                second: secondNode
-            )
-            return (node, firstCores.merging(secondCores) { _, new in new })
+        case .container(let strategy, let children, let weights):
+            var nodes: [PaneNode] = []
+            nodes.reserveCapacity(children.count)
+            var combinedCores: [PaneID: TerminalCore] = [:]
+            for child in children {
+                let (childNode, childCores) = restorePaneTree(
+                    layout: child,
+                    contexts: contexts,
+                    sessionID: sessionID
+                )
+                nodes.append(childNode)
+                combinedCores.merge(childCores) { _, new in new }
+            }
+            let node = PaneNode.container(Container(
+                strategy: strategy,
+                children: nodes,
+                weights: weights.map { CGFloat($0) }
+            ))
+            return (node, combinedCores)
         }
     }
 

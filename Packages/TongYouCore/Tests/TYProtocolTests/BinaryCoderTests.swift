@@ -245,20 +245,21 @@ struct BinaryCoderTests {
         #expect(decoded == tree)
     }
 
-    @Test func roundTripLayoutTreeSplit() throws {
+    @Test func roundTripLayoutTreeContainer() throws {
         let p1 = PaneID()
         let p2 = PaneID()
         let p3 = PaneID()
-        let tree = LayoutTree.split(
-            direction: .horizontal,
-            ratio: 0.5,
-            first: .leaf(p1),
-            second: .split(
-                direction: .vertical,
-                ratio: 0.3,
-                first: .leaf(p2),
-                second: .leaf(p3)
-            )
+        let tree = LayoutTree.container(
+            strategy: .horizontal,
+            children: [
+                .leaf(p1),
+                .container(
+                    strategy: .vertical,
+                    children: [.leaf(p2), .leaf(p3)],
+                    weights: [0.3, 0.7]
+                )
+            ],
+            weights: [0.5, 0.5]
         )
 
         var encoder = BinaryEncoder()
@@ -267,6 +268,43 @@ struct BinaryCoderTests {
         var decoder = BinaryDecoder(encoder.data)
         let decoded = try decoder.readLayoutTree()
         #expect(decoded == tree)
+    }
+
+    @Test func roundTripLayoutTreeContainerNAry() throws {
+        // N-ary container with 4 children and distinct weights — exercises
+        // the count prefix and per-child weight decoding added in P2.
+        let panes = [PaneID(), PaneID(), PaneID(), PaneID()]
+        let tree = LayoutTree.container(
+            strategy: .vertical,
+            children: panes.map { .leaf($0) },
+            weights: [1.0, 2.0, 1.5, 0.5]
+        )
+
+        var encoder = BinaryEncoder()
+        encoder.writeLayoutTree(tree)
+
+        var decoder = BinaryDecoder(encoder.data)
+        let decoded = try decoder.readLayoutTree()
+        #expect(decoded == tree)
+    }
+
+    @Test func roundTripLayoutTreeAllStrategies() throws {
+        // Every strategy case must survive a round trip (the P2 wire format
+        // maps each kind to a distinct UInt8 tag).
+        let strategies: [LayoutStrategyKind] = [
+            .horizontal, .vertical, .grid, .masterStack, .fibonacci,
+        ]
+        for strategy in strategies {
+            let tree = LayoutTree.container(
+                strategy: strategy,
+                children: [.leaf(PaneID()), .leaf(PaneID())],
+                weights: [1.0, 1.0]
+            )
+            var encoder = BinaryEncoder()
+            encoder.writeLayoutTree(tree)
+            var decoder = BinaryDecoder(encoder.data)
+            #expect(try decoder.readLayoutTree() == tree)
+        }
     }
 
     // MARK: - FloatingPaneInfo

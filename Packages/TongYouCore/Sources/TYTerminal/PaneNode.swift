@@ -5,16 +5,25 @@ import Foundation
 public enum SplitDirection: Equatable, Sendable, Codable {
     case horizontal  // top / bottom
     case vertical    // left / right
+
+    /// Layout strategy that corresponds to this split orientation. A horizontal
+    /// split stacks children top/bottom (strategy `.horizontal`); a vertical
+    /// split lays them out left/right (strategy `.vertical`).
+    public var strategy: LayoutStrategyKind {
+        switch self {
+        case .horizontal: return .horizontal
+        case .vertical:   return .vertical
+        }
+    }
 }
 
 /// N-ary container node in the pane tree. Holds children under a given layout
-/// strategy with parallel relative weights. Invariant: `children.count ==
-/// weights.count && children.count >= 1`. The tree-pruning rule in the
-/// `LayoutEngine` collapses containers whose `children.count < 2`.
+/// strategy with parallel relative weights.
 ///
-/// Introduced in P2 alongside the N-ary `PaneNode` migration. The BSP
-/// `.split` case remains as the current enum case until the enum is flipped
-/// in a subsequent commit.
+/// Invariant: `children.count == weights.count && children.count >= 1`.
+/// The tree self-cleaning rule in the `LayoutEngine` (P3) collapses containers
+/// whose `children.count < 2`; during P2 the mutation helpers on `PaneNode`
+/// uphold that rule directly.
 public struct Container: Equatable, Sendable, Identifiable {
     public let id: UUID
     public var strategy: LayoutStrategyKind
@@ -36,13 +45,26 @@ public struct Container: Equatable, Sendable, Identifiable {
     }
 }
 
-/// Binary tree representing the pane layout within a tab.
+/// N-ary tree representing the pane layout within a tab.
 ///
 /// - `.leaf`: A single terminal pane.
-/// - `.split`: Two children separated by a divider.
+/// - `.container`: Multiple children arranged under a `LayoutStrategyKind`
+///   (horizontal, vertical, grid, masterStack, fibonacci).
+///
+/// Introduced in P2 (auto-layout engine). During P2 every container produced
+/// by user splits has exactly two children — the P3 `LayoutEngine` introduces
+/// same-direction flattening so a row of 4 panes collapses into one container.
 public indirect enum PaneNode: Equatable, Sendable {
     case leaf(TerminalPane)
-    case split(direction: SplitDirection, ratio: CGFloat, first: PaneNode, second: PaneNode)
+    case container(Container)
+
+    /// Stable identifier for this node.
+    public var nodeID: UUID {
+        switch self {
+        case .leaf(let pane):       return pane.id
+        case .container(let c):     return c.id
+        }
+    }
 
     // MARK: - Queries
 
@@ -57,9 +79,8 @@ public indirect enum PaneNode: Equatable, Sendable {
         switch self {
         case .leaf(let pane):
             result.append(pane)
-        case .split(_, _, let first, let second):
-            first.collectPanes(into: &result)
-            second.collectPanes(into: &result)
+        case .container(let c):
+            for child in c.children { child.collectPanes(into: &result) }
         }
     }
 
@@ -74,9 +95,8 @@ public indirect enum PaneNode: Equatable, Sendable {
         switch self {
         case .leaf(let pane):
             result.append(pane.id)
-        case .split(_, _, let first, let second):
-            first.collectPaneIDs(into: &result)
-            second.collectPaneIDs(into: &result)
+        case .container(let c):
+            for child in c.children { child.collectPaneIDs(into: &result) }
         }
     }
 
@@ -85,8 +105,8 @@ public indirect enum PaneNode: Equatable, Sendable {
         switch self {
         case .leaf:
             return 1
-        case .split(_, _, let first, let second):
-            return first.paneCount + second.paneCount
+        case .container(let c):
+            return c.children.reduce(0) { $0 + $1.paneCount }
         }
     }
 
@@ -95,8 +115,11 @@ public indirect enum PaneNode: Equatable, Sendable {
         switch self {
         case .leaf(let pane):
             return pane.id == id ? pane : nil
-        case .split(_, _, let first, let second):
-            return first.findPane(id: id) ?? second.findPane(id: id)
+        case .container(let c):
+            for child in c.children {
+                if let found = child.findPane(id: id) { return found }
+            }
+            return nil
         }
     }
 
@@ -110,8 +133,8 @@ public indirect enum PaneNode: Equatable, Sendable {
         switch self {
         case .leaf(let pane):
             return pane
-        case .split(_, _, let first, _):
-            return first.firstPane
+        case .container(let c):
+            return c.children[0].firstPane
         }
     }
 
@@ -123,104 +146,145 @@ public indirect enum PaneNode: Equatable, Sendable {
 
     // MARK: - Mutations (return new tree)
 
-    /// Replace the leaf with the given ID by splitting it in the given direction.
-    /// The original pane becomes the first child; a new pane becomes the second child.
-    /// Returns the new tree and the newly created pane, or nil if the ID was not found.
+    /// Split the leaf with the given ID in the given direction. The original
+    /// pane becomes the first child of a new 2-child container; the `newPane`
+    /// becomes the second child. Weights are initialized to `[1, 1]` (equal
+    /// split). Returns nil if the ID is not found.
+    ///
+    /// P2 intentionally does not flatten same-direction splits into a single
+    /// container — that behavior lands with the P3 `LayoutEngine`.
     public func split(paneID: UUID, direction: SplitDirection, newPane: TerminalPane) -> PaneNode? {
         switch self {
         case .leaf(let pane):
             guard pane.id == paneID else { return nil }
-            return .split(
-                direction: direction,
-                ratio: 0.5,
-                first: .leaf(pane),
-                second: .leaf(newPane)
-            )
-        case .split(let dir, let ratio, let first, let second):
-            if let newFirst = first.split(paneID: paneID, direction: direction, newPane: newPane) {
-                return .split(direction: dir, ratio: ratio, first: newFirst, second: second)
-            }
-            if let newSecond = second.split(paneID: paneID, direction: direction, newPane: newPane) {
-                return .split(direction: dir, ratio: ratio, first: first, second: newSecond)
+            return .container(Container(
+                strategy: direction.strategy,
+                children: [.leaf(pane), .leaf(newPane)],
+                weights: [1.0, 1.0]
+            ))
+        case .container(let c):
+            for (i, child) in c.children.enumerated() {
+                guard let replaced = child.split(paneID: paneID, direction: direction, newPane: newPane) else { continue }
+                var newChildren = c.children
+                newChildren[i] = replaced
+                return .container(Container(
+                    id: c.id,
+                    strategy: c.strategy,
+                    children: newChildren,
+                    weights: c.weights
+                ))
             }
             return nil
         }
     }
 
-    /// Remove a pane by ID. The sibling of the removed pane is promoted.
-    /// Returns nil if the removed pane is the only leaf (tree becomes empty).
+    /// Remove a pane by ID. Parent containers are collapsed when they drop to a
+    /// single remaining child, mirroring the BSP sibling-promotion rule.
+    /// Returns nil when the entire tree consisted of just the removed leaf.
     public func removePane(id: UUID) -> PaneNode? {
         switch self {
         case .leaf(let pane):
-            // Removing the only leaf — tree becomes empty.
             return pane.id == id ? nil : self
-        case .split(let dir, let ratio, let first, let second):
-            // Check if the target is an immediate child.
-            if case .leaf(let pane) = first, pane.id == id {
-                return second  // Promote sibling.
+        case .container(let c):
+            guard contains(paneID: id) else { return self }
+            var newChildren: [PaneNode] = []
+            var newWeights: [CGFloat] = []
+            for (i, child) in c.children.enumerated() {
+                if let updated = child.removePane(id: id) {
+                    newChildren.append(updated)
+                    newWeights.append(c.weights[i])
+                }
             }
-            if case .leaf(let pane) = second, pane.id == id {
-                return first   // Promote sibling.
-            }
-            // Recurse into children.
-            if let newFirst = first.removePane(id: id), newFirst != first {
-                return .split(direction: dir, ratio: ratio, first: newFirst, second: second)
-            }
-            if let newSecond = second.removePane(id: id), newSecond != second {
-                return .split(direction: dir, ratio: ratio, first: first, second: newSecond)
-            }
-            return self  // ID not found; return unchanged.
+            if newChildren.isEmpty { return nil }
+            if newChildren.count == 1 { return newChildren[0] }  // collapse
+            return .container(Container(
+                id: c.id,
+                strategy: c.strategy,
+                children: newChildren,
+                weights: newWeights
+            ))
         }
     }
 
-    /// Update the split ratio so that the pane identified by `paneID` occupies
-    /// `newRatio` of its parent split. When the target is the second child the
-    /// parent's stored ratio (first child's share) becomes `1 - newRatio`.
+    /// Update the parent container's weights so `paneID` occupies `newRatio`
+    /// of its 2-child parent (BSP-compatible semantics). Only meaningful while
+    /// containers are guaranteed 2-child (P2); with P3 flattening this helper
+    /// will migrate into the `LayoutEngine`.
     public func updateRatio(for paneID: UUID, newRatio: CGFloat) -> PaneNode {
         switch self {
         case .leaf:
             return self
-        case .split(let dir, let ratio, let first, let second):
-            if case .leaf(let p) = first, p.id == paneID {
-                return .split(direction: dir, ratio: newRatio, first: first, second: second)
+        case .container(let c):
+            if c.children.count == 2 {
+                for i in 0..<c.children.count {
+                    guard case .leaf(let p) = c.children[i], p.id == paneID else { continue }
+                    var newWeights = c.weights
+                    newWeights[i] = newRatio
+                    newWeights[1 - i] = 1.0 - newRatio
+                    return .container(Container(
+                        id: c.id,
+                        strategy: c.strategy,
+                        children: c.children,
+                        weights: newWeights
+                    ))
+                }
             }
-            if case .leaf(let p) = second, p.id == paneID {
-                return .split(direction: dir, ratio: 1.0 - newRatio, first: first, second: second)
+            var newChildren = c.children
+            var changed = false
+            for i in 0..<c.children.count {
+                let updated = c.children[i].updateRatio(for: paneID, newRatio: newRatio)
+                if updated != c.children[i] {
+                    newChildren[i] = updated
+                    changed = true
+                }
             }
-            return .split(
-                direction: dir,
-                ratio: ratio,
-                first: first.updateRatio(for: paneID, newRatio: newRatio),
-                second: second.updateRatio(for: paneID, newRatio: newRatio)
-            )
+            guard changed else { return self }
+            return .container(Container(
+                id: c.id,
+                strategy: c.strategy,
+                children: newChildren,
+                weights: c.weights
+            ))
         }
     }
 
-    /// Resize the pane by adjusting its direct parent split ratio.
-    /// A positive delta grows the pane; a negative delta shrinks it.
-    /// The ratio is clamped to [0.1, 0.9]. Returns nil if the pane is not
-    /// inside a split (i.e. it's the only pane).
+    /// Resize a pane by shifting its parent container's weights. A positive
+    /// delta grows the pane; a negative delta shrinks it. The resulting ratio
+    /// is clamped to `[0.1, 0.9]`. Returns nil when the pane is not inside
+    /// any container (i.e. it is the tab's only pane).
     public func resizePane(id paneID: UUID, delta: CGFloat) -> PaneNode? {
         switch self {
         case .leaf:
             return nil
-        case .split(let dir, let ratio, let first, let second):
-            // Check if target pane is a direct leaf child.
-            if case .leaf(let p) = first, p.id == paneID {
-                let newRatio = min(max(ratio + delta, 0.1), 0.9)
-                return .split(direction: dir, ratio: newRatio, first: first, second: second)
+        case .container(let c):
+            if c.children.count == 2 {
+                for i in 0..<c.children.count {
+                    guard case .leaf(let p) = c.children[i], p.id == paneID else { continue }
+                    let sum = c.weights.reduce(0, +)
+                    guard sum > 0 else { return nil }
+                    let currentRatio = c.weights[i] / sum
+                    let newRatio = min(max(currentRatio + delta, 0.1), 0.9)
+                    var newWeights = c.weights
+                    newWeights[i] = newRatio * sum
+                    newWeights[1 - i] = (1.0 - newRatio) * sum
+                    return .container(Container(
+                        id: c.id,
+                        strategy: c.strategy,
+                        children: c.children,
+                        weights: newWeights
+                    ))
+                }
             }
-            if case .leaf(let p) = second, p.id == paneID {
-                // Second child grows when ratio decreases.
-                let newRatio = min(max(ratio - delta, 0.1), 0.9)
-                return .split(direction: dir, ratio: newRatio, first: first, second: second)
-            }
-            // Recurse into children.
-            if let newFirst = first.resizePane(id: paneID, delta: delta) {
-                return .split(direction: dir, ratio: ratio, first: newFirst, second: second)
-            }
-            if let newSecond = second.resizePane(id: paneID, delta: delta) {
-                return .split(direction: dir, ratio: ratio, first: first, second: newSecond)
+            for (i, child) in c.children.enumerated() {
+                guard let updated = child.resizePane(id: paneID, delta: delta) else { continue }
+                var newChildren = c.children
+                newChildren[i] = updated
+                return .container(Container(
+                    id: c.id,
+                    strategy: c.strategy,
+                    children: newChildren,
+                    weights: c.weights
+                ))
             }
             return nil
         }
@@ -231,13 +295,17 @@ public indirect enum PaneNode: Equatable, Sendable {
         switch self {
         case .leaf(let pane):
             return pane.id == id ? newNode : self
-        case .split(let dir, let ratio, let first, let second):
-            return .split(
-                direction: dir,
-                ratio: ratio,
-                first: first.replacingPane(id: id, with: newNode),
-                second: second.replacingPane(id: id, with: newNode)
-            )
+        case .container(let c):
+            var newChildren = c.children
+            for i in 0..<c.children.count {
+                newChildren[i] = c.children[i].replacingPane(id: id, with: newNode)
+            }
+            return .container(Container(
+                id: c.id,
+                strategy: c.strategy,
+                children: newChildren,
+                weights: c.weights
+            ))
         }
     }
 }

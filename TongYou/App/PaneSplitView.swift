@@ -24,12 +24,9 @@ struct PaneSplitView: View {
         case .leaf(let pane):
             leafView(pane: pane)
 
-        case .split(let direction, let ratio, let first, let second):
-            SplitContainerView(
-                direction: direction,
-                modelRatio: ratio,
-                first: first,
-                second: second,
+        case .container(let container):
+            ContainerView(
+                container: container,
                 viewStore: viewStore,
                 focusManager: focusManager,
                 focusColor: focusColor,
@@ -74,18 +71,20 @@ struct PaneSplitView: View {
     }
 }
 
-// MARK: - Split Container
+// MARK: - Container View
 
-/// Renders a split node with local drag state to avoid re-render jitter.
+/// Renders a `Container` node with N children separated by draggable dividers.
 ///
-/// During a divider drag, only local `@State liveRatio` is updated (no model round-trip).
-/// On drag end, the final ratio is committed to the model via `onNodeChanged`.
-private struct SplitContainerView: View {
+/// During a divider drag, only local `@State liveWeights` is updated (no model
+/// round-trip). On drag end, the new weights are committed via `onNodeChanged`.
+///
+/// Dragging a divider between children `i` and `i+1` preserves
+/// `weights[i] + weights[i+1]` and redistributes pixel delta proportionally so
+/// neighboring dividers don't move. Weights are clamped to the
+/// `[10%, 90%]` share of that pair (BSP-compatible behavior).
+private struct ContainerView: View {
 
-    let direction: SplitDirection
-    let modelRatio: CGFloat
-    let first: PaneNode
-    let second: PaneNode
+    let container: Container
     let viewStore: MetalViewStore
     let focusManager: FocusManager
     let focusColor: Color
@@ -97,121 +96,153 @@ private struct SplitContainerView: View {
     let onUserInteraction: ((UUID) -> Void)?
     let isTreePaneExited: (UUID) -> Bool
 
-    /// Local ratio used during drag. Nil when not dragging (uses modelRatio).
-    @State private var liveRatio: CGFloat?
-    /// The ratio at the moment the drag started.
-    @State private var dragStartRatio: CGFloat?
+    /// Local weights used during a divider drag. Nil when not dragging.
+    @State private var liveWeights: [CGFloat]?
+    /// Snapshot of weights at drag start — anchors the delta computation.
+    @State private var dragStartWeights: [CGFloat]?
 
-    private var effectiveRatio: CGFloat { liveRatio ?? modelRatio }
+    private var effectiveWeights: [CGFloat] { liveWeights ?? container.weights }
+
+    /// Whether this container splits along the horizontal (x) axis.
+    /// `.vertical` strategy stacks children left/right; `.horizontal` stacks
+    /// top/bottom. Fall back to horizontal for grid / masterStack / fibonacci
+    /// until their renderers arrive in P4.
+    private var isHorizontalAxis: Bool {
+        container.strategy == .vertical
+    }
 
     private var layout: AnyLayout {
-        direction == .vertical
+        isHorizontalAxis
             ? AnyLayout(HStackLayout(spacing: 0))
             : AnyLayout(VStackLayout(spacing: 0))
     }
 
+    /// Divider visual orientation. The divider sits between two adjacent
+    /// children whose axis is `container.strategy`. `PaneDividerView`
+    /// interprets `.vertical` as a vertical line (for left/right splits) and
+    /// `.horizontal` as a horizontal line (for top/bottom splits).
+    private var dividerOrientation: SplitDirection {
+        isHorizontalAxis ? .vertical : .horizontal
+    }
+
     var body: some View {
         GeometryReader { geometry in
-            let totalSize = direction == .vertical ? geometry.size.width : geometry.size.height
-            let available = max(0, totalSize - PaneDividerView.thickness)
-            let firstSize = solveFirstSize(available: available)
+            let axisSize = isHorizontalAxis ? geometry.size.width : geometry.size.height
+            let dividerCount = max(0, container.children.count - 1)
+            let available = max(0, axisSize - CGFloat(dividerCount) * PaneDividerView.thickness)
+            let sizes = computeSizes(available: available)
 
             layout {
-                firstChild
-                    .frame(
-                        width: direction == .vertical ? firstSize : nil,
-                        height: direction == .horizontal ? firstSize : nil
-                    )
-                PaneDividerView(direction: direction, onDrag: { delta in
-                    handleDrag(delta: delta, available: available)
-                }, onDragEnd: {
-                    commitDrag()
-                })
-                secondChild
+                ForEach(Array(container.children.enumerated()), id: \.element.nodeID) { offset, child in
+                    childView(index: offset, child: child)
+                        .frame(
+                            width: isHorizontalAxis && offset < container.children.count - 1 ? sizes[offset] : nil,
+                            height: !isHorizontalAxis && offset < container.children.count - 1 ? sizes[offset] : nil
+                        )
+                    if offset < container.children.count - 1 {
+                        PaneDividerView(
+                            direction: dividerOrientation,
+                            onDrag: { delta in
+                                handleDrag(dividerIndex: offset, delta: delta, available: available)
+                            },
+                            onDragEnd: {
+                                commitDrag()
+                            }
+                        )
+                    }
+                }
             }
         }
-        .onChange(of: modelRatio) { _, _ in
-            if dragStartRatio == nil {
-                liveRatio = nil
+        .onChange(of: container.weights) { _, _ in
+            if dragStartWeights == nil {
+                liveWeights = nil
             }
         }
     }
 
-    /// Route the BSP 2-child split through `LayoutDispatch` so the P1 solver
-    /// layer is exercised before the P2 AST migration. Equivalent to
-    /// `available * effectiveRatio` within integer rounding.
-    private func solveFirstSize(available: CGFloat) -> CGFloat {
-        let kind: LayoutStrategyKind = direction == .vertical ? .vertical : .horizontal
+    // MARK: - Child View
+
+    private func childView(index: Int, child: PaneNode) -> some View {
+        PaneSplitView(
+            node: child,
+            viewStore: viewStore,
+            focusManager: focusManager,
+            focusColor: focusColor,
+            configLoader: configLoader,
+            controllerForPane: controllerForPane,
+            onTabAction: onTabAction,
+            onTitleChanged: onTitleChanged,
+            onNodeChanged: { newChild in
+                var newChildren = container.children
+                newChildren[index] = newChild
+                onNodeChanged(.container(Container(
+                    id: container.id,
+                    strategy: container.strategy,
+                    children: newChildren,
+                    weights: effectiveWeights
+                )))
+            },
+            onUserInteraction: onUserInteraction,
+            isTreePaneExited: isTreePaneExited
+        )
+    }
+
+    // MARK: - Size Computation
+
+    private func computeSizes(available: CGFloat) -> [CGFloat] {
+        let n = container.children.count
+        guard n > 0 else { return [] }
         let axisLength = Int(available.rounded())
         let parentRect = Rect(
             x: 0,
             y: 0,
-            width: direction == .vertical ? axisLength : 1,
-            height: direction == .horizontal ? axisLength : 1
+            width: isHorizontalAxis ? axisLength : 1,
+            height: !isHorizontalAxis ? axisLength : 1
         )
         let result = LayoutDispatch.solve(
-            kind: kind,
+            kind: container.strategy,
             parentRect: parentRect,
-            childCount: 2,
-            weights: [effectiveRatio, 1.0 - effectiveRatio],
+            childCount: n,
+            weights: effectiveWeights,
             minSize: Size(width: 1, height: 1),
             dividerSize: 0
         )
-        let firstAxis = direction == .vertical ? result.rects[0].width : result.rects[0].height
-        return CGFloat(firstAxis)
+        return result.rects.map { CGFloat(isHorizontalAxis ? $0.width : $0.height) }
     }
 
-    private func handleDrag(delta: CGFloat, available: CGFloat) {
-        if dragStartRatio == nil {
-            dragStartRatio = modelRatio
+    // MARK: - Drag Handling
+
+    private func handleDrag(dividerIndex i: Int, delta: CGFloat, available: CGFloat) {
+        if dragStartWeights == nil {
+            dragStartWeights = container.weights
         }
-        guard available > 0, let startRatio = dragStartRatio else { return }
-        let newRatio = min(max(startRatio + delta / available, 0.1), 0.9)
-        liveRatio = newRatio
+        guard available > 0, let start = dragStartWeights, i + 1 < start.count else { return }
+
+        // Preserve `weights[i] + weights[i+1]`, remap pixel delta proportionally
+        // to that pair's weight budget. Clamp to [10%, 90%] of the pair.
+        let pairSum = start[i] + start[i + 1]
+        guard pairSum > 0 else { return }
+        let weightPerPixel = pairSum / available
+        let dw = delta * weightPerPixel
+        let rawNew = start[i] + dw
+        let clampedI = min(max(rawNew, 0.1 * pairSum), 0.9 * pairSum)
+        let actualDelta = clampedI - start[i]
+
+        var newWeights = start
+        newWeights[i] = start[i] + actualDelta
+        newWeights[i + 1] = start[i + 1] - actualDelta
+        liveWeights = newWeights
     }
 
     private func commitDrag() {
-        guard let ratio = liveRatio else { return }
-        dragStartRatio = nil
-        liveRatio = nil
-        onNodeChanged(.split(direction: direction, ratio: ratio, first: first, second: second))
-    }
-
-    // MARK: - Child Views
-
-    private var firstChild: some View {
-        PaneSplitView(
-            node: first,
-            viewStore: viewStore,
-            focusManager: focusManager,
-            focusColor: focusColor,
-            configLoader: configLoader,
-            controllerForPane: controllerForPane,
-            onTabAction: onTabAction,
-            onTitleChanged: onTitleChanged,
-            onNodeChanged: { newFirst in
-                onNodeChanged(.split(direction: direction, ratio: effectiveRatio, first: newFirst, second: second))
-            },
-            onUserInteraction: onUserInteraction,
-            isTreePaneExited: isTreePaneExited
-        )
-    }
-
-    private var secondChild: some View {
-        PaneSplitView(
-            node: second,
-            viewStore: viewStore,
-            focusManager: focusManager,
-            focusColor: focusColor,
-            configLoader: configLoader,
-            controllerForPane: controllerForPane,
-            onTabAction: onTabAction,
-            onTitleChanged: onTitleChanged,
-            onNodeChanged: { newSecond in
-                onNodeChanged(.split(direction: direction, ratio: effectiveRatio, first: first, second: newSecond))
-            },
-            onUserInteraction: onUserInteraction,
-            isTreePaneExited: isTreePaneExited
-        )
+        guard let weights = liveWeights else { return }
+        dragStartWeights = nil
+        liveWeights = nil
+        onNodeChanged(.container(Container(
+            id: container.id,
+            strategy: container.strategy,
+            children: container.children,
+            weights: weights
+        )))
     }
 }

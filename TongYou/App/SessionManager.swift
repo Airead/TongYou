@@ -2107,13 +2107,15 @@ final class SessionManager {
                 closeOnExit: metadata[paneID]?.closeOnExit
             ))
 
-        case .split(let direction, let ratio, let first, let second):
-            return .split(
-                direction: direction,
-                ratio: CGFloat(ratio),
-                first: buildPaneNode(from: first, sessionID: sessionID, metadata: metadata),
-                second: buildPaneNode(from: second, sessionID: sessionID, metadata: metadata)
-            )
+        case .container(let strategy, let children, let weights):
+            let childNodes = children.map {
+                buildPaneNode(from: $0, sessionID: sessionID, metadata: metadata)
+            }
+            return .container(Container(
+                strategy: strategy,
+                children: childNodes,
+                weights: weights.map { CGFloat($0) }
+            ))
         }
     }
 
@@ -2214,13 +2216,13 @@ final class SessionManager {
                 initialWorkingDirectory: contexts[paneID]?.cwd
             )
             return .leaf(pane)
-        case .split(let direction, let ratio, let first, let second):
-            return .split(
-                direction: direction,
-                ratio: CGFloat(ratio),
-                first: buildLocalPaneNode(from: first, contexts: contexts),
-                second: buildLocalPaneNode(from: second, contexts: contexts)
-            )
+        case .container(let strategy, let children, let weights):
+            let childNodes = children.map { buildLocalPaneNode(from: $0, contexts: contexts) }
+            return .container(Container(
+                strategy: strategy,
+                children: childNodes,
+                weights: weights.map { CGFloat($0) }
+            ))
         }
     }
 
