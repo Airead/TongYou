@@ -113,8 +113,8 @@ private struct SplitContainerView: View {
     var body: some View {
         GeometryReader { geometry in
             let totalSize = direction == .vertical ? geometry.size.width : geometry.size.height
-            let available = totalSize - PaneDividerView.thickness
-            let firstSize = available * effectiveRatio
+            let available = max(0, totalSize - PaneDividerView.thickness)
+            let firstSize = solveFirstSize(available: available)
 
             layout {
                 firstChild
@@ -135,6 +135,30 @@ private struct SplitContainerView: View {
                 liveRatio = nil
             }
         }
+    }
+
+    /// Route the BSP 2-child split through `LayoutDispatch` so the P1 solver
+    /// layer is exercised before the P2 AST migration. Equivalent to
+    /// `available * effectiveRatio` within integer rounding.
+    private func solveFirstSize(available: CGFloat) -> CGFloat {
+        let kind: LayoutStrategyKind = direction == .vertical ? .vertical : .horizontal
+        let axisLength = Int(available.rounded())
+        let parentRect = Rect(
+            x: 0,
+            y: 0,
+            width: direction == .vertical ? axisLength : 1,
+            height: direction == .horizontal ? axisLength : 1
+        )
+        let result = LayoutDispatch.solve(
+            kind: kind,
+            parentRect: parentRect,
+            childCount: 2,
+            weights: [effectiveRatio, 1.0 - effectiveRatio],
+            minSize: Size(width: 1, height: 1),
+            dividerSize: 0
+        )
+        let firstAxis = direction == .vertical ? result.rects[0].width : result.rects[0].height
+        return CGFloat(firstAxis)
     }
 
     private func handleDrag(delta: CGFloat, available: CGFloat) {
