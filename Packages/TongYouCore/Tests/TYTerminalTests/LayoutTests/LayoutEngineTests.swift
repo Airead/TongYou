@@ -345,4 +345,75 @@ struct LayoutEngineTests {
         let out = LayoutEngine.sanitize(tab: tab)
         #expect(out.paneTree == tab.paneTree)
     }
+
+    // MARK: - Tree-level entries (smoke coverage — same logic as tab-level)
+
+    @Test func treeSplitAppliesFlattening() {
+        // V[A, B] + split B rightwards via tree-level entry → V[A, B, new].
+        let (_, leafA) = leaf()
+        let (b, leafB) = leaf()
+        let tree = container(.vertical, [leafA, leafB], [1, 1])
+        let newPane = TerminalPane()
+
+        let out = LayoutEngine.splitPane(
+            tree: tree, targetPaneID: b.id,
+            direction: .vertical, newPane: newPane
+        )
+        guard case .container(let c) = out else {
+            Issue.record("expected container root"); return
+        }
+        #expect(c.children.count == 3)
+        #expect(c.children[2].allPaneIDs == [newPane.id])
+    }
+
+    @Test func treeCloseReportsEmptiedOnLastPane() {
+        let (a, leafA) = leaf()
+        let outcome = LayoutEngine.closePane(tree: leafA, paneID: a.id)
+        if case .emptiedTree = outcome {} else {
+            Issue.record("expected .emptiedTree")
+        }
+    }
+
+    @Test func treeCloseCollapsesSingleChildContainer() {
+        let (a, leafA) = leaf()
+        let (b, leafB) = leaf()
+        let tree = container(.vertical, [leafA, leafB], [1, 1])
+
+        guard case .closed(let newTree, let promoted) = LayoutEngine.closePane(tree: tree, paneID: a.id) else {
+            Issue.record("expected .closed"); return
+        }
+        if case .leaf(let p) = newTree {
+            #expect(p.id == b.id)
+        } else {
+            Issue.record("expected collapse to leaf")
+        }
+        #expect(promoted == b.id)
+    }
+
+    @Test func treeResizeUpdatesContainerWeights() {
+        let (a, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let tree = container(.vertical, [leafA, leafB], [0.5, 0.5])
+
+        let out = LayoutEngine.resizePane(tree: tree, paneID: a.id, newRatio: 0.25)
+        guard case .container(let c) = out else {
+            Issue.record("expected container"); return
+        }
+        #expect(c.weights == [0.25, 0.75])
+    }
+
+    @Test func treeSanitizeCollapsesSingleChildContainer() {
+        // Construct a deliberately-invalid tree: outer container with a
+        // single child (should collapse under sanitize).
+        let (a, leafA) = leaf()
+        let inner = PaneNode.container(Container(
+            strategy: .vertical, children: [leafA], weights: [1]
+        ))
+        let out = LayoutEngine.sanitize(tree: inner)
+        if case .leaf(let p) = out {
+            #expect(p.id == a.id)
+        } else {
+            Issue.record("expected single-child container to collapse")
+        }
+    }
 }
