@@ -195,4 +195,104 @@ struct GridSolverTests {
         #expect(result.rects[3].x == 60)
         #expect(result.rects[3].y == 70)
     }
+
+    // MARK: - Custom grid row/col weights (draggable grid, plan §P4)
+
+    @Test func customRowAndColWeightsPinGridShape() {
+        // 2×2 grid with custom row weights [1, 3] and col weights [1, 2] →
+        // widths split 33/67, heights split 25/75.
+        let parent = Rect(x: 0, y: 0, width: 120, height: 80)
+        let result = GridSolver.solve(
+            parentRect: parent,
+            childCount: 4,
+            weights: [1, 1, 1, 1],
+            minSize: Size(width: 1, height: 1),
+            dividerSize: 0,
+            gridRowWeights: [1, 3],
+            gridColWeights: [1, 2]
+        )
+        #expect(result.rects.count == 4)
+        // Top row: height 20, cols 40 + 80
+        #expect(result.rects[0] == Rect(x: 0, y: 0, width: 40, height: 20))
+        #expect(result.rects[1] == Rect(x: 40, y: 0, width: 80, height: 20))
+        // Bottom row: height 60, same column widths
+        #expect(result.rects[2] == Rect(x: 0, y: 20, width: 40, height: 60))
+        #expect(result.rects[3] == Rect(x: 40, y: 20, width: 80, height: 60))
+    }
+
+    @Test func customWeightsOverrideAutoRowsColsPick() {
+        // 6 panes in a very wide parent: auto-balanced would pick 1×6 or 2×3,
+        // but custom gridRowWeights.count × gridColWeights.count = 3×2 pins it.
+        let parent = Rect(x: 0, y: 0, width: 600, height: 100)
+        let result = GridSolver.solve(
+            parentRect: parent,
+            childCount: 6,
+            weights: Array(repeating: 1.0, count: 6),
+            minSize: Size(width: 1, height: 1),
+            dividerSize: 0,
+            gridRowWeights: [1, 1, 1],
+            gridColWeights: [1, 1]
+        )
+        // 3 rows × 2 cols: each cell 300×33 (rowHeights = 33,33,34 due to rounding).
+        let ys = Set(result.rects.map(\.y))
+        let xs = Set(result.rects.map(\.x))
+        #expect(ys.count == 3)
+        #expect(xs.count == 2)
+    }
+
+    @Test func customWeightsFallBackWhenShapeMismatch() {
+        // 5 panes but custom weights claim 2×2 (4 slots): N ≠ R·C, fall
+        // back to auto-balanced behavior so rendering doesn't break.
+        let parent = Rect(x: 0, y: 0, width: 100, height: 100)
+        let customResult = GridSolver.solve(
+            parentRect: parent,
+            childCount: 5,
+            weights: Array(repeating: 1.0, count: 5),
+            minSize: Size(width: 1, height: 1),
+            dividerSize: 0,
+            gridRowWeights: [1, 1],
+            gridColWeights: [1, 1]
+        )
+        let autoResult = GridSolver.solve(
+            parentRect: parent,
+            childCount: 5,
+            weights: Array(repeating: 1.0, count: 5),
+            minSize: Size(width: 1, height: 1),
+            dividerSize: 0
+        )
+        #expect(customResult.rects == autoResult.rects)
+    }
+
+    @Test func customWeightsIgnoredWhenOneSideEmpty() {
+        // Only rowWeights set, colWeights empty → treated as auto
+        // (both arrays must be non-empty to activate custom mode).
+        let parent = Rect(x: 0, y: 0, width: 100, height: 100)
+        let customResult = GridSolver.solve(
+            parentRect: parent,
+            childCount: 4,
+            weights: Array(repeating: 1.0, count: 4),
+            minSize: Size(width: 1, height: 1),
+            dividerSize: 0,
+            gridRowWeights: [1, 3],
+            gridColWeights: []
+        )
+        let autoResult = GridSolver.solve(
+            parentRect: parent,
+            childCount: 4,
+            weights: Array(repeating: 1.0, count: 4),
+            minSize: Size(width: 1, height: 1),
+            dividerSize: 0
+        )
+        #expect(customResult.rects == autoResult.rects)
+    }
+
+    @Test func chooseRowsColsExposedForAuto() {
+        // Renderer needs R×C to place dividers before any custom weights
+        // exist, so the choice is exposed publicly.
+        let (r, c) = GridSolver.chooseRowsCols(
+            n: 4,
+            parent: Rect(x: 0, y: 0, width: 100, height: 100)
+        )
+        #expect(r == 2 && c == 2)
+    }
 }

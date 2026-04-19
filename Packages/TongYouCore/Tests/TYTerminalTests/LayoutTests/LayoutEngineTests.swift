@@ -988,6 +988,42 @@ struct LayoutEngineTests {
         #expect(updated.strategy == .masterStack)
     }
 
+    @Test func changeStrategyPreservesGridRowAndColWeights() {
+        // User customized a 2×2 grid (R=2, C=2), then switched to masterStack
+        // and back. The row/col weights must survive the round-trip so the
+        // customized layout returns intact.
+        let (_, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let (_, leafC) = leaf()
+        let (_, leafD) = leaf()
+        let gridContainer = Container(
+            strategy: .grid,
+            children: [leafA, leafB, leafC, leafD],
+            weights: [1, 1, 1, 1],
+            gridRowWeights: [1, 3],
+            gridColWeights: [2, 1]
+        )
+        let tree = PaneNode.container(gridContainer)
+
+        guard case .container(let afterSwap) = LayoutEngine.changeStrategy(
+            tree: tree, containerID: gridContainer.id, newKind: .masterStack
+        ) else {
+            Issue.record("expected container"); return
+        }
+        #expect(afterSwap.strategy == .masterStack)
+        #expect(afterSwap.gridRowWeights == [1, 3])
+        #expect(afterSwap.gridColWeights == [2, 1])
+
+        guard case .container(let afterSwapBack) = LayoutEngine.changeStrategy(
+            tree: .container(afterSwap), containerID: gridContainer.id, newKind: .grid
+        ) else {
+            Issue.record("expected container"); return
+        }
+        #expect(afterSwapBack.strategy == .grid)
+        #expect(afterSwapBack.gridRowWeights == [1, 3])
+        #expect(afterSwapBack.gridColWeights == [2, 1])
+    }
+
     // MARK: - flattenToStrategy (plan §P4.5)
 
     @Test func flattenCollapsesNestedTreeIntoFlatContainer() {
@@ -1083,6 +1119,42 @@ struct LayoutEngineTests {
         #expect(flat.weights == [6.0, 1.0, 1.0, 1.0, 1.0])
         let stackSum = flat.weights[1...].reduce(0, +)
         #expect(flat.weights[0] / (flat.weights[0] + stackSum) == 0.6)
+    }
+
+    @Test func flattenToGridStartsWithoutCustomRowColWeights() {
+        // flattenToStrategy is the "fresh start" path — any prior customized
+        // grid weights are abandoned along with the nesting and ratios, so
+        // the resulting grid is auto-balanced again.
+        let (_, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let (_, leafC) = leaf()
+        let (_, leafD) = leaf()
+        let tree = PaneNode.container(Container(
+            strategy: .grid,
+            children: [leafA, leafB, leafC, leafD],
+            weights: [1, 1, 1, 1],
+            gridRowWeights: [2, 1],
+            gridColWeights: [1, 2]
+        ))
+
+        // Flatten to horizontal then back to grid — the grid we get back
+        // should have empty gridRow/ColWeights (auto-balanced).
+        guard case .container(let horizontal) = LayoutEngine.flattenToStrategy(
+            tree: tree, newKind: .horizontal
+        ) else {
+            Issue.record("expected container"); return
+        }
+        #expect(horizontal.gridRowWeights == [])
+        #expect(horizontal.gridColWeights == [])
+
+        guard case .container(let back) = LayoutEngine.flattenToStrategy(
+            tree: .container(horizontal), newKind: .grid
+        ) else {
+            Issue.record("expected container"); return
+        }
+        #expect(back.strategy == .grid)
+        #expect(back.gridRowWeights == [])
+        #expect(back.gridColWeights == [])
     }
 
     @Test func flattenToNonMasterStackStrategiesStayEqualWeight() {

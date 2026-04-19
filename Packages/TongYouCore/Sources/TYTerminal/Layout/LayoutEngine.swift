@@ -99,16 +99,10 @@ public enum LayoutEngine {
             if c.strategy == newStrategy {
                 for (i, child) in c.children.enumerated() {
                     guard case .leaf(let pane) = child, pane.id == targetID else { continue }
-                    var newChildren = c.children
-                    var newWeights = c.weights
-                    newChildren.insert(.leaf(newPane), at: i + 1)
-                    newWeights.insert(1.0, at: i + 1)
-                    return .container(Container(
-                        id: c.id,
-                        strategy: c.strategy,
-                        children: newChildren,
-                        weights: newWeights
-                    ))
+                    var copy = c
+                    copy.children.insert(.leaf(newPane), at: i + 1)
+                    copy.weights.insert(1.0, at: i + 1)
+                    return .container(copy)
                 }
             }
             // Otherwise recurse into children; a matching descendant will
@@ -121,14 +115,9 @@ public enum LayoutEngine {
                     direction: direction,
                     newPane: newPane
                 ) else { continue }
-                var newChildren = c.children
-                newChildren[i] = replaced
-                return .container(Container(
-                    id: c.id,
-                    strategy: c.strategy,
-                    children: newChildren,
-                    weights: c.weights
-                ))
+                var copy = c
+                copy.children[i] = replaced
+                return .container(copy)
             }
             return nil
         }
@@ -195,12 +184,9 @@ public enum LayoutEngine {
                 swapLeaves(node: $0, idA: idA, paneA: paneA, idB: idB, paneB: paneB)
             }
             if newChildren == c.children { return node }
-            return .container(Container(
-                id: c.id,
-                strategy: c.strategy,
-                children: newChildren,
-                weights: c.weights
-            ))
+            var copy = c
+            copy.children = newChildren
+            return .container(copy)
         }
     }
 
@@ -280,17 +266,11 @@ public enum LayoutEngine {
             if c.strategy == newStrategy {
                 for (i, child) in c.children.enumerated() {
                     guard case .leaf(let pane) = child, pane.id == targetID else { continue }
-                    var newChildren = c.children
-                    var newWeights = c.weights
+                    var copy = c
                     let insertIdx = insertAfter ? i + 1 : i
-                    newChildren.insert(.leaf(newPane), at: insertIdx)
-                    newWeights.insert(1.0, at: insertIdx)
-                    return .container(Container(
-                        id: c.id,
-                        strategy: c.strategy,
-                        children: newChildren,
-                        weights: newWeights
-                    ))
+                    copy.children.insert(.leaf(newPane), at: insertIdx)
+                    copy.weights.insert(1.0, at: insertIdx)
+                    return .container(copy)
                 }
             }
             for (i, child) in c.children.enumerated() {
@@ -301,14 +281,9 @@ public enum LayoutEngine {
                     insertAfter: insertAfter,
                     newPane: newPane
                 ) else { continue }
-                var newChildren = c.children
-                newChildren[i] = replaced
-                return .container(Container(
-                    id: c.id,
-                    strategy: c.strategy,
-                    children: newChildren,
-                    weights: c.weights
-                ))
+                var copy = c
+                copy.children[i] = replaced
+                return .container(copy)
             }
             return nil
         }
@@ -348,12 +323,9 @@ public enum LayoutEngine {
         case .container(let c):
             if c.id == containerID {
                 guard c.strategy != newKind else { return nil }
-                return .container(Container(
-                    id: c.id,
-                    strategy: newKind,
-                    children: c.children,
-                    weights: c.weights
-                ))
+                var copy = c
+                copy.strategy = newKind
+                return .container(copy)
             }
             for (i, child) in c.children.enumerated() {
                 guard let replaced = replaceContainerStrategy(
@@ -361,14 +333,9 @@ public enum LayoutEngine {
                     containerID: containerID,
                     newKind: newKind
                 ) else { continue }
-                var newChildren = c.children
-                newChildren[i] = replaced
-                return .container(Container(
-                    id: c.id,
-                    strategy: c.strategy,
-                    children: newChildren,
-                    weights: c.weights
-                ))
+                var copy = c
+                copy.children[i] = replaced
+                return .container(copy)
             }
             return nil
         }
@@ -515,12 +482,10 @@ public enum LayoutEngine {
             if newChildren.isEmpty { return nil }
             if newChildren.count == 1 { return newChildren[0] }
             if newChildren == c.children { return node }
-            return .container(Container(
-                id: c.id,
-                strategy: c.strategy,
-                children: newChildren,
-                weights: newWeights
-            ))
+            var copy = c
+            copy.children = newChildren
+            copy.weights = newWeights
+            return .container(copy)
         }
     }
 
@@ -551,12 +516,10 @@ public enum LayoutEngine {
                 }
             }
             guard newChildren != c.children else { return node }
-            return .container(Container(
-                id: c.id,
-                strategy: c.strategy,
-                children: newChildren,
-                weights: newWeights
-            ))
+            var copy = c
+            copy.children = newChildren
+            copy.weights = newWeights
+            return .container(copy)
         }
     }
 
