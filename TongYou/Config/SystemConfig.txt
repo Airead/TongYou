@@ -138,6 +138,7 @@ daemon-auto-exit-on-no-sessions = false
 #   new_floating_pane, toggle_or_create_floating_pane,
 #   list_remote_sessions, new_remote_session, show_session_picker,
 #   detach_session, rename_session,
+#   show_command_palette, show_session_palette,
 #   run_in_place:command, run_in_place:command:arg1,arg2,
 #   run_command[opts]:command, run_command[opts]:command:arg1,arg2,
 #   toggle_broadcast_input, clear_pane_selection,
@@ -254,9 +255,13 @@ keybind = alt+m=run_in_place:lazygit
 # Remote session management
 keybind = cmd+y=list_remote_sessions
 keybind = cmd+shift+i=new_remote_session
-keybind = cmd+r=show_session_picker
+keybind = cmd+r=show_session_palette
 keybind = cmd+shift+k=detach_session
 keybind = cmd+shift+r=rename_session
+
+# Command palette (⌘P) — fuzzy-search SSH hosts, profiles, tabs, or commands.
+# ⌘R opens the same palette pre-filled with `s ` for session switching.
+keybind = cmd+p=show_command_palette
 
 # Broadcast input: sync typing across panes in the active tab.
 # Cmd+Alt+click a pane to toggle its membership in the selection; if no

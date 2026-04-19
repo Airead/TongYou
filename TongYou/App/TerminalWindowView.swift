@@ -28,6 +28,7 @@ struct TerminalWindowView: View {
     @State private var suppressAutoSidebar = true
     @State private var showingSessionPicker = false
     @State private var renamingSessionIndex: Int?
+    @State private var commandPalette = CommandPaletteController()
 
     /// IDs of panes whose in-pane search bar is currently open. Updated via
     /// `MetalView.onSearchBarToggled`. Consumed by `zoomedPaneView` to hide
@@ -146,47 +147,7 @@ struct TerminalWindowView: View {
             }
         }
         .overlay {
-            if showingSessionPicker {
-                modalOverlay(onDismiss: { showingSessionPicker = false }) {
-                    SessionPickerView(
-                        sessions: sessionManager.sessions,
-                        activeSessionIndex: sessionManager.activeSessionIndex,
-                        attachedSessionIDs: sessionManager.allAttachedSessionIDs,
-                        onSelect: { index in
-                            switchToSessionFromPicker(at: index)
-                        },
-                        onDismiss: {
-                            showingSessionPicker = false
-                        },
-                        themeForeground: configLoader.config.foreground,
-                        themeBackground: configLoader.config.background
-                    )
-                }
-            }
-
-            if let index = renamingSessionIndex,
-               sessionManager.sessions.indices.contains(index) {
-                modalOverlay(onDismiss: { dismissRenamePanel() }) {
-                    SessionRenameView(
-                        currentName: sessionManager.sessions[index].name,
-                        onConfirm: { newName in
-                            sessionManager.renameSession(at: index, to: newName)
-                        },
-                        onDismiss: {
-                            dismissRenamePanel()
-                        }
-                    )
-                }
-            }
-
-            if sessionManager.connectionStatus != .idle {
-                DaemonConnectingOverlayView(
-                    status: sessionManager.connectionStatus,
-                    onDismiss: {
-                        sessionManager.dismissConnectionStatus()
-                    }
-                )
-            }
+            modalOverlays
         }
         .background(WindowConfigurator(
             backgroundColor: windowBackgroundColor,
@@ -244,6 +205,58 @@ struct TerminalWindowView: View {
             for (paneID, view) in viewStore.allViews {
                 let shouldShow = newIDs.contains(paneID) && paneID != focusManager.focusedPaneID
                 view.setNotificationRing(visible: shouldShow)
+            }
+        }
+    }
+
+    /// All modal overlays (session picker, rename, daemon connecting, command
+    /// palette). Extracted out of `body` because inlining the chain exceeds
+    /// SwiftUI's type-checking budget.
+    @ViewBuilder
+    private var modalOverlays: some View {
+        if showingSessionPicker {
+            modalOverlay(onDismiss: { showingSessionPicker = false }) {
+                SessionPickerView(
+                    sessions: sessionManager.sessions,
+                    activeSessionIndex: sessionManager.activeSessionIndex,
+                    attachedSessionIDs: sessionManager.allAttachedSessionIDs,
+                    onSelect: { index in switchToSessionFromPicker(at: index) },
+                    onDismiss: { showingSessionPicker = false },
+                    themeForeground: configLoader.config.foreground,
+                    themeBackground: configLoader.config.background
+                )
+            }
+        }
+
+        if let index = renamingSessionIndex,
+           sessionManager.sessions.indices.contains(index) {
+            modalOverlay(onDismiss: { dismissRenamePanel() }) {
+                SessionRenameView(
+                    currentName: sessionManager.sessions[index].name,
+                    onConfirm: { newName in sessionManager.renameSession(at: index, to: newName) },
+                    onDismiss: { dismissRenamePanel() }
+                )
+            }
+        }
+
+        if sessionManager.connectionStatus != .idle {
+            DaemonConnectingOverlayView(
+                status: sessionManager.connectionStatus,
+                onDismiss: { sessionManager.dismissConnectionStatus() }
+            )
+        }
+
+        if commandPalette.isOpen {
+            modalOverlay(onDismiss: { commandPalette.close() }) {
+                CommandPaletteView(
+                    controller: commandPalette,
+                    themeForeground: configLoader.config.foreground,
+                    themeBackground: configLoader.config.background,
+                    // Phase 5: commit paths only dismiss. Phase 6–8 plug in
+                    // SSH spawn / session switch / profile open here.
+                    onCommit: { _ in commandPalette.close() },
+                    onDismiss: { commandPalette.close() }
+                )
             }
         }
     }
@@ -889,6 +902,10 @@ struct TerminalWindowView: View {
             toggleBroadcastInput()
         case .clearPaneSelection:
             clearPaneSelection()
+        case .showCommandPalette:
+            commandPalette.open()
+        case .showSessionPalette:
+            commandPalette.openSessionScope()
         }
     }
 

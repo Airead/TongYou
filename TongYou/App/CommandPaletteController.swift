@@ -1,0 +1,240 @@
+import AppKit
+import Foundation
+
+/// Which bucket of candidates the palette is currently matching against.
+/// Derived from the current input's leading prefix — see
+/// ``PaletteScope/parse(input:)``.
+enum PaletteScope: Equatable {
+    /// SSH connection (default, no prefix).
+    case ssh
+    /// Command / action enumeration (`> ` prefix).
+    case command
+    /// Profile search (`p ` prefix).
+    case profile
+    /// Already-open tab switcher (`t ` prefix).
+    case tab
+    /// Already-open session switcher (`s ` prefix, or entered via ⌘R).
+    case session
+
+    /// Parse the visible input into a `(scope, fuzzyText)` pair. `fuzzyText`
+    /// is what gets fed to the fuzzy matcher — the prefix is stripped so
+    /// `"s db"` searches "db" inside sessions, not "s db" literally.
+    static func parse(input: String) -> (scope: PaletteScope, query: String) {
+        if let tail = matchPrefix(input, prefix: "> ") { return (.command, tail) }
+        if input == ">" { return (.command, "") }
+        if let tail = matchPrefix(input, prefix: "p ") { return (.profile, tail) }
+        if let tail = matchPrefix(input, prefix: "t ") { return (.tab, tail) }
+        if let tail = matchPrefix(input, prefix: "s ") { return (.session, tail) }
+        if let tail = matchPrefix(input, prefix: "ssh ") { return (.ssh, tail) }
+        return (.ssh, input)
+    }
+
+    private static func matchPrefix(_ s: String, prefix: String) -> String? {
+        guard s.hasPrefix(prefix) else { return nil }
+        return String(s.dropFirst(prefix.count))
+    }
+}
+
+/// The four modifier variants of the Enter key supported by the palette.
+/// Dispatch is handled by the phase-specific scope; Phase 5 only records
+/// which variant fired.
+enum PaletteEnterMode: Equatable {
+    case plain          // Enter
+    case commandEnter   // ⌘Enter — split right
+    case shiftEnter     // ⇧Enter — split below
+    case optionEnter    // ⌥Enter — float pane
+}
+
+/// A single row in the candidate list. Opaque to the view apart from the
+/// fields it renders.
+///
+/// `id` must be stable across re-renders of the same underlying entity.
+/// Using `UUID` (fresh per build) is fine for Phase 5 because the controller
+/// rebuilds candidates only when the query changes; later phases that back
+/// candidates with real models should plumb the real ID through.
+struct PaletteCandidate: Identifiable, Equatable {
+    let id: UUID
+    let primaryText: String
+    let secondaryText: String?
+    let scope: PaletteScope
+
+    init(
+        id: UUID = UUID(),
+        primaryText: String,
+        secondaryText: String? = nil,
+        scope: PaletteScope
+    ) {
+        self.id = id
+        self.primaryText = primaryText
+        self.secondaryText = secondaryText
+        self.scope = scope
+    }
+}
+
+/// A ranked candidate — pairs the candidate with the fuzzy match result so
+/// the view can render highlight ranges.
+struct PaletteRow: Identifiable, Equatable {
+    var id: UUID { candidate.id }
+    let candidate: PaletteCandidate
+    let match: FuzzyMatcher.Match
+}
+
+/// Observable state for the command palette. Purely data-driven — the view
+/// binds to `input` / `highlightedIndex` / `rows` and calls back into
+/// `moveHighlight` / `commit` etc. in response to key presses.
+///
+/// Phase 5 does not talk to any scope data source; the `ssh` candidate list
+/// is set by the test harness, and Phase 6+ will wire in history /
+/// ssh_config / rules.
+@MainActor
+@Observable
+final class CommandPaletteController {
+
+    /// The raw text shown in the palette input field.
+    var input: String = "" {
+        didSet {
+            if input != oldValue { refreshRows(resetHighlight: true) }
+        }
+    }
+
+    /// Derived from `input`. Re-evaluated on every text change.
+    private(set) var scope: PaletteScope = .ssh
+
+    /// Text fed to the fuzzy matcher — `input` with any scope prefix removed.
+    private(set) var query: String = ""
+
+    /// Ranked candidates for the current scope + query.
+    private(set) var rows: [PaletteRow] = []
+
+    /// Currently highlighted row index. `-1` when `rows` is empty.
+    private(set) var highlightedIndex: Int = -1
+
+    /// Multi-selection chip; Phase 5 just records toggles, Phase 7 wires
+    /// into batch spawn. `OrderedSet` would be nicer but `[UUID]` with
+    /// explicit dedup logic is sufficient — selection sets stay tiny
+    /// (usually < 10).
+    private(set) var selection: [UUID] = []
+
+    /// When true, the palette view is mounted and should capture keystrokes.
+    /// Writing `false` (via `close()`) is the canonical way to dismiss.
+    private(set) var isOpen: Bool = false
+
+    // MARK: - Scope data source
+
+    /// Candidates for the SSH scope. Phase 5 leaves this empty; Phase 6 wires
+    /// history + ssh_config entries in.
+    var sshCandidates: [PaletteCandidate] = [] {
+        didSet { refreshRows(resetHighlight: true) }
+    }
+
+    /// Candidates for the session scope (Phase 8 will feed this from
+    /// SessionManager). Kept here so the Phase 5 controller can be tested
+    /// end-to-end.
+    var sessionCandidates: [PaletteCandidate] = [] {
+        didSet { refreshRows(resetHighlight: true) }
+    }
+
+    // MARK: - Open / close
+
+    /// Open the palette in SSH scope with an empty input.
+    func open() {
+        openWithInitialInput("")
+    }
+
+    /// Open the palette pre-filled with `s ` so the first keystroke starts
+    /// filtering sessions. The cursor caret ends up after the space.
+    func openSessionScope() {
+        openWithInitialInput("s ")
+    }
+
+    private func openWithInitialInput(_ initial: String) {
+        input = initial
+        selection = []
+        isOpen = true
+        refreshRows(resetHighlight: true)
+    }
+
+    /// Close the palette. Resets transient state so the next open starts
+    /// from a clean slate.
+    func close() {
+        isOpen = false
+        input = ""
+        selection = []
+        rows = []
+        highlightedIndex = -1
+    }
+
+    // MARK: - Keyboard navigation
+
+    /// Move highlight by `delta` rows (wraps around the end of the list).
+    /// No-op when `rows` is empty.
+    func moveHighlight(by delta: Int) {
+        guard !rows.isEmpty else {
+            highlightedIndex = -1
+            return
+        }
+        let count = rows.count
+        let next = ((highlightedIndex + delta) % count + count) % count
+        highlightedIndex = next
+    }
+
+    /// Toggle the currently highlighted row in/out of the multi-select bag.
+    /// No-op when nothing is highlighted. Phase 5 only records the bag;
+    /// Phase 7 wires batch spawn.
+    func toggleSelection() {
+        guard rows.indices.contains(highlightedIndex) else { return }
+        let id = rows[highlightedIndex].id
+        if let idx = selection.firstIndex(of: id) {
+            selection.remove(at: idx)
+        } else {
+            selection.append(id)
+        }
+    }
+
+    /// User pressed Enter (possibly with a modifier). Phase 5 returns the
+    /// highlighted row and enter mode; wiring each scope + mode to a real
+    /// action is the job of Phases 6–8.
+    func commit(mode: PaletteEnterMode) -> (rows: [PaletteRow], mode: PaletteEnterMode)? {
+        let committed = committedRows()
+        guard !committed.isEmpty else { return nil }
+        return (committed, mode)
+    }
+
+    /// Rows that would be acted upon by a commit. When the selection bag
+    /// is non-empty, those rows are returned in selection order; otherwise
+    /// the single highlighted row.
+    func committedRows() -> [PaletteRow] {
+        if !selection.isEmpty {
+            let byID = Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0) })
+            return selection.compactMap { byID[$0] }
+        }
+        guard rows.indices.contains(highlightedIndex) else { return [] }
+        return [rows[highlightedIndex]]
+    }
+
+    // MARK: - Query refresh
+
+    private func refreshRows(resetHighlight: Bool) {
+        let parsed = PaletteScope.parse(input: input)
+        scope = parsed.scope
+        query = parsed.query
+        let pool = candidates(for: scope)
+        let ranked = FuzzyMatcher.rank(query: query, in: pool, extract: { $0.primaryText })
+        rows = ranked.map { PaletteRow(candidate: $0.candidate, match: $0.match) }
+        if resetHighlight {
+            highlightedIndex = rows.isEmpty ? -1 : 0
+        } else if highlightedIndex >= rows.count {
+            highlightedIndex = rows.isEmpty ? -1 : rows.count - 1
+        }
+    }
+
+    private func candidates(for scope: PaletteScope) -> [PaletteCandidate] {
+        switch scope {
+        case .ssh:     return sshCandidates
+        case .session: return sessionCandidates
+        // The remaining scopes are intentionally empty in Phase 5; Phase 6+
+        // plug in profile / tab / command enumerations.
+        case .command, .profile, .tab: return []
+        }
+    }
+}

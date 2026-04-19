@@ -1634,7 +1634,8 @@ final class SessionManager {
              .rerunFloatingPaneCommand, .dismissExitedPane, .rerunExitedPaneCommand,
              .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession,
              .renameSession, .runInPlace(_, _), .runCommand(_, _, _),
-             .paneNotification, .toggleBroadcastInput, .clearPaneSelection:
+             .paneNotification, .toggleBroadcastInput, .clearPaneSelection,
+             .showCommandPalette, .showSessionPalette:
             // Pane/remote actions are handled by TerminalWindowView.
             return false
         }

@@ -51,6 +51,10 @@ enum TabAction {
     case toggleBroadcastInput
     // Clear the multi-pane selection in the active tab
     case clearPaneSelection
+    // Command palette (⌘P) — opens fuzzy panel in SSH scope by default.
+    case showCommandPalette
+    // Session palette (⌘R) — opens fuzzy panel pre-filled with `s `.
+    case showSessionPalette
 }
 
 /// Manages the list of terminal tabs and the active tab index.
@@ -328,7 +332,8 @@ final class TabManager {
              .rerunFloatingPaneCommand, .dismissExitedPane, .rerunExitedPaneCommand,
              .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession,
              .renameSession, .runInPlace, .runCommand,
-             .paneNotification, .toggleBroadcastInput, .clearPaneSelection:
+             .paneNotification, .toggleBroadcastInput, .clearPaneSelection,
+             .showCommandPalette, .showSessionPalette:
             // Pane/remote actions are handled by TerminalWindowView, not TabManager.
             return false
         }

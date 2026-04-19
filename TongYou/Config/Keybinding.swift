@@ -155,6 +155,13 @@ struct Keybinding: Equatable {
         case toggleBroadcastInput
         // Clear the multi-pane selection (and broadcast) for the active tab.
         case clearPaneSelection
+        // Command palette (⌘P). Opens the fuzzy command panel in SSH scope
+        // (the default). Prefixes inside the input switch to command / profile
+        // / tab / session scopes.
+        case showCommandPalette
+        // Session palette (⌘R). Opens the palette pre-filled with `s ` so it
+        // starts in session-switching scope.
+        case showSessionPalette
         // Pass through to PTY (disables the keybinding)
         case unbind
 
@@ -216,6 +223,8 @@ struct Keybinding: Equatable {
                 Self.formatPrefixedAction(prefix: "run_command", command: cmd, arguments: args, options: opts)
             case .toggleBroadcastInput: "toggle_broadcast_input"
             case .clearPaneSelection: "clear_pane_selection"
+            case .showCommandPalette: "show_command_palette"
+            case .showSessionPalette: "show_session_palette"
             case .unbind: "unbind"
             }
         }
@@ -334,6 +343,8 @@ struct Keybinding: Equatable {
             case .runCommand(let cmd, let args, let opts): .runCommand(command: cmd, arguments: args, options: opts)
             case .toggleBroadcastInput: .toggleBroadcastInput
             case .clearPaneSelection: .clearPaneSelection
+            case .showCommandPalette: .showCommandPalette
+            case .showSessionPalette: .showSessionPalette
             case .copy, .paste, .search, .searchNext, .searchPrevious,
                  .resetFontSize, .increaseFontSize, .decreaseFontSize,
                  .unbind:
@@ -386,6 +397,8 @@ struct Keybinding: Equatable {
             case "rename_session": self = .renameSession
             case "toggle_broadcast_input": self = .toggleBroadcastInput
             case "clear_pane_selection": self = .clearPaneSelection
+            case "show_command_palette": self = .showCommandPalette
+            case "show_session_palette": self = .showSessionPalette
             case "unbind": self = .unbind
             default:
                 if rawValue.hasPrefix("goto_tab:"),
@@ -510,11 +523,13 @@ struct Keybinding: Equatable {
         // Remote session management
         Keybinding(modifiers: .command, key: "y", action: .listRemoteSessions),
         Keybinding(modifiers: [.command, .shift], key: "i", action: .newRemoteSession),
-        Keybinding(modifiers: .command, key: "r", action: .showSessionPicker),
+        Keybinding(modifiers: .command, key: "r", action: .showSessionPalette),
         Keybinding(modifiers: [.command, .shift], key: "k", action: .detachSession),
         Keybinding(modifiers: [.command, .shift], key: "r", action: .renameSession),
         // Multi-pane selection
         Keybinding(modifiers: [.command, .option], key: ".", action: .clearPaneSelection),
+        // Command palette
+        Keybinding(modifiers: .command, key: "p", action: .showCommandPalette),
     ]
 
     /// Parse a keybinding string like "cmd+shift+t=new_tab".
