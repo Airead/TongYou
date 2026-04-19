@@ -218,11 +218,16 @@ private struct ContainerView: View {
         }
         guard available > 0, let start = dragStartWeights, i + 1 < start.count else { return }
 
-        // Preserve `weights[i] + weights[i+1]`, remap pixel delta proportionally
-        // to that pair's weight budget. Clamp to [10%, 90%] of the pair.
+        // Preserve `weights[i] + weights[i+1]`, remap pixel delta to the full
+        // container's weight budget (a pane's share is `weight_i / sum(all)`,
+        // so one pixel corresponds to `sum(all) / available` weight units —
+        // not the pair sum, which under-counts when there are 3+ children).
+        // Clamp to [10%, 90%] of the pair's own share.
         let pairSum = start[i] + start[i + 1]
         guard pairSum > 0 else { return }
-        let weightPerPixel = pairSum / available
+        let totalSum = start.reduce(0, +)
+        guard totalSum > 0 else { return }
+        let weightPerPixel = totalSum / available
         let dw = delta * weightPerPixel
         let rawNew = start[i] + dw
         let clampedI = min(max(rawNew, 0.1 * pairSum), 0.9 * pairSum)

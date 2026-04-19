@@ -272,6 +272,22 @@ struct PaneSplitTests {
         #expect(fm.focusedPaneID == pane1.id)
     }
 
+    // MARK: - Keybinding Normalization
+
+    @Test func arrowKeyScalarsNormalizeToNames() {
+        // macOS reports arrow keys as private-use Unicode scalars via
+        // `charactersIgnoringModifiers`. They must be translated to the
+        // readable names keybinding configs use, otherwise
+        // `cmd+option+<arrow>` bindings never match.
+        #expect(Keybinding.normalizedKey(from: "\u{F700}") == "up")
+        #expect(Keybinding.normalizedKey(from: "\u{F701}") == "down")
+        #expect(Keybinding.normalizedKey(from: "\u{F702}") == "left")
+        #expect(Keybinding.normalizedKey(from: "\u{F703}") == "right")
+        // Ordinary characters must pass through unchanged.
+        #expect(Keybinding.normalizedKey(from: "a") == "a")
+        #expect(Keybinding.normalizedKey(from: "left") == "left")
+    }
+
     // MARK: - Keybinding Action Parsing
 
     @Test func paneActionRawValueRoundTrip() {
