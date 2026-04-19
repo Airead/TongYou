@@ -163,69 +163,75 @@ struct PaneSplitTests {
 
     // MARK: - Focus Navigation
 
+    private static let focusCanvas = Rect(x: 0, y: 0, width: 100, height: 40)
+
+    private func tab(_ tree: PaneNode) -> TerminalTab {
+        TerminalTab(id: UUID(), title: "t", paneTree: tree)
+    }
+
     @Test func moveFocusInSimpleSplit() {
         let pane1 = TerminalPane()
         let pane2 = TerminalPane()
-        let tree = PaneNode.container(Container(
+        let t = tab(.container(Container(
             strategy: .vertical,
             children: [.leaf(pane1), .leaf(pane2)],
             weights: [1.0, 1.0]
-        ))
+        )))
 
         let fm = FocusManager()
         fm.focusPane(id: pane1.id)
 
         // Move right: pane1 → pane2
-        fm.moveFocus(direction: .right, in: tree)
+        fm.moveFocus(direction: .right, in: t, screenRect: Self.focusCanvas)
         #expect(fm.focusedPaneID == pane2.id)
 
         // Move left: pane2 → pane1
-        fm.moveFocus(direction: .left, in: tree)
+        fm.moveFocus(direction: .left, in: t, screenRect: Self.focusCanvas)
         #expect(fm.focusedPaneID == pane1.id)
 
         // Move left at boundary: stays at pane1
-        fm.moveFocus(direction: .left, in: tree)
+        fm.moveFocus(direction: .left, in: t, screenRect: Self.focusCanvas)
         #expect(fm.focusedPaneID == pane1.id)
     }
 
     @Test func moveFocusVerticalSplit() {
         let pane1 = TerminalPane()
         let pane2 = TerminalPane()
-        let tree = PaneNode.container(Container(
+        let t = tab(.container(Container(
             strategy: .horizontal,
             children: [.leaf(pane1), .leaf(pane2)],
             weights: [1.0, 1.0]
-        ))
+        )))
 
         let fm = FocusManager()
         fm.focusPane(id: pane1.id)
 
         // Move down: pane1 → pane2
-        fm.moveFocus(direction: .down, in: tree)
+        fm.moveFocus(direction: .down, in: t, screenRect: Self.focusCanvas)
         #expect(fm.focusedPaneID == pane2.id)
 
         // Move up: pane2 → pane1
-        fm.moveFocus(direction: .up, in: tree)
+        fm.moveFocus(direction: .up, in: t, screenRect: Self.focusCanvas)
         #expect(fm.focusedPaneID == pane1.id)
     }
 
     @Test func moveFocusCrossAxis() {
         let pane1 = TerminalPane()
         let pane2 = TerminalPane()
-        let tree = PaneNode.container(Container(
+        let t = tab(.container(Container(
             strategy: .vertical,
             children: [.leaf(pane1), .leaf(pane2)],
             weights: [1.0, 1.0]
-        ))
+        )))
 
         let fm = FocusManager()
         fm.focusPane(id: pane1.id)
 
         // Moving up/down in a vertical split — no neighbor.
-        fm.moveFocus(direction: .up, in: tree)
+        fm.moveFocus(direction: .up, in: t, screenRect: Self.focusCanvas)
         #expect(fm.focusedPaneID == pane1.id)
 
-        fm.moveFocus(direction: .down, in: tree)
+        fm.moveFocus(direction: .down, in: t, screenRect: Self.focusCanvas)
         #expect(fm.focusedPaneID == pane1.id)
     }
 
@@ -239,37 +245,43 @@ struct PaneSplitTests {
             children: [.leaf(pane2), .leaf(pane3)],
             weights: [1.0, 1.0]
         ))
-        let tree = PaneNode.container(Container(
+        let t = tab(.container(Container(
             strategy: .vertical,
             children: [.leaf(pane1), inner],
             weights: [1.0, 1.0]
-        ))
+        )))
 
         let fm = FocusManager()
         fm.focusPane(id: pane1.id)
 
-        // Right from pane1 → enters right subtree, top pane (pane2)
-        fm.moveFocus(direction: .right, in: tree)
-        #expect(fm.focusedPaneID == pane2.id)
+        // Right from pane1 → enters right subtree. With equal weights pane2
+        // and pane3 each share half of pane1's height; on a tie the first
+        // match in dictionary iteration wins, so just assert it's one of them.
+        fm.moveFocus(direction: .right, in: t, screenRect: Self.focusCanvas)
+        #expect(fm.focusedPaneID == pane2.id || fm.focusedPaneID == pane3.id)
+        let landed = fm.focusedPaneID!
 
-        // Down from pane2 → pane3
-        fm.moveFocus(direction: .down, in: tree)
-        #expect(fm.focusedPaneID == pane3.id)
-
-        // Left from pane3 → pane1
-        fm.moveFocus(direction: .left, in: tree)
+        // From whichever inner pane was chosen, left must return to pane1.
+        fm.moveFocus(direction: .left, in: t, screenRect: Self.focusCanvas)
         #expect(fm.focusedPaneID == pane1.id)
+
+        // Inner up/down still navigates between pane2 and pane3.
+        fm.focusPane(id: landed)
+        let opposite = (landed == pane2.id) ? pane3.id : pane2.id
+        let dir: FocusDirection = (landed == pane2.id) ? .down : .up
+        fm.moveFocus(direction: dir, in: t, screenRect: Self.focusCanvas)
+        #expect(fm.focusedPaneID == opposite)
     }
 
     @Test func moveFocusWithNoFocus() {
         let pane1 = TerminalPane()
-        let tree = PaneNode.leaf(pane1)
+        let t = tab(.leaf(pane1))
 
         let fm = FocusManager()
         #expect(fm.focusedPaneID == nil)
 
         // Should focus the first pane.
-        fm.moveFocus(direction: .right, in: tree)
+        fm.moveFocus(direction: .right, in: t, screenRect: Self.focusCanvas)
         #expect(fm.focusedPaneID == pane1.id)
     }
 
@@ -311,10 +323,325 @@ struct PaneSplitTests {
         let actions: [Keybinding.Action] = [
             .splitVertical, .splitHorizontal, .closePane,
             .focusPane(.left), .focusPane(.right), .focusPane(.up), .focusPane(.down),
+            .movePane(.left), .movePane(.right), .movePane(.up), .movePane(.down),
         ]
         for action in actions {
             let parsed = Keybinding.Action(rawValue: action.rawValue)
             #expect(parsed == action, "Round-trip failed for \(action.rawValue)")
         }
+    }
+
+    @Test func defaultsBindCtrlCmdArrowsToMovePane() {
+        let expected: [(String, FocusDirection)] = [
+            ("left", .left), ("right", .right), ("up", .up), ("down", .down),
+        ]
+        for (key, dir) in expected {
+            let match = Keybinding.defaults.first {
+                $0.key == key
+                    && $0.modifiers == [.command, .control]
+                    && $0.action == .movePane(dir)
+            }
+            #expect(match != nil, "missing default binding Ctrl+Cmd+\(key) → movePane(\(dir))")
+        }
+    }
+
+    // MARK: - ContainerLayout (2D rendering path)
+    //
+    // Regression coverage for the bug where `.grid` / `.masterStack` containers
+    // with 2 panes rendered one pane taking almost all of the tab. Root cause
+    // was `ContainerView` running them through a 1D HStack/VStack. These tests
+    // exercise the pure helper that the 2D render path now feeds from.
+
+    private func flatContainer(
+        strategy: LayoutStrategyKind,
+        paneCount: Int
+    ) -> Container {
+        Container(
+            strategy: strategy,
+            children: (0..<paneCount).map { _ in .leaf(TerminalPane()) },
+            weights: Array(repeating: 1.0, count: paneCount)
+        )
+    }
+
+    @Test func gridTwoPanesSplitEvenlySideBySide() {
+        let container = flatContainer(strategy: .grid, paneCount: 2)
+        let rects = ContainerLayout.rects(
+            for: container,
+            in: CGSize(width: 800, height: 600)
+        )
+
+        #expect(rects.count == 2)
+        // 1 row × 2 columns → equal widths, full height each.
+        #expect(abs(rects[0].width - rects[1].width) <= 1)
+        #expect(rects[0].height == 600)
+        #expect(rects[1].height == 600)
+        // Neither pane should be degenerate (<10% of parent width).
+        #expect(rects[0].width > 80)
+        #expect(rects[1].width > 80)
+        // Side-by-side, no overlap.
+        #expect(rects[0].minX == 0)
+        #expect(rects[1].minX >= rects[0].maxX - 1)
+    }
+
+    @Test func masterStackTwoPanesSplitEvenlyLeftRight() {
+        let container = flatContainer(strategy: .masterStack, paneCount: 2)
+        let rects = ContainerLayout.rects(
+            for: container,
+            in: CGSize(width: 800, height: 600)
+        )
+
+        #expect(rects.count == 2)
+        // master weight = stack weight = 1 → 50/50 horizontally, full height.
+        #expect(abs(rects[0].width - rects[1].width) <= 1)
+        #expect(rects[0].height == 600)
+        #expect(rects[1].height == 600)
+        #expect(rects[0].width > 80)
+        #expect(rects[1].width > 80)
+        #expect(rects[0].minX == 0)
+        #expect(rects[1].minX >= rects[0].maxX - 1)
+    }
+
+    @Test func gridFourPanesForm2x2() {
+        let container = flatContainer(strategy: .grid, paneCount: 4)
+        let rects = ContainerLayout.rects(
+            for: container,
+            in: CGSize(width: 800, height: 600)
+        )
+
+        #expect(rects.count == 4)
+        // 2×2 grid: two distinct y rows, two distinct x columns.
+        let ys = Set(rects.map { $0.minY })
+        let xs = Set(rects.map { $0.minX })
+        #expect(ys.count == 2)
+        #expect(xs.count == 2)
+        // All cells roughly equal area.
+        let areas = rects.map { $0.width * $0.height }
+        let maxArea = areas.max()!
+        let minArea = areas.min()!
+        #expect(minArea > 0)
+        #expect(maxArea / minArea < 1.1)
+    }
+
+    @Test func masterStackThreePanesMasterPlusTwoStack() {
+        let container = flatContainer(strategy: .masterStack, paneCount: 3)
+        let rects = ContainerLayout.rects(
+            for: container,
+            in: CGSize(width: 900, height: 600)
+        )
+
+        #expect(rects.count == 3)
+        // Master (index 0) runs full height; stack panes sit to its right,
+        // stacked vertically with equal heights.
+        #expect(rects[0].height == 600)
+        #expect(rects[0].minX == 0)
+        // Stack panes share the same x column, each roughly half-height.
+        #expect(rects[1].minX == rects[2].minX)
+        #expect(rects[1].minX >= rects[0].maxX - 1)
+        #expect(abs(rects[1].height - rects[2].height) <= 1)
+        #expect(rects[1].minY == 0)
+        #expect(rects[2].minY >= rects[1].maxY - 1)
+    }
+
+    // MARK: - Master-stack divider drag math
+
+    /// Given master-stack weights, compute the master column's pixel width
+    /// for a given `availableWidth` — matches the `MasterStackSolver` formula
+    /// `availableWidth · m / (m + stackSum)`.
+    private func masterColumnWidth(weights: [CGFloat], availableWidth: CGFloat) -> CGFloat {
+        let m = weights[0]
+        let s = weights[1...].reduce(0, +)
+        return availableWidth * m / (m + s)
+    }
+
+    @Test func masterStackMasterDragFollowsMousePixelForPixel() {
+        // Two-pane master-stack, equal weights → divider at 50% = 400px of 800.
+        // Drag +100px → divider should land at ~500px.
+        let start: [CGFloat] = [1.0, 1.0]
+        let availableWidth: CGFloat = 800
+        let next = ContainerLayout.masterStackMasterDragWeights(
+            start: start, delta: 100, availableWidth: availableWidth
+        )
+        #expect(next != nil)
+        guard let out = next else { return }
+        let newDividerX = masterColumnWidth(weights: out, availableWidth: availableWidth)
+        #expect(abs(newDividerX - 500) < 0.5)
+        // Stack weights untouched so internal heights stay fixed.
+        #expect(out[1] == start[1])
+    }
+
+    @Test func masterStackMasterDragClampedInPixelSpace() {
+        // Oversized drags clamp to 10% / 90% of `availableWidth`, not weight.
+        let start: [CGFloat] = [1.0, 1.0]
+        let availableWidth: CGFloat = 800
+
+        let leftmost = ContainerLayout.masterStackMasterDragWeights(
+            start: start, delta: -10_000, availableWidth: availableWidth
+        )
+        #expect(leftmost != nil)
+        if let lm = leftmost {
+            let x = masterColumnWidth(weights: lm, availableWidth: availableWidth)
+            #expect(abs(x - 0.1 * availableWidth) < 0.5)
+            #expect(lm[1] == start[1])
+        }
+
+        let rightmost = ContainerLayout.masterStackMasterDragWeights(
+            start: start, delta: 10_000, availableWidth: availableWidth
+        )
+        #expect(rightmost != nil)
+        if let rm = rightmost {
+            let x = masterColumnWidth(weights: rm, availableWidth: availableWidth)
+            #expect(abs(x - 0.9 * availableWidth) < 0.5)
+            #expect(rm[1] == start[1])
+        }
+    }
+
+    @Test func masterStackMasterDragPreservesStackDistribution() {
+        // With non-uniform stack weights, the master drag must not change the
+        // relative sizing of the stack panes — only `weights[0]` updates.
+        let start: [CGFloat] = [1.0, 2.0, 3.0]
+        let out = ContainerLayout.masterStackMasterDragWeights(
+            start: start, delta: 50, availableWidth: 900
+        )
+        #expect(out != nil)
+        guard let next = out else { return }
+        #expect(next[1] == start[1])
+        #expect(next[2] == start[2])
+    }
+
+    @Test func masterStackStackDragPairPreserving() {
+        // 3-pane master-stack: [master, s0, s1], all weights 1.
+        // Drag stack divider 0 (between s0 and s1) down by 60px out of 600px
+        // of available stack height → s0 grows, s1 shrinks by the same amount.
+        let start: [CGFloat] = [1.0, 1.0, 1.0]
+        let out = ContainerLayout.masterStackStackDragWeights(
+            start: start, stackIndex: 0, delta: 60, availableHeight: 600
+        )
+        #expect(out != nil)
+        guard let next = out else { return }
+        // stackSum = 2, weightPerPixel = 2/600, dw = 60 * 2/600 = 0.2
+        #expect(abs(next[1] - 1.2) < 1e-9)
+        #expect(abs(next[2] - 0.8) < 1e-9)
+        // Pair preserved.
+        #expect(abs((next[1] + next[2]) - (start[1] + start[2])) < 1e-9)
+        // Master untouched.
+        #expect(next[0] == start[0])
+    }
+
+    @Test func masterStackStackDragClampedTo10to90OfPair() {
+        let start: [CGFloat] = [1.0, 1.0, 1.0]
+        let pairSum: CGFloat = 2.0
+
+        let upmost = ContainerLayout.masterStackStackDragWeights(
+            start: start, stackIndex: 0, delta: -10_000, availableHeight: 600
+        )
+        #expect(abs((upmost?[1] ?? 0) - 0.1 * pairSum) < 1e-9)
+        #expect(abs((upmost?[2] ?? 0) - 0.9 * pairSum) < 1e-9)
+        #expect(upmost?[0] == start[0])
+
+        let downmost = ContainerLayout.masterStackStackDragWeights(
+            start: start, stackIndex: 0, delta: 10_000, availableHeight: 600
+        )
+        #expect(abs((downmost?[1] ?? 0) - 0.9 * pairSum) < 1e-9)
+        #expect(abs((downmost?[2] ?? 0) - 0.1 * pairSum) < 1e-9)
+        #expect(downmost?[0] == start[0])
+    }
+
+    // MARK: - Grid row/col drag math (plan §P4 draggable grid)
+
+    @Test func gridPairPreservingDragFollowsMouse() {
+        // 2-row grid, equal weights → row divider at 50% = 300 of 600px.
+        // Drag +60 down → row 0's weight shifts so the divider lands at 360.
+        let start: [CGFloat] = [1, 1]
+        let availableHeight: CGFloat = 600
+        let next = ContainerLayout.pairPreservingDragWeights(
+            start: start, index: 0, delta: 60, availableAxisLength: availableHeight
+        )!
+        // total = 2, weightPerPixel = 2/600, dw = 60 × 2/600 = 0.2.
+        #expect(abs(next[0] - 1.2) < 1e-9)
+        #expect(abs(next[1] - 0.8) < 1e-9)
+        // Pair sum preserved.
+        #expect(abs((next[0] + next[1]) - (start[0] + start[1])) < 1e-9)
+    }
+
+    @Test func gridDragClampedTo10to90OfPair() {
+        let start: [CGFloat] = [1, 1]
+        let pairSum: CGFloat = 2
+
+        let leftmost = ContainerLayout.pairPreservingDragWeights(
+            start: start, index: 0, delta: -10_000, availableAxisLength: 800
+        )!
+        #expect(abs(leftmost[0] - 0.1 * pairSum) < 1e-9)
+        #expect(abs(leftmost[1] - 0.9 * pairSum) < 1e-9)
+
+        let rightmost = ContainerLayout.pairPreservingDragWeights(
+            start: start, index: 0, delta: 10_000, availableAxisLength: 800
+        )!
+        #expect(abs(rightmost[0] - 0.9 * pairSum) < 1e-9)
+        #expect(abs(rightmost[1] - 0.1 * pairSum) < 1e-9)
+    }
+
+    @Test func gridDragOnlyAffectsAdjacentPair() {
+        // 3-row grid [1, 1, 1]. Dragging divider 0 must not touch
+        // weights[2] — that's the whole point of pair-preserving.
+        let start: [CGFloat] = [1, 1, 1]
+        let next = ContainerLayout.pairPreservingDragWeights(
+            start: start, index: 0, delta: 50, availableAxisLength: 900
+        )!
+        #expect(next[2] == start[2])
+    }
+
+    @Test func gridDragRejectsDegenerateInputs() {
+        #expect(ContainerLayout.pairPreservingDragWeights(
+            start: [1], index: 0, delta: 10, availableAxisLength: 100
+        ) == nil)
+        #expect(ContainerLayout.pairPreservingDragWeights(
+            start: [1, 1], index: 1, delta: 10, availableAxisLength: 100
+        ) == nil)
+        #expect(ContainerLayout.pairPreservingDragWeights(
+            start: [1, 1], index: 0, delta: 10, availableAxisLength: 0
+        ) == nil)
+    }
+
+    @Test func gridRectsHonorCustomRowAndColWeights() {
+        // End-to-end: pass custom grid weights through ContainerLayout.rects
+        // and verify the rects match the solver's output.
+        let container = Container(
+            strategy: .grid,
+            children: [
+                .leaf(TerminalPane()), .leaf(TerminalPane()),
+                .leaf(TerminalPane()), .leaf(TerminalPane()),
+            ],
+            weights: [1, 1, 1, 1],
+            gridRowWeights: [1, 3],
+            gridColWeights: [2, 1]
+        )
+        let rects = ContainerLayout.rects(
+            for: container,
+            in: CGSize(width: 120, height: 80)
+        )
+        // Widths split 80/40 (2:1), heights split 20/60 (1:3).
+        #expect(rects[0].size == CGSize(width: 80, height: 20))
+        #expect(rects[1].size == CGSize(width: 40, height: 20))
+        #expect(rects[2].size == CGSize(width: 80, height: 60))
+        #expect(rects[3].size == CGSize(width: 40, height: 60))
+    }
+
+    @Test func masterStackDragRejectsDegenerateInputs() {
+        // Too few weights for master drag.
+        #expect(ContainerLayout.masterStackMasterDragWeights(
+            start: [1.0], delta: 50, availableWidth: 800
+        ) == nil)
+        // Zero/negative available width.
+        #expect(ContainerLayout.masterStackMasterDragWeights(
+            start: [1.0, 1.0], delta: 50, availableWidth: 0
+        ) == nil)
+        // Stack drag: out-of-range stackIndex.
+        #expect(ContainerLayout.masterStackStackDragWeights(
+            start: [1.0, 1.0, 1.0], stackIndex: 1, delta: 50, availableHeight: 600
+        ) == nil)
+        // Stack drag: only master + one stack pane → no internal divider.
+        #expect(ContainerLayout.masterStackStackDragWeights(
+            start: [1.0, 1.0], stackIndex: 0, delta: 50, availableHeight: 600
+        ) == nil)
     }
 }

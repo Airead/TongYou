@@ -572,6 +572,25 @@ public final class SocketServer: @unchecked Sendable {
             // contents are replaced without waiting for the first draw.
             sessionManager.rerunPane(sessionID: sessionID, paneID: paneID)
             sendFullSnapshot(to: client, sessionID: sessionID, paneID: paneID)
+
+        case .movePane(let sessionID, let sourcePaneID, let targetPaneID, let side):
+            if sessionManager.movePane(
+                sessionID: sessionID,
+                sourcePaneID: sourcePaneID,
+                targetPaneID: targetPaneID,
+                side: side
+            ) {
+                broadcastLayoutOrClosed(sessionID: sessionID)
+            }
+
+        case .changeStrategy(let sessionID, let paneID, let kind):
+            if sessionManager.changeStrategy(
+                sessionID: sessionID,
+                paneID: paneID,
+                kind: kind
+            ) {
+                broadcastLayoutOrClosed(sessionID: sessionID)
+            }
         }
     }
 

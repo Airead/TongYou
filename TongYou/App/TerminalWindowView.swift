@@ -27,6 +27,11 @@ struct TerminalWindowView: View {
     @State private var showingSessionPicker = false
     @State private var renamingSessionIndex: Int?
 
+    /// IDs of panes whose in-pane search bar is currently open. Updated via
+    /// `MetalView.onSearchBarToggled`. Consumed by `zoomedPaneView` to hide
+    /// the zoom badge while search is active (would otherwise overlap).
+    @State private var searchActivePaneIDs: Set<UUID> = []
+
     /// Stores MetalView instances outside of SwiftUI state so that
     /// NSViewRepresentable.makeNSView can read/write without triggering
     /// "Modifying state during view update" warnings.
@@ -290,27 +295,43 @@ struct TerminalWindowView: View {
         }
 
         ZStack {
-            PaneSplitView(
-                node: activeTab.paneTree,
-                viewStore: viewStore,
-                focusManager: focusManager,
-                focusColor: paneFocusColor,
-                configLoader: configLoader,
-                controllerForPane: { paneID in
-                    sessionManager.activeController(for: paneID)
-                },
-                onTabAction: handleTabAction,
-                onTitleChanged: updateTabTitle,
-                onNodeChanged: { newTree in
-                    sessionManager.updateActivePaneTree(newTree)
-                },
-                onUserInteraction: { paneID in
-                    notificationStore.markRead(paneID: paneID)
-                },
-                isTreePaneExited: { paneID in
-                    sessionManager.exitedTreePanes[paneID] != nil
-                }
-            )
+            // Zoom / monocle (plan §P4.1): render only the zoomed pane when
+            // set and the ID still resolves in the tree. MetalView instances
+            // for non-zoomed panes stay alive in `viewStore` — just detached
+            // from the SwiftUI hierarchy, so their PTY sizes freeze until
+            // zoom exits (`dismantleNSView` intentionally does not tear down).
+            if let zoomedID = activeTab.zoomedPaneID,
+               let zoomedPane = activeTab.paneTree.findPane(id: zoomedID) {
+                let hiddenCount = max(0, activeTab.paneTree.allPaneIDs.count - 1)
+                zoomedPaneView(
+                    pane: zoomedPane,
+                    focusColor: paneFocusColor,
+                    updateTabTitle: updateTabTitle,
+                    hiddenPaneCount: hiddenCount
+                )
+            } else {
+                PaneSplitView(
+                    node: activeTab.paneTree,
+                    viewStore: viewStore,
+                    focusManager: focusManager,
+                    focusColor: paneFocusColor,
+                    configLoader: configLoader,
+                    controllerForPane: { paneID in
+                        sessionManager.activeController(for: paneID)
+                    },
+                    onTabAction: handleTabAction,
+                    onTitleChanged: updateTabTitle,
+                    onNodeChanged: { newTree in
+                        sessionManager.updateActivePaneTree(newTree)
+                    },
+                    onUserInteraction: { paneID in
+                        notificationStore.markRead(paneID: paneID)
+                    },
+                    isTreePaneExited: { paneID in
+                        sessionManager.exitedTreePanes[paneID] != nil
+                    }
+                )
+            }
 
             FloatingPaneOverlay(
                 floatingPanes: activeTab.floatingPanes,
@@ -345,6 +366,69 @@ struct TerminalWindowView: View {
                 }
             )
         }
+    }
+
+    /// Full-tab rendering of a single zoomed pane. Mirrors `PaneSplitView`'s
+    /// leaf branch so the visual treatment (focus border, callbacks) stays
+    /// consistent. Adds a top-center badge (⛶ +N) indicating how many
+    /// other panes are hidden behind the zoom — suppressed while the
+    /// pane's search bar is open (would visually collide with the bar).
+    @ViewBuilder
+    private func zoomedPaneView(
+        pane: TerminalPane,
+        focusColor: Color,
+        updateTabTitle: @escaping (String) -> Void,
+        hiddenPaneCount: Int
+    ) -> some View {
+        let isFocused = focusManager.focusedPaneID == pane.id
+        let showBadge = hiddenPaneCount > 0 && !searchActivePaneIDs.contains(pane.id)
+        TerminalPaneContainerView(
+            paneID: pane.id,
+            profileID: pane.profileID,
+            viewStore: viewStore,
+            initialWorkingDirectory: pane.initialWorkingDirectory,
+            configLoader: configLoader,
+            externalController: sessionManager.activeController(for: pane.id),
+            onTabAction: handleTabAction,
+            onTitleChanged: updateTabTitle,
+            onFocused: { focusManager.focusPane(id: pane.id) },
+            onUserInteraction: { notificationStore.markRead(paneID: pane.id) },
+            isProcessExited: { sessionManager.exitedTreePanes[pane.id] != nil },
+            onSearchBarToggled: { isOpen in
+                if isOpen {
+                    searchActivePaneIDs.insert(pane.id)
+                } else {
+                    searchActivePaneIDs.remove(pane.id)
+                }
+            }
+        )
+        .id(pane.id)
+        .overlay(
+            Rectangle()
+                .stroke(focusColor, lineWidth: 1)
+                .opacity(isFocused ? 1 : 0)
+                .allowsHitTesting(false)
+        )
+        .overlay(alignment: .top) {
+            if showBadge {
+                zoomBadgeLabel(hiddenPaneCount: hiddenPaneCount)
+                    .padding(.top, 6)
+            }
+        }
+    }
+
+    /// Small translucent chip shown at the top-center of the zoomed pane.
+    /// `hiddenPaneCount` is `tab.paneTree.allPaneIDs.count - 1`.
+    @ViewBuilder
+    private func zoomBadgeLabel(hiddenPaneCount: Int) -> some View {
+        Text("⛶ +\(hiddenPaneCount)")
+            .font(.system(size: 11, weight: .medium, design: .monospaced))
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 0.5))
+            .allowsHitTesting(false)
     }
 
     // MARK: - Session Operations
@@ -495,6 +579,36 @@ struct TerminalWindowView: View {
         if let newTree = activeTab.paneTree.resizePane(id: focusedID, delta: delta) {
             sessionManager.updateActivePaneTree(newTree)
         }
+    }
+
+    /// Toggle zoom / monocle on the focused tree pane. Floating panes
+    /// don't zoom — tmux parity — so requests from a floating pane fall
+    /// through silently.
+    private func toggleZoom() {
+        guard let focusedID = focusManager.focusedPaneID,
+              let activeTab = sessionManager.activeTab,
+              activeTab.paneTree.contains(paneID: focusedID) else { return }
+        sessionManager.toggleZoom(paneID: focusedID)
+    }
+
+    /// Change the layout strategy of the container that directly holds the
+    /// focused tree pane (plan §P4.5). Floating panes and a sole root-leaf
+    /// pane have no container to mutate, so requests from those contexts
+    /// fall through silently.
+    private func changeStrategy(to kind: LayoutStrategyKind) {
+        guard let focusedID = focusManager.focusedPaneID,
+              let activeTab = sessionManager.activeTab,
+              activeTab.paneTree.contains(paneID: focusedID) else { return }
+        sessionManager.changeStrategy(paneID: focusedID, newKind: kind)
+    }
+
+    /// Cycle the strategy of the focused pane's parent container through
+    /// `LayoutEngine.userCycleableStrategies` (plan §P4.5).
+    private func cycleStrategy(forward: Bool) {
+        guard let focusedID = focusManager.focusedPaneID,
+              let activeTab = sessionManager.activeTab,
+              activeTab.paneTree.contains(paneID: focusedID) else { return }
+        sessionManager.cycleStrategy(paneID: focusedID, forward: forward)
     }
 
     /// PTY process has just exited. Decide between keep-alive (zombie) and
@@ -681,12 +795,20 @@ struct TerminalWindowView: View {
             closePane()
         case .focusPane(let direction):
             moveFocus(direction)
+        case .movePane(let direction):
+            movePane(direction)
         case .paneExited(let paneID, let exitCode):
             handlePTYExit(id: paneID, exitCode: exitCode)
         case .growPane:
             resizePane(delta: 0.1)
         case .shrinkPane:
             resizePane(delta: -0.1)
+        case .toggleZoom:
+            toggleZoom()
+        case .changeStrategy(let kind):
+            changeStrategy(to: kind)
+        case .cycleStrategy(let forward):
+            cycleStrategy(forward: forward)
         // Floating pane actions
         case .newFloatingPane:
             createFloatingPane()
@@ -743,8 +865,35 @@ struct TerminalWindowView: View {
 
     private func moveFocus(_ direction: FocusDirection) {
         guard let activeTab = sessionManager.activeTab else { return }
-        focusManager.moveFocus(direction: direction, in: activeTab.paneTree)
+        focusManager.moveFocus(direction: direction, in: activeTab, screenRect: Self.focusCanvas)
     }
+
+    /// Relocate the focused pane next to its visual neighbor in `direction`
+    /// (plan §P4.3). Neighbor lookup reuses `focusNeighbor` so the UX
+    /// mirrors focus navigation: the pane "jumps past" its cardinal
+    /// neighbor and lands on that neighbor's far side. No-op at the edge
+    /// or when no pane is focused.
+    private func movePane(_ direction: FocusDirection) {
+        guard let activeTab = sessionManager.activeTab else { return }
+        guard let sourceID = focusManager.focusedPaneID else { return }
+        guard let targetID = LayoutEngine.focusNeighbor(
+            tab: activeTab,
+            screenRect: Self.focusCanvas,
+            from: sourceID,
+            direction: direction
+        ) else { return }
+        sessionManager.movePane(
+            sourcePaneID: sourceID,
+            targetPaneID: targetID,
+            side: direction
+        )
+    }
+
+    /// Synthetic canvas for engine-level neighbor/rect lookups until the
+    /// render layer consumes `LayoutEngine.solveRects` directly (plan §315
+    /// step 7). Large enough that weights dominate and min-size clamping is
+    /// irrelevant — only relative geometry matters for focus/move.
+    private static let focusCanvas = Rect(x: 0, y: 0, width: 10_000, height: 10_000)
 
     // MARK: - Helpers
 

@@ -14,7 +14,9 @@ extension LayoutTree {
             self = .container(
                 strategy: c.strategy,
                 children: c.children.map(LayoutTree.init(from:)),
-                weights: c.weights.map(Float.init)
+                weights: c.weights.map(Float.init),
+                gridRowWeights: c.gridRowWeights.map(Float.init),
+                gridColWeights: c.gridColWeights.map(Float.init)
             )
         }
     }
@@ -29,7 +31,7 @@ extension PaneNode {
         case .leaf(let paneID):
             guard let pane = resolvePane(paneID) else { return nil }
             return .leaf(pane)
-        case .container(let strategy, let children, let weights):
+        case .container(let strategy, let children, let weights, let gridRowWeights, let gridColWeights):
             var nodes: [PaneNode] = []
             nodes.reserveCapacity(children.count)
             for child in children {
@@ -41,7 +43,9 @@ extension PaneNode {
             return .container(Container(
                 strategy: strategy,
                 children: nodes,
-                weights: weights.map { CGFloat($0) }
+                weights: weights.map { CGFloat($0) },
+                gridRowWeights: gridRowWeights.map { CGFloat($0) },
+                gridColWeights: gridColWeights.map { CGFloat($0) }
             ))
         }
     }

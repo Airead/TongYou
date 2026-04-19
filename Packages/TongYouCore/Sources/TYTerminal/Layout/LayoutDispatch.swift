@@ -19,7 +19,9 @@ public enum LayoutDispatch {
             childCount: container.children.count,
             weights: container.weights,
             minSize: minSize,
-            dividerSize: dividerSize
+            dividerSize: dividerSize,
+            gridRowWeights: container.gridRowWeights,
+            gridColWeights: container.gridColWeights
         )
     }
 
@@ -29,7 +31,9 @@ public enum LayoutDispatch {
         childCount: Int,
         weights: [CGFloat],
         minSize: Size = .defaultMin,
-        dividerSize: Int = 0
+        dividerSize: Int = 0,
+        gridRowWeights: [CGFloat] = [],
+        gridColWeights: [CGFloat] = []
     ) -> SolveResult {
         switch kind {
         case .horizontal:
@@ -54,7 +58,9 @@ public enum LayoutDispatch {
                 childCount: childCount,
                 weights: weights,
                 minSize: minSize,
-                dividerSize: dividerSize
+                dividerSize: dividerSize,
+                gridRowWeights: gridRowWeights,
+                gridColWeights: gridColWeights
             )
         case .masterStack:
             return MasterStackSolver.solve(
@@ -72,7 +78,9 @@ public enum LayoutDispatch {
                 childCount: childCount,
                 weights: weights,
                 minSize: minSize,
-                dividerSize: dividerSize
+                dividerSize: dividerSize,
+                gridRowWeights: gridRowWeights,
+                gridColWeights: gridColWeights
             )
         }
     }

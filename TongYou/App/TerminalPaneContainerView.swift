@@ -18,6 +18,10 @@ struct TerminalPaneContainerView: NSViewRepresentable {
     let onFocused: () -> Void
     let onUserInteraction: (() -> Void)?
     var isProcessExited: (() -> Bool)?
+    /// Notifies when the in-pane search bar opens (`true`) or closes
+    /// (`false`). Optional — callers that don't care about search state
+    /// leave it nil.
+    var onSearchBarToggled: ((Bool) -> Void)?
 
     func makeNSView(context: Context) -> MetalView {
         if let existing = viewStore.view(for: paneID) {
@@ -29,6 +33,7 @@ struct TerminalPaneContainerView: NSViewRepresentable {
             existing.onFocused = onFocused
             existing.onUserInteraction = onUserInteraction
             existing.isProcessExited = isProcessExited
+            existing.onSearchBarToggled = onSearchBarToggled
             return existing
         }
         let view = MetalView()
@@ -42,6 +47,7 @@ struct TerminalPaneContainerView: NSViewRepresentable {
         view.onFocused = onFocused
         view.onUserInteraction = onUserInteraction
         view.isProcessExited = isProcessExited
+        view.onSearchBarToggled = onSearchBarToggled
         viewStore.store(view, for: paneID)
         return view
     }
@@ -55,6 +61,7 @@ struct TerminalPaneContainerView: NSViewRepresentable {
         nsView.onFocused = onFocused
         nsView.onUserInteraction = onUserInteraction
         nsView.isProcessExited = isProcessExited
+        nsView.onSearchBarToggled = onSearchBarToggled
         if nsView.externalController !== externalController {
             nsView.externalController = externalController
             if let external = externalController {

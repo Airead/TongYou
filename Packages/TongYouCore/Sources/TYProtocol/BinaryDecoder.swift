@@ -227,6 +227,18 @@ public struct BinaryDecoder: Sendable {
         }
     }
 
+    public mutating func readFocusDirection() throws -> FocusDirection {
+        let raw = try readUInt8()
+        switch raw {
+        case 0: return .left
+        case 1: return .right
+        case 2: return .up
+        case 3: return .down
+        default:
+            throw BinaryDecoderError.invalidEnumValue(type: "FocusDirection", rawValue: UInt64(raw))
+        }
+    }
+
     public mutating func readLayoutStrategyKind() throws -> LayoutStrategyKind {
         let raw = try readUInt8()
         switch raw {
@@ -280,7 +292,25 @@ public struct BinaryDecoder: Sendable {
             for _ in 0..<count {
                 weights.append(try readFloat())
             }
-            return .container(strategy: strategy, children: children, weights: weights)
+            let rowCount = Int(try readUInt32())
+            var gridRowWeights: [Float] = []
+            gridRowWeights.reserveCapacity(rowCount)
+            for _ in 0..<rowCount {
+                gridRowWeights.append(try readFloat())
+            }
+            let colCount = Int(try readUInt32())
+            var gridColWeights: [Float] = []
+            gridColWeights.reserveCapacity(colCount)
+            for _ in 0..<colCount {
+                gridColWeights.append(try readFloat())
+            }
+            return .container(
+                strategy: strategy,
+                children: children,
+                weights: weights,
+                gridRowWeights: gridRowWeights,
+                gridColWeights: gridColWeights
+            )
         default:
             throw BinaryDecoderError.invalidEnumValue(type: "LayoutTree", rawValue: UInt64(tag))
         }
@@ -762,6 +792,24 @@ public struct BinaryDecoder: Sendable {
             let sessionID = try readSessionID()
             let paneID = try readPaneID()
             return .rerunPane(sessionID, paneID)
+
+        case .movePane:
+            let sessionID = try readSessionID()
+            let sourcePaneID = try readPaneID()
+            let targetPaneID = try readPaneID()
+            let side = try readFocusDirection()
+            return .movePane(
+                sessionID,
+                sourcePaneID: sourcePaneID,
+                targetPaneID: targetPaneID,
+                side: side
+            )
+
+        case .changeStrategy:
+            let sessionID = try readSessionID()
+            let paneID = try readPaneID()
+            let kind = try readLayoutStrategyKind()
+            return .changeStrategy(sessionID, paneID, kind)
         }
     }
 }

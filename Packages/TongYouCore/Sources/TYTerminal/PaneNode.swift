@@ -29,12 +29,22 @@ public struct Container: Equatable, Sendable, Identifiable {
     public var strategy: LayoutStrategyKind
     public var children: [PaneNode]
     public var weights: [CGFloat]
+    /// Per-row weights for `.grid`. Empty by default — grid stays
+    /// auto-balanced until the user drags a row divider. When set, its
+    /// length pins the grid's row count; if `gridRowWeights.count ×
+    /// gridColWeights.count != children.count` the solver falls back to
+    /// auto so a later pane add/close doesn't break rendering.
+    public var gridRowWeights: [CGFloat]
+    /// Per-column weights for `.grid`. Same semantics as `gridRowWeights`.
+    public var gridColWeights: [CGFloat]
 
     public init(
         id: UUID = UUID(),
         strategy: LayoutStrategyKind,
         children: [PaneNode],
-        weights: [CGFloat]
+        weights: [CGFloat],
+        gridRowWeights: [CGFloat] = [],
+        gridColWeights: [CGFloat] = []
     ) {
         precondition(children.count == weights.count, "children.count must equal weights.count")
         precondition(!children.isEmpty, "Container must have at least one child")
@@ -42,6 +52,8 @@ public struct Container: Equatable, Sendable, Identifiable {
         self.strategy = strategy
         self.children = children
         self.weights = weights
+        self.gridRowWeights = gridRowWeights
+        self.gridColWeights = gridColWeights
     }
 }
 
@@ -165,14 +177,9 @@ public indirect enum PaneNode: Equatable, Sendable {
         case .container(let c):
             for (i, child) in c.children.enumerated() {
                 guard let replaced = child.split(paneID: paneID, direction: direction, newPane: newPane) else { continue }
-                var newChildren = c.children
-                newChildren[i] = replaced
-                return .container(Container(
-                    id: c.id,
-                    strategy: c.strategy,
-                    children: newChildren,
-                    weights: c.weights
-                ))
+                var copy = c
+                copy.children[i] = replaced
+                return .container(copy)
             }
             return nil
         }
@@ -197,12 +204,10 @@ public indirect enum PaneNode: Equatable, Sendable {
             }
             if newChildren.isEmpty { return nil }
             if newChildren.count == 1 { return newChildren[0] }  // collapse
-            return .container(Container(
-                id: c.id,
-                strategy: c.strategy,
-                children: newChildren,
-                weights: newWeights
-            ))
+            var copy = c
+            copy.children = newChildren
+            copy.weights = newWeights
+            return .container(copy)
         }
     }
 
@@ -218,15 +223,10 @@ public indirect enum PaneNode: Equatable, Sendable {
             if c.children.count == 2 {
                 for i in 0..<c.children.count {
                     guard case .leaf(let p) = c.children[i], p.id == paneID else { continue }
-                    var newWeights = c.weights
-                    newWeights[i] = newRatio
-                    newWeights[1 - i] = 1.0 - newRatio
-                    return .container(Container(
-                        id: c.id,
-                        strategy: c.strategy,
-                        children: c.children,
-                        weights: newWeights
-                    ))
+                    var copy = c
+                    copy.weights[i] = newRatio
+                    copy.weights[1 - i] = 1.0 - newRatio
+                    return .container(copy)
                 }
             }
             var newChildren = c.children
@@ -239,12 +239,9 @@ public indirect enum PaneNode: Equatable, Sendable {
                 }
             }
             guard changed else { return self }
-            return .container(Container(
-                id: c.id,
-                strategy: c.strategy,
-                children: newChildren,
-                weights: c.weights
-            ))
+            var copy = c
+            copy.children = newChildren
+            return .container(copy)
         }
     }
 
@@ -264,27 +261,17 @@ public indirect enum PaneNode: Equatable, Sendable {
                     guard sum > 0 else { return nil }
                     let currentRatio = c.weights[i] / sum
                     let newRatio = min(max(currentRatio + delta, 0.1), 0.9)
-                    var newWeights = c.weights
-                    newWeights[i] = newRatio * sum
-                    newWeights[1 - i] = (1.0 - newRatio) * sum
-                    return .container(Container(
-                        id: c.id,
-                        strategy: c.strategy,
-                        children: c.children,
-                        weights: newWeights
-                    ))
+                    var copy = c
+                    copy.weights[i] = newRatio * sum
+                    copy.weights[1 - i] = (1.0 - newRatio) * sum
+                    return .container(copy)
                 }
             }
             for (i, child) in c.children.enumerated() {
                 guard let updated = child.resizePane(id: paneID, delta: delta) else { continue }
-                var newChildren = c.children
-                newChildren[i] = updated
-                return .container(Container(
-                    id: c.id,
-                    strategy: c.strategy,
-                    children: newChildren,
-                    weights: c.weights
-                ))
+                var copy = c
+                copy.children[i] = updated
+                return .container(copy)
             }
             return nil
         }
@@ -296,16 +283,11 @@ public indirect enum PaneNode: Equatable, Sendable {
         case .leaf(let pane):
             return pane.id == id ? newNode : self
         case .container(let c):
-            var newChildren = c.children
+            var copy = c
             for i in 0..<c.children.count {
-                newChildren[i] = c.children[i].replacingPane(id: id, with: newNode)
+                copy.children[i] = c.children[i].replacingPane(id: id, with: newNode)
             }
-            return .container(Container(
-                id: c.id,
-                strategy: c.strategy,
-                children: newChildren,
-                weights: c.weights
-            ))
+            return .container(copy)
         }
     }
 }

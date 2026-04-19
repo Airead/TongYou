@@ -972,6 +972,172 @@ final class SessionManager {
         return false
     }
 
+    /// Toggle the zoom / monocle state of `paneID` within its owning tab
+    /// (plan §P4.1). When `inSessionID` is non-nil the lookup is scoped to
+    /// that session, otherwise the active session is used.
+    ///
+    /// Zoom is client-only UI state: not forwarded to the server. Remote
+    /// sessions zoom locally too so the keybinding feels consistent.
+    @discardableResult
+    func toggleZoom(inSessionID: UUID? = nil, paneID: UUID) -> Bool {
+        let targetIndex: Int
+        if let sid = inSessionID {
+            guard let i = sessions.firstIndex(where: { $0.id == sid }) else { return false }
+            targetIndex = i
+        } else {
+            guard sessions.indices.contains(activeSessionIndex) else { return false }
+            targetIndex = activeSessionIndex
+        }
+
+        for i in sessions[targetIndex].tabs.indices {
+            let tab = sessions[targetIndex].tabs[i]
+            guard let newTab = LayoutEngine.toggleZoom(tab: tab, paneID: paneID)
+            else { continue }
+            sessions[targetIndex].tabs[i] = newTab
+            return true
+        }
+        return false
+    }
+
+    /// Move `sourcePaneID` next to `targetPaneID` within the tab that owns
+    /// them (plan §P4.3). For remote sessions the request is forwarded to
+    /// the server and the tree lands locally via `layoutUpdate`; for local
+    /// sessions the engine runs in-process and the tab is rewritten.
+    ///
+    /// Returns `true` when the move was applied or dispatched; `false`
+    /// when the inputs are invalid (missing session/panes, same pane,
+    /// different tab, unsupported source kind, etc.).
+    @discardableResult
+    func movePane(
+        inSessionID: UUID? = nil,
+        sourcePaneID: UUID,
+        targetPaneID: UUID,
+        side: FocusDirection
+    ) -> Bool {
+        guard sourcePaneID != targetPaneID else { return false }
+
+        let targetIndex: Int
+        if let sid = inSessionID {
+            guard let i = sessions.firstIndex(where: { $0.id == sid }) else { return false }
+            targetIndex = i
+        } else {
+            guard sessions.indices.contains(activeSessionIndex) else { return false }
+            targetIndex = activeSessionIndex
+        }
+
+        let session = sessions[targetIndex]
+
+        if let sid = session.source.serverSessionID,
+           let serverSource = serverPaneUUID(for: sourcePaneID),
+           let serverTarget = serverPaneUUID(for: targetPaneID) {
+            remoteClient?.movePane(
+                sessionID: SessionID(sid),
+                sourcePaneID: PaneID(serverSource),
+                targetPaneID: PaneID(serverTarget),
+                side: side
+            )
+            return true
+        }
+
+        for i in sessions[targetIndex].tabs.indices {
+            let tab = sessions[targetIndex].tabs[i]
+            guard tab.hasPane(id: sourcePaneID), tab.hasPane(id: targetPaneID) else { continue }
+            guard let newTab = LayoutEngine.movePane(
+                tab: tab,
+                sourceID: sourcePaneID,
+                targetID: targetPaneID,
+                side: side
+            ) else { return false }
+            sessions[targetIndex].tabs[i] = newTab
+            scheduleLocalSaveIfNeeded(sessionID: session.id)
+            return true
+        }
+        return false
+    }
+
+    /// Change the tab layout that owns `paneID` to `newKind` (plan §P4.5),
+    /// flattening any prior nesting so every pane lives as a direct child
+    /// of a single top-level container. For remote sessions the request is
+    /// forwarded to the server; for local sessions the engine runs in
+    /// process.
+    ///
+    /// Returns `true` when the rewrite was applied or dispatched. Returns
+    /// `false` when the pane cannot be found, the tab has only one pane
+    /// (no container to install), or the tab is already a flat container
+    /// using `newKind`.
+    @discardableResult
+    func changeStrategy(
+        inSessionID: UUID? = nil,
+        paneID: UUID,
+        newKind: LayoutStrategyKind
+    ) -> Bool {
+        let targetIndex: Int
+        if let sid = inSessionID {
+            guard let i = sessions.firstIndex(where: { $0.id == sid }) else { return false }
+            targetIndex = i
+        } else {
+            guard sessions.indices.contains(activeSessionIndex) else { return false }
+            targetIndex = activeSessionIndex
+        }
+
+        let session = sessions[targetIndex]
+
+        if let sid = session.source.serverSessionID,
+           let serverPane = serverPaneUUID(for: paneID) {
+            remoteClient?.changeStrategy(
+                sessionID: SessionID(sid),
+                paneID: PaneID(serverPane),
+                kind: newKind
+            )
+            return true
+        }
+
+        for i in sessions[targetIndex].tabs.indices {
+            let tab = sessions[targetIndex].tabs[i]
+            guard tab.paneTree.contains(paneID: paneID) else { continue }
+            guard let newTab = LayoutEngine.flattenToStrategy(
+                tab: tab, newKind: newKind
+            ) else { return false }
+            sessions[targetIndex].tabs[i] = newTab
+            if session.source == .local {
+                scheduleLocalSaveIfNeeded(sessionID: session.id)
+            }
+            return true
+        }
+        return false
+    }
+
+    /// Cycle the tab layout that owns `paneID` through
+    /// `LayoutEngine.userCycleableStrategies` (plan §P4.5). The starting
+    /// strategy is read from the tab's root container (if any); nested
+    /// sub-containers are ignored because a `changeStrategy` rewrite
+    /// flattens them anyway.
+    @discardableResult
+    func cycleStrategy(
+        inSessionID: UUID? = nil,
+        paneID: UUID,
+        forward: Bool
+    ) -> Bool {
+        let targetIndex: Int
+        if let sid = inSessionID {
+            guard let i = sessions.firstIndex(where: { $0.id == sid }) else { return false }
+            targetIndex = i
+        } else {
+            guard sessions.indices.contains(activeSessionIndex) else { return false }
+            targetIndex = activeSessionIndex
+        }
+        guard let tab = sessions[targetIndex].tabs.first(where: { $0.paneTree.contains(paneID: paneID) }),
+              case .container(let root) = tab.paneTree else {
+            return false
+        }
+        let newKind = LayoutEngine.nextStrategy(current: root.strategy, forward: forward)
+        return changeStrategy(
+            inSessionID: inSessionID,
+            paneID: paneID,
+            newKind: newKind
+        )
+    }
+
     /// Replace the active tab's pane tree (e.g. after a divider drag), then
     /// run `LayoutEngine.sanitize` so any externally-produced invariant
     /// violations (stray empty / single-child containers) are cleaned up
@@ -1451,7 +1617,8 @@ final class SessionManager {
             // Session-level actions are handled by TerminalWindowView.
             return false
         case .splitVertical, .splitHorizontal, .closePane,
-             .focusPane, .paneExited, .growPane, .shrinkPane,
+             .focusPane, .movePane, .paneExited, .growPane, .shrinkPane, .toggleZoom,
+             .changeStrategy, .cycleStrategy,
              .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane,
              .rerunFloatingPaneCommand, .dismissExitedPane, .rerunExitedPaneCommand,
              .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession,
@@ -2117,14 +2284,16 @@ final class SessionManager {
                 closeOnExit: metadata[paneID]?.closeOnExit
             ))
 
-        case .container(let strategy, let children, let weights):
+        case .container(let strategy, let children, let weights, let gridRowWeights, let gridColWeights):
             let childNodes = children.map {
                 buildPaneNode(from: $0, sessionID: sessionID, metadata: metadata)
             }
             return .container(Container(
                 strategy: strategy,
                 children: childNodes,
-                weights: weights.map { CGFloat($0) }
+                weights: weights.map { CGFloat($0) },
+                gridRowWeights: gridRowWeights.map { CGFloat($0) },
+                gridColWeights: gridColWeights.map { CGFloat($0) }
             ))
         }
     }
@@ -2226,12 +2395,14 @@ final class SessionManager {
                 initialWorkingDirectory: contexts[paneID]?.cwd
             )
             return .leaf(pane)
-        case .container(let strategy, let children, let weights):
+        case .container(let strategy, let children, let weights, let gridRowWeights, let gridColWeights):
             let childNodes = children.map { buildLocalPaneNode(from: $0, contexts: contexts) }
             return .container(Container(
                 strategy: strategy,
                 children: childNodes,
-                weights: weights.map { CGFloat($0) }
+                weights: weights.map { CGFloat($0) },
+                gridRowWeights: gridRowWeights.map { CGFloat($0) },
+                gridColWeights: gridColWeights.map { CGFloat($0) }
             ))
         }
     }

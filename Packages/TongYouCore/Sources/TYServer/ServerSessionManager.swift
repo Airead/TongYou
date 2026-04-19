@@ -384,6 +384,57 @@ public final class ServerSessionManager {
         return newPaneID
     }
 
+    /// Relocate `sourcePaneID` next to `targetPaneID` within the same tab
+    /// (plan §P4.3). Both panes must live in the same tab; mismatched tabs
+    /// or missing panes are treated as no-op. Returns `true` on success so
+    /// the caller can broadcast a `layoutUpdate`.
+    @discardableResult
+    public func movePane(
+        sessionID: SessionID,
+        sourcePaneID: PaneID,
+        targetPaneID: PaneID,
+        side: FocusDirection
+    ) -> Bool {
+        guard var session = sessions[sessionID] else { return false }
+        guard let tabIndex = session.tabIndex(for: sourcePaneID),
+              session.tabIndex(for: targetPaneID) == tabIndex else { return false }
+        guard let newTree = LayoutEngine.movePane(
+            tree: session.tabs[tabIndex].paneTree,
+            sourceID: sourcePaneID.uuid,
+            targetID: targetPaneID.uuid,
+            side: side
+        ) else { return false }
+        session.tabs[tabIndex].paneTree = newTree
+        sessions[sessionID] = session
+        saveSession(id: sessionID)
+        return true
+    }
+
+    /// Rewrite the layout of the tab that owns `paneID` to `kind`,
+    /// flattening any prior nesting (plan §P4.5). `paneID` identifies the
+    /// target tab — the rewrite itself is applied to the entire tree.
+    /// Returns `true` when the tree changed (caller should broadcast
+    /// `layoutUpdate`); `false` when the pane cannot be found, the tab
+    /// has a single-pane root leaf, or the tab is already a flat
+    /// container using `kind`.
+    @discardableResult
+    public func changeStrategy(
+        sessionID: SessionID,
+        paneID: PaneID,
+        kind: LayoutStrategyKind
+    ) -> Bool {
+        guard var session = sessions[sessionID] else { return false }
+        guard let tabIndex = session.tabIndex(for: paneID) else { return false }
+        guard let newTree = LayoutEngine.flattenToStrategy(
+            tree: session.tabs[tabIndex].paneTree,
+            newKind: kind
+        ) else { return false }
+        session.tabs[tabIndex].paneTree = newTree
+        sessions[sessionID] = session
+        saveSession(id: sessionID)
+        return true
+    }
+
     public func closePane(sessionID: SessionID, paneID: PaneID) {
         guard var session = sessions[sessionID] else { return }
         guard let tabIndex = session.tabIndex(for: paneID) else { return }
@@ -822,7 +873,7 @@ public final class ServerSessionManager {
                 paneID: paneID
             )
             return (.leaf(pane), [paneID: core])
-        case .container(let strategy, let children, let weights):
+        case .container(let strategy, let children, let weights, let gridRowWeights, let gridColWeights):
             var nodes: [PaneNode] = []
             nodes.reserveCapacity(children.count)
             var combinedCores: [PaneID: TerminalCore] = [:]
@@ -838,7 +889,9 @@ public final class ServerSessionManager {
             let node = PaneNode.container(Container(
                 strategy: strategy,
                 children: nodes,
-                weights: weights.map { CGFloat($0) }
+                weights: weights.map { CGFloat($0) },
+                gridRowWeights: gridRowWeights.map { CGFloat($0) },
+                gridColWeights: gridColWeights.map { CGFloat($0) }
             ))
             return (node, combinedCores)
         }

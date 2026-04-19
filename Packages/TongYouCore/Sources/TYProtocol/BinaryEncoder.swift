@@ -136,6 +136,15 @@ public struct BinaryEncoder: Sendable {
         }
     }
 
+    public mutating func writeFocusDirection(_ direction: FocusDirection) {
+        switch direction {
+        case .left:  writeUInt8(0)
+        case .right: writeUInt8(1)
+        case .up:    writeUInt8(2)
+        case .down:  writeUInt8(3)
+        }
+    }
+
     public mutating func writeLayoutStrategyKind(_ kind: LayoutStrategyKind) {
         switch kind {
         case .horizontal:  writeUInt8(0)
@@ -163,7 +172,7 @@ public struct BinaryEncoder: Sendable {
         case .leaf(let paneID):
             writeUInt8(0)  // tag: leaf
             writePaneID(paneID)
-        case .container(let strategy, let children, let weights):
+        case .container(let strategy, let children, let weights, let gridRowWeights, let gridColWeights):
             writeUInt8(1)  // tag: container
             writeLayoutStrategyKind(strategy)
             writeUInt32(UInt32(children.count))
@@ -171,6 +180,14 @@ public struct BinaryEncoder: Sendable {
                 writeLayoutTree(child)
             }
             for weight in weights {
+                writeFloat(weight)
+            }
+            writeUInt32(UInt32(gridRowWeights.count))
+            for weight in gridRowWeights {
+                writeFloat(weight)
+            }
+            writeUInt32(UInt32(gridColWeights.count))
+            for weight in gridColWeights {
                 writeFloat(weight)
             }
         }
@@ -560,6 +577,17 @@ public struct BinaryEncoder: Sendable {
         case .rerunPane(let sessionID, let paneID):
             writeSessionID(sessionID)
             writePaneID(paneID)
+
+        case .movePane(let sessionID, let sourcePaneID, let targetPaneID, let side):
+            writeSessionID(sessionID)
+            writePaneID(sourcePaneID)
+            writePaneID(targetPaneID)
+            writeFocusDirection(side)
+
+        case .changeStrategy(let sessionID, let paneID, let kind):
+            writeSessionID(sessionID)
+            writePaneID(paneID)
+            writeLayoutStrategyKind(kind)
         }
     }
 }

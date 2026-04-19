@@ -612,6 +612,92 @@ struct WireFormatTests {
         #expect(dPid == pid)
     }
 
+    @Test(arguments: [
+        FocusDirection.left,
+        FocusDirection.right,
+        FocusDirection.up,
+        FocusDirection.down,
+    ])
+    func roundTripMovePane(side: FocusDirection) throws {
+        let sid = SessionID()
+        let source = PaneID()
+        let target = PaneID()
+        let msg = ClientMessage.movePane(
+            sid, sourcePaneID: source, targetPaneID: target, side: side
+        )
+        let decoded = try encodeAndDecode(clientMessage: msg)
+        guard case .movePane(let dSid, let dSource, let dTarget, let dSide) = decoded else {
+            Issue.record("Expected .movePane")
+            return
+        }
+        #expect(dSid == sid)
+        #expect(dSource == source)
+        #expect(dTarget == target)
+        #expect(dSide == side)
+    }
+
+    @Test(arguments: [
+        LayoutStrategyKind.horizontal,
+        LayoutStrategyKind.vertical,
+        LayoutStrategyKind.grid,
+        LayoutStrategyKind.masterStack,
+        LayoutStrategyKind.fibonacci,
+    ])
+    func roundTripChangeStrategy(kind: LayoutStrategyKind) throws {
+        let sid = SessionID()
+        let pid = PaneID()
+        let msg = ClientMessage.changeStrategy(sid, pid, kind)
+        let decoded = try encodeAndDecode(clientMessage: msg)
+        guard case .changeStrategy(let dSid, let dPid, let dKind) = decoded else {
+            Issue.record("Expected .changeStrategy")
+            return
+        }
+        #expect(dSid == sid)
+        #expect(dPid == pid)
+        #expect(dKind == kind)
+    }
+
+    // MARK: - LayoutTree Codable (JSON persistence)
+
+    @Test func layoutTreeCodableRoundTripWithGridWeights() throws {
+        let panes = [PaneID(), PaneID(), PaneID(), PaneID()]
+        let tree = LayoutTree.container(
+            strategy: .grid,
+            children: panes.map { .leaf($0) },
+            weights: [1, 1, 1, 1],
+            gridRowWeights: [2, 1],
+            gridColWeights: [1, 3]
+        )
+        let data = try JSONEncoder().encode(tree)
+        let decoded = try JSONDecoder().decode(LayoutTree.self, from: data)
+        #expect(decoded == tree)
+    }
+
+    @Test func layoutTreeCodableAcceptsMissingGridWeightsForBackCompat() throws {
+        // Persisted session files written before the grid fields existed
+        // omit `gridRowWeights` / `gridColWeights`. `decodeIfPresent` must
+        // default them to empty so loading doesn't fail.
+        let p1 = PaneID()
+        let p2 = PaneID()
+        // Build the legacy JSON by encoding the leaves the Codable-synthesized
+        // way, then assembling the surrounding container dict without the new
+        // keys.
+        let leaf1Data = try JSONEncoder().encode(LayoutTree.leaf(p1))
+        let leaf2Data = try JSONEncoder().encode(LayoutTree.leaf(p2))
+        let leaf1 = String(data: leaf1Data, encoding: .utf8)!
+        let leaf2 = String(data: leaf2Data, encoding: .utf8)!
+        let json = "{\"type\":\"container\",\"strategy\":\"vertical\",\"children\":[\(leaf1),\(leaf2)],\"weights\":[1,1]}"
+        let decoded = try JSONDecoder().decode(LayoutTree.self, from: Data(json.utf8))
+        guard case .container(let strategy, let children, let weights, let rows, let cols) = decoded else {
+            Issue.record("expected container"); return
+        }
+        #expect(strategy == .vertical)
+        #expect(children.count == 2)
+        #expect(weights == [1, 1])
+        #expect(rows.isEmpty)
+        #expect(cols.isEmpty)
+    }
+
     // MARK: - Unknown Type Codes
 
     @Test func unknownServerTypeThrows() throws {

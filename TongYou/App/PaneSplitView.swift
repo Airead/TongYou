@@ -1,6 +1,139 @@
 import SwiftUI
 import TYTerminal
 
+/// Pure helper: compute per-child rects for 2D container strategies
+/// (`.grid` / `.masterStack` / `.fibonacci`). Lives outside the SwiftUI view
+/// so it can be unit-tested without spinning up a view hierarchy.
+enum ContainerLayout {
+    /// Forward `container` to `LayoutDispatch` with `size` as the parent rect.
+    /// Returns rects in local coordinates (origin at 0,0). `weights`,
+    /// `gridRowWeights`, and `gridColWeights` override the container's own
+    /// values during a live divider drag.
+    static func rects(
+        for container: Container,
+        in size: CGSize,
+        weights: [CGFloat]? = nil,
+        dividerSize: Int = 0,
+        gridRowWeights: [CGFloat]? = nil,
+        gridColWeights: [CGFloat]? = nil
+    ) -> [CGRect] {
+        let w = max(0, Int(size.width.rounded()))
+        let h = max(0, Int(size.height.rounded()))
+        let parentRect = Rect(x: 0, y: 0, width: w, height: h)
+        let result = LayoutDispatch.solve(
+            kind: container.strategy,
+            parentRect: parentRect,
+            childCount: container.children.count,
+            weights: weights ?? container.weights,
+            minSize: Size(width: 1, height: 1),
+            dividerSize: dividerSize,
+            gridRowWeights: gridRowWeights ?? container.gridRowWeights,
+            gridColWeights: gridColWeights ?? container.gridColWeights
+        )
+        return result.rects.map {
+            CGRect(
+                x: CGFloat($0.x),
+                y: CGFloat($0.y),
+                width: CGFloat($0.width),
+                height: CGFloat($0.height)
+            )
+        }
+    }
+
+    /// Pair-preserving drag math for a divider inside a 1-D weight vector:
+    /// moves pixel `delta` between `weights[i]` and `weights[i+1]`, keeping
+    /// their sum and the rest of the array intact. Clamps to 10–90% of the
+    /// pair. Used for grid row / column divider drags.
+    /// `availableAxisLength = parentAxisLength − (count − 1) · dividerSize`.
+    static func pairPreservingDragWeights(
+        start: [CGFloat],
+        index: Int,
+        delta: CGFloat,
+        availableAxisLength: CGFloat
+    ) -> [CGFloat]? {
+        guard availableAxisLength > 0, index + 1 < start.count else { return nil }
+        let a = start[index]
+        let b = start[index + 1]
+        let pairSum = a + b
+        guard pairSum > 0 else { return nil }
+        let total = start.reduce(0, +)
+        guard total > 0 else { return nil }
+        let weightPerPixel = total / availableAxisLength
+        let dw = delta * weightPerPixel
+        let rawNew = a + dw
+        let clamped = min(max(rawNew, 0.1 * pairSum), 0.9 * pairSum)
+        let actualDelta = clamped - a
+        var out = start
+        out[index] = a + actualDelta
+        out[index + 1] = b - actualDelta
+        return out
+    }
+
+    /// Pure drag math for the master|stack vertical boundary in a master-stack
+    /// container. Only `weights[0]` (master) changes; `weights[1...]` (stack
+    /// panes) are preserved so the stack's internal heights don't shift when
+    /// the user is only moving the master boundary.
+    ///
+    /// The master column's pixel width is
+    /// `availableWidth · m / (m + stackSum)`, which is **non-linear** in `m`
+    /// when `stackSum` is held constant, so we solve directly for the weight
+    /// that lands the divider at the target pixel. Clamp is applied in pixel
+    /// space (10–90% of `availableWidth`) for intuitive mouse tracking and to
+    /// keep the `1 − r` denominator safely away from zero.
+    /// `availableWidth` is `parentWidth − dividerSize`.
+    static func masterStackMasterDragWeights(
+        start: [CGFloat],
+        delta: CGFloat,
+        availableWidth: CGFloat
+    ) -> [CGFloat]? {
+        guard start.count >= 2, availableWidth > 0 else { return nil }
+        let masterW = start[0]
+        let stackSum = start[1...].reduce(0, +)
+        guard stackSum > 0, masterW + stackSum > 0 else { return nil }
+
+        let currentWidth = availableWidth * masterW / (masterW + stackSum)
+        let rawTarget = currentWidth + delta
+        let targetWidth = min(max(rawTarget, 0.1 * availableWidth), 0.9 * availableWidth)
+        let r = targetWidth / availableWidth
+        let newMasterWeight = r * stackSum / (1 - r)
+
+        var out = start
+        out[0] = newMasterWeight
+        return out
+    }
+
+    /// Pure drag math for a divider between two adjacent stack panes in a
+    /// master-stack container. `stackIndex` is the stack-relative index of the
+    /// divider's top pane (container index `stackIndex + 1`). Pair-preserving
+    /// on `weights[stackIndex+1]` + `weights[stackIndex+2]`, so `stackSum`
+    /// stays constant and the master column width doesn't jump while dragging.
+    /// `availableHeight = parentHeight - (stackCount - 1) * dividerSize`.
+    static func masterStackStackDragWeights(
+        start: [CGFloat],
+        stackIndex: Int,
+        delta: CGFloat,
+        availableHeight: CGFloat
+    ) -> [CGFloat]? {
+        let ci = stackIndex + 1
+        guard availableHeight > 0, ci + 1 < start.count else { return nil }
+        let a = start[ci]
+        let b = start[ci + 1]
+        let pairSum = a + b
+        guard pairSum > 0 else { return nil }
+        let stackSum = start[1...].reduce(0, +)
+        guard stackSum > 0 else { return nil }
+        let weightPerPixel = stackSum / availableHeight
+        let dw = delta * weightPerPixel
+        let rawNew = a + dw
+        let clamped = min(max(rawNew, 0.1 * pairSum), 0.9 * pairSum)
+        let actualDelta = clamped - a
+        var out = start
+        out[ci] = a + actualDelta
+        out[ci + 1] = b - actualDelta
+        return out
+    }
+}
+
 /// Recursively renders a `PaneNode` tree with draggable dividers and focus highlighting.
 struct PaneSplitView: View {
 
@@ -100,15 +233,38 @@ private struct ContainerView: View {
     @State private var liveWeights: [CGFloat]?
     /// Snapshot of weights at drag start — anchors the delta computation.
     @State private var dragStartWeights: [CGFloat]?
+    /// Live grid row weights during a row-divider drag (grid only).
+    @State private var liveGridRowWeights: [CGFloat]?
+    /// Live grid column weights during a column-divider drag (grid only).
+    @State private var liveGridColWeights: [CGFloat]?
+    /// Snapshot of grid row weights at drag start — anchors the drag math and
+    /// doubles as the "we've pinned R×C" marker for first-drag bootstrapping.
+    @State private var dragStartGridRowWeights: [CGFloat]?
+    @State private var dragStartGridColWeights: [CGFloat]?
 
     private var effectiveWeights: [CGFloat] { liveWeights ?? container.weights }
+    private var effectiveGridRowWeights: [CGFloat] {
+        liveGridRowWeights ?? container.gridRowWeights
+    }
+    private var effectiveGridColWeights: [CGFloat] {
+        liveGridColWeights ?? container.gridColWeights
+    }
 
     /// Whether this container splits along the horizontal (x) axis.
     /// `.vertical` strategy stacks children left/right; `.horizontal` stacks
-    /// top/bottom. Fall back to horizontal for grid / masterStack / fibonacci
-    /// until their renderers arrive in P4.
+    /// top/bottom. `.grid` / `.masterStack` / `.fibonacci` are true 2D and
+    /// take the absolute-positioning path below instead.
     private var isHorizontalAxis: Bool {
         container.strategy == .vertical
+    }
+
+    /// Strategies that cannot be expressed as a single HStack/VStack and must
+    /// be rendered via absolute positioning using solver-computed rects.
+    private var is2DStrategy: Bool {
+        switch container.strategy {
+        case .horizontal, .vertical: return false
+        case .grid, .masterStack, .fibonacci: return true
+        }
     }
 
     private var layout: AnyLayout {
@@ -126,6 +282,31 @@ private struct ContainerView: View {
     }
 
     var body: some View {
+        Group {
+            if is2DStrategy {
+                twoDimensionalBody
+            } else {
+                oneDimensionalBody
+            }
+        }
+        .onChange(of: container.weights) { _, _ in
+            if dragStartWeights == nil {
+                liveWeights = nil
+            }
+        }
+        .onChange(of: container.gridRowWeights) { _, _ in
+            if dragStartGridRowWeights == nil {
+                liveGridRowWeights = nil
+            }
+        }
+        .onChange(of: container.gridColWeights) { _, _ in
+            if dragStartGridColWeights == nil {
+                liveGridColWeights = nil
+            }
+        }
+    }
+
+    private var oneDimensionalBody: some View {
         GeometryReader { geometry in
             let axisSize = isHorizontalAxis ? geometry.size.width : geometry.size.height
             let dividerCount = max(0, container.children.count - 1)
@@ -153,9 +334,166 @@ private struct ContainerView: View {
                 }
             }
         }
-        .onChange(of: container.weights) { _, _ in
-            if dragStartWeights == nil {
-                liveWeights = nil
+    }
+
+    /// Absolute-positioning path for true 2D strategies. Grid / master-stack
+    /// each render their own draggable dividers; fibonacci falls back to
+    /// grid in the solver and gets no dividers for now.
+    private var twoDimensionalBody: some View {
+        GeometryReader { geometry in
+            let thickness = PaneDividerView.thickness
+            let usesDividers = container.strategy == .masterStack
+                || container.strategy == .grid
+            let dividerPixels = usesDividers ? Int(thickness.rounded()) : 0
+            let rects = ContainerLayout.rects(
+                for: container,
+                in: geometry.size,
+                weights: effectiveWeights,
+                dividerSize: dividerPixels,
+                gridRowWeights: effectiveGridRowWeights,
+                gridColWeights: effectiveGridColWeights
+            )
+            ZStack(alignment: .topLeading) {
+                ForEach(Array(container.children.enumerated()), id: \.element.nodeID) { offset, child in
+                    let rect = offset < rects.count ? rects[offset] : .zero
+                    childView(index: offset, child: child)
+                        .frame(width: rect.width, height: rect.height)
+                        .offset(x: rect.minX, y: rect.minY)
+                }
+                if container.strategy == .masterStack {
+                    masterStackDividers(
+                        rects: rects,
+                        size: geometry.size,
+                        thickness: thickness
+                    )
+                } else if container.strategy == .grid {
+                    gridDividers(
+                        rects: rects,
+                        size: geometry.size,
+                        thickness: thickness
+                    )
+                }
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+        }
+    }
+
+    @ViewBuilder
+    private func masterStackDividers(
+        rects: [CGRect],
+        size: CGSize,
+        thickness: CGFloat
+    ) -> some View {
+        if rects.count >= 2 {
+            let master = rects[0]
+            let availableWidth = max(0, size.width - thickness)
+            PaneDividerView(
+                direction: .vertical,
+                onDrag: { delta in
+                    handleMasterStackMasterDrag(delta: delta, availableWidth: availableWidth)
+                },
+                onDragEnd: { commitDrag() }
+            )
+            .frame(width: thickness, height: size.height)
+            .offset(x: master.maxX, y: 0)
+
+            let stackCount = rects.count - 1
+            if stackCount >= 2 {
+                let stackAvailable = max(0, size.height - CGFloat(stackCount - 1) * thickness)
+                let column = rects[1]
+                ForEach(0..<(stackCount - 1), id: \.self) { i in
+                    let upper = rects[i + 1]
+                    PaneDividerView(
+                        direction: .horizontal,
+                        onDrag: { delta in
+                            handleMasterStackStackDrag(
+                                stackIndex: i,
+                                delta: delta,
+                                availableHeight: stackAvailable
+                            )
+                        },
+                        onDragEnd: { commitDrag() }
+                    )
+                    .frame(width: column.width, height: thickness)
+                    .offset(x: column.minX, y: upper.maxY)
+                }
+            }
+        }
+    }
+
+    /// Resolved `(rows, cols)` for a grid container, honoring the pinned
+    /// `gridRow/ColWeights` when their product matches `children.count` and
+    /// otherwise falling back to the solver's auto-balance pick. Returns nil
+    /// if the grid is currently in partial-row fallback (N ≠ R·C) — that
+    /// suppresses divider rendering because the visual grid isn't rectangular.
+    private func rectangularGridShape(parentSize: CGSize) -> (rows: Int, cols: Int)? {
+        let n = container.children.count
+        let rows = effectiveGridRowWeights.count
+        let cols = effectiveGridColWeights.count
+        if rows > 0 && cols > 0 && rows * cols == n {
+            return (rows, cols)
+        }
+        let parent = Rect(
+            x: 0, y: 0,
+            width: max(1, Int(parentSize.width.rounded())),
+            height: max(1, Int(parentSize.height.rounded()))
+        )
+        let (autoR, autoC) = GridSolver.chooseRowsCols(n: n, parent: parent)
+        return autoR * autoC == n ? (autoR, autoC) : nil
+    }
+
+    @ViewBuilder
+    private func gridDividers(
+        rects: [CGRect],
+        size: CGSize,
+        thickness: CGFloat
+    ) -> some View {
+        if let (rows, cols) = rectangularGridShape(parentSize: size) {
+            // Row dividers: horizontal lines between adjacent rows, spanning
+            // the full container width.
+            let availableHeight = max(0, size.height - CGFloat(rows - 1) * thickness)
+            if rows >= 2 {
+                ForEach(0..<(rows - 1), id: \.self) { r in
+                    let above = rects[r * cols]
+                    PaneDividerView(
+                        direction: .horizontal,
+                        onDrag: { delta in
+                            handleGridRowDrag(
+                                rowIndex: r,
+                                delta: delta,
+                                availableHeight: availableHeight,
+                                rows: rows,
+                                cols: cols
+                            )
+                        },
+                        onDragEnd: { commitDrag() }
+                    )
+                    .frame(width: size.width, height: thickness)
+                    .offset(x: 0, y: above.maxY)
+                }
+            }
+            // Column dividers: vertical lines between adjacent columns,
+            // spanning the full container height.
+            let availableWidth = max(0, size.width - CGFloat(cols - 1) * thickness)
+            if cols >= 2 {
+                ForEach(0..<(cols - 1), id: \.self) { c in
+                    let left = rects[c]
+                    PaneDividerView(
+                        direction: .vertical,
+                        onDrag: { delta in
+                            handleGridColDrag(
+                                colIndex: c,
+                                delta: delta,
+                                availableWidth: availableWidth,
+                                rows: rows,
+                                cols: cols
+                            )
+                        },
+                        onDragEnd: { commitDrag() }
+                    )
+                    .frame(width: thickness, height: size.height)
+                    .offset(x: left.maxX, y: 0)
+                }
             }
         }
     }
@@ -173,14 +511,12 @@ private struct ContainerView: View {
             onTabAction: onTabAction,
             onTitleChanged: onTitleChanged,
             onNodeChanged: { newChild in
-                var newChildren = container.children
-                newChildren[index] = newChild
-                onNodeChanged(.container(Container(
-                    id: container.id,
-                    strategy: container.strategy,
-                    children: newChildren,
-                    weights: effectiveWeights
-                )))
+                var copy = container
+                copy.children[index] = newChild
+                copy.weights = effectiveWeights
+                copy.gridRowWeights = effectiveGridRowWeights
+                copy.gridColWeights = effectiveGridColWeights
+                onNodeChanged(.container(copy))
             },
             onUserInteraction: onUserInteraction,
             isTreePaneExited: isTreePaneExited
@@ -239,15 +575,112 @@ private struct ContainerView: View {
         liveWeights = newWeights
     }
 
+    private func handleMasterStackMasterDrag(delta: CGFloat, availableWidth: CGFloat) {
+        if dragStartWeights == nil {
+            dragStartWeights = container.weights
+        }
+        guard let start = dragStartWeights,
+              let next = ContainerLayout.masterStackMasterDragWeights(
+                  start: start,
+                  delta: delta,
+                  availableWidth: availableWidth
+              )
+        else { return }
+        liveWeights = next
+    }
+
+    private func handleMasterStackStackDrag(
+        stackIndex: Int,
+        delta: CGFloat,
+        availableHeight: CGFloat
+    ) {
+        if dragStartWeights == nil {
+            dragStartWeights = container.weights
+        }
+        guard let start = dragStartWeights,
+              let next = ContainerLayout.masterStackStackDragWeights(
+                  start: start,
+                  stackIndex: stackIndex,
+                  delta: delta,
+                  availableHeight: availableHeight
+              )
+        else { return }
+        liveWeights = next
+    }
+
+    /// Bootstrap pinned grid weights on first drag so the user's drag operates
+    /// on a well-defined R×C. Existing custom weights are left alone.
+    private func ensurePinnedGridWeights(rows: Int, cols: Int) {
+        if dragStartGridRowWeights == nil {
+            let start = container.gridRowWeights.count == rows
+                ? container.gridRowWeights
+                : Array(repeating: CGFloat(1.0), count: rows)
+            dragStartGridRowWeights = start
+            liveGridRowWeights = start
+        }
+        if dragStartGridColWeights == nil {
+            let start = container.gridColWeights.count == cols
+                ? container.gridColWeights
+                : Array(repeating: CGFloat(1.0), count: cols)
+            dragStartGridColWeights = start
+            liveGridColWeights = start
+        }
+    }
+
+    private func handleGridRowDrag(
+        rowIndex: Int,
+        delta: CGFloat,
+        availableHeight: CGFloat,
+        rows: Int,
+        cols: Int
+    ) {
+        ensurePinnedGridWeights(rows: rows, cols: cols)
+        guard let start = dragStartGridRowWeights,
+              let next = ContainerLayout.pairPreservingDragWeights(
+                  start: start,
+                  index: rowIndex,
+                  delta: delta,
+                  availableAxisLength: availableHeight
+              )
+        else { return }
+        liveGridRowWeights = next
+    }
+
+    private func handleGridColDrag(
+        colIndex: Int,
+        delta: CGFloat,
+        availableWidth: CGFloat,
+        rows: Int,
+        cols: Int
+    ) {
+        ensurePinnedGridWeights(rows: rows, cols: cols)
+        guard let start = dragStartGridColWeights,
+              let next = ContainerLayout.pairPreservingDragWeights(
+                  start: start,
+                  index: colIndex,
+                  delta: delta,
+                  availableAxisLength: availableWidth
+              )
+        else { return }
+        liveGridColWeights = next
+    }
+
     private func commitDrag() {
-        guard let weights = liveWeights else { return }
+        let newWeights = liveWeights
+        let newGridRowWeights = liveGridRowWeights
+        let newGridColWeights = liveGridColWeights
+        let changed = newWeights != nil || newGridRowWeights != nil || newGridColWeights != nil
+        guard changed else { return }
         dragStartWeights = nil
+        dragStartGridRowWeights = nil
+        dragStartGridColWeights = nil
         liveWeights = nil
-        onNodeChanged(.container(Container(
-            id: container.id,
-            strategy: container.strategy,
-            children: container.children,
-            weights: weights
-        )))
+        liveGridRowWeights = nil
+        liveGridColWeights = nil
+        var copy = container
+        if let w = newWeights { copy.weights = w }
+        if let r = newGridRowWeights { copy.gridRowWeights = r }
+        if let c = newGridColWeights { copy.gridColWeights = c }
+        onNodeChanged(.container(copy))
     }
 }

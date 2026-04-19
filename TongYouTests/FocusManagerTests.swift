@@ -210,9 +210,11 @@ struct FocusManagerTests {
             children: [.leaf(pane1), .leaf(pane2)],
             weights: [1.0, 1.0]
         ))
+        let t = TerminalTab(id: UUID(), title: "t", paneTree: tree)
+        let canvas = Rect(x: 0, y: 0, width: 100, height: 40)
 
         mgr.focusPane(id: pane1.id)
-        mgr.moveFocus(direction: .right, in: tree)
+        mgr.moveFocus(direction: .right, in: t, screenRect: canvas)
 
         #expect(mgr.focusedPaneID == pane2.id)
         #expect(mgr.focusHistory == [pane1.id])

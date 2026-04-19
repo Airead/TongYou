@@ -74,6 +74,15 @@ Note: `--no-parallel` only controls process-level parallelism (how many test run
 
 - `deinit` is nonisolated. Accessing actor-isolated stored properties from `deinit` will deadlock. Use `nonisolated(unsafe)` for properties that must be read/cancelled in `deinit` (e.g. `DispatchSource`, `Task`).
 
+## Keybindings
+
+Runtime keybindings are **not** read from `Keybinding.defaults` in `TongYou/Config/Keybinding.swift`. On every launch `ConfigLoader.writeSystemConfig()` overwrites `~/.config/tongyou/system_config.txt` from the bundled `TongYou/Config/SystemConfig.txt`, and `Config.from(entries:)` builds `keybindings` **entirely** from those file entries (unset actions stay unbound — the in-code `.defaults` array is only used by tests).
+
+When adding a new action:
+1. Add the `Keybinding.Action` case and `rawValue` / `init?(rawValue:)` mapping.
+2. Add the default binding to **`TongYou/Config/SystemConfig.txt`** (not just `Keybinding.defaults`) — otherwise the shortcut is dead on first install / after launch overwrites the user's copy.
+3. Update the comment block in `SystemConfig.txt` that lists available action names so the file stays self-documenting.
+
 ## Logging
 
 - Core / server / daemon code: prefer `Log` from `Packages/TongYouCore/Sources/TYServer/Logging.swift`.
