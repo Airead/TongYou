@@ -396,12 +396,15 @@ final class ColorEmojiAtlas {
     }
 
     /// Choose smallest power-of-two texture size that fits the given entry count.
+    ///
+    /// Never shrinks below the current `textureSize` — see the matching
+    /// note on `GlyphAtlas.compactTextureSize` for rationale.
     private func compactTextureSize(entryCount: Int) -> UInt32 {
         // Estimate needed area: entryCount * average emoji area * 1.5 headroom
         // Emoji are typically larger than text glyphs (approx 64x64 at retina)
         let avgEmojiArea: Double = 64.0 * 64.0
         let neededArea = Double(entryCount) * avgEmojiArea * 1.5
-        var size: UInt32 = 512
+        var size: UInt32 = textureSize
         while Double(size * size) < neededArea && size < maxTextureSize {
             size *= 2
         }

@@ -24,9 +24,16 @@ struct GlyphCacheKey: Hashable, Equatable {
 }
 
 /// Cache entry wrapping GlyphInfo with LRU tracking.
+///
+/// `font` retains the exact `CTFont` used to rasterize this glyph so
+/// `compact()` can re-rasterize it regardless of whether the font is
+/// the primary or a fallback. Without this, fallback-font entries
+/// (most CJK characters) were silently dropped on every compact,
+/// causing thrash where CJK text kept re-filling the atlas.
 struct GlyphEntry {
     var info: GlyphInfo
     var lastUsedFrame: UInt64
+    var font: CTFont
 }
 
 /// Grayscale glyph texture atlas using shelf (row) packing.
@@ -72,7 +79,7 @@ final class GlyphAtlas {
     /// Guards against redundant eviction when multiple renderers share this atlas.
     private var lastEvictionFrame: UInt64 = 0
 
-    init(device: MTLDevice, initialSize: UInt32 = 1024, maxTextureSize: UInt32 = 4096) {
+    init(device: MTLDevice, initialSize: UInt32 = 2048, maxTextureSize: UInt32 = 4096) {
         self.device = device
         self.maxTextureSize = maxTextureSize
         self.textureSize = initialSize
@@ -126,7 +133,7 @@ final class GlyphAtlas {
         if let entry = cache[key] {
             // Only update LRU timestamp when stale (avoids dictionary write on every hit)
             if frameNumber &- entry.lastUsedFrame > 60 {
-                cache[key] = GlyphEntry(info: entry.info, lastUsedFrame: frameNumber)
+                cache[key] = GlyphEntry(info: entry.info, lastUsedFrame: frameNumber, font: entry.font)
             }
             return entry.info
         }
@@ -134,7 +141,7 @@ final class GlyphAtlas {
         guard let info = rasterizeGlyph(glyph: glyph, font: font, fontSystem: fontSystem) else {
             return nil
         }
-        cache[key] = GlyphEntry(info: info, lastUsedFrame: frameNumber)
+        cache[key] = GlyphEntry(info: info, lastUsedFrame: frameNumber, font: font)
         return info
     }
 
@@ -336,6 +343,12 @@ final class GlyphAtlas {
     }
 
     /// Rebuild the atlas from scratch with only active cache entries.
+    ///
+    /// Each entry retains the `CTFont` used to originally rasterize it, so
+    /// both primary and fallback fonts are preserved verbatim — the old
+    /// "drop everything that isn't the primary font" path caused cache
+    /// thrash where CJK (fallback) glyphs were discarded and immediately
+    /// re-rasterized, re-filling the atlas and triggering another compact.
     private func compact(fontSystem: FontSystem) {
         let activeEntries = cache
 
@@ -348,32 +361,13 @@ final class GlyphAtlas {
         textureSize = newSize
         cache.removeAll(keepingCapacity: true)
 
-        // Group entries by fontID and use fontSystem to resolve the font.
-        // Since ObjectIdentifier is used as the key, we need to map back to CTFont.
-        // We use the fontSystem's base font as a fallback; this is acceptable
-        // because compaction happens during normal operation where fonts are stable.
-        var entriesByFontID: [ObjectIdentifier: [(glyph: CGGlyph, entry: GlyphEntry)]] = [:]
         for (key, entry) in activeEntries {
-            entriesByFontID[key.fontID, default: []].append((key.glyph, entry))
-        }
-
-        for (fontID, entries) in entriesByFontID {
-            // Try to use the primary font from fontSystem; if the identifier matches,
-            // use it. Otherwise, we skip since we can't recreate the exact font.
-            let candidateFont = fontSystem.ctFont
-            let font: CTFont
-            if ObjectIdentifier(candidateFont) == fontID {
-                font = candidateFont
-            } else {
-                // Skip fonts that no longer match the current fontSystem
-                continue
-            }
-
-            for (glyph, entry) in entries {
-                if let info = rasterizeGlyph(glyph: glyph, font: font, fontSystem: fontSystem) {
-                    let newKey = GlyphCacheKey(fontID: fontID, glyph: glyph)
-                    cache[newKey] = GlyphEntry(info: info, lastUsedFrame: entry.lastUsedFrame)
-                }
+            if let info = rasterizeGlyph(glyph: key.glyph, font: entry.font, fontSystem: fontSystem) {
+                cache[key] = GlyphEntry(
+                    info: info,
+                    lastUsedFrame: entry.lastUsedFrame,
+                    font: entry.font
+                )
             }
         }
 
@@ -385,11 +379,16 @@ final class GlyphAtlas {
     }
 
     /// Choose smallest power-of-two texture size that fits the given entry count.
+    ///
+    /// Never returns smaller than the current `textureSize` — once the atlas
+    /// has grown (via `grow()` or a previous compact), we keep that capacity.
+    /// Shrinking back down would immediately fill up again under CJK input
+    /// and trigger the next compact, causing cache churn for no benefit.
     private func compactTextureSize(entryCount: Int) -> UInt32 {
         // Estimate needed area: entryCount * average glyph area * 1.5 headroom
         let avgGlyphArea: Double = 17.0 * 21.0
         let neededArea = Double(entryCount) * avgGlyphArea * 1.5
-        var size: UInt32 = 1024
+        var size: UInt32 = textureSize
         while Double(size * size) < neededArea && size < maxTextureSize {
             size *= 2
         }
