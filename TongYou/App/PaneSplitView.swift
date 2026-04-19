@@ -6,8 +6,14 @@ import TYTerminal
 /// so it can be unit-tested without spinning up a view hierarchy.
 enum ContainerLayout {
     /// Forward `container` to `LayoutDispatch` with `size` as the parent rect.
-    /// Returns rects in local coordinates (origin at 0,0).
-    static func rects(for container: Container, in size: CGSize) -> [CGRect] {
+    /// Returns rects in local coordinates (origin at 0,0). `weights` overrides
+    /// `container.weights` during a live divider drag.
+    static func rects(
+        for container: Container,
+        in size: CGSize,
+        weights: [CGFloat]? = nil,
+        dividerSize: Int = 0
+    ) -> [CGRect] {
         let w = max(0, Int(size.width.rounded()))
         let h = max(0, Int(size.height.rounded()))
         let parentRect = Rect(x: 0, y: 0, width: w, height: h)
@@ -15,9 +21,9 @@ enum ContainerLayout {
             kind: container.strategy,
             parentRect: parentRect,
             childCount: container.children.count,
-            weights: container.weights,
+            weights: weights ?? container.weights,
             minSize: Size(width: 1, height: 1),
-            dividerSize: 0
+            dividerSize: dividerSize
         )
         return result.rects.map {
             CGRect(
@@ -27,6 +33,70 @@ enum ContainerLayout {
                 height: CGFloat($0.height)
             )
         }
+    }
+
+    /// Pure drag math for the master|stack vertical boundary in a master-stack
+    /// container. Only `weights[0]` (master) changes; `weights[1...]` (stack
+    /// panes) are preserved so the stack's internal heights don't shift when
+    /// the user is only moving the master boundary.
+    ///
+    /// The master column's pixel width is
+    /// `availableWidth · m / (m + stackSum)`, which is **non-linear** in `m`
+    /// when `stackSum` is held constant, so we solve directly for the weight
+    /// that lands the divider at the target pixel. Clamp is applied in pixel
+    /// space (10–90% of `availableWidth`) for intuitive mouse tracking and to
+    /// keep the `1 − r` denominator safely away from zero.
+    /// `availableWidth` is `parentWidth − dividerSize`.
+    static func masterStackMasterDragWeights(
+        start: [CGFloat],
+        delta: CGFloat,
+        availableWidth: CGFloat
+    ) -> [CGFloat]? {
+        guard start.count >= 2, availableWidth > 0 else { return nil }
+        let masterW = start[0]
+        let stackSum = start[1...].reduce(0, +)
+        guard stackSum > 0, masterW + stackSum > 0 else { return nil }
+
+        let currentWidth = availableWidth * masterW / (masterW + stackSum)
+        let rawTarget = currentWidth + delta
+        let targetWidth = min(max(rawTarget, 0.1 * availableWidth), 0.9 * availableWidth)
+        let r = targetWidth / availableWidth
+        let newMasterWeight = r * stackSum / (1 - r)
+
+        var out = start
+        out[0] = newMasterWeight
+        return out
+    }
+
+    /// Pure drag math for a divider between two adjacent stack panes in a
+    /// master-stack container. `stackIndex` is the stack-relative index of the
+    /// divider's top pane (container index `stackIndex + 1`). Pair-preserving
+    /// on `weights[stackIndex+1]` + `weights[stackIndex+2]`, so `stackSum`
+    /// stays constant and the master column width doesn't jump while dragging.
+    /// `availableHeight = parentHeight - (stackCount - 1) * dividerSize`.
+    static func masterStackStackDragWeights(
+        start: [CGFloat],
+        stackIndex: Int,
+        delta: CGFloat,
+        availableHeight: CGFloat
+    ) -> [CGFloat]? {
+        let ci = stackIndex + 1
+        guard availableHeight > 0, ci + 1 < start.count else { return nil }
+        let a = start[ci]
+        let b = start[ci + 1]
+        let pairSum = a + b
+        guard pairSum > 0 else { return nil }
+        let stackSum = start[1...].reduce(0, +)
+        guard stackSum > 0 else { return nil }
+        let weightPerPixel = stackSum / availableHeight
+        let dw = delta * weightPerPixel
+        let rawNew = a + dw
+        let clamped = min(max(rawNew, 0.1 * pairSum), 0.9 * pairSum)
+        let actualDelta = clamped - a
+        var out = start
+        out[ci] = a + actualDelta
+        out[ci + 1] = b - actualDelta
+        return out
     }
 }
 
@@ -208,12 +278,23 @@ private struct ContainerView: View {
         }
     }
 
-    /// Absolute-positioning path for true 2D strategies. Dividers are omitted
-    /// for now — grid ignores weights entirely, and master-stack divider
-    /// dragging will land in a follow-up.
+    /// Absolute-positioning path for true 2D strategies. Grid has no dividers
+    /// (the solver ignores weights). Master-stack renders one master|stack
+    /// vertical divider plus one horizontal divider between each adjacent
+    /// stack-pane pair. Fibonacci currently falls back to grid in the solver
+    /// and also gets no dividers.
     private var twoDimensionalBody: some View {
         GeometryReader { geometry in
-            let rects = ContainerLayout.rects(for: container, in: geometry.size)
+            let thickness = PaneDividerView.thickness
+            let dividerPixels = container.strategy == .masterStack
+                ? Int(thickness.rounded())
+                : 0
+            let rects = ContainerLayout.rects(
+                for: container,
+                in: geometry.size,
+                weights: effectiveWeights,
+                dividerSize: dividerPixels
+            )
             ZStack(alignment: .topLeading) {
                 ForEach(Array(container.children.enumerated()), id: \.element.nodeID) { offset, child in
                     let rect = offset < rects.count ? rects[offset] : .zero
@@ -221,8 +302,58 @@ private struct ContainerView: View {
                         .frame(width: rect.width, height: rect.height)
                         .offset(x: rect.minX, y: rect.minY)
                 }
+                if container.strategy == .masterStack {
+                    masterStackDividers(
+                        rects: rects,
+                        size: geometry.size,
+                        thickness: thickness
+                    )
+                }
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+        }
+    }
+
+    @ViewBuilder
+    private func masterStackDividers(
+        rects: [CGRect],
+        size: CGSize,
+        thickness: CGFloat
+    ) -> some View {
+        if rects.count >= 2 {
+            let master = rects[0]
+            let availableWidth = max(0, size.width - thickness)
+            PaneDividerView(
+                direction: .vertical,
+                onDrag: { delta in
+                    handleMasterStackMasterDrag(delta: delta, availableWidth: availableWidth)
+                },
+                onDragEnd: { commitDrag() }
+            )
+            .frame(width: thickness, height: size.height)
+            .offset(x: master.maxX, y: 0)
+
+            let stackCount = rects.count - 1
+            if stackCount >= 2 {
+                let stackAvailable = max(0, size.height - CGFloat(stackCount - 1) * thickness)
+                let column = rects[1]
+                ForEach(0..<(stackCount - 1), id: \.self) { i in
+                    let upper = rects[i + 1]
+                    PaneDividerView(
+                        direction: .horizontal,
+                        onDrag: { delta in
+                            handleMasterStackStackDrag(
+                                stackIndex: i,
+                                delta: delta,
+                                availableHeight: stackAvailable
+                            )
+                        },
+                        onDragEnd: { commitDrag() }
+                    )
+                    .frame(width: column.width, height: thickness)
+                    .offset(x: column.minX, y: upper.maxY)
+                }
+            }
         }
     }
 
@@ -303,6 +434,39 @@ private struct ContainerView: View {
         newWeights[i] = start[i] + actualDelta
         newWeights[i + 1] = start[i + 1] - actualDelta
         liveWeights = newWeights
+    }
+
+    private func handleMasterStackMasterDrag(delta: CGFloat, availableWidth: CGFloat) {
+        if dragStartWeights == nil {
+            dragStartWeights = container.weights
+        }
+        guard let start = dragStartWeights,
+              let next = ContainerLayout.masterStackMasterDragWeights(
+                  start: start,
+                  delta: delta,
+                  availableWidth: availableWidth
+              )
+        else { return }
+        liveWeights = next
+    }
+
+    private func handleMasterStackStackDrag(
+        stackIndex: Int,
+        delta: CGFloat,
+        availableHeight: CGFloat
+    ) {
+        if dragStartWeights == nil {
+            dragStartWeights = container.weights
+        }
+        guard let start = dragStartWeights,
+              let next = ContainerLayout.masterStackStackDragWeights(
+                  start: start,
+                  stackIndex: stackIndex,
+                  delta: delta,
+                  availableHeight: availableHeight
+              )
+        else { return }
+        liveWeights = next
     }
 
     private func commitDrag() {

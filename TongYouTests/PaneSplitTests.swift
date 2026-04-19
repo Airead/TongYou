@@ -441,4 +441,127 @@ struct PaneSplitTests {
         #expect(rects[1].minY == 0)
         #expect(rects[2].minY >= rects[1].maxY - 1)
     }
+
+    // MARK: - Master-stack divider drag math
+
+    /// Given master-stack weights, compute the master column's pixel width
+    /// for a given `availableWidth` — matches the `MasterStackSolver` formula
+    /// `availableWidth · m / (m + stackSum)`.
+    private func masterColumnWidth(weights: [CGFloat], availableWidth: CGFloat) -> CGFloat {
+        let m = weights[0]
+        let s = weights[1...].reduce(0, +)
+        return availableWidth * m / (m + s)
+    }
+
+    @Test func masterStackMasterDragFollowsMousePixelForPixel() {
+        // Two-pane master-stack, equal weights → divider at 50% = 400px of 800.
+        // Drag +100px → divider should land at ~500px.
+        let start: [CGFloat] = [1.0, 1.0]
+        let availableWidth: CGFloat = 800
+        let next = ContainerLayout.masterStackMasterDragWeights(
+            start: start, delta: 100, availableWidth: availableWidth
+        )
+        #expect(next != nil)
+        guard let out = next else { return }
+        let newDividerX = masterColumnWidth(weights: out, availableWidth: availableWidth)
+        #expect(abs(newDividerX - 500) < 0.5)
+        // Stack weights untouched so internal heights stay fixed.
+        #expect(out[1] == start[1])
+    }
+
+    @Test func masterStackMasterDragClampedInPixelSpace() {
+        // Oversized drags clamp to 10% / 90% of `availableWidth`, not weight.
+        let start: [CGFloat] = [1.0, 1.0]
+        let availableWidth: CGFloat = 800
+
+        let leftmost = ContainerLayout.masterStackMasterDragWeights(
+            start: start, delta: -10_000, availableWidth: availableWidth
+        )
+        #expect(leftmost != nil)
+        if let lm = leftmost {
+            let x = masterColumnWidth(weights: lm, availableWidth: availableWidth)
+            #expect(abs(x - 0.1 * availableWidth) < 0.5)
+            #expect(lm[1] == start[1])
+        }
+
+        let rightmost = ContainerLayout.masterStackMasterDragWeights(
+            start: start, delta: 10_000, availableWidth: availableWidth
+        )
+        #expect(rightmost != nil)
+        if let rm = rightmost {
+            let x = masterColumnWidth(weights: rm, availableWidth: availableWidth)
+            #expect(abs(x - 0.9 * availableWidth) < 0.5)
+            #expect(rm[1] == start[1])
+        }
+    }
+
+    @Test func masterStackMasterDragPreservesStackDistribution() {
+        // With non-uniform stack weights, the master drag must not change the
+        // relative sizing of the stack panes — only `weights[0]` updates.
+        let start: [CGFloat] = [1.0, 2.0, 3.0]
+        let out = ContainerLayout.masterStackMasterDragWeights(
+            start: start, delta: 50, availableWidth: 900
+        )
+        #expect(out != nil)
+        guard let next = out else { return }
+        #expect(next[1] == start[1])
+        #expect(next[2] == start[2])
+    }
+
+    @Test func masterStackStackDragPairPreserving() {
+        // 3-pane master-stack: [master, s0, s1], all weights 1.
+        // Drag stack divider 0 (between s0 and s1) down by 60px out of 600px
+        // of available stack height → s0 grows, s1 shrinks by the same amount.
+        let start: [CGFloat] = [1.0, 1.0, 1.0]
+        let out = ContainerLayout.masterStackStackDragWeights(
+            start: start, stackIndex: 0, delta: 60, availableHeight: 600
+        )
+        #expect(out != nil)
+        guard let next = out else { return }
+        // stackSum = 2, weightPerPixel = 2/600, dw = 60 * 2/600 = 0.2
+        #expect(abs(next[1] - 1.2) < 1e-9)
+        #expect(abs(next[2] - 0.8) < 1e-9)
+        // Pair preserved.
+        #expect(abs((next[1] + next[2]) - (start[1] + start[2])) < 1e-9)
+        // Master untouched.
+        #expect(next[0] == start[0])
+    }
+
+    @Test func masterStackStackDragClampedTo10to90OfPair() {
+        let start: [CGFloat] = [1.0, 1.0, 1.0]
+        let pairSum: CGFloat = 2.0
+
+        let upmost = ContainerLayout.masterStackStackDragWeights(
+            start: start, stackIndex: 0, delta: -10_000, availableHeight: 600
+        )
+        #expect(abs((upmost?[1] ?? 0) - 0.1 * pairSum) < 1e-9)
+        #expect(abs((upmost?[2] ?? 0) - 0.9 * pairSum) < 1e-9)
+        #expect(upmost?[0] == start[0])
+
+        let downmost = ContainerLayout.masterStackStackDragWeights(
+            start: start, stackIndex: 0, delta: 10_000, availableHeight: 600
+        )
+        #expect(abs((downmost?[1] ?? 0) - 0.9 * pairSum) < 1e-9)
+        #expect(abs((downmost?[2] ?? 0) - 0.1 * pairSum) < 1e-9)
+        #expect(downmost?[0] == start[0])
+    }
+
+    @Test func masterStackDragRejectsDegenerateInputs() {
+        // Too few weights for master drag.
+        #expect(ContainerLayout.masterStackMasterDragWeights(
+            start: [1.0], delta: 50, availableWidth: 800
+        ) == nil)
+        // Zero/negative available width.
+        #expect(ContainerLayout.masterStackMasterDragWeights(
+            start: [1.0, 1.0], delta: 50, availableWidth: 0
+        ) == nil)
+        // Stack drag: out-of-range stackIndex.
+        #expect(ContainerLayout.masterStackStackDragWeights(
+            start: [1.0, 1.0, 1.0], stackIndex: 1, delta: 50, availableHeight: 600
+        ) == nil)
+        // Stack drag: only master + one stack pane → no internal divider.
+        #expect(ContainerLayout.masterStackStackDragWeights(
+            start: [1.0, 1.0], stackIndex: 0, delta: 50, availableHeight: 600
+        ) == nil)
+    }
 }
