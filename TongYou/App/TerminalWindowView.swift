@@ -839,7 +839,12 @@ struct TerminalWindowView: View {
 
     private func moveFocus(_ direction: FocusDirection) {
         guard let activeTab = sessionManager.activeTab else { return }
-        focusManager.moveFocus(direction: direction, in: activeTab.paneTree)
+        // TODO(plan §315): once `PaneSplitView` consumes `LayoutEngine.solveRects`
+        // directly, plumb the tab's real cell-grid rect through here. Until then
+        // a synthetic large canvas is fine — focusNeighbor only cares about
+        // relative geometry, which is weight-dominated at this scale.
+        let canvas = Rect(x: 0, y: 0, width: 10_000, height: 10_000)
+        focusManager.moveFocus(direction: direction, in: activeTab, screenRect: canvas)
     }
 
     // MARK: - Helpers

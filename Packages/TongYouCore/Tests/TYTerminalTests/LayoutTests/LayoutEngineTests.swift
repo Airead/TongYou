@@ -547,4 +547,124 @@ struct LayoutEngineTests {
             Issue.record("expected single-child container to collapse")
         }
     }
+
+    // MARK: - focusNeighbor (plan §P4.2)
+
+    private let canvas = Rect(x: 0, y: 0, width: 100, height: 40)
+
+    @Test func focusNeighborFlatSideBySide() {
+        // V[A, B] — A left, B right.
+        let (a, leafA) = leaf()
+        let (b, leafB) = leaf()
+        let tab = makeTab(container(.vertical, [leafA, leafB], [1, 1]))
+
+        #expect(LayoutEngine.focusNeighbor(tab: tab, screenRect: canvas, from: a.id, direction: .right) == b.id)
+        #expect(LayoutEngine.focusNeighbor(tab: tab, screenRect: canvas, from: b.id, direction: .left) == a.id)
+        #expect(LayoutEngine.focusNeighbor(tab: tab, screenRect: canvas, from: a.id, direction: .left) == nil)
+        #expect(LayoutEngine.focusNeighbor(tab: tab, screenRect: canvas, from: b.id, direction: .right) == nil)
+    }
+
+    @Test func focusNeighborFlatStacked() {
+        // H[A, B] — A top, B bottom.
+        let (a, leafA) = leaf()
+        let (b, leafB) = leaf()
+        let tab = makeTab(container(.horizontal, [leafA, leafB], [1, 1]))
+
+        #expect(LayoutEngine.focusNeighbor(tab: tab, screenRect: canvas, from: a.id, direction: .down) == b.id)
+        #expect(LayoutEngine.focusNeighbor(tab: tab, screenRect: canvas, from: b.id, direction: .up) == a.id)
+        #expect(LayoutEngine.focusNeighbor(tab: tab, screenRect: canvas, from: a.id, direction: .up) == nil)
+    }
+
+    @Test func focusNeighborReturnsNilForOrthogonalDirection() {
+        // In a side-by-side layout there is no up/down neighbor.
+        let (a, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let tab = makeTab(container(.vertical, [leafA, leafB], [1, 1]))
+
+        #expect(LayoutEngine.focusNeighbor(tab: tab, screenRect: canvas, from: a.id, direction: .up) == nil)
+        #expect(LayoutEngine.focusNeighbor(tab: tab, screenRect: canvas, from: a.id, direction: .down) == nil)
+    }
+
+    @Test func focusNeighborPrefersLongestOverlap() {
+        // V[A, H[B, C]] with H weights [1, 2] — A right maps to C (larger
+        // vertical overlap) rather than B.
+        let (a, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let (c, leafC) = leaf()
+        let tree = container(
+            .vertical,
+            [leafA, container(.horizontal, [leafB, leafC], [1, 2])],
+            [1, 1]
+        )
+        let tab = makeTab(tree)
+
+        #expect(LayoutEngine.focusNeighbor(tab: tab, screenRect: canvas, from: a.id, direction: .right) == c.id)
+    }
+
+    @Test func focusNeighborCrossesContainerBoundaries() {
+        // V[A, H[B, C]] — moving left from either B or C lands on A.
+        let (a, leafA) = leaf()
+        let (b, leafB) = leaf()
+        let (c, leafC) = leaf()
+        let tree = container(
+            .vertical,
+            [leafA, container(.horizontal, [leafB, leafC], [1, 1])],
+            [1, 1]
+        )
+        let tab = makeTab(tree)
+
+        #expect(LayoutEngine.focusNeighbor(tab: tab, screenRect: canvas, from: b.id, direction: .left) == a.id)
+        #expect(LayoutEngine.focusNeighbor(tab: tab, screenRect: canvas, from: c.id, direction: .left) == a.id)
+        // Within the inner container, B and C are each other's vertical neighbors.
+        #expect(LayoutEngine.focusNeighbor(tab: tab, screenRect: canvas, from: b.id, direction: .down) == c.id)
+        #expect(LayoutEngine.focusNeighbor(tab: tab, screenRect: canvas, from: c.id, direction: .up) == b.id)
+    }
+
+    @Test func focusNeighborReturnsNilWhenZoomed() {
+        // With zoom active, only the zoomed pane exists in solveRects — no
+        // neighbor is reachable in any direction.
+        let (a, leafA) = leaf()
+        let (b, leafB) = leaf()
+        var tab = makeTab(container(.vertical, [leafA, leafB], [1, 1]))
+        tab.zoomedPaneID = a.id
+
+        #expect(LayoutEngine.focusNeighbor(tab: tab, screenRect: canvas, from: a.id, direction: .right) == nil)
+        // The hidden pane is not in solveRects output either.
+        #expect(LayoutEngine.focusNeighbor(tab: tab, screenRect: canvas, from: b.id, direction: .left) == nil)
+    }
+
+    @Test func focusNeighborReturnsNilForUnknownSource() {
+        let (_, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let tab = makeTab(container(.vertical, [leafA, leafB], [1, 1]))
+
+        #expect(LayoutEngine.focusNeighbor(tab: tab, screenRect: canvas, from: UUID(), direction: .right) == nil)
+    }
+
+    @Test func focusNeighborIgnoresCornerOnlyTouch() {
+        // H[V[A, C], V[D, B]] — four quadrants: A top-left, C top-right,
+        // D bottom-left, B bottom-right. A's bottom-right corner touches
+        // B's top-left corner, but they share no edge overlap — A moving
+        // down must land on D, never B; A moving right must land on C,
+        // never B.
+        let (a, leafA) = leaf()
+        let (b, leafB) = leaf()
+        let (c, leafC) = leaf()
+        let (d, leafD) = leaf()
+        let tree = container(
+            .horizontal,
+            [
+                container(.vertical, [leafA, leafC], [1, 1]),
+                container(.vertical, [leafD, leafB], [1, 1]),
+            ],
+            [1, 1]
+        )
+        let tab = makeTab(tree)
+
+        #expect(LayoutEngine.focusNeighbor(tab: tab, screenRect: canvas, from: a.id, direction: .right) == c.id)
+        #expect(LayoutEngine.focusNeighbor(tab: tab, screenRect: canvas, from: a.id, direction: .down) == d.id)
+        // Sanity: B is reachable via its flush neighbors, just not from A.
+        #expect(LayoutEngine.focusNeighbor(tab: tab, screenRect: canvas, from: c.id, direction: .down) == b.id)
+        #expect(LayoutEngine.focusNeighbor(tab: tab, screenRect: canvas, from: d.id, direction: .right) == b.id)
+    }
 }

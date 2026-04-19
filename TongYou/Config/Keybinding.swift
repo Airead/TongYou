@@ -1,4 +1,5 @@
 import AppKit
+import TYTerminal
 
 /// Options parsed from `[key=value,flag]` syntax in command actions.
 ///

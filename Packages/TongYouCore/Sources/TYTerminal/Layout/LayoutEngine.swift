@@ -291,6 +291,82 @@ public enum LayoutEngine {
         return next
     }
 
+    // MARK: - focusNeighbor
+
+    /// Find the pane in `tab` that should receive focus when moving from
+    /// `paneID` in `direction` (plan §P4.2).
+    ///
+    /// Geometric algorithm: solve the tree into rects, then pick the pane
+    /// whose edge in the requested direction is flush against the source's
+    /// opposing edge and whose perpendicular-axis overlap with the source is
+    /// greatest. Corner-only touching (overlap == 0) does not count.
+    ///
+    /// Uses `dividerSize: 0` so adjacent rects share exact edges, making the
+    /// flush-edge test a simple equality check.
+    ///
+    /// Returns `nil` when:
+    /// - `paneID` is not in `tab.paneTree` (or is shadowed by `zoomedPaneID`)
+    /// - no pane sits flush in the requested direction with positive overlap
+    public static func focusNeighbor(
+        tab: TerminalTab,
+        screenRect: Rect,
+        from paneID: UUID,
+        direction: FocusDirection
+    ) -> UUID? {
+        let rects = solveRects(tab: tab, screenRect: screenRect, dividerSize: 0)
+        guard let origin = rects[paneID] else { return nil }
+
+        var best: (id: UUID, overlap: Int)?
+        for (candidateID, rect) in rects where candidateID != paneID {
+            guard let overlap = neighborOverlap(
+                origin: origin,
+                candidate: rect,
+                direction: direction
+            ) else { continue }
+            if let current = best, current.overlap >= overlap { continue }
+            best = (candidateID, overlap)
+        }
+        return best?.id
+    }
+
+    private static func neighborOverlap(
+        origin: Rect,
+        candidate: Rect,
+        direction: FocusDirection
+    ) -> Int? {
+        switch direction {
+        case .right:
+            guard candidate.x == origin.x + origin.width else { return nil }
+            return positiveOverlap(
+                a0: origin.y, a1: origin.y + origin.height,
+                b0: candidate.y, b1: candidate.y + candidate.height
+            )
+        case .left:
+            guard candidate.x + candidate.width == origin.x else { return nil }
+            return positiveOverlap(
+                a0: origin.y, a1: origin.y + origin.height,
+                b0: candidate.y, b1: candidate.y + candidate.height
+            )
+        case .down:
+            guard candidate.y == origin.y + origin.height else { return nil }
+            return positiveOverlap(
+                a0: origin.x, a1: origin.x + origin.width,
+                b0: candidate.x, b1: candidate.x + candidate.width
+            )
+        case .up:
+            guard candidate.y + candidate.height == origin.y else { return nil }
+            return positiveOverlap(
+                a0: origin.x, a1: origin.x + origin.width,
+                b0: candidate.x, b1: candidate.x + candidate.width
+            )
+        }
+    }
+
+    private static func positiveOverlap(a0: Int, a1: Int, b0: Int, b1: Int) -> Int? {
+        let v = min(a1, b1) - max(a0, b0)
+        return v > 0 ? v : nil
+    }
+
     // MARK: - solveRects
 
     /// Map every leaf pane in the tab to its screen rect by recursively
@@ -348,4 +424,10 @@ public enum LayoutEngine {
             }
         }
     }
+}
+
+/// Cardinal directions for focus navigation. Consumed by
+/// `LayoutEngine.focusNeighbor`.
+public enum FocusDirection: Sendable {
+    case left, right, up, down
 }

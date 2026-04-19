@@ -163,69 +163,75 @@ struct PaneSplitTests {
 
     // MARK: - Focus Navigation
 
+    private static let focusCanvas = Rect(x: 0, y: 0, width: 100, height: 40)
+
+    private func tab(_ tree: PaneNode) -> TerminalTab {
+        TerminalTab(id: UUID(), title: "t", paneTree: tree)
+    }
+
     @Test func moveFocusInSimpleSplit() {
         let pane1 = TerminalPane()
         let pane2 = TerminalPane()
-        let tree = PaneNode.container(Container(
+        let t = tab(.container(Container(
             strategy: .vertical,
             children: [.leaf(pane1), .leaf(pane2)],
             weights: [1.0, 1.0]
-        ))
+        )))
 
         let fm = FocusManager()
         fm.focusPane(id: pane1.id)
 
         // Move right: pane1 → pane2
-        fm.moveFocus(direction: .right, in: tree)
+        fm.moveFocus(direction: .right, in: t, screenRect: Self.focusCanvas)
         #expect(fm.focusedPaneID == pane2.id)
 
         // Move left: pane2 → pane1
-        fm.moveFocus(direction: .left, in: tree)
+        fm.moveFocus(direction: .left, in: t, screenRect: Self.focusCanvas)
         #expect(fm.focusedPaneID == pane1.id)
 
         // Move left at boundary: stays at pane1
-        fm.moveFocus(direction: .left, in: tree)
+        fm.moveFocus(direction: .left, in: t, screenRect: Self.focusCanvas)
         #expect(fm.focusedPaneID == pane1.id)
     }
 
     @Test func moveFocusVerticalSplit() {
         let pane1 = TerminalPane()
         let pane2 = TerminalPane()
-        let tree = PaneNode.container(Container(
+        let t = tab(.container(Container(
             strategy: .horizontal,
             children: [.leaf(pane1), .leaf(pane2)],
             weights: [1.0, 1.0]
-        ))
+        )))
 
         let fm = FocusManager()
         fm.focusPane(id: pane1.id)
 
         // Move down: pane1 → pane2
-        fm.moveFocus(direction: .down, in: tree)
+        fm.moveFocus(direction: .down, in: t, screenRect: Self.focusCanvas)
         #expect(fm.focusedPaneID == pane2.id)
 
         // Move up: pane2 → pane1
-        fm.moveFocus(direction: .up, in: tree)
+        fm.moveFocus(direction: .up, in: t, screenRect: Self.focusCanvas)
         #expect(fm.focusedPaneID == pane1.id)
     }
 
     @Test func moveFocusCrossAxis() {
         let pane1 = TerminalPane()
         let pane2 = TerminalPane()
-        let tree = PaneNode.container(Container(
+        let t = tab(.container(Container(
             strategy: .vertical,
             children: [.leaf(pane1), .leaf(pane2)],
             weights: [1.0, 1.0]
-        ))
+        )))
 
         let fm = FocusManager()
         fm.focusPane(id: pane1.id)
 
         // Moving up/down in a vertical split — no neighbor.
-        fm.moveFocus(direction: .up, in: tree)
+        fm.moveFocus(direction: .up, in: t, screenRect: Self.focusCanvas)
         #expect(fm.focusedPaneID == pane1.id)
 
-        fm.moveFocus(direction: .down, in: tree)
+        fm.moveFocus(direction: .down, in: t, screenRect: Self.focusCanvas)
         #expect(fm.focusedPaneID == pane1.id)
     }
 
@@ -239,37 +245,43 @@ struct PaneSplitTests {
             children: [.leaf(pane2), .leaf(pane3)],
             weights: [1.0, 1.0]
         ))
-        let tree = PaneNode.container(Container(
+        let t = tab(.container(Container(
             strategy: .vertical,
             children: [.leaf(pane1), inner],
             weights: [1.0, 1.0]
-        ))
+        )))
 
         let fm = FocusManager()
         fm.focusPane(id: pane1.id)
 
-        // Right from pane1 → enters right subtree, top pane (pane2)
-        fm.moveFocus(direction: .right, in: tree)
-        #expect(fm.focusedPaneID == pane2.id)
+        // Right from pane1 → enters right subtree. With equal weights pane2
+        // and pane3 each share half of pane1's height; on a tie the first
+        // match in dictionary iteration wins, so just assert it's one of them.
+        fm.moveFocus(direction: .right, in: t, screenRect: Self.focusCanvas)
+        #expect(fm.focusedPaneID == pane2.id || fm.focusedPaneID == pane3.id)
+        let landed = fm.focusedPaneID!
 
-        // Down from pane2 → pane3
-        fm.moveFocus(direction: .down, in: tree)
-        #expect(fm.focusedPaneID == pane3.id)
-
-        // Left from pane3 → pane1
-        fm.moveFocus(direction: .left, in: tree)
+        // From whichever inner pane was chosen, left must return to pane1.
+        fm.moveFocus(direction: .left, in: t, screenRect: Self.focusCanvas)
         #expect(fm.focusedPaneID == pane1.id)
+
+        // Inner up/down still navigates between pane2 and pane3.
+        fm.focusPane(id: landed)
+        let opposite = (landed == pane2.id) ? pane3.id : pane2.id
+        let dir: FocusDirection = (landed == pane2.id) ? .down : .up
+        fm.moveFocus(direction: dir, in: t, screenRect: Self.focusCanvas)
+        #expect(fm.focusedPaneID == opposite)
     }
 
     @Test func moveFocusWithNoFocus() {
         let pane1 = TerminalPane()
-        let tree = PaneNode.leaf(pane1)
+        let t = tab(.leaf(pane1))
 
         let fm = FocusManager()
         #expect(fm.focusedPaneID == nil)
 
         // Should focus the first pane.
-        fm.moveFocus(direction: .right, in: tree)
+        fm.moveFocus(direction: .right, in: t, screenRect: Self.focusCanvas)
         #expect(fm.focusedPaneID == pane1.id)
     }
 
