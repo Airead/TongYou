@@ -1,0 +1,14 @@
+# TongYou SSH template rules.
+#
+# Format: <template>  <glob> [<glob> ...]
+# First matching rule wins. Blank lines and `#` comments are ignored.
+# Globs use POSIX fnmatch (`*`, `?`, `[abc]`); matching is case-insensitive.
+#
+# Hostnames are checked against both the typed target and the `Hostname`
+# value from `~/.ssh/config` (if the target is an alias). Unmatched
+# hostnames fall back to the bundled "ssh" template.
+#
+# Uncomment and tailor the examples below:
+#
+# ssh-prod    *.prod.example.com   *-prod-*   db*.internal
+# ssh-dev     *.dev.example.com    *.staging.*

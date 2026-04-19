@@ -1,0 +1,8 @@
+# SSH template for development environments.
+#
+# Inherits command/args/close-on-exit from `ssh` and overlays a dark-blue
+# background so dev panes stand out visually from local shells or prod.
+
+extends = ssh
+background = 0a1a2e
+description = SSH dev: ${HOST}

@@ -1,0 +1,17 @@
+# TongYou SSH base template.
+#
+# Used by the command palette (⌘P) to launch ssh to an arbitrary host.
+# The palette sets `${HOST}` from the typed target and (when the input
+# has the `user@` form) also `${USER}`. This base template only uses
+# `${HOST}` so plain `host` input works without a user prefix.
+#
+# ssh itself understands `user@host` in the argument, so typing
+# `alice@db1` in the palette will still resolve correctly when the
+# palette forwards the full target — override `args` in a personal
+# profile if you want an explicit `-l ${USER}` flag.
+
+command = /usr/bin/ssh
+args = -t
+args = ${HOST}
+close-on-exit = false
+description = SSH to ${HOST}
