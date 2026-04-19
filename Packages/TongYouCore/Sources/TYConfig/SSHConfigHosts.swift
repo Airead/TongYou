@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// A single host entry harvested from `~/.ssh/config`.
 ///
@@ -21,8 +22,10 @@ public struct SSHConfigHost: Sendable, Equatable {
 /// Parses the tiny subset of `ssh_config` syntax we care about: top-level
 /// `Host` declarations plus their `Hostname` directive (if any).
 ///
+/// `Include` directives are expanded by `load(from:)` before parsing — the
+/// pure `parse(_:)` entry point ignores them.
+///
 /// Explicitly not handled:
-/// - `Include` directives (no chaining)
 /// - Any other keyword (silently ignored)
 /// - Quoted tokens, backslash escapes
 /// - `Match` blocks — treated as a barrier so a `Hostname` inside one
@@ -43,12 +46,14 @@ public struct SSHConfigHosts: Sendable, Equatable {
 
     /// Load hosts from `url`. Missing file → empty result (no error).
     /// Encoding / other IO failures are rethrown.
+    ///
+    /// `Include` directives (tilde, relative paths, and glob patterns) are
+    /// expanded in place before parsing, matching ssh's behavior of
+    /// inlining the included content at the Include line — so an `Include`
+    /// inside a `Host` block continues that block.
     public static func load(from url: URL = Self.defaultURL) throws -> SSHConfigHosts {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: url.path) else {
-            return SSHConfigHosts()
-        }
-        let text = try String(contentsOf: url, encoding: .utf8)
+        var inProgress: Set<String> = []
+        let text = try expand(url: url, inProgress: &inProgress)
         return parse(text)
     }
 
@@ -150,5 +155,99 @@ public struct SSHConfigHosts: Sendable, Equatable {
 
     private static func hasWildcard(_ s: String) -> Bool {
         s.contains("*") || s.contains("?")
+    }
+
+    // MARK: - Include expansion
+
+    /// Read `url` and inline-expand any `Include` directives so the result
+    /// can be fed to `parse(_:)` as a single contiguous document. Matches
+    /// ssh's "insert in place" semantics: an Include inside a Host/Match
+    /// block continues that block.
+    ///
+    /// - `inProgress` tracks the canonical paths currently being expanded
+    ///   along this recursion branch. A cycle short-circuits to an empty
+    ///   string rather than raising. Paths are removed on unwind so the
+    ///   same file can legitimately appear in sibling Includes.
+    /// - Missing files resolve to empty strings (ssh-equivalent behavior).
+    /// - Relative include paths resolve against the directory of the file
+    ///   that contains the `Include`. ssh's rule for the top-level user
+    ///   config is "relative to `~/.ssh`", which falls out automatically
+    ///   when that file lives in `~/.ssh/config`.
+    private static func expand(url: URL, inProgress: inout Set<String>) throws -> String {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: url.path) else {
+            return ""
+        }
+        let canonical = url.resolvingSymlinksInPath().standardized.path
+        if inProgress.contains(canonical) {
+            return ""
+        }
+        inProgress.insert(canonical)
+        defer { inProgress.remove(canonical) }
+
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let baseDir = url.deletingLastPathComponent()
+
+        var output = ""
+        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            var stripped = String(rawLine)
+            if let hashIdx = stripped.firstIndex(of: "#") {
+                stripped = String(stripped[..<hashIdx])
+            }
+            let trimmed = stripped.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                let (keyword, rest) = splitKeyword(trimmed)
+                if keyword.lowercased() == "include", !rest.isEmpty {
+                    for token in rest.split(whereSeparator: { $0.isWhitespace }) {
+                        for match in resolveIncludePaths(String(token), base: baseDir) {
+                            let included = try expand(url: match, inProgress: &inProgress)
+                            output.append(included)
+                            if !included.isEmpty, !included.hasSuffix("\n") {
+                                output.append("\n")
+                            }
+                        }
+                    }
+                    continue
+                }
+            }
+            output.append(String(rawLine))
+            output.append("\n")
+        }
+        return output
+    }
+
+    /// Resolve a single `Include` token into existing file URLs. Handles
+    /// tilde expansion, relative-to-base resolution, and shell-style globs
+    /// (`*`, `?`, `[...]`). A token without wildcards returns a single URL
+    /// regardless of whether the file exists — the caller tolerates
+    /// missing files.
+    private static func resolveIncludePaths(_ token: String, base: URL) -> [URL] {
+        var path = (token as NSString).expandingTildeInPath
+        if !path.hasPrefix("/") {
+            path = base.appendingPathComponent(path).path
+        }
+        if containsGlobMetacharacter(path) {
+            return runGlob(path).map(URL.init(fileURLWithPath:))
+        }
+        return [URL(fileURLWithPath: path)]
+    }
+
+    private static func containsGlobMetacharacter(_ s: String) -> Bool {
+        s.contains("*") || s.contains("?") || s.contains("[")
+    }
+
+    private static func runGlob(_ pattern: String) -> [String] {
+        var g = glob_t()
+        defer { globfree(&g) }
+        let rc = pattern.withCString { glob($0, 0, nil, &g) }
+        guard rc == 0 else { return [] }
+        var paths: [String] = []
+        let count = Int(g.gl_pathc)
+        for i in 0..<count {
+            if let cStr = g.gl_pathv[i] {
+                paths.append(String(cString: cStr))
+            }
+        }
+        return paths
     }
 }

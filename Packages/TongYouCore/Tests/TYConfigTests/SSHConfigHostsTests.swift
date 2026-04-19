@@ -192,6 +192,158 @@ struct SSHConfigHostsTests {
         #expect(result.hosts[0].hostname == "db1.internal")
     }
 
+    // MARK: - Include expansion
+
+    @Test func includeAbsolutePath() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let fragment = dir.appendingPathComponent("fragment.conf")
+        try """
+        Host db01
+            Hostname db1.internal
+        """.write(to: fragment, atomically: true, encoding: .utf8)
+
+        let main = dir.appendingPathComponent("config")
+        try """
+        Include \(fragment.path)
+
+        Host web01
+            Hostname web1.internal
+        """.write(to: main, atomically: true, encoding: .utf8)
+
+        let result = try SSHConfigHosts.load(from: main)
+        #expect(result.hosts.map(\.alias) == ["db01", "web01"])
+        #expect(result.hosts.map(\.hostname) == ["db1.internal", "web1.internal"])
+    }
+
+    @Test func includeRelativePathIsRelativeToIncludingFile() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let sub = dir.appendingPathComponent("conf.d", isDirectory: true)
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        try """
+        Host app01
+            Hostname app1.internal
+        """.write(to: sub.appendingPathComponent("app.conf"), atomically: true, encoding: .utf8)
+
+        let main = dir.appendingPathComponent("config")
+        try """
+        Include conf.d/app.conf
+        """.write(to: main, atomically: true, encoding: .utf8)
+
+        let result = try SSHConfigHosts.load(from: main)
+        #expect(result.hosts.map(\.alias) == ["app01"])
+        #expect(result.hosts[0].hostname == "app1.internal")
+    }
+
+    @Test func includeGlobExpandsToAllMatchingFiles() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let sub = dir.appendingPathComponent("conf.d", isDirectory: true)
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        try "Host a\n    Hostname a.internal\n"
+            .write(to: sub.appendingPathComponent("a.conf"), atomically: true, encoding: .utf8)
+        try "Host b\n    Hostname b.internal\n"
+            .write(to: sub.appendingPathComponent("b.conf"), atomically: true, encoding: .utf8)
+        // Non-matching extension should be skipped.
+        try "Host skipme\n"
+            .write(to: sub.appendingPathComponent("skip.txt"), atomically: true, encoding: .utf8)
+
+        let main = dir.appendingPathComponent("config")
+        try "Include conf.d/*.conf\n".write(to: main, atomically: true, encoding: .utf8)
+
+        let result = try SSHConfigHosts.load(from: main)
+        let aliases = result.hosts.map(\.alias).sorted()
+        #expect(aliases == ["a", "b"])
+    }
+
+    @Test func includeMultiplePathsOnOneLine() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        try "Host a\n".write(
+            to: dir.appendingPathComponent("a.conf"),
+            atomically: true, encoding: .utf8
+        )
+        try "Host b\n".write(
+            to: dir.appendingPathComponent("b.conf"),
+            atomically: true, encoding: .utf8
+        )
+
+        let main = dir.appendingPathComponent("config")
+        try "Include a.conf b.conf\n".write(to: main, atomically: true, encoding: .utf8)
+
+        let result = try SSHConfigHosts.load(from: main)
+        #expect(result.hosts.map(\.alias) == ["a", "b"])
+    }
+
+    @Test func includeMissingFileIsSilentlyIgnored() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let main = dir.appendingPathComponent("config")
+        try """
+        Include does-not-exist.conf
+        Host db01
+            Hostname db1.internal
+        """.write(to: main, atomically: true, encoding: .utf8)
+
+        let result = try SSHConfigHosts.load(from: main)
+        #expect(result.hosts.map(\.alias) == ["db01"])
+    }
+
+    @Test func includeCycleDoesNotInfiniteLoop() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let a = dir.appendingPathComponent("a.conf")
+        let b = dir.appendingPathComponent("b.conf")
+        try "Host a_host\nInclude b.conf\n"
+            .write(to: a, atomically: true, encoding: .utf8)
+        try "Host b_host\nInclude a.conf\n"
+            .write(to: b, atomically: true, encoding: .utf8)
+
+        let result = try SSHConfigHosts.load(from: a)
+        let aliases = result.hosts.map(\.alias).sorted()
+        #expect(aliases == ["a_host", "b_host"])
+    }
+
+    @Test func includeInsideHostBlockContinuesTheBlock() throws {
+        // ssh's Include is inline insertion: a Hostname in the included
+        // file applies to the Host block that contained the Include.
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let fragment = dir.appendingPathComponent("hostname.conf")
+        try "    Hostname inherited.internal\n"
+            .write(to: fragment, atomically: true, encoding: .utf8)
+
+        let main = dir.appendingPathComponent("config")
+        try """
+        Host db01
+            Include hostname.conf
+        """.write(to: main, atomically: true, encoding: .utf8)
+
+        let result = try SSHConfigHosts.load(from: main)
+        #expect(result.hosts.count == 1)
+        #expect(result.hosts[0].alias == "db01")
+        #expect(result.hosts[0].hostname == "inherited.internal")
+    }
+
+    @Test func pureParseIgnoresInclude() {
+        // parse(_:) is pure; Include expansion only happens in load(from:).
+        let result = SSHConfigHosts.parse("""
+        Include /nonexistent/path
+        Host db01
+            Hostname db1.internal
+        """)
+        #expect(result.hosts.map(\.alias) == ["db01"])
+        #expect(result.hosts[0].hostname == "db1.internal")
+    }
+
     // MARK: - Helpers
 
     private func makeTempDir() throws -> URL {
