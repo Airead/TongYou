@@ -313,21 +313,24 @@ final class CommandPaletteController {
         scope = parsed.scope
         query = parsed.query
         let pool = candidates(for: scope)
-        let ranked = FuzzyMatcher.rank(query: query, in: pool, extract: { $0.primaryText })
-        var built = ranked.map { PaletteRow(candidate: $0.candidate, match: $0.match) }
-
-        // SSH ad-hoc fallback (Phase 6): when no real candidate matched
-        // and the user typed something, offer a synthesised row so Enter
-        // still spawns against the literal input.
-        if built.isEmpty, scope == .ssh, !query.isEmpty,
-           let adHoc = sshAdHocBuilder?(query) {
-            // Empty match = entire string is "highlighted" trivially;
-            // we pass an empty index list and render it with the default
-            // style so the row is visually distinct from a ranked hit.
-            built = [PaletteRow(
-                candidate: adHoc,
-                match: FuzzyMatcher.Match(score: 0, matchedIndices: [])
-            )]
+        var built: [PaletteRow]
+        if scope == .ssh {
+            built = rankSSH(query: query, in: pool)
+            // ad-hoc fallback: only when the query is a plain literal
+            // (no glob metachars / comma). With wildcards or multiple
+            // alternatives the user is filtering, not naming a host, so
+            // synthesising `ssh <query>` would never do what they want.
+            if built.isEmpty, !query.isEmpty,
+               !query.contains(where: SSHGlobMatcher.metaCharacters.contains),
+               let adHoc = sshAdHocBuilder?(query) {
+                built = [PaletteRow(
+                    candidate: adHoc,
+                    match: FuzzyMatcher.Match(score: 0, matchedIndices: [])
+                )]
+            }
+        } else {
+            let ranked = FuzzyMatcher.rank(query: query, in: pool, extract: { $0.primaryText })
+            built = ranked.map { PaletteRow(candidate: $0.candidate, match: $0.match) }
         }
 
         rows = built
@@ -336,6 +339,39 @@ final class CommandPaletteController {
         } else if highlightedIndex >= rows.count {
             highlightedIndex = rows.isEmpty ? -1 : rows.count - 1
         }
+    }
+
+    /// SSH-scope filter: glob-based matching with `,` as an OR separator.
+    /// Empty or all-whitespace query returns the pool unchanged (in
+    /// upstream order: history recency → ssh_config position). A non-
+    /// empty query that doesn't parse into any glob (e.g. `", ,"`)
+    /// returns an empty list rather than the pool — the user clearly
+    /// typed *something*, so surfacing every candidate would be
+    /// surprising.
+    private func rankSSH(query: String, in pool: [PaletteCandidate]) -> [PaletteRow] {
+        guard !query.isEmpty else {
+            return pool.map {
+                PaletteRow(
+                    candidate: $0,
+                    match: FuzzyMatcher.Match(score: 0, matchedIndices: [])
+                )
+            }
+        }
+        guard let patterns = SSHGlobMatcher.parse(query) else {
+            return []
+        }
+        var out: [PaletteRow] = []
+        out.reserveCapacity(pool.count)
+        for candidate in pool {
+            guard let hit = SSHGlobMatcher.match(text: candidate.primaryText, patterns: patterns) else {
+                continue
+            }
+            out.append(PaletteRow(
+                candidate: candidate,
+                match: FuzzyMatcher.Match(score: 0, matchedIndices: hit.matchedIndices)
+            ))
+        }
+        return out
     }
 
     private func candidates(for scope: PaletteScope) -> [PaletteCandidate] {

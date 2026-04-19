@@ -320,6 +320,114 @@ struct CommandPaletteControllerTests {
         #expect(controller.rows.isEmpty)
     }
 
+    // MARK: - SSH glob scope
+
+    @Test func sshGlobRejectsScatteredSubsequenceMatch() {
+        // The pre-glob matcher would have accepted "ase1c" against
+        // "aws-ase1b-…" because `a` + `se1` can be stitched across the
+        // host name. The glob matcher insists on a contiguous substring.
+        let controller = CommandPaletteController()
+        controller.sshCandidates = [
+            PaletteCandidate(primaryText: "aws-ase1c-btc-node-50", scope: .ssh),
+            PaletteCandidate(primaryText: "aws-ase1b-btc-node-50", scope: .ssh),
+        ]
+        controller.sshAdHocBuilder = { _ in nil }
+        controller.open()
+        controller.input = "ssh ase1c"
+
+        #expect(controller.rows.count == 1)
+        #expect(controller.rows.first?.candidate.primaryText == "aws-ase1c-btc-node-50")
+    }
+
+    @Test func sshCommaCombinesPatternsWithOr() {
+        // `a, b` should surface candidates matching either glob.
+        let controller = CommandPaletteController()
+        controller.sshCandidates = [
+            PaletteCandidate(primaryText: "aws-ase1c-btc-node-50", scope: .ssh),
+            PaletteCandidate(primaryText: "aws-ase1b-btc-node-50", scope: .ssh),
+            PaletteCandidate(primaryText: "aws-use1-btc-node-50", scope: .ssh),
+        ]
+        controller.sshAdHocBuilder = { _ in nil }
+        controller.open()
+        controller.input = "ssh ase1c, ase1b"
+
+        #expect(controller.rows.count == 2)
+        let names = controller.rows.map(\.candidate.primaryText)
+        #expect(names.contains("aws-ase1c-btc-node-50"))
+        #expect(names.contains("aws-ase1b-btc-node-50"))
+    }
+
+    @Test func sshWildcardFiltersAcrossNodeLabels() {
+        // `aws-*-50` should pick up every aws host ending in -50 without
+        // caring about the middle segments.
+        let controller = CommandPaletteController()
+        controller.sshCandidates = [
+            PaletteCandidate(primaryText: "aws-ase1c-btc-node-50", scope: .ssh),
+            PaletteCandidate(primaryText: "aws-ase1b-btc-node-50", scope: .ssh),
+            PaletteCandidate(primaryText: "gcp-eu-node-50", scope: .ssh),
+        ]
+        controller.sshAdHocBuilder = { _ in nil }
+        controller.open()
+        controller.input = "ssh aws-*-50"
+
+        #expect(controller.rows.count == 2)
+        let names = controller.rows.map(\.candidate.primaryText)
+        #expect(names.allSatisfy { $0.hasPrefix("aws-") })
+    }
+
+    @Test func sshAdHocDisabledWhenQueryContainsWildcard() {
+        // With `*` in the query the user is filtering, not naming a
+        // specific host — synthesising `ssh aws-*-99` would be nonsense.
+        let controller = CommandPaletteController()
+        controller.sshCandidates = [
+            PaletteCandidate(primaryText: "aws-50", scope: .ssh),
+        ]
+        var adHocQueries: [String] = []
+        controller.sshAdHocBuilder = { q in
+            adHocQueries.append(q)
+            return PaletteCandidate(primaryText: "Connect ad-hoc: \(q)", scope: .ssh)
+        }
+        controller.open()
+        controller.input = "ssh aws-*-99"
+
+        #expect(controller.rows.isEmpty)
+        #expect(adHocQueries.isEmpty)
+    }
+
+    @Test func sshAdHocDisabledWhenQueryContainsComma() {
+        // Same rationale as the wildcard case — a comma-separated list
+        // is filtering semantics, not a literal host string.
+        let controller = CommandPaletteController()
+        controller.sshCandidates = [
+            PaletteCandidate(primaryText: "aws-50", scope: .ssh),
+        ]
+        var adHocQueries: [String] = []
+        controller.sshAdHocBuilder = { q in
+            adHocQueries.append(q)
+            return PaletteCandidate(primaryText: "Connect ad-hoc: \(q)", scope: .ssh)
+        }
+        controller.open()
+        controller.input = "ssh zzz, yyy"
+
+        #expect(controller.rows.isEmpty)
+        #expect(adHocQueries.isEmpty)
+    }
+
+    @Test func sshEmptyQueryShowsAllCandidatesUnranked() {
+        // An empty post-prefix query must surface every candidate in
+        // upstream order, not rank them.
+        let controller = CommandPaletteController()
+        controller.sshCandidates = [
+            PaletteCandidate(primaryText: "a", scope: .ssh),
+            PaletteCandidate(primaryText: "b", scope: .ssh),
+            PaletteCandidate(primaryText: "c", scope: .ssh),
+        ]
+        controller.open()
+        controller.input = "ssh "
+
+        #expect(controller.rows.map(\.candidate.primaryText) == ["a", "b", "c"])
+    }
+
     // MARK: - ⌘⌫ delete dispatch
 
     @Test func deleteHighlightedInvokesSSHCallbackWithTarget() {

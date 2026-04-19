@@ -133,3 +133,121 @@ struct FuzzyMatcherTests {
         #expect(ranked.map(\.candidate) == ["prod-db-01"])
     }
 }
+
+/// Unit tests for the SSH-scope glob matcher. The matcher is intentionally
+/// narrower than ``FuzzyMatcher``: each comma-separated glob must match as
+/// a contiguous substring (with `*` / `?` wildcards), and the set of
+/// patterns combines with OR semantics.
+@Suite("SSHGlobMatcher")
+struct SSHGlobMatcherTests {
+
+    // MARK: - Parsing
+
+    @Test func parseSplitsOnCommaAndTrimsWhitespace() {
+        let patterns = SSHGlobMatcher.parse("aws-*,  btc-node  ,  *-50")
+        #expect(patterns?.count == 3)
+        #expect(patterns?[0] == SSHGlobMatcher.compile(glob: "aws-*"))
+        #expect(patterns?[1] == SSHGlobMatcher.compile(glob: "btc-node"))
+        #expect(patterns?[2] == SSHGlobMatcher.compile(glob: "*-50"))
+    }
+
+    @Test func parseIgnoresEmptyPieces() {
+        // Trailing / doubled commas should not produce empty patterns
+        // that would otherwise match everything.
+        #expect(SSHGlobMatcher.parse("aws-*,")?.count == 1)
+        #expect(SSHGlobMatcher.parse(",,aws-*,,")?.count == 1)
+        #expect(SSHGlobMatcher.parse("   ,  , ") == nil)
+        #expect(SSHGlobMatcher.parse("") == nil)
+    }
+
+    @Test func compileNormalisesLeadingTrailingAndRepeatedWildcards() {
+        // Substring matching is implicit, so **/leading/trailing wildcards
+        // carry no signal — they're stripped so the match loop doesn't
+        // have to special-case them.
+        let pattern = SSHGlobMatcher.compile(glob: "**a*b**")
+        #expect(pattern.segments == [
+            .literal("a"),
+            .anyRun,
+            .literal("b"),
+        ])
+    }
+
+    @Test func compileLowercasesLiterals() {
+        // Matching is case-insensitive — compile-time lower-casing keeps
+        // the hot loop allocation-free.
+        let pattern = SSHGlobMatcher.compile(glob: "AWS")
+        #expect(pattern.segments == [.literal("aws")])
+    }
+
+    // MARK: - Matching
+
+    @Test func singleLiteralGlobIsSubstring() {
+        // A plain token (no wildcards) matches anywhere in the candidate.
+        let patterns = SSHGlobMatcher.parse("ase1c")!
+        let hit = SSHGlobMatcher.match(text: "aws-ase1c-btc-node-50", patterns: patterns)
+        #expect(hit != nil)
+        // All five literal characters get highlighted.
+        let chars = (hit?.matchedIndices ?? []).map { "aws-ase1c-btc-node-50"[$0] }
+        #expect(String(chars) == "ase1c")
+    }
+
+    @Test func singleLiteralGlobIsCaseInsensitive() {
+        let patterns = SSHGlobMatcher.parse("AWS")!
+        #expect(SSHGlobMatcher.match(text: "aws-a", patterns: patterns) != nil)
+    }
+
+    @Test func starWildcardSpansAnyRun() {
+        // `aws*50` should skip across arbitrary characters between the
+        // two literals — both `aws-ase1c-btc-node-50` and `aws-50` match.
+        let patterns = SSHGlobMatcher.parse("aws*50")!
+        #expect(SSHGlobMatcher.match(text: "aws-ase1c-btc-node-50", patterns: patterns) != nil)
+        #expect(SSHGlobMatcher.match(text: "aws-50", patterns: patterns) != nil)
+        // But the order matters — `50-aws` must not match.
+        #expect(SSHGlobMatcher.match(text: "50-aws", patterns: patterns) == nil)
+    }
+
+    @Test func questionWildcardMatchesExactlyOneChar() {
+        let patterns = SSHGlobMatcher.parse("a?e1c")!
+        #expect(SSHGlobMatcher.match(text: "ase1c", patterns: patterns) != nil)
+        #expect(SSHGlobMatcher.match(text: "axe1c", patterns: patterns) != nil)
+        // ? is not optional — `ae1c` has no character to consume.
+        #expect(SSHGlobMatcher.match(text: "ae1c", patterns: patterns) == nil)
+    }
+
+    @Test func highlightSkipsWildcardCharacters() {
+        // Highlight indices point only at *literal* characters — `*` and
+        // `?` contribute nothing, otherwise the view would underline
+        // characters the user didn't type.
+        let patterns = SSHGlobMatcher.parse("a*c")!
+        let hit = SSHGlobMatcher.match(text: "abc", patterns: patterns)
+        let chars = (hit?.matchedIndices ?? []).map { "abc"[$0] }
+        #expect(String(chars) == "ac")
+    }
+
+    @Test func multipleGlobsCombineWithOr() {
+        // `ase1c, ase1b` should match both AZ-specific hosts.
+        let patterns = SSHGlobMatcher.parse("ase1c, ase1b")!
+        #expect(SSHGlobMatcher.match(text: "aws-ase1c-btc-node-50", patterns: patterns) != nil)
+        #expect(SSHGlobMatcher.match(text: "aws-ase1b-btc-node-50", patterns: patterns) != nil)
+        // A host that matches neither token must be dropped.
+        #expect(SSHGlobMatcher.match(text: "aws-use1-btc-node-50", patterns: patterns) == nil)
+    }
+
+    @Test func multipleGlobsUnionHighlights() {
+        // When more than one glob matches the same candidate, the
+        // view should underline every literal character any of them
+        // touched (union, not just the first winner).
+        let patterns = SSHGlobMatcher.parse("aws, 50")!
+        let text = "aws-ase1c-btc-node-50"
+        let hit = SSHGlobMatcher.match(text: text, patterns: patterns)
+        let chars = (hit?.matchedIndices ?? []).map { text[$0] }
+        // Both "aws" at the start and "50" at the end must be covered.
+        #expect(String(chars).contains("aws"))
+        #expect(String(chars).contains("50"))
+    }
+
+    @Test func nonMatchReturnsNil() {
+        let patterns = SSHGlobMatcher.parse("zzz")!
+        #expect(SSHGlobMatcher.match(text: "aws-50", patterns: patterns) == nil)
+    }
+}
