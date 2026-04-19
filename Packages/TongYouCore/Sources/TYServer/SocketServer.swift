@@ -475,11 +475,12 @@ public final class SocketServer: @unchecked Sendable {
                 client.send(.clipboardSet(text))
             }
 
-        case .createTab(let sessionID, let profileID, let snapshot):
+        case .createTab(let sessionID, let profileID, let snapshot, let variables):
             if sessionManager.createTab(
                 sessionID: sessionID,
                 profileID: profileID,
-                snapshot: snapshot
+                snapshot: snapshot,
+                variables: variables
             ) != nil {
                 broadcastLayoutOrClosed(sessionID: sessionID)
             }
@@ -488,11 +489,12 @@ public final class SocketServer: @unchecked Sendable {
             sessionManager.closeTab(sessionID: sessionID, tabID: tabID)
             broadcastLayoutOrClosed(sessionID: sessionID)
 
-        case .splitPane(let sessionID, let paneID, let direction, let profileID, let snapshot):
+        case .splitPane(let sessionID, let paneID, let direction, let profileID, let snapshot, let variables):
             if sessionManager.splitPane(
                 sessionID: sessionID, paneID: paneID, direction: direction,
                 profileID: profileID,
-                snapshot: snapshot
+                snapshot: snapshot,
+                variables: variables
             ) != nil {
                 broadcastLayoutOrClosed(sessionID: sessionID)
             }
@@ -514,11 +516,12 @@ public final class SocketServer: @unchecked Sendable {
                 broadcastLayoutOrClosed(sessionID: sessionID)
             }
 
-        case .createFloatingPane(let sessionID, let tabID, let profileID, let snapshot, let frameHint):
+        case .createFloatingPane(let sessionID, let tabID, let profileID, let snapshot, let variables, let frameHint):
             if sessionManager.createFloatingPane(
                 sessionID: sessionID, tabID: tabID,
                 profileID: profileID,
                 snapshot: snapshot,
+                variables: variables,
                 frameHint: frameHint
             ) != nil {
                 broadcastLayoutOrClosed(sessionID: sessionID)

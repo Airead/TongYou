@@ -401,7 +401,7 @@ struct BinaryCoderTests {
         let tabID = TabID()
         let msg = ClientMessage.createFloatingPane(
             sessionID, tabID,
-            profileID: nil, snapshot: nil, frameHint: nil
+            profileID: nil, snapshot: nil, variables: [:], frameHint: nil
         )
 
         var encoder = BinaryEncoder()
@@ -409,7 +409,7 @@ struct BinaryCoderTests {
 
         var decoder = BinaryDecoder(encoder.data)
         let decoded = try decoder.readClientMessage(type: .createFloatingPane)
-        if case .createFloatingPane(let sid, let tid, let profileID, let snapshot, let frameHint) = decoded {
+        if case .createFloatingPane(let sid, let tid, let profileID, let snapshot, _, let frameHint) = decoded {
             #expect(sid == sessionID)
             #expect(tid == tabID)
             #expect(profileID == nil)
@@ -935,12 +935,14 @@ struct BinaryCoderTests {
             ("ci", snap),
         ]
         for (profileID, snapshot) in cases {
-            let msg = ClientMessage.createTab(sid, profileID: profileID, snapshot: snapshot)
+            let msg = ClientMessage.createTab(
+                sid, profileID: profileID, snapshot: snapshot, variables: [:]
+            )
             var encoder = BinaryEncoder()
             encoder.writeClientMessage(msg)
             var decoder = BinaryDecoder(encoder.data)
             let decoded = try decoder.readClientMessage(type: .createTab)
-            guard case .createTab(let dSid, let dProfile, let dSnap) = decoded else {
+            guard case .createTab(let dSid, let dProfile, let dSnap, _) = decoded else {
                 Issue.record("Expected .createTab"); continue
             }
             #expect(dSid == sid)
@@ -962,13 +964,13 @@ struct BinaryCoderTests {
         for (profileID, snapshot) in cases {
             let msg = ClientMessage.splitPane(
                 sid, pid, .vertical,
-                profileID: profileID, snapshot: snapshot
+                profileID: profileID, snapshot: snapshot, variables: [:]
             )
             var encoder = BinaryEncoder()
             encoder.writeClientMessage(msg)
             var decoder = BinaryDecoder(encoder.data)
             let decoded = try decoder.readClientMessage(type: .splitPane)
-            guard case .splitPane(let dSid, let dPid, let dDir, let dProfile, let dSnap) = decoded else {
+            guard case .splitPane(let dSid, let dPid, let dDir, let dProfile, let dSnap, _) = decoded else {
                 Issue.record("Expected .splitPane"); continue
             }
             #expect(dSid == sid)
@@ -996,13 +998,14 @@ struct BinaryCoderTests {
                 sid, tid,
                 profileID: profileID,
                 snapshot: snapshot,
+                variables: [:],
                 frameHint: frameHint
             )
             var encoder = BinaryEncoder()
             encoder.writeClientMessage(msg)
             var decoder = BinaryDecoder(encoder.data)
             let decoded = try decoder.readClientMessage(type: .createFloatingPane)
-            guard case .createFloatingPane(let dSid, let dTid, let dProfile, let dSnap, let dHint) = decoded else {
+            guard case .createFloatingPane(let dSid, let dTid, let dProfile, let dSnap, _, let dHint) = decoded else {
                 Issue.record("Expected .createFloatingPane"); continue
             }
             #expect(dSid == sid)

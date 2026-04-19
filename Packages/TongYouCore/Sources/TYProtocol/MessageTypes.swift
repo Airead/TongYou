@@ -203,11 +203,15 @@ public enum ClientMessage: Sendable {
     /// Create a new tab. If `profileID` and `snapshot` are nil the server
     /// inherits the focused pane's cwd (current behavior). When non-nil,
     /// `snapshot` fully drives PTY launch and `profileID` is stored as a label.
-    case createTab(SessionID, profileID: String?, snapshot: StartupSnapshot?)
+    /// `variables` carries the profile variables (e.g. `${HOST}` / `${USER}`)
+    /// used to resolve the snapshot so child splits can re-resolve the same
+    /// profile against the same substitutions. Empty for non-templated
+    /// profiles.
+    case createTab(SessionID, profileID: String?, snapshot: StartupSnapshot?, variables: [String: String])
     case closeTab(SessionID, TabID)
     /// Split a pane. Same semantics as `createTab`: when `snapshot` is non-nil
     /// the new pane ignores parent inheritance and uses the snapshot directly.
-    case splitPane(SessionID, PaneID, SplitDirection, profileID: String?, snapshot: StartupSnapshot?)
+    case splitPane(SessionID, PaneID, SplitDirection, profileID: String?, snapshot: StartupSnapshot?, variables: [String: String])
     case closePane(SessionID, PaneID)
     case focusPane(SessionID, PaneID)
     case selectTab(SessionID, tabIndex: UInt16)
@@ -216,10 +220,10 @@ public enum ClientMessage: Sendable {
     case setSplitRatio(SessionID, PaneID, ratio: Float)
 
     // Floating pane operations
-    /// Create a floating pane. `profileID`/`snapshot` follow the same
-    /// semantics as `createTab`. `frameHint` optionally supplies initial
+    /// Create a floating pane. `profileID`/`snapshot`/`variables` follow the
+    /// same semantics as `createTab`. `frameHint` optionally supplies initial
     /// normalized geometry; when nil the server picks a default frame.
-    case createFloatingPane(SessionID, TabID, profileID: String?, snapshot: StartupSnapshot?, frameHint: FloatFrameHint?)
+    case createFloatingPane(SessionID, TabID, profileID: String?, snapshot: StartupSnapshot?, variables: [String: String], frameHint: FloatFrameHint?)
     case closeFloatingPane(SessionID, PaneID)
     case updateFloatingPaneFrame(SessionID, PaneID, x: Float, y: Float, width: Float, height: Float)
     case bringFloatingPaneToFront(SessionID, PaneID)
@@ -280,12 +284,12 @@ public enum ClientMessage: Sendable {
             return "extractSelection(session=\(sid), pane=\(pid), [\(s.line):\(s.col)..\(e.line):\(e.col)])"
         case .mouseEvent(let sid, let pid, let event):
             return "mouseEvent(session=\(sid), pane=\(pid), action=\(event.action), col=\(event.col), row=\(event.row))"
-        case .createTab(let sid, let profileID, let snapshot):
-            return "createTab(session=\(sid), profile=\(profileID ?? "nil"), hasSnapshot=\(snapshot != nil))"
+        case .createTab(let sid, let profileID, let snapshot, let variables):
+            return "createTab(session=\(sid), profile=\(profileID ?? "nil"), hasSnapshot=\(snapshot != nil), vars=\(variables.count))"
         case .closeTab(let sid, let tid):
             return "closeTab(session=\(sid), tab=\(tid))"
-        case .splitPane(let sid, let pid, let dir, let profileID, let snapshot):
-            return "splitPane(session=\(sid), pane=\(pid), dir=\(dir), profile=\(profileID ?? "nil"), hasSnapshot=\(snapshot != nil))"
+        case .splitPane(let sid, let pid, let dir, let profileID, let snapshot, let variables):
+            return "splitPane(session=\(sid), pane=\(pid), dir=\(dir), profile=\(profileID ?? "nil"), hasSnapshot=\(snapshot != nil), vars=\(variables.count))"
         case .closePane(let sid, let pid):
             return "closePane(session=\(sid), pane=\(pid))"
         case .focusPane(let sid, let pid):
@@ -294,8 +298,8 @@ public enum ClientMessage: Sendable {
             return "selectTab(session=\(sid), tabIndex=\(tabIndex))"
         case .setSplitRatio(let sid, let pid, let ratio):
             return "setSplitRatio(session=\(sid), pane=\(pid), ratio=\(ratio))"
-        case .createFloatingPane(let sid, let tid, let profileID, let snapshot, let frameHint):
-            return "createFloatingPane(session=\(sid), tab=\(tid), profile=\(profileID ?? "nil"), hasSnapshot=\(snapshot != nil), hasFrameHint=\(frameHint != nil))"
+        case .createFloatingPane(let sid, let tid, let profileID, let snapshot, let variables, let frameHint):
+            return "createFloatingPane(session=\(sid), tab=\(tid), profile=\(profileID ?? "nil"), hasSnapshot=\(snapshot != nil), vars=\(variables.count), hasFrameHint=\(frameHint != nil))"
         case .closeFloatingPane(let sid, let pid):
             return "closeFloatingPane(session=\(sid), pane=\(pid))"
         case .updateFloatingPaneFrame(let sid, let pid, let x, let y, let w, let h):

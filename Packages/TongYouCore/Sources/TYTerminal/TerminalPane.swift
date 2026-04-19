@@ -17,6 +17,13 @@ public struct TerminalPane: Identifiable, Equatable, Sendable {
     /// directly; it does not re-resolve the profile.
     public let startupSnapshot: StartupSnapshot
 
+    /// Profile variables (e.g. `${HOST}`, `${USER}`) used to resolve the
+    /// snapshot. Captured so child splits can re-resolve the same profile
+    /// against the same substitutions without asking the user to re-type.
+    /// Empty dict means "no variables" — the common case for non-templated
+    /// profiles like `default`.
+    public let variables: [String: String]
+
     /// Default profile id used when a caller does not specify one.
     public static let defaultProfileID = "default"
 
@@ -24,11 +31,13 @@ public struct TerminalPane: Identifiable, Equatable, Sendable {
     public init(
         profileID: String = TerminalPane.defaultProfileID,
         startupSnapshot: StartupSnapshot = StartupSnapshot(),
+        variables: [String: String] = [:],
         initialWorkingDirectory: String? = nil
     ) {
         self.id = UUID()
         self.profileID = profileID
         self.startupSnapshot = startupSnapshot
+        self.variables = variables
         self.initialWorkingDirectory = initialWorkingDirectory
             ?? startupSnapshot.cwd
     }
@@ -41,6 +50,7 @@ public struct TerminalPane: Identifiable, Equatable, Sendable {
         self.init(
             profileID: TerminalPane.defaultProfileID,
             startupSnapshot: StartupSnapshot(cwd: initialWorkingDirectory),
+            variables: [:],
             initialWorkingDirectory: initialWorkingDirectory
         )
     }
@@ -50,6 +60,7 @@ public struct TerminalPane: Identifiable, Equatable, Sendable {
         self.id = id
         self.profileID = TerminalPane.defaultProfileID
         self.startupSnapshot = StartupSnapshot(cwd: initialWorkingDirectory)
+        self.variables = [:]
         self.initialWorkingDirectory = initialWorkingDirectory
     }
 
@@ -58,11 +69,13 @@ public struct TerminalPane: Identifiable, Equatable, Sendable {
         id: UUID,
         profileID: String,
         startupSnapshot: StartupSnapshot,
+        variables: [String: String] = [:],
         initialWorkingDirectory: String? = nil
     ) {
         self.id = id
         self.profileID = profileID
         self.startupSnapshot = startupSnapshot
+        self.variables = variables
         self.initialWorkingDirectory = initialWorkingDirectory
             ?? startupSnapshot.cwd
     }

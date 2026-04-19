@@ -75,6 +75,17 @@ public struct BinaryEncoder: Sendable {
         for s in strings { writeString(s) }
     }
 
+    /// Write a count-prefixed `[String: String]` map (UInt16 count + key/value
+    /// length-prefixed strings). Keys are emitted in sorted order so the wire
+    /// bytes are deterministic — useful for golden-file snapshot tests.
+    public mutating func writeStringMap(_ map: [String: String]) {
+        writeUInt16(UInt16(map.count))
+        for key in map.keys.sorted() {
+            writeString(key)
+            writeString(map[key] ?? "")
+        }
+    }
+
     /// Write a length-prefixed byte array (UInt32 length + bytes).
     public mutating func writeBytes(_ bytes: [UInt8]) {
         writeUInt32(UInt32(bytes.count))
@@ -366,6 +377,7 @@ public struct BinaryEncoder: Sendable {
         case .some(false): writeUInt8(1)
         case .some(true): writeUInt8(2)
         }
+        writeStringMap(meta.variables)
     }
 
     /// Encode a `TabInfo` into the buffer.
@@ -488,21 +500,23 @@ public struct BinaryEncoder: Sendable {
             writePaneID(paneID)
             writeMouseEvent(event)
 
-        case .createTab(let sessionID, let profileID, let snapshot):
+        case .createTab(let sessionID, let profileID, let snapshot, let variables):
             writeSessionID(sessionID)
             writeOptionalString(profileID)
             writeOptionalStartupSnapshot(snapshot)
+            writeStringMap(variables)
 
         case .closeTab(let sessionID, let tabID):
             writeSessionID(sessionID)
             writeTabID(tabID)
 
-        case .splitPane(let sessionID, let paneID, let direction, let profileID, let snapshot):
+        case .splitPane(let sessionID, let paneID, let direction, let profileID, let snapshot, let variables):
             writeSessionID(sessionID)
             writePaneID(paneID)
             writeSplitDirection(direction)
             writeOptionalString(profileID)
             writeOptionalStartupSnapshot(snapshot)
+            writeStringMap(variables)
 
         case .closePane(let sessionID, let paneID):
             writeSessionID(sessionID)
@@ -521,11 +535,12 @@ public struct BinaryEncoder: Sendable {
             writePaneID(paneID)
             writeFloat(ratio)
 
-        case .createFloatingPane(let sessionID, let tabID, let profileID, let snapshot, let frameHint):
+        case .createFloatingPane(let sessionID, let tabID, let profileID, let snapshot, let variables, let frameHint):
             writeSessionID(sessionID)
             writeTabID(tabID)
             writeOptionalString(profileID)
             writeOptionalStartupSnapshot(snapshot)
+            writeStringMap(variables)
             writeOptionalFloatFrameHint(frameHint)
 
         case .closeFloatingPane(let sessionID, let paneID):

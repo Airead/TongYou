@@ -572,7 +572,8 @@ final class SessionManager {
             remoteClient?.createTab(
                 sessionID: SessionID(serverSessionID),
                 profileID: bundle.profileID,
-                snapshot: bundle.snapshot
+                snapshot: bundle.snapshot,
+                variables: variables
             )
             return nil
         }
@@ -866,10 +867,17 @@ final class SessionManager {
             let inheritedProfileID = profileID
                 ?? self.profileID(ofPane: parentPaneID)
                 ?? TerminalPane.defaultProfileID
+            // When the caller supplied no variables, propagate the parent
+            // pane's captured variables so templated profiles (ssh-prod
+            // etc.) can still resolve `${HOST}` / `${USER}` on the child
+            // split without making the user retype the target.
+            let inheritedVariables = variables.isEmpty
+                ? (self.variables(ofPane: parentPaneID) ?? [:])
+                : variables
             let bundle = resolveRemoteStartupBundle(
                 profileID: inheritedProfileID,
                 overrides: overrides,
-                variables: variables,
+                variables: inheritedVariables,
                 initialWorkingDirectory: initialWorkingDirectory
             )
             remoteClient?.splitPane(
@@ -877,7 +885,8 @@ final class SessionManager {
                 paneID: PaneID(serverPaneUUID),
                 direction: direction,
                 profileID: bundle.profileID,
-                snapshot: bundle.snapshot
+                snapshot: bundle.snapshot,
+                variables: inheritedVariables
             )
             return nil
         }
@@ -885,11 +894,14 @@ final class SessionManager {
         let inheritedProfileID = profileID
             ?? self.profileID(ofPane: parentPaneID)
             ?? TerminalPane.defaultProfileID
+        let inheritedVariables = variables.isEmpty
+            ? (self.variables(ofPane: parentPaneID) ?? [:])
+            : variables
 
         let newPane = createPane(
             profileID: inheritedProfileID,
             overrides: overrides,
-            variables: variables,
+            variables: inheritedVariables,
             initialWorkingDirectory: initialWorkingDirectory
         )
 
@@ -1214,13 +1226,18 @@ final class SessionManager {
             let activeTab = session.activeTab
             let parentProfileID = activeTab?.focusedPaneID.flatMap { self.profileID(ofPane: $0) }
                 ?? activeTab?.paneTree.firstPane.profileID
+            let parentVariables = activeTab?.focusedPaneID.flatMap { self.variables(ofPane: $0) }
+                ?? activeTab?.paneTree.firstPane.variables
             let effectiveProfileID = profileID
                 ?? parentProfileID
                 ?? TerminalPane.defaultProfileID
+            let effectiveVariables = variables.isEmpty
+                ? (parentVariables ?? [:])
+                : variables
             let bundle = resolveRemoteStartupBundle(
                 profileID: effectiveProfileID,
                 overrides: overrides,
-                variables: variables,
+                variables: effectiveVariables,
                 initialWorkingDirectory: initialWorkingDirectory
             )
             remoteClient?.createFloatingPane(
@@ -1228,6 +1245,7 @@ final class SessionManager {
                 tabID: tabIDs[session.activeTabIndex],
                 profileID: bundle.profileID,
                 snapshot: bundle.snapshot,
+                variables: effectiveVariables,
                 frameHint: bundle.frameHint
             )
             return nil
@@ -1236,14 +1254,19 @@ final class SessionManager {
         let activeTab = session.activeTab
         let parentProfileID = activeTab?.focusedPaneID.flatMap { self.profileID(ofPane: $0) }
             ?? activeTab?.paneTree.firstPane.profileID
+        let parentVariables = activeTab?.focusedPaneID.flatMap { self.variables(ofPane: $0) }
+            ?? activeTab?.paneTree.firstPane.variables
         let effectiveProfileID = profileID
             ?? parentProfileID
             ?? TerminalPane.defaultProfileID
+        let effectiveVariables = variables.isEmpty
+            ? (parentVariables ?? [:])
+            : variables
 
         let pane = createPane(
             profileID: effectiveProfileID,
             overrides: overrides,
-            variables: variables,
+            variables: effectiveVariables,
             initialWorkingDirectory: initialWorkingDirectory
         )
         let floating = FloatingPane(pane: pane, frame: activeFloatingPanes.nextCascadedFrame(), zIndex: activeFloatingPanes.nextZIndex)
@@ -1321,6 +1344,13 @@ final class SessionManager {
     /// default inheritance" (i.e. `TerminalPane.defaultProfileID`).
     func profileID(ofPane paneID: UUID) -> String? {
         findPane(id: paneID)?.profileID
+    }
+
+    /// Look up the variables (e.g. `${HOST}` / `${USER}`) captured on an
+    /// existing pane when it was created. Returns nil when the pane is
+    /// unknown; callers treat nil as "no variables" (empty dict).
+    func variables(ofPane paneID: UUID) -> [String: String]? {
+        findPane(id: paneID)?.variables
     }
 
     /// Probe a profile id + overrides combination against the shared
@@ -1477,6 +1507,7 @@ final class SessionManager {
         return TerminalPane(
             profileID: resolved.profileID,
             startupSnapshot: snapshot,
+            variables: variables,
             initialWorkingDirectory: initialWorkingDirectory ?? snapshot.cwd
         )
     }
