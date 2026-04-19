@@ -164,7 +164,7 @@ struct ServerSessionManagerTests {
         #expect(newPaneID != nil)
 
         let info = manager.sessionInfo(for: session.id)
-        if case .container(let strategy, let children, _) = info?.tabs[0].layout {
+        if case .container(let strategy, let children, _, _, _) = info?.tabs[0].layout {
             #expect(strategy == .vertical)
             #expect(children.count == 2)
         } else {
@@ -194,7 +194,7 @@ struct ServerSessionManagerTests {
 
         let info = manager.sessionInfo(for: session.id)
         // Second child targets ratio 0.25; first child's weight share becomes 0.75.
-        if case .container(_, _, let weights) = info?.tabs[0].layout {
+        if case .container(_, _, let weights, _, _) = info?.tabs[0].layout {
             let sum = weights.reduce(0, +)
             #expect(sum > 0)
             #expect(abs(weights[0] / sum - 0.75) < 1e-6)
@@ -240,7 +240,7 @@ struct ServerSessionManagerTests {
         ))
 
         let info = manager.sessionInfo(for: session.id)
-        guard case .container(let strategy, let children, _) = info?.tabs[0].layout else {
+        guard case .container(let strategy, let children, _, _, _) = info?.tabs[0].layout else {
             Issue.record("Expected container layout"); return
         }
         #expect(strategy == .vertical)
@@ -273,7 +273,7 @@ struct ServerSessionManagerTests {
         ))
 
         let info = manager.sessionInfo(for: session.id)
-        guard case .container(let strategy, let children, let weights) =
+        guard case .container(let strategy, let children, let weights, _, _) =
                 info?.tabs[0].layout else {
             Issue.record("Expected container layout"); return
         }
@@ -350,7 +350,7 @@ struct ServerSessionManagerTests {
         ))
 
         let info = manager.sessionInfo(for: session.id)
-        guard case .container(let strategy, let children, let weights) =
+        guard case .container(let strategy, let children, let weights, _, _) =
                 info?.tabs[0].layout else {
             Issue.record("Expected container layout"); return
         }
@@ -1009,7 +1009,7 @@ struct ServerSessionManagerTests {
         let loaded = store.loadAll()
         #expect(loaded.count == 1)
         let layout = loaded.first?.sessionInfo.tabs.first?.layout
-        if case .container(let strategy, _, _) = layout {
+        if case .container(let strategy, _, _, _, _) = layout {
             #expect(strategy == .vertical)
         } else {
             Issue.record("Expected container layout in persisted data")

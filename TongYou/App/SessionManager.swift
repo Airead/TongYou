@@ -2284,14 +2284,16 @@ final class SessionManager {
                 closeOnExit: metadata[paneID]?.closeOnExit
             ))
 
-        case .container(let strategy, let children, let weights):
+        case .container(let strategy, let children, let weights, let gridRowWeights, let gridColWeights):
             let childNodes = children.map {
                 buildPaneNode(from: $0, sessionID: sessionID, metadata: metadata)
             }
             return .container(Container(
                 strategy: strategy,
                 children: childNodes,
-                weights: weights.map { CGFloat($0) }
+                weights: weights.map { CGFloat($0) },
+                gridRowWeights: gridRowWeights.map { CGFloat($0) },
+                gridColWeights: gridColWeights.map { CGFloat($0) }
             ))
         }
     }
@@ -2393,12 +2395,14 @@ final class SessionManager {
                 initialWorkingDirectory: contexts[paneID]?.cwd
             )
             return .leaf(pane)
-        case .container(let strategy, let children, let weights):
+        case .container(let strategy, let children, let weights, let gridRowWeights, let gridColWeights):
             let childNodes = children.map { buildLocalPaneNode(from: $0, contexts: contexts) }
             return .container(Container(
                 strategy: strategy,
                 children: childNodes,
-                weights: weights.map { CGFloat($0) }
+                weights: weights.map { CGFloat($0) },
+                gridRowWeights: gridRowWeights.map { CGFloat($0) },
+                gridColWeights: gridColWeights.map { CGFloat($0) }
             ))
         }
     }
