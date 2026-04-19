@@ -74,6 +74,12 @@ Note: `--no-parallel` only controls process-level parallelism (how many test run
 
 - `deinit` is nonisolated. Accessing actor-isolated stored properties from `deinit` will deadlock. Use `nonisolated(unsafe)` for properties that must be read/cancelled in `deinit` (e.g. `DispatchSource`, `Task`).
 
+## Logging
+
+- Core / server / daemon code: prefer `Log` from `Packages/TongYouCore/Sources/TYServer/Logging.swift`.
+- GUI / client code: prefer `GUILog` from `TongYou/Utils/GUILog.swift`.
+- Use `print` only for throwaway debug traces; convert to the proper logger once the trace survives past a single session.
+
 ## Reference
 
 - Review [dev/ai-swift-macos-best-practices.md](dev/ai-swift-macos-best-practices.md) for AI-assisted Swift macOS development best practices including Swift 6.2 concurrency, SwiftUI architecture, and testing strategy.

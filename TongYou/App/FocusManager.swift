@@ -98,29 +98,37 @@ enum FocusDirection {
 
 extension PaneNode {
 
-    /// Find the neighboring pane in the given direction.
-    /// Returns nil if there is no neighbor in that direction.
+    /// Find the neighboring pane in the given direction. Returns nil if there
+    /// is no neighbor in that direction.
+    ///
+    /// BSP-compatible navigation generalized to N-ary containers: build a path
+    /// from root to the target, then walk up looking for a container whose
+    /// strategy allows movement in the requested direction and where the step
+    /// is not already at the edge.
     func neighborOf(paneID: UUID, direction: FocusDirection) -> UUID? {
-        // Build a path from root to the target pane, then walk up to find
-        // the first split whose direction matches the requested movement.
         guard let path = pathTo(paneID: paneID) else { return nil }
 
-        // Walk up the path looking for a split we can cross.
-        for i in stride(from: path.count - 1, through: 0, by: -1) {
-            let step = path[i]
-            guard case .split(let dir, _, let child1, let child2) = step.node else { continue }
+        for step in path.reversed() {
+            guard case .container(let c) = step.node else { continue }
+            let idx = step.childIndex
 
-            switch (dir, direction, step.isFirst) {
-            // Vertical split (left | right): can move left/right between children.
-            case (.vertical, .left, false):
-                return nearestLeaf(in: child1, preferring: .right)
-            case (.vertical, .right, true):
-                return nearestLeaf(in: child2, preferring: .left)
-            // Horizontal split (top | bottom): can move up/down between children.
-            case (.horizontal, .up, false):
-                return nearestLeaf(in: child1, preferring: .down)
-            case (.horizontal, .down, true):
-                return nearestLeaf(in: child2, preferring: .up)
+            switch (c.strategy, direction) {
+            case (.vertical, .left):
+                if idx > 0 {
+                    return nearestLeaf(in: c.children[idx - 1], preferring: .right)
+                }
+            case (.vertical, .right):
+                if idx < c.children.count - 1 {
+                    return nearestLeaf(in: c.children[idx + 1], preferring: .left)
+                }
+            case (.horizontal, .up):
+                if idx > 0 {
+                    return nearestLeaf(in: c.children[idx - 1], preferring: .down)
+                }
+            case (.horizontal, .down):
+                if idx < c.children.count - 1 {
+                    return nearestLeaf(in: c.children[idx + 1], preferring: .up)
+                }
             default:
                 continue
             }
@@ -133,30 +141,34 @@ extension PaneNode {
         switch self {
         case .leaf(let pane):
             return pane.id == paneID ? [] : nil
-        case .split(_, _, let child1, let child2):
-            if let subPath = child1.pathTo(paneID: paneID) {
-                return [PathStep(node: self, isFirst: true)] + subPath
-            }
-            if let subPath = child2.pathTo(paneID: paneID) {
-                return [PathStep(node: self, isFirst: false)] + subPath
+        case .container(let c):
+            for (i, child) in c.children.enumerated() {
+                if let subPath = child.pathTo(paneID: paneID) {
+                    return [PathStep(node: self, childIndex: i)] + subPath
+                }
             }
             return nil
         }
     }
 
-    /// Get the nearest leaf pane on the preferred side of a subtree.
+    /// Return the nearest leaf pane on the side of the subtree that faces
+    /// `direction`. For a container, recurse into the child whose edge aligns
+    /// with the incoming direction; fall through to child 0 for axes that
+    /// don't match the container's strategy.
     private func nearestLeaf(in node: PaneNode, preferring direction: FocusDirection) -> UUID {
         switch node {
         case .leaf(let pane):
             return pane.id
-        case .split(let dir, _, let child1, let child2):
-            switch (dir, direction) {
-            case (.vertical, .left): return nearestLeaf(in: child1, preferring: direction)
-            case (.vertical, .right): return nearestLeaf(in: child2, preferring: direction)
-            case (.horizontal, .up): return nearestLeaf(in: child1, preferring: direction)
-            case (.horizontal, .down): return nearestLeaf(in: child2, preferring: direction)
-            default: return nearestLeaf(in: child1, preferring: direction)
+        case .container(let c):
+            let idx: Int
+            switch (c.strategy, direction) {
+            case (.vertical, .left):   idx = 0
+            case (.vertical, .right):  idx = c.children.count - 1
+            case (.horizontal, .up):   idx = 0
+            case (.horizontal, .down): idx = c.children.count - 1
+            default:                   idx = 0
             }
+            return nearestLeaf(in: c.children[idx], preferring: direction)
         }
     }
 }
@@ -164,5 +176,5 @@ extension PaneNode {
 /// A step in the path from root to a target pane.
 private struct PathStep {
     let node: PaneNode
-    let isFirst: Bool  // Whether the target is in the first child.
+    let childIndex: Int
 }

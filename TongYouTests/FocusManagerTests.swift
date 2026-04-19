@@ -205,12 +205,11 @@ struct FocusManagerTests {
         let mgr = FocusManager()
         let pane1 = TerminalPane()
         let pane2 = TerminalPane()
-        let tree = PaneNode.split(
-            direction: .vertical,
-            ratio: 0.5,
-            first: .leaf(pane1),
-            second: .leaf(pane2)
-        )
+        let tree = PaneNode.container(Container(
+            strategy: .vertical,
+            children: [.leaf(pane1), .leaf(pane2)],
+            weights: [1.0, 1.0]
+        ))
 
         mgr.focusPane(id: pane1.id)
         mgr.moveFocus(direction: .right, in: tree)

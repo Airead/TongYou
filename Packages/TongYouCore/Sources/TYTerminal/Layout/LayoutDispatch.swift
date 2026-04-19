@@ -3,11 +3,26 @@ import Foundation
 /// Central `kind → solver` dispatch. Layers above the solver (P3's
 /// `LayoutEngine`, the renderer) call into this instead of touching individual
 /// solver types.
-///
-/// P1 note: the signature accepts `childCount: Int` rather than a `Container`.
-/// When P2 introduces the N-ary `Container` type, a convenience overload taking
-/// `Container` can forward `container.children.count` here unchanged.
 public enum LayoutDispatch {
+    /// Convenience overload that forwards a `Container`'s own strategy,
+    /// child count, and weights. Introduced in P2 once the N-ary `Container`
+    /// type landed in `TYTerminal`.
+    public static func solve(
+        container: Container,
+        in parentRect: Rect,
+        minSize: Size = .defaultMin,
+        dividerSize: Int = 0
+    ) -> SolveResult {
+        solve(
+            kind: container.strategy,
+            parentRect: parentRect,
+            childCount: container.children.count,
+            weights: container.weights,
+            minSize: minSize,
+            dividerSize: dividerSize
+        )
+    }
+
     public static func solve(
         kind: LayoutStrategyKind,
         parentRect: Rect,

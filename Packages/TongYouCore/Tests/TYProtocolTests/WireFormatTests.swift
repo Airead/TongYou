@@ -199,9 +199,10 @@ struct WireFormatTests {
         let sid = SessionID()
         let p1 = PaneID()
         let p2 = PaneID()
-        let tree = LayoutTree.split(
-            direction: .vertical, ratio: 0.6,
-            first: .leaf(p1), second: .leaf(p2)
+        let tree = LayoutTree.container(
+            strategy: .vertical,
+            children: [.leaf(p1), .leaf(p2)],
+            weights: [0.6, 0.4]
         )
         let info = SessionInfo(
             id: sid,

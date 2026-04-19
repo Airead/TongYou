@@ -800,16 +800,19 @@ final class SessionManager {
         }
 
         for i in sessions[targetIndex].tabs.indices {
-            if let newTree = sessions[targetIndex].tabs[i].paneTree.split(
-                paneID: paneID, direction: direction, newPane: newPane
-            ) {
-                sessions[targetIndex].tabs[i].paneTree = newTree
-                if attachedLocalSessionIDs.contains(session.id) {
-                    _ = ensureLocalController(for: newPane.id)
-                }
-                scheduleLocalSaveIfNeeded(sessionID: session.id)
-                return true
+            let tab = sessions[targetIndex].tabs[i]
+            guard let newTab = LayoutEngine.splitPane(
+                tab: tab,
+                targetPaneID: paneID,
+                direction: direction,
+                newPane: newPane
+            ) else { continue }
+            sessions[targetIndex].tabs[i] = newTab
+            if attachedLocalSessionIDs.contains(session.id) {
+                _ = ensureLocalController(for: newPane.id)
             }
+            scheduleLocalSaveIfNeeded(sessionID: session.id)
+            return true
         }
         return false
     }
@@ -915,15 +918,17 @@ final class SessionManager {
         }
 
         for i in sessions[targetIndex].tabs.indices {
-            guard sessions[targetIndex].tabs[i].paneTree.contains(paneID: paneID)
+            let tab = sessions[targetIndex].tabs[i]
+            guard let outcome = LayoutEngine.closePane(tab: tab, paneID: paneID)
             else { continue }
             stopAllControllers(for: paneID)
             exitedTreePanes.removeValue(forKey: paneID)
-            if let newTree = sessions[targetIndex].tabs[i].paneTree.removePane(id: paneID) {
-                sessions[targetIndex].tabs[i].paneTree = newTree
+            switch outcome {
+            case .closed(let newTab, let promoted):
+                sessions[targetIndex].tabs[i] = newTab
                 scheduleLocalSaveIfNeeded(sessionID: session.id)
-                return newTree.firstPane.id
-            } else {
+                return promoted
+            case .emptiedTree:
                 closeTab(inSessionID: session.id, at: i)
                 return nil
             }
@@ -954,11 +959,11 @@ final class SessionManager {
         }
 
         for i in sessions[idx].tabs.indices {
-            guard sessions[idx].tabs[i].paneTree.contains(paneID: paneID) else { continue }
-            let newTree = sessions[idx].tabs[i].paneTree.updateRatio(
-                for: paneID, newRatio: newRatio
-            )
-            sessions[idx].tabs[i].paneTree = newTree
+            let tab = sessions[idx].tabs[i]
+            guard let newTab = LayoutEngine.resizePane(
+                tab: tab, paneID: paneID, newRatio: newRatio
+            ) else { continue }
+            sessions[idx].tabs[i] = newTab
             if sessions[idx].source == .local {
                 scheduleLocalSaveIfNeeded(sessionID: sessions[idx].id)
             }
@@ -967,12 +972,17 @@ final class SessionManager {
         return false
     }
 
-    /// Replace the active tab's pane tree (e.g. after a divider drag).
+    /// Replace the active tab's pane tree (e.g. after a divider drag), then
+    /// run `LayoutEngine.sanitize` so any externally-produced invariant
+    /// violations (stray empty / single-child containers) are cleaned up
+    /// before the tree lands in persistent state.
     func updateActivePaneTree(_ newTree: PaneNode) {
         guard sessions.indices.contains(activeSessionIndex) else { return }
         let tabIdx = sessions[activeSessionIndex].activeTabIndex
         guard sessions[activeSessionIndex].tabs.indices.contains(tabIdx) else { return }
-        sessions[activeSessionIndex].tabs[tabIdx].paneTree = newTree
+        var tab = sessions[activeSessionIndex].tabs[tabIdx]
+        tab.paneTree = newTree
+        sessions[activeSessionIndex].tabs[tabIdx] = LayoutEngine.sanitize(tab: tab)
         if sessions[activeSessionIndex].source == .local {
             scheduleLocalSaveIfNeeded(sessionID: sessions[activeSessionIndex].id)
         }
@@ -2107,13 +2117,15 @@ final class SessionManager {
                 closeOnExit: metadata[paneID]?.closeOnExit
             ))
 
-        case .split(let direction, let ratio, let first, let second):
-            return .split(
-                direction: direction,
-                ratio: CGFloat(ratio),
-                first: buildPaneNode(from: first, sessionID: sessionID, metadata: metadata),
-                second: buildPaneNode(from: second, sessionID: sessionID, metadata: metadata)
-            )
+        case .container(let strategy, let children, let weights):
+            let childNodes = children.map {
+                buildPaneNode(from: $0, sessionID: sessionID, metadata: metadata)
+            }
+            return .container(Container(
+                strategy: strategy,
+                children: childNodes,
+                weights: weights.map { CGFloat($0) }
+            ))
         }
     }
 
@@ -2214,13 +2226,13 @@ final class SessionManager {
                 initialWorkingDirectory: contexts[paneID]?.cwd
             )
             return .leaf(pane)
-        case .split(let direction, let ratio, let first, let second):
-            return .split(
-                direction: direction,
-                ratio: CGFloat(ratio),
-                first: buildLocalPaneNode(from: first, contexts: contexts),
-                second: buildLocalPaneNode(from: second, contexts: contexts)
-            )
+        case .container(let strategy, let children, let weights):
+            let childNodes = children.map { buildLocalPaneNode(from: $0, contexts: contexts) }
+            return .container(Container(
+                strategy: strategy,
+                children: childNodes,
+                weights: weights.map { CGFloat($0) }
+            ))
         }
     }
 

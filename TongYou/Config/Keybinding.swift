@@ -485,8 +485,13 @@ struct Keybinding: Equatable {
         event: NSEvent,
         in bindings: [Keybinding]
     ) -> Action? {
-        let eventMods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        let eventKey = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        // Arrow / function keys arrive with the `function` bit (and sometimes
+        // `numericPad`) set in addition to the user-meaningful modifiers.
+        // Strict equality vs. a binding declared as `[.command, .option]`
+        // fails unless we narrow the mask to the flags configs care about.
+        let eventMods = event.modifierFlags.intersection(.relevantFlags)
+        let rawKey = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        let eventKey = normalizedKey(from: rawKey)
 
         for binding in bindings {
             if eventMods == binding.modifiers && eventKey == binding.key {
@@ -514,6 +519,26 @@ struct Keybinding: Equatable {
         "space": " ", "backslash": "\\", "slash": "/",
         "comma": ",", "period": ".", "semicolon": ";",
     ]
+
+    /// Maps macOS private-use function-key Unicode scalars back to the
+    /// readable names used in keybinding configs. `charactersIgnoringModifiers`
+    /// returns these scalars for keys that have no printable character
+    /// (arrow keys, function keys, etc.).
+    private static let namedSpecialKeys: [String: String] = [
+        "\u{F700}": "up",
+        "\u{F701}": "down",
+        "\u{F702}": "left",
+        "\u{F703}": "right",
+    ]
+
+    /// Normalize a raw event character (the `.lowercased()` output of
+    /// `charactersIgnoringModifiers`) into the readable name used by keybinding
+    /// configs. For ordinary characters this is the identity; for macOS
+    /// private-use function-key scalars (arrow keys etc.) it returns the
+    /// config-side alias (`"left"`, `"right"`, `"up"`, `"down"`).
+    static func normalizedKey(from raw: String) -> String {
+        namedSpecialKeys[raw] ?? raw
+    }
 
     /// Maps common shifted ASCII symbols back to their base key characters.
     /// This allows bindings like `cmd+shift+[` to match even though

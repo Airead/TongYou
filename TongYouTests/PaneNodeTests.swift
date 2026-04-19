@@ -6,6 +6,23 @@ import TYTerminal
 @Suite("PaneNode")
 struct PaneNodeTests {
 
+    // MARK: - Helpers
+
+    /// Build a 2-child `.container` node (BSP-compatible shape produced by
+    /// `PaneNode.split` during P2). `ratio` is the first child's weight share.
+    private func twoChildContainer(
+        strategy: LayoutStrategyKind,
+        first: PaneNode,
+        second: PaneNode,
+        ratio: CGFloat = 0.5
+    ) -> PaneNode {
+        .container(Container(
+            strategy: strategy,
+            children: [first, second],
+            weights: [ratio, 1.0 - ratio]
+        ))
+    }
+
     // MARK: - Leaf
 
     @Test func leafAllPanes() {
@@ -35,17 +52,12 @@ struct PaneNodeTests {
         #expect(node.rootPane?.id == pane.id)
     }
 
-    // MARK: - Split
+    // MARK: - Container
 
-    @Test func splitAllPanes() {
+    @Test func containerAllPanes() {
         let pane1 = TerminalPane()
         let pane2 = TerminalPane()
-        let node = PaneNode.split(
-            direction: .vertical,
-            ratio: 0.5,
-            first: .leaf(pane1),
-            second: .leaf(pane2)
-        )
+        let node = twoChildContainer(strategy: .vertical, first: .leaf(pane1), second: .leaf(pane2))
 
         #expect(node.allPanes.count == 2)
         #expect(node.allPaneIDs == [pane1.id, pane2.id])
@@ -53,19 +65,28 @@ struct PaneNodeTests {
         #expect(node.rootPane == nil)
     }
 
-    @Test func splitFindPane() {
+    @Test func containerFindPane() {
         let pane1 = TerminalPane()
         let pane2 = TerminalPane()
-        let node = PaneNode.split(
-            direction: .vertical,
-            ratio: 0.5,
-            first: .leaf(pane1),
-            second: .leaf(pane2)
-        )
+        let node = twoChildContainer(strategy: .vertical, first: .leaf(pane1), second: .leaf(pane2))
 
         #expect(node.findPane(id: pane1.id)?.id == pane1.id)
         #expect(node.findPane(id: pane2.id)?.id == pane2.id)
         #expect(node.findPane(id: UUID()) == nil)
+    }
+
+    @Test func nAryContainerAllPanes() {
+        // N-ary container (may appear once P3 flattening lands; the model
+        // itself supports it already).
+        let panes = [TerminalPane(), TerminalPane(), TerminalPane(), TerminalPane()]
+        let node = PaneNode.container(Container(
+            strategy: .vertical,
+            children: panes.map { .leaf($0) },
+            weights: [1.0, 2.0, 1.5, 0.5]
+        ))
+
+        #expect(node.paneCount == 4)
+        #expect(node.allPaneIDs == panes.map(\.id))
     }
 
     // MARK: - Split Mutation
@@ -80,11 +101,12 @@ struct PaneNodeTests {
         #expect(result!.paneCount == 2)
         #expect(result!.allPaneIDs == [pane1.id, pane2.id])
 
-        if case .split(let dir, let ratio, _, _) = result! {
-            #expect(dir == .vertical)
-            #expect(ratio == 0.5)
+        if case .container(let c) = result! {
+            #expect(c.strategy == .vertical)
+            #expect(c.children.count == 2)
+            #expect(c.weights == [1.0, 1.0])
         } else {
-            Issue.record("Expected split node")
+            Issue.record("Expected container node")
         }
     }
 
@@ -100,14 +122,9 @@ struct PaneNodeTests {
         let pane1 = TerminalPane()
         let pane2 = TerminalPane()
         let pane3 = TerminalPane()
-        let node = PaneNode.split(
-            direction: .vertical,
-            ratio: 0.5,
-            first: .leaf(pane1),
-            second: .leaf(pane2)
-        )
+        let node = twoChildContainer(strategy: .vertical, first: .leaf(pane1), second: .leaf(pane2))
 
-        // Split pane2 horizontally.
+        // Split pane2 horizontally (different direction ⇒ new nested container).
         let result = node.split(paneID: pane2.id, direction: .horizontal, newPane: pane3)
         #expect(result != nil)
         #expect(result!.paneCount == 3)
@@ -127,16 +144,11 @@ struct PaneNodeTests {
     @Test func removeFirstChild() {
         let pane1 = TerminalPane()
         let pane2 = TerminalPane()
-        let node = PaneNode.split(
-            direction: .vertical,
-            ratio: 0.5,
-            first: .leaf(pane1),
-            second: .leaf(pane2)
-        )
+        let node = twoChildContainer(strategy: .vertical, first: .leaf(pane1), second: .leaf(pane2))
 
         let result = node.removePane(id: pane1.id)
         #expect(result != nil)
-        // Sibling promoted.
+        // Sibling promoted (container collapses to single remaining leaf).
         if case .leaf(let pane) = result! {
             #expect(pane.id == pane2.id)
         } else {
@@ -147,12 +159,7 @@ struct PaneNodeTests {
     @Test func removeSecondChild() {
         let pane1 = TerminalPane()
         let pane2 = TerminalPane()
-        let node = PaneNode.split(
-            direction: .horizontal,
-            ratio: 0.6,
-            first: .leaf(pane1),
-            second: .leaf(pane2)
-        )
+        let node = twoChildContainer(strategy: .horizontal, first: .leaf(pane1), second: .leaf(pane2), ratio: 0.6)
 
         let result = node.removePane(id: pane2.id)
         #expect(result != nil)
@@ -168,21 +175,11 @@ struct PaneNodeTests {
         let pane2 = TerminalPane()
         let pane3 = TerminalPane()
 
-        // Structure: split(vertical, leaf(pane1), split(horizontal, leaf(pane2), leaf(pane3)))
-        let inner = PaneNode.split(
-            direction: .horizontal,
-            ratio: 0.5,
-            first: .leaf(pane2),
-            second: .leaf(pane3)
-        )
-        let node = PaneNode.split(
-            direction: .vertical,
-            ratio: 0.5,
-            first: .leaf(pane1),
-            second: inner
-        )
+        // Structure: container(vertical, leaf(pane1), container(horizontal, leaf(pane2), leaf(pane3)))
+        let inner = twoChildContainer(strategy: .horizontal, first: .leaf(pane2), second: .leaf(pane3))
+        let node = twoChildContainer(strategy: .vertical, first: .leaf(pane1), second: inner)
 
-        // Remove pane3 → inner becomes leaf(pane2) → outer becomes split(vert, leaf(pane1), leaf(pane2))
+        // Remove pane3 → inner collapses to leaf(pane2) → outer stays 2-child container.
         let result = node.removePane(id: pane3.id)
         #expect(result != nil)
         #expect(result!.paneCount == 2)
@@ -192,16 +189,31 @@ struct PaneNodeTests {
     @Test func removeNonExistentPane() {
         let pane1 = TerminalPane()
         let pane2 = TerminalPane()
-        let node = PaneNode.split(
-            direction: .vertical,
-            ratio: 0.5,
-            first: .leaf(pane1),
-            second: .leaf(pane2)
-        )
+        let node = twoChildContainer(strategy: .vertical, first: .leaf(pane1), second: .leaf(pane2))
 
         let result = node.removePane(id: UUID())
         // Unchanged.
         #expect(result == node)
+    }
+
+    @Test func removeMiddleChildOfNAry() {
+        // Container with 3+ children must shrink in place (not collapse).
+        let panes = [TerminalPane(), TerminalPane(), TerminalPane()]
+        let node = PaneNode.container(Container(
+            strategy: .vertical,
+            children: panes.map { .leaf($0) },
+            weights: [1.0, 2.0, 3.0]
+        ))
+
+        let result = node.removePane(id: panes[1].id)
+        #expect(result != nil)
+        guard case .container(let c) = result! else {
+            Issue.record("Expected container to remain after removing one of three children")
+            return
+        }
+        #expect(c.children.count == 2)
+        #expect(c.weights == [1.0, 3.0])  // middle weight dropped
+        #expect(result!.allPaneIDs == [panes[0].id, panes[2].id])
     }
 
     // MARK: - Update Ratio
@@ -209,39 +221,29 @@ struct PaneNodeTests {
     @Test func updateRatioDirectChild() {
         let pane1 = TerminalPane()
         let pane2 = TerminalPane()
-        let node = PaneNode.split(
-            direction: .vertical,
-            ratio: 0.5,
-            first: .leaf(pane1),
-            second: .leaf(pane2)
-        )
+        let node = twoChildContainer(strategy: .vertical, first: .leaf(pane1), second: .leaf(pane2))
 
         let result = node.updateRatio(for: pane1.id, newRatio: 0.7)
-        if case .split(_, let ratio, _, _) = result {
-            #expect(ratio == 0.7)
+        if case .container(let c) = result {
+            #expect(abs(c.weights[0] - 0.7) < 0.0001)
+            #expect(abs(c.weights[1] - 0.3) < 0.0001)
         } else {
-            Issue.record("Expected split node")
+            Issue.record("Expected container node")
         }
     }
 
     @Test func updateRatioSecondChildInverts() {
-        // newRatio is the target pane's share. When the target is the second
-        // child, the parent's stored ratio (first child's share) becomes
-        // 1 - newRatio so the target ends up at `newRatio`.
+        // newRatio is the target's weight share; sibling gets 1-newRatio.
         let pane1 = TerminalPane()
         let pane2 = TerminalPane()
-        let node = PaneNode.split(
-            direction: .vertical,
-            ratio: 0.5,
-            first: .leaf(pane1),
-            second: .leaf(pane2)
-        )
+        let node = twoChildContainer(strategy: .vertical, first: .leaf(pane1), second: .leaf(pane2))
 
         let result = node.updateRatio(for: pane2.id, newRatio: 0.2)
-        if case .split(_, let ratio, _, _) = result {
-            #expect(abs(ratio - 0.8) < 0.0001)
+        if case .container(let c) = result {
+            #expect(abs(c.weights[0] - 0.8) < 0.0001)
+            #expect(abs(c.weights[1] - 0.2) < 0.0001)
         } else {
-            Issue.record("Expected split node")
+            Issue.record("Expected container node")
         }
     }
 
@@ -250,25 +252,25 @@ struct PaneNodeTests {
         let pane2 = TerminalPane()
         let pane3 = TerminalPane()
 
-        // Structure: split(vert, leaf(pane1), split(horiz, leaf(pane2), leaf(pane3)))
-        let inner = PaneNode.split(direction: .horizontal, ratio: 0.5, first: .leaf(pane2), second: .leaf(pane3))
-        let node = PaneNode.split(direction: .vertical, ratio: 0.5, first: .leaf(pane1), second: inner)
+        let inner = twoChildContainer(strategy: .horizontal, first: .leaf(pane2), second: .leaf(pane3))
+        let node = twoChildContainer(strategy: .vertical, first: .leaf(pane1), second: inner)
 
-        // Update ratio of the inner split via pane2.
         let result = node.updateRatio(for: pane2.id, newRatio: 0.3)
 
-        // Outer ratio unchanged.
-        if case .split(_, let outerRatio, _, let secondChild) = result {
-            #expect(outerRatio == 0.5)
-            // Inner ratio updated.
-            if case .split(_, let innerRatio, _, _) = secondChild {
-                #expect(innerRatio == 0.3)
-            } else {
-                Issue.record("Expected inner split node")
-            }
-        } else {
-            Issue.record("Expected outer split node")
+        guard case .container(let outer) = result else {
+            Issue.record("Expected outer container")
+            return
         }
+        // Outer weights unchanged.
+        #expect(outer.weights[0] == 0.5)
+        #expect(outer.weights[1] == 0.5)
+        // Inner weights updated.
+        guard case .container(let innerC) = outer.children[1] else {
+            Issue.record("Expected inner container")
+            return
+        }
+        #expect(abs(innerC.weights[0] - 0.3) < 0.0001)
+        #expect(abs(innerC.weights[1] - 0.7) < 0.0001)
     }
 
     // MARK: - Resize
@@ -276,80 +278,69 @@ struct PaneNodeTests {
     @Test func resizeFirstChild() {
         let pane1 = TerminalPane()
         let pane2 = TerminalPane()
-        let node = PaneNode.split(
-            direction: .vertical,
-            ratio: 0.5,
-            first: .leaf(pane1),
-            second: .leaf(pane2)
-        )
+        let node = twoChildContainer(strategy: .vertical, first: .leaf(pane1), second: .leaf(pane2))
 
-        // Grow first child: ratio increases.
+        // Grow first child: weight share goes from 0.5 to 0.6.
         let result = node.resizePane(id: pane1.id, delta: 0.1)
         #expect(result != nil)
-        if case .split(_, let ratio, _, _) = result! {
-            #expect(abs(ratio - 0.6) < 0.001)
+        if case .container(let c) = result! {
+            let sum = c.weights.reduce(0, +)
+            #expect(abs(c.weights[0] / sum - 0.6) < 0.001)
         } else {
-            Issue.record("Expected split node")
+            Issue.record("Expected container node")
         }
     }
 
     @Test func resizeSecondChild() {
         let pane1 = TerminalPane()
         let pane2 = TerminalPane()
-        let node = PaneNode.split(
-            direction: .vertical,
-            ratio: 0.5,
-            first: .leaf(pane1),
-            second: .leaf(pane2)
-        )
+        let node = twoChildContainer(strategy: .vertical, first: .leaf(pane1), second: .leaf(pane2))
 
-        // Grow second child: ratio decreases.
+        // Grow second child by +0.1: its share goes 0.5 → 0.6, first shrinks to 0.4.
         let result = node.resizePane(id: pane2.id, delta: 0.1)
         #expect(result != nil)
-        if case .split(_, let ratio, _, _) = result! {
-            #expect(abs(ratio - 0.4) < 0.001)
+        if case .container(let c) = result! {
+            let sum = c.weights.reduce(0, +)
+            #expect(abs(c.weights[0] / sum - 0.4) < 0.001)
+            #expect(abs(c.weights[1] / sum - 0.6) < 0.001)
         } else {
-            Issue.record("Expected split node")
+            Issue.record("Expected container node")
         }
     }
 
     @Test func resizeClampsToMin() {
         let pane1 = TerminalPane()
         let pane2 = TerminalPane()
-        let node = PaneNode.split(
-            direction: .vertical,
-            ratio: 0.15,
-            first: .leaf(pane1),
-            second: .leaf(pane2)
+        let node = twoChildContainer(
+            strategy: .vertical, first: .leaf(pane1), second: .leaf(pane2), ratio: 0.15
         )
 
-        // Shrink first child below minimum: clamped to 0.1.
+        // Shrink first child below the 10% floor: clamped to 0.1.
         let result = node.resizePane(id: pane1.id, delta: -0.1)
         #expect(result != nil)
-        if case .split(_, let ratio, _, _) = result! {
-            #expect(abs(ratio - 0.1) < 0.001)
+        if case .container(let c) = result! {
+            let sum = c.weights.reduce(0, +)
+            #expect(abs(c.weights[0] / sum - 0.1) < 0.001)
         } else {
-            Issue.record("Expected split node")
+            Issue.record("Expected container node")
         }
     }
 
     @Test func resizeClampsToMax() {
         let pane1 = TerminalPane()
         let pane2 = TerminalPane()
-        let node = PaneNode.split(
-            direction: .vertical,
-            ratio: 0.85,
-            first: .leaf(pane1),
-            second: .leaf(pane2)
+        let node = twoChildContainer(
+            strategy: .vertical, first: .leaf(pane1), second: .leaf(pane2), ratio: 0.85
         )
 
-        // Grow first child beyond maximum: clamped to 0.9.
+        // Grow first child beyond the 90% ceiling: clamped to 0.9.
         let result = node.resizePane(id: pane1.id, delta: 0.1)
         #expect(result != nil)
-        if case .split(_, let ratio, _, _) = result! {
-            #expect(abs(ratio - 0.9) < 0.001)
+        if case .container(let c) = result! {
+            let sum = c.weights.reduce(0, +)
+            #expect(abs(c.weights[0] / sum - 0.9) < 0.001)
         } else {
-            Issue.record("Expected split node")
+            Issue.record("Expected container node")
         }
     }
 
@@ -358,22 +349,27 @@ struct PaneNodeTests {
         let pane2 = TerminalPane()
         let pane3 = TerminalPane()
 
-        let inner = PaneNode.split(direction: .horizontal, ratio: 0.5, first: .leaf(pane2), second: .leaf(pane3))
-        let node = PaneNode.split(direction: .vertical, ratio: 0.5, first: .leaf(pane1), second: inner)
+        let inner = twoChildContainer(strategy: .horizontal, first: .leaf(pane2), second: .leaf(pane3))
+        let node = twoChildContainer(strategy: .vertical, first: .leaf(pane1), second: inner)
 
-        // Resize pane2 (inner first child).
+        // Resize pane2 (inner container's first child).
         let result = node.resizePane(id: pane2.id, delta: 0.1)
         #expect(result != nil)
-        if case .split(_, let outerRatio, _, let secondChild) = result! {
-            #expect(abs(outerRatio - 0.5) < 0.001)  // Outer unchanged.
-            if case .split(_, let innerRatio, _, _) = secondChild {
-                #expect(abs(innerRatio - 0.6) < 0.001)  // Inner grew.
-            } else {
-                Issue.record("Expected inner split node")
-            }
-        } else {
-            Issue.record("Expected outer split node")
+
+        guard case .container(let outer) = result! else {
+            Issue.record("Expected outer container")
+            return
         }
+        // Outer weights unchanged.
+        let outerSum = outer.weights.reduce(0, +)
+        #expect(abs(outer.weights[0] / outerSum - 0.5) < 0.001)
+
+        guard case .container(let innerC) = outer.children[1] else {
+            Issue.record("Expected inner container")
+            return
+        }
+        let innerSum = innerC.weights.reduce(0, +)
+        #expect(abs(innerC.weights[0] / innerSum - 0.6) < 0.001)
     }
 
     @Test func resizeLeafReturnsNil() {
@@ -385,12 +381,7 @@ struct PaneNodeTests {
     @Test func resizeNonExistentReturnsNil() {
         let pane1 = TerminalPane()
         let pane2 = TerminalPane()
-        let node = PaneNode.split(
-            direction: .vertical,
-            ratio: 0.5,
-            first: .leaf(pane1),
-            second: .leaf(pane2)
-        )
+        let node = twoChildContainer(strategy: .vertical, first: .leaf(pane1), second: .leaf(pane2))
         #expect(node.resizePane(id: UUID(), delta: 0.1) == nil)
     }
 
@@ -400,12 +391,7 @@ struct PaneNodeTests {
         let pane1 = TerminalPane()
         let pane2 = TerminalPane()
         let paneNew = TerminalPane()
-        let node = PaneNode.split(
-            direction: .vertical,
-            ratio: 0.5,
-            first: .leaf(pane1),
-            second: .leaf(pane2)
-        )
+        let node = twoChildContainer(strategy: .vertical, first: .leaf(pane1), second: .leaf(pane2))
 
         let result = node.replacingPane(id: pane1.id, with: .leaf(paneNew))
         #expect(result.allPaneIDs == [paneNew.id, pane2.id])
@@ -417,5 +403,10 @@ struct PaneNodeTests {
         let tab = TerminalTab(title: "test")
         #expect(tab.allPaneIDs.count == 1)
         #expect(tab.paneTree.rootPane != nil)
+    }
+
+    @Test func terminalTabZoomedPaneIDDefaultsNil() {
+        let tab = TerminalTab(title: "test")
+        #expect(tab.zoomedPaneID == nil)
     }
 }

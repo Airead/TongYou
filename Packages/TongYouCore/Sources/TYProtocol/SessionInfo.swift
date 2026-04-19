@@ -142,22 +142,24 @@ public struct FloatFrameHint: Equatable, Sendable, Codable {
 
 /// Serializable representation of the pane layout tree.
 /// Mirrors `PaneNode` from TYTerminal but uses protocol-layer IDs.
+///
+/// P2 replaces the BSP `.split` case with an N-ary `.container` carrying a
+/// layout strategy and parallel weights.
 public indirect enum LayoutTree: Sendable, Equatable, Codable {
     case leaf(PaneID)
-    case split(direction: SplitDirection, ratio: Float, first: LayoutTree, second: LayoutTree)
+    case container(strategy: LayoutStrategyKind, children: [LayoutTree], weights: [Float])
 
     private enum CodingKeys: String, CodingKey {
         case type
         case paneID
-        case direction
-        case ratio
-        case first
-        case second
+        case strategy
+        case children
+        case weights
     }
 
     private enum LayoutType: String, Codable {
         case leaf
-        case split
+        case container
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -166,12 +168,11 @@ public indirect enum LayoutTree: Sendable, Equatable, Codable {
         case .leaf(let paneID):
             try container.encode(LayoutType.leaf, forKey: .type)
             try container.encode(paneID, forKey: .paneID)
-        case .split(let direction, let ratio, let first, let second):
-            try container.encode(LayoutType.split, forKey: .type)
-            try container.encode(direction, forKey: .direction)
-            try container.encode(ratio, forKey: .ratio)
-            try container.encode(first, forKey: .first)
-            try container.encode(second, forKey: .second)
+        case .container(let strategy, let children, let weights):
+            try container.encode(LayoutType.container, forKey: .type)
+            try container.encode(strategy, forKey: .strategy)
+            try container.encode(children, forKey: .children)
+            try container.encode(weights, forKey: .weights)
         }
     }
 
@@ -182,12 +183,11 @@ public indirect enum LayoutTree: Sendable, Equatable, Codable {
         case .leaf:
             let paneID = try container.decode(PaneID.self, forKey: .paneID)
             self = .leaf(paneID)
-        case .split:
-            let direction = try container.decode(SplitDirection.self, forKey: .direction)
-            let ratio = try container.decode(Float.self, forKey: .ratio)
-            let first = try container.decode(LayoutTree.self, forKey: .first)
-            let second = try container.decode(LayoutTree.self, forKey: .second)
-            self = .split(direction: direction, ratio: ratio, first: first, second: second)
+        case .container:
+            let strategy = try container.decode(LayoutStrategyKind.self, forKey: .strategy)
+            let children = try container.decode([LayoutTree].self, forKey: .children)
+            let weights = try container.decode([Float].self, forKey: .weights)
+            self = .container(strategy: strategy, children: children, weights: weights)
         }
     }
 }

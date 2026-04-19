@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 import TYTerminal
@@ -20,11 +21,11 @@ struct PaneSplitTests {
         #expect(mgr.activeTab!.allPaneIDs.contains(rootPaneID))
         #expect(mgr.activeTab!.allPaneIDs.contains(newPane.id))
 
-        if case .split(let dir, let ratio, _, _) = mgr.activeTab!.paneTree {
-            #expect(dir == .vertical)
-            #expect(ratio == 0.5)
+        if case .container(let c) = mgr.activeTab!.paneTree {
+            #expect(c.strategy == .vertical)
+            #expect(c.weights == [1.0, 1.0])
         } else {
-            Issue.record("Expected split node")
+            Issue.record("Expected container node")
         }
     }
 
@@ -37,10 +38,10 @@ struct PaneSplitTests {
         let ok = mgr.splitPane(id: rootPaneID, direction: .horizontal, newPane: newPane)
         #expect(ok)
 
-        if case .split(let dir, _, _, _) = mgr.activeTab!.paneTree {
-            #expect(dir == .horizontal)
+        if case .container(let c) = mgr.activeTab!.paneTree {
+            #expect(c.strategy == .horizontal)
         } else {
-            Issue.record("Expected split node")
+            Issue.record("Expected container node")
         }
     }
 
@@ -121,15 +122,21 @@ struct PaneSplitTests {
         let newPane = TerminalPane()
         mgr.splitPane(id: rootPaneID, direction: .vertical, newPane: newPane)
 
-        // Simulate divider drag: update ratio via tree replacement.
-        if case .split(let dir, _, let first, let second) = mgr.activeTab!.paneTree {
-            mgr.updateActivePaneTree(.split(direction: dir, ratio: 0.7, first: first, second: second))
+        // Simulate divider drag: update weights via tree replacement.
+        if case .container(let c) = mgr.activeTab!.paneTree {
+            let updated = PaneNode.container(Container(
+                id: c.id,
+                strategy: c.strategy,
+                children: c.children,
+                weights: [0.7, 0.3]
+            ))
+            mgr.updateActivePaneTree(updated)
         }
 
-        if case .split(_, let ratio, _, _) = mgr.activeTab!.paneTree {
-            #expect(ratio == 0.7)
+        if case .container(let c) = mgr.activeTab!.paneTree {
+            #expect(c.weights == [0.7, 0.3])
         } else {
-            Issue.record("Expected split node")
+            Issue.record("Expected container node")
         }
     }
 
@@ -159,10 +166,11 @@ struct PaneSplitTests {
     @Test func moveFocusInSimpleSplit() {
         let pane1 = TerminalPane()
         let pane2 = TerminalPane()
-        let tree = PaneNode.split(
-            direction: .vertical, ratio: 0.5,
-            first: .leaf(pane1), second: .leaf(pane2)
-        )
+        let tree = PaneNode.container(Container(
+            strategy: .vertical,
+            children: [.leaf(pane1), .leaf(pane2)],
+            weights: [1.0, 1.0]
+        ))
 
         let fm = FocusManager()
         fm.focusPane(id: pane1.id)
@@ -183,10 +191,11 @@ struct PaneSplitTests {
     @Test func moveFocusVerticalSplit() {
         let pane1 = TerminalPane()
         let pane2 = TerminalPane()
-        let tree = PaneNode.split(
-            direction: .horizontal, ratio: 0.5,
-            first: .leaf(pane1), second: .leaf(pane2)
-        )
+        let tree = PaneNode.container(Container(
+            strategy: .horizontal,
+            children: [.leaf(pane1), .leaf(pane2)],
+            weights: [1.0, 1.0]
+        ))
 
         let fm = FocusManager()
         fm.focusPane(id: pane1.id)
@@ -203,10 +212,11 @@ struct PaneSplitTests {
     @Test func moveFocusCrossAxis() {
         let pane1 = TerminalPane()
         let pane2 = TerminalPane()
-        let tree = PaneNode.split(
-            direction: .vertical, ratio: 0.5,
-            first: .leaf(pane1), second: .leaf(pane2)
-        )
+        let tree = PaneNode.container(Container(
+            strategy: .vertical,
+            children: [.leaf(pane1), .leaf(pane2)],
+            weights: [1.0, 1.0]
+        ))
 
         let fm = FocusManager()
         fm.focusPane(id: pane1.id)
@@ -224,14 +234,16 @@ struct PaneSplitTests {
         let pane1 = TerminalPane()
         let pane2 = TerminalPane()
         let pane3 = TerminalPane()
-        let inner = PaneNode.split(
-            direction: .horizontal, ratio: 0.5,
-            first: .leaf(pane2), second: .leaf(pane3)
-        )
-        let tree = PaneNode.split(
-            direction: .vertical, ratio: 0.5,
-            first: .leaf(pane1), second: inner
-        )
+        let inner = PaneNode.container(Container(
+            strategy: .horizontal,
+            children: [.leaf(pane2), .leaf(pane3)],
+            weights: [1.0, 1.0]
+        ))
+        let tree = PaneNode.container(Container(
+            strategy: .vertical,
+            children: [.leaf(pane1), inner],
+            weights: [1.0, 1.0]
+        ))
 
         let fm = FocusManager()
         fm.focusPane(id: pane1.id)
@@ -259,6 +271,38 @@ struct PaneSplitTests {
         // Should focus the first pane.
         fm.moveFocus(direction: .right, in: tree)
         #expect(fm.focusedPaneID == pane1.id)
+    }
+
+    // MARK: - Keybinding Normalization
+
+    @Test func arrowKeyScalarsNormalizeToNames() {
+        // macOS reports arrow keys as private-use Unicode scalars via
+        // `charactersIgnoringModifiers`. They must be translated to the
+        // readable names keybinding configs use, otherwise
+        // `cmd+option+<arrow>` bindings never match.
+        #expect(Keybinding.normalizedKey(from: "\u{F700}") == "up")
+        #expect(Keybinding.normalizedKey(from: "\u{F701}") == "down")
+        #expect(Keybinding.normalizedKey(from: "\u{F702}") == "left")
+        #expect(Keybinding.normalizedKey(from: "\u{F703}") == "right")
+        // Ordinary characters must pass through unchanged.
+        #expect(Keybinding.normalizedKey(from: "a") == "a")
+        #expect(Keybinding.normalizedKey(from: "left") == "left")
+    }
+
+    @Test func modifierMaskStripsFunctionAndNumpadBits() {
+        // Arrow keys arrive with `.function` (and often `.numericPad`) set
+        // alongside the user-pressed modifiers. Strict equality against a
+        // binding declared as `[.command, .option]` fails unless we first
+        // mask down to the modifiers configs actually care about.
+        let arrowKeyFlags: NSEvent.ModifierFlags = [.command, .option, .function, .numericPad]
+        let masked = arrowKeyFlags.intersection(.relevantFlags)
+        #expect(masked == [.command, .option])
+
+        // `.relevantFlags` itself must not include the extraneous bits.
+        #expect(!NSEvent.ModifierFlags.relevantFlags.contains(.function))
+        #expect(!NSEvent.ModifierFlags.relevantFlags.contains(.numericPad))
+        #expect(NSEvent.ModifierFlags.relevantFlags.contains(.command))
+        #expect(NSEvent.ModifierFlags.relevantFlags.contains(.option))
     }
 
     // MARK: - Keybinding Action Parsing

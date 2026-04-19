@@ -11,6 +11,10 @@ public struct TerminalTab: Identifiable, Sendable {
     public var floatingPanes: [FloatingPane] = []
     /// The pane that was last focused in this tab. Used to restore focus when switching back.
     public var focusedPaneID: UUID?
+    /// The pane currently "zoomed" (temporarily filling the tab, Monocle-style).
+    /// `nil` means normal tiled state. Consumed by `LayoutEngine.solveRects`
+    /// (P4.1): when set, the tab renders only the zoomed pane.
+    public var zoomedPaneID: UUID?
 
     /// All pane IDs in this tab's pane tree (does not include floating panes).
     public var allPaneIDs: [UUID] { paneTree.allPaneIDs }
@@ -40,11 +44,19 @@ public struct TerminalTab: Identifiable, Sendable {
         self.paneTree = .leaf(initialPane)
     }
 
-    public init(id: UUID, title: String, paneTree: PaneNode, floatingPanes: [FloatingPane] = [], focusedPaneID: UUID? = nil) {
+    public init(
+        id: UUID,
+        title: String,
+        paneTree: PaneNode,
+        floatingPanes: [FloatingPane] = [],
+        focusedPaneID: UUID? = nil,
+        zoomedPaneID: UUID? = nil
+    ) {
         self.id = id
         self.title = title
         self.paneTree = paneTree
         self.floatingPanes = floatingPanes
         self.focusedPaneID = focusedPaneID
+        self.zoomedPaneID = zoomedPaneID
     }
 }

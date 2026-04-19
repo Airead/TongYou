@@ -164,10 +164,11 @@ struct ServerSessionManagerTests {
         #expect(newPaneID != nil)
 
         let info = manager.sessionInfo(for: session.id)
-        if case .split(let dir, _, _, _) = info?.tabs[0].layout {
-            #expect(dir == .vertical)
+        if case .container(let strategy, let children, _) = info?.tabs[0].layout {
+            #expect(strategy == .vertical)
+            #expect(children.count == 2)
         } else {
-            Issue.record("Expected split layout after splitting pane")
+            Issue.record("Expected container layout after splitting pane")
         }
 
         manager.closeSession(id: session.id)
@@ -192,11 +193,13 @@ struct ServerSessionManagerTests {
         ))
 
         let info = manager.sessionInfo(for: session.id)
-        // Second child targets ratio 0.25; stored ratio (first child's share) becomes 0.75.
-        if case .split(_, let ratio, _, _) = info?.tabs[0].layout {
-            #expect(abs(ratio - 0.75) < 1e-6)
+        // Second child targets ratio 0.25; first child's weight share becomes 0.75.
+        if case .container(_, _, let weights) = info?.tabs[0].layout {
+            let sum = weights.reduce(0, +)
+            #expect(sum > 0)
+            #expect(abs(weights[0] / sum - 0.75) < 1e-6)
         } else {
-            Issue.record("Expected split layout with updated ratio")
+            Issue.record("Expected container layout with updated ratio")
         }
 
         manager.closeSession(id: session.id)
@@ -825,10 +828,10 @@ struct ServerSessionManagerTests {
         let loaded = store.loadAll()
         #expect(loaded.count == 1)
         let layout = loaded.first?.sessionInfo.tabs.first?.layout
-        if case .split(let dir, _, _, _) = layout {
-            #expect(dir == .vertical)
+        if case .container(let strategy, _, _) = layout {
+            #expect(strategy == .vertical)
         } else {
-            Issue.record("Expected split layout in persisted data")
+            Issue.record("Expected container layout in persisted data")
         }
 
         manager.closeSession(id: session.id)
