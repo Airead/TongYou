@@ -5,5 +5,5 @@
 # against running destructive commands in the wrong pane — keep it.
 
 extends = ssh
-background = 1a0a0a
+background = 4a1818
 description = SSH prod: ${HOST}

@@ -13,5 +13,5 @@
 command = /usr/bin/ssh
 args = -t
 args = ${HOST}
-close-on-exit = false
+close-on-exit = true
 description = SSH to ${HOST}

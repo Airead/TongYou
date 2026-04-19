@@ -4,5 +4,5 @@
 # background so dev panes stand out visually from local shells or prod.
 
 extends = ssh
-background = 0a1a2e
+background = 18284a
 description = SSH dev: ${HOST}
