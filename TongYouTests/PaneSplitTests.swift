@@ -546,6 +546,86 @@ struct PaneSplitTests {
         #expect(downmost?[0] == start[0])
     }
 
+    // MARK: - Grid row/col drag math (plan §P4 draggable grid)
+
+    @Test func gridPairPreservingDragFollowsMouse() {
+        // 2-row grid, equal weights → row divider at 50% = 300 of 600px.
+        // Drag +60 down → row 0's weight shifts so the divider lands at 360.
+        let start: [CGFloat] = [1, 1]
+        let availableHeight: CGFloat = 600
+        let next = ContainerLayout.pairPreservingDragWeights(
+            start: start, index: 0, delta: 60, availableAxisLength: availableHeight
+        )!
+        // total = 2, weightPerPixel = 2/600, dw = 60 × 2/600 = 0.2.
+        #expect(abs(next[0] - 1.2) < 1e-9)
+        #expect(abs(next[1] - 0.8) < 1e-9)
+        // Pair sum preserved.
+        #expect(abs((next[0] + next[1]) - (start[0] + start[1])) < 1e-9)
+    }
+
+    @Test func gridDragClampedTo10to90OfPair() {
+        let start: [CGFloat] = [1, 1]
+        let pairSum: CGFloat = 2
+
+        let leftmost = ContainerLayout.pairPreservingDragWeights(
+            start: start, index: 0, delta: -10_000, availableAxisLength: 800
+        )!
+        #expect(abs(leftmost[0] - 0.1 * pairSum) < 1e-9)
+        #expect(abs(leftmost[1] - 0.9 * pairSum) < 1e-9)
+
+        let rightmost = ContainerLayout.pairPreservingDragWeights(
+            start: start, index: 0, delta: 10_000, availableAxisLength: 800
+        )!
+        #expect(abs(rightmost[0] - 0.9 * pairSum) < 1e-9)
+        #expect(abs(rightmost[1] - 0.1 * pairSum) < 1e-9)
+    }
+
+    @Test func gridDragOnlyAffectsAdjacentPair() {
+        // 3-row grid [1, 1, 1]. Dragging divider 0 must not touch
+        // weights[2] — that's the whole point of pair-preserving.
+        let start: [CGFloat] = [1, 1, 1]
+        let next = ContainerLayout.pairPreservingDragWeights(
+            start: start, index: 0, delta: 50, availableAxisLength: 900
+        )!
+        #expect(next[2] == start[2])
+    }
+
+    @Test func gridDragRejectsDegenerateInputs() {
+        #expect(ContainerLayout.pairPreservingDragWeights(
+            start: [1], index: 0, delta: 10, availableAxisLength: 100
+        ) == nil)
+        #expect(ContainerLayout.pairPreservingDragWeights(
+            start: [1, 1], index: 1, delta: 10, availableAxisLength: 100
+        ) == nil)
+        #expect(ContainerLayout.pairPreservingDragWeights(
+            start: [1, 1], index: 0, delta: 10, availableAxisLength: 0
+        ) == nil)
+    }
+
+    @Test func gridRectsHonorCustomRowAndColWeights() {
+        // End-to-end: pass custom grid weights through ContainerLayout.rects
+        // and verify the rects match the solver's output.
+        let container = Container(
+            strategy: .grid,
+            children: [
+                .leaf(TerminalPane()), .leaf(TerminalPane()),
+                .leaf(TerminalPane()), .leaf(TerminalPane()),
+            ],
+            weights: [1, 1, 1, 1],
+            gridRowWeights: [1, 3],
+            gridColWeights: [2, 1]
+        )
+        let rects = ContainerLayout.rects(
+            for: container,
+            in: CGSize(width: 120, height: 80)
+        )
+        // Widths split 80/40 (2:1), heights split 20/60 (1:3).
+        #expect(rects[0].size == CGSize(width: 80, height: 20))
+        #expect(rects[1].size == CGSize(width: 40, height: 20))
+        #expect(rects[2].size == CGSize(width: 80, height: 60))
+        #expect(rects[3].size == CGSize(width: 40, height: 60))
+    }
+
     @Test func masterStackDragRejectsDegenerateInputs() {
         // Too few weights for master drag.
         #expect(ContainerLayout.masterStackMasterDragWeights(
