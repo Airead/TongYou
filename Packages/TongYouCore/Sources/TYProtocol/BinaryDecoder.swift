@@ -786,6 +786,12 @@ public struct BinaryDecoder: Sendable {
                 targetPaneID: targetPaneID,
                 side: side
             )
+
+        case .changeStrategy:
+            let sessionID = try readSessionID()
+            let paneID = try readPaneID()
+            let kind = try readLayoutStrategyKind()
+            return .changeStrategy(sessionID, paneID, kind)
         }
     }
 }

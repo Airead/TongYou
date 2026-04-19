@@ -591,6 +591,26 @@ struct TerminalWindowView: View {
         sessionManager.toggleZoom(paneID: focusedID)
     }
 
+    /// Change the layout strategy of the container that directly holds the
+    /// focused tree pane (plan §P4.5). Floating panes and a sole root-leaf
+    /// pane have no container to mutate, so requests from those contexts
+    /// fall through silently.
+    private func changeStrategy(to kind: LayoutStrategyKind) {
+        guard let focusedID = focusManager.focusedPaneID,
+              let activeTab = sessionManager.activeTab,
+              activeTab.paneTree.contains(paneID: focusedID) else { return }
+        sessionManager.changeStrategy(paneID: focusedID, newKind: kind)
+    }
+
+    /// Cycle the strategy of the focused pane's parent container through
+    /// `LayoutEngine.userCycleableStrategies` (plan §P4.5).
+    private func cycleStrategy(forward: Bool) {
+        guard let focusedID = focusManager.focusedPaneID,
+              let activeTab = sessionManager.activeTab,
+              activeTab.paneTree.contains(paneID: focusedID) else { return }
+        sessionManager.cycleStrategy(paneID: focusedID, forward: forward)
+    }
+
     /// PTY process has just exited. Decide between keep-alive (zombie) and
     /// immediate tear-down based on the pane's `close-on-exit` setting.
     /// Routed from `.paneExited`.
@@ -785,6 +805,10 @@ struct TerminalWindowView: View {
             resizePane(delta: -0.1)
         case .toggleZoom:
             toggleZoom()
+        case .changeStrategy(let kind):
+            changeStrategy(to: kind)
+        case .cycleStrategy(let forward):
+            cycleStrategy(forward: forward)
         // Floating pane actions
         case .newFloatingPane:
             createFloatingPane()

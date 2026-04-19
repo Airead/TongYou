@@ -232,6 +232,21 @@ public final class RemoteSessionClient: @unchecked Sendable {
         ))
     }
 
+    /// Ask the server to rewrite the tab that owns `paneID` into a single
+    /// flat container using `kind` (plan §P4.5). Any prior nesting is
+    /// flattened; every leaf ends up as a direct child with equal
+    /// weights. `paneID` only identifies the target tab — the request is
+    /// a whole-tree replacement, not a nested-container mutation. The
+    /// server broadcasts `layoutUpdate` on change and treats a flat tab
+    /// already using `kind` as a no-op.
+    public func changeStrategy(
+        sessionID: SessionID,
+        paneID: PaneID,
+        kind: LayoutStrategyKind
+    ) {
+        connection?.send(.changeStrategy(sessionID, paneID, kind))
+    }
+
     // MARK: - Floating Pane Operations
 
     public func createFloatingPane(

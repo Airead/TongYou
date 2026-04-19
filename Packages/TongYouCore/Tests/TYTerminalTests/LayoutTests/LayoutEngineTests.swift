@@ -856,4 +856,241 @@ struct LayoutEngineTests {
         #expect(LayoutEngine.focusNeighbor(tab: tab, screenRect: canvas, from: c.id, direction: .down) == b.id)
         #expect(LayoutEngine.focusNeighbor(tab: tab, screenRect: canvas, from: d.id, direction: .right) == b.id)
     }
+
+    // MARK: - parentContainer (plan §P4.5)
+
+    @Test func parentContainerReturnsDirectParent() {
+        // H[A, V[B, C]] — A's parent is the outer H, C's parent is the inner V.
+        let (a, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let (c, leafC) = leaf()
+        let innerNode = container(.vertical, [leafB, leafC], [1, 1])
+        guard case .container(let innerContainer) = innerNode else {
+            Issue.record("expected inner container"); return
+        }
+        let tree = container(.horizontal, [leafA, innerNode], [1, 1])
+        guard case .container(let outerContainer) = tree else {
+            Issue.record("expected outer container"); return
+        }
+
+        #expect(LayoutEngine.parentContainer(tree: tree, paneID: a.id)?.id == outerContainer.id)
+        #expect(LayoutEngine.parentContainer(tree: tree, paneID: c.id)?.id == innerContainer.id)
+    }
+
+    @Test func parentContainerReturnsNilForRootLeafAndUnknown() {
+        let (a, leafA) = leaf()
+        // Root leaf has no parent container.
+        #expect(LayoutEngine.parentContainer(tree: leafA, paneID: a.id) == nil)
+
+        // Unknown pane ID in any tree.
+        let (_, leafB) = leaf()
+        let tree = container(.vertical, [leafA, leafB], [1, 1])
+        #expect(LayoutEngine.parentContainer(tree: tree, paneID: UUID()) == nil)
+    }
+
+    // MARK: - changeStrategy (plan §P4.5)
+
+    @Test func changeStrategySwapsStrategyAndPreservesWeights() {
+        // V[A(2), B(1), C(1)] → grid; weights stay verbatim.
+        let (a, leafA) = leaf()
+        let (b, leafB) = leaf()
+        let (c, leafC) = leaf()
+        let originalNode = container(.vertical, [leafA, leafB, leafC], [2, 1, 1])
+        guard case .container(let original) = originalNode else {
+            Issue.record("expected container"); return
+        }
+
+        let out = LayoutEngine.changeStrategy(
+            tree: originalNode,
+            containerID: original.id,
+            newKind: .grid
+        )
+
+        guard case .container(let updated) = out else {
+            Issue.record("expected container root after change"); return
+        }
+        #expect(updated.id == original.id)
+        #expect(updated.strategy == .grid)
+        #expect(updated.weights == [2, 1, 1])
+        #expect(updated.children.map(\.allPaneIDs) == [[a.id], [b.id], [c.id]])
+    }
+
+    @Test func changeStrategyIsNoopForSameKind() {
+        // Returning nil lets callers skip broadcasting a layoutUpdate.
+        let (_, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let node = container(.vertical, [leafA, leafB], [1, 1])
+        guard case .container(let c) = node else {
+            Issue.record("expected container"); return
+        }
+        #expect(LayoutEngine.changeStrategy(
+            tree: node, containerID: c.id, newKind: .vertical
+        ) == nil)
+    }
+
+    @Test func changeStrategyReturnsNilForUnknownContainer() {
+        let (_, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let node = container(.vertical, [leafA, leafB], [1, 1])
+        #expect(LayoutEngine.changeStrategy(
+            tree: node, containerID: UUID(), newKind: .grid
+        ) == nil)
+    }
+
+    @Test func changeStrategyTargetsNestedContainerOnly() {
+        // H[A, V[B, C]] — switching the inner V to grid must leave the
+        // outer H untouched.
+        let (_, leafA) = leaf()
+        let (b, leafB) = leaf()
+        let (c, leafC) = leaf()
+        let innerNode = container(.vertical, [leafB, leafC], [1, 1])
+        guard case .container(let inner) = innerNode else {
+            Issue.record("expected inner container"); return
+        }
+        let tree = container(.horizontal, [leafA, innerNode], [1, 1])
+        guard case .container(let outerBefore) = tree else {
+            Issue.record("expected outer container"); return
+        }
+
+        let out = LayoutEngine.changeStrategy(
+            tree: tree, containerID: inner.id, newKind: .grid
+        )
+        guard case .container(let outerAfter) = out else {
+            Issue.record("expected outer container"); return
+        }
+        #expect(outerAfter.id == outerBefore.id)
+        #expect(outerAfter.strategy == .horizontal)
+        guard case .container(let innerAfter) = outerAfter.children[1] else {
+            Issue.record("expected inner container"); return
+        }
+        #expect(innerAfter.id == inner.id)
+        #expect(innerAfter.strategy == .grid)
+        #expect(innerAfter.children.map(\.allPaneIDs) == [[b.id], [c.id]])
+    }
+
+    @Test func changeStrategyTabWrapperPreservesZoom() {
+        let (a, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let node = container(.vertical, [leafA, leafB], [1, 1])
+        guard case .container(let outer) = node else {
+            Issue.record("expected container"); return
+        }
+        var tab = makeTab(node)
+        tab.zoomedPaneID = a.id
+
+        let next = LayoutEngine.changeStrategy(
+            tab: tab, containerID: outer.id, newKind: .masterStack
+        )
+        #expect(next?.zoomedPaneID == a.id)
+        guard case .container(let updated) = next?.paneTree else {
+            Issue.record("expected updated container"); return
+        }
+        #expect(updated.strategy == .masterStack)
+    }
+
+    // MARK: - flattenToStrategy (plan §P4.5)
+
+    @Test func flattenCollapsesNestedTreeIntoFlatContainer() {
+        // H[A, V[B, C]] + flatten → grid → G[A, B, C] with equal weights.
+        let (a, leafA) = leaf()
+        let (b, leafB) = leaf()
+        let (c, leafC) = leaf()
+        let tree = container(
+            .horizontal,
+            [leafA, container(.vertical, [leafB, leafC], [1, 2])],
+            [3, 2]
+        )
+
+        let out = LayoutEngine.flattenToStrategy(tree: tree, newKind: .grid)
+        guard case .container(let flat) = out else {
+            Issue.record("expected flat container"); return
+        }
+        #expect(flat.strategy == .grid)
+        #expect(flat.weights == [1, 1, 1])
+        #expect(flat.children.map(\.allPaneIDs) == [[a.id], [b.id], [c.id]])
+        // Every child is a leaf — no nesting survives.
+        #expect(flat.children.allSatisfy {
+            if case .leaf = $0 { true } else { false }
+        })
+    }
+
+    @Test func flattenReturnsNilForSingleLeafTree() {
+        // A single-pane tab has no container to host a strategy.
+        let (_, leafA) = leaf()
+        #expect(LayoutEngine.flattenToStrategy(tree: leafA, newKind: .grid) == nil)
+    }
+
+    @Test func flattenIsNoopForAlreadyFlatMatchingContainer() {
+        let (_, leafA) = leaf()
+        let (_, leafB) = leaf()
+        let (_, leafC) = leaf()
+        let tree = container(.grid, [leafA, leafB, leafC], [1, 1, 1])
+        #expect(LayoutEngine.flattenToStrategy(tree: tree, newKind: .grid) == nil)
+    }
+
+    @Test func flattenFlatContainerSwitchesStrategyAndResetsWeights() {
+        // Flat container with uneven weights + flatten to the same kind is
+        // a no-op; flattening to a different kind rewrites both strategy
+        // and weights.
+        let (a, leafA) = leaf()
+        let (b, leafB) = leaf()
+        let (c, leafC) = leaf()
+        let tree = container(.vertical, [leafA, leafB, leafC], [2, 1, 4])
+
+        let out = LayoutEngine.flattenToStrategy(tree: tree, newKind: .horizontal)
+        guard case .container(let flat) = out else {
+            Issue.record("expected container"); return
+        }
+        #expect(flat.strategy == .horizontal)
+        #expect(flat.weights == [1, 1, 1])
+        #expect(flat.children.map(\.allPaneIDs) == [[a.id], [b.id], [c.id]])
+    }
+
+    @Test func flattenTabPreservesZoomAndFocus() {
+        // Zoomed/focused pane IDs survive because flatten reuses the same
+        // TerminalPane values — only their parent container changes.
+        let (a, leafA) = leaf()
+        let (b, leafB) = leaf()
+        let (c, leafC) = leaf()
+        let tree = container(
+            .horizontal,
+            [leafA, container(.vertical, [leafB, leafC], [1, 1])],
+            [1, 1]
+        )
+        var tab = makeTab(tree, focused: b.id)
+        tab.zoomedPaneID = a.id
+
+        guard let next = LayoutEngine.flattenToStrategy(tab: tab, newKind: .grid) else {
+            Issue.record("expected flattened tab"); return
+        }
+        #expect(next.focusedPaneID == b.id)
+        #expect(next.zoomedPaneID == a.id)
+        guard case .container(let flat) = next.paneTree else {
+            Issue.record("expected flat container"); return
+        }
+        #expect(flat.strategy == .grid)
+        #expect(flat.children.map(\.allPaneIDs) == [[a.id], [b.id], [c.id]])
+    }
+
+    // MARK: - nextStrategy (plan §P4.5 cycling)
+
+    @Test func nextStrategyCyclesForwardAndBackward() {
+        let order = LayoutEngine.userCycleableStrategies
+        // Expected cycle: horizontal → vertical → grid → masterStack → horizontal
+        #expect(order == [.horizontal, .vertical, .grid, .masterStack])
+        #expect(LayoutEngine.nextStrategy(current: .horizontal, forward: true) == .vertical)
+        #expect(LayoutEngine.nextStrategy(current: .vertical, forward: true) == .grid)
+        #expect(LayoutEngine.nextStrategy(current: .grid, forward: true) == .masterStack)
+        #expect(LayoutEngine.nextStrategy(current: .masterStack, forward: true) == .horizontal)
+        // Backward wraps.
+        #expect(LayoutEngine.nextStrategy(current: .horizontal, forward: false) == .masterStack)
+        #expect(LayoutEngine.nextStrategy(current: .masterStack, forward: false) == .grid)
+    }
+
+    @Test func nextStrategyAnchorsUnknownOnFirst() {
+        // `.fibonacci` is not in the cycle list — treat it as starting from
+        // the first entry (`.horizontal`) so cycling is still well-defined.
+        #expect(LayoutEngine.nextStrategy(current: .fibonacci, forward: true) == .vertical)
+        #expect(LayoutEngine.nextStrategy(current: .fibonacci, forward: false) == .masterStack)
+    }
 }

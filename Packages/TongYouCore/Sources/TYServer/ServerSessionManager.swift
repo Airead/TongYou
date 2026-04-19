@@ -410,6 +410,31 @@ public final class ServerSessionManager {
         return true
     }
 
+    /// Rewrite the layout of the tab that owns `paneID` to `kind`,
+    /// flattening any prior nesting (plan §P4.5). `paneID` identifies the
+    /// target tab — the rewrite itself is applied to the entire tree.
+    /// Returns `true` when the tree changed (caller should broadcast
+    /// `layoutUpdate`); `false` when the pane cannot be found, the tab
+    /// has a single-pane root leaf, or the tab is already a flat
+    /// container using `kind`.
+    @discardableResult
+    public func changeStrategy(
+        sessionID: SessionID,
+        paneID: PaneID,
+        kind: LayoutStrategyKind
+    ) -> Bool {
+        guard var session = sessions[sessionID] else { return false }
+        guard let tabIndex = session.tabIndex(for: paneID) else { return false }
+        guard let newTree = LayoutEngine.flattenToStrategy(
+            tree: session.tabs[tabIndex].paneTree,
+            newKind: kind
+        ) else { return false }
+        session.tabs[tabIndex].paneTree = newTree
+        sessions[sessionID] = session
+        saveSession(id: sessionID)
+        return true
+    }
+
     public func closePane(sessionID: SessionID, paneID: PaneID) {
         guard var session = sessions[sessionID] else { return }
         guard let tabIndex = session.tabIndex(for: paneID) else { return }

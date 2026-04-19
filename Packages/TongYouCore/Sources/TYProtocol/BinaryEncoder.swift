@@ -575,6 +575,11 @@ public struct BinaryEncoder: Sendable {
             writePaneID(sourcePaneID)
             writePaneID(targetPaneID)
             writeFocusDirection(side)
+
+        case .changeStrategy(let sessionID, let paneID, let kind):
+            writeSessionID(sessionID)
+            writePaneID(paneID)
+            writeLayoutStrategyKind(kind)
         }
     }
 }

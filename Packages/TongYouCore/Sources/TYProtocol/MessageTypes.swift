@@ -84,6 +84,11 @@ public enum ClientMessageType: UInt16, Sendable {
     /// Move a pane within its tab's tree, landing on a specific side of
     /// the target pane. Plan §P4.3.
     case movePane                      = 0x0231
+    /// Rewrite the tab that owns a given pane into a single flat
+    /// container using the requested strategy (plan §P4.5). The pane
+    /// identifies which tab to rewrite; every leaf is re-parented under
+    /// one new container with equal weights.
+    case changeStrategy                = 0x0232
 }
 
 // MARK: - Server Messages
@@ -236,6 +241,14 @@ public enum ClientMessage: Sendable {
     /// tab (plan §P4.3). Both panes must already exist in the tab's tree.
     /// The server updates the tree and broadcasts `layoutUpdate`.
     case movePane(SessionID, sourcePaneID: PaneID, targetPaneID: PaneID, side: FocusDirection)
+    /// Rewrite the tab that owns `paneID` into a single flat container
+    /// using the requested `LayoutStrategyKind` (plan §P4.5). `paneID`
+    /// identifies the target tab; the rewrite itself is whole-tree —
+    /// every leaf is re-parented under one fresh container with equal
+    /// weights. Container identities are not transmitted in
+    /// `LayoutTree` messages so this opcode deliberately avoids
+    /// referencing specific nested containers.
+    case changeStrategy(SessionID, PaneID, LayoutStrategyKind)
 
     /// Human-readable summary for debug logging. Long payloads are truncated.
     public var debugDescription: String {
@@ -301,6 +314,8 @@ public enum ClientMessage: Sendable {
             return "rerunPane(session=\(sid), pane=\(pid))"
         case .movePane(let sid, let source, let target, let side):
             return "movePane(session=\(sid), source=\(source), target=\(target), side=\(side))"
+        case .changeStrategy(let sid, let pid, let kind):
+            return "changeStrategy(session=\(sid), pane=\(pid), kind=\(kind.rawValue))"
         }
     }
 
@@ -336,6 +351,7 @@ public enum ClientMessage: Sendable {
         case .restartFloatingPaneCommand:    return .restartFloatingPaneCommand
         case .rerunPane:                     return .rerunPane
         case .movePane:                      return .movePane
+        case .changeStrategy:                return .changeStrategy
         }
     }
 }

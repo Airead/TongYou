@@ -137,6 +137,9 @@ struct Keybinding: Equatable {
         case shrinkPane
         // Pane zoom / monocle
         case toggleZoom
+        // Pane layout strategy (plan §P4.5)
+        case changeStrategy(LayoutStrategyKind)
+        case cycleStrategy(forward: Bool)
         // Floating pane management
         case newFloatingPane
         case toggleOrCreateFloatingPane
@@ -192,6 +195,10 @@ struct Keybinding: Equatable {
             case .growPane: "grow_pane"
             case .shrinkPane: "shrink_pane"
             case .toggleZoom: "toggle_zoom"
+            case .changeStrategy(let kind):
+                "change_strategy_\(Self.strategyToken(for: kind))"
+            case .cycleStrategy(let forward):
+                forward ? "cycle_strategy_next" : "cycle_strategy_previous"
             case .newFloatingPane: "new_floating_pane"
             case .toggleOrCreateFloatingPane: "toggle_or_create_floating_pane"
             case .listRemoteSessions: "list_remote_sessions"
@@ -208,6 +215,33 @@ struct Keybinding: Equatable {
         }
 
         // MARK: - Helpers
+
+        /// Snake-case token used in config strings (`change_strategy_<token>`).
+        /// Internally, `LayoutStrategyKind` cases are camelCase; the token
+        /// form exists only at the keybinding boundary.
+        static func strategyToken(for kind: LayoutStrategyKind) -> String {
+            switch kind {
+            case .horizontal:  return "horizontal"
+            case .vertical:    return "vertical"
+            case .grid:        return "grid"
+            case .masterStack: return "master_stack"
+            case .fibonacci:   return "fibonacci"
+            }
+        }
+
+        /// Reverse of `strategyToken(for:)`. Accepts both snake_case
+        /// (`master_stack`) and the raw enum case name (`masterStack`) so
+        /// user configs can use either style.
+        static func strategyKind(fromToken token: String) -> LayoutStrategyKind? {
+            switch token {
+            case "horizontal":               return .horizontal
+            case "vertical":                 return .vertical
+            case "grid":                     return .grid
+            case "master_stack", "masterStack": return .masterStack
+            case "fibonacci":                return .fibonacci
+            default:                         return nil
+            }
+        }
 
         private static func formatPrefixedAction(
             prefix: String, command: String, arguments: [String],
@@ -281,6 +315,8 @@ struct Keybinding: Equatable {
             case .growPane: .growPane
             case .shrinkPane: .shrinkPane
             case .toggleZoom: .toggleZoom
+            case .changeStrategy(let kind): .changeStrategy(kind)
+            case .cycleStrategy(let forward): .cycleStrategy(forward: forward)
             case .newFloatingPane: .newFloatingPane
             case .toggleOrCreateFloatingPane: .toggleOrCreateFloatingPane
             case .listRemoteSessions: .listRemoteSessions
@@ -331,6 +367,8 @@ struct Keybinding: Equatable {
             case "grow_pane": self = .growPane
             case "shrink_pane": self = .shrinkPane
             case "toggle_zoom": self = .toggleZoom
+            case "cycle_strategy_next": self = .cycleStrategy(forward: true)
+            case "cycle_strategy_previous": self = .cycleStrategy(forward: false)
             case "new_floating_pane": self = .newFloatingPane
             case "toggle_or_create_floating_pane": self = .toggleOrCreateFloatingPane
             case "list_remote_sessions": self = .listRemoteSessions
@@ -344,6 +382,13 @@ struct Keybinding: Equatable {
                    let n = Int(rawValue.dropFirst("goto_tab:".count)),
                    (1...9).contains(n) {
                     self = .gotoTab(n)
+                    return
+                }
+                if rawValue.hasPrefix("change_strategy_"),
+                   let kind = Self.strategyKind(
+                       fromToken: String(rawValue.dropFirst("change_strategy_".count))
+                   ) {
+                    self = .changeStrategy(kind)
                     return
                 }
                 if let parsed = Self.parsePrefixedAction(rawValue: rawValue, prefix: "run_in_place") {
@@ -434,6 +479,19 @@ struct Keybinding: Equatable {
         Keybinding(modifiers: .option, key: "-", action: .shrinkPane),
         // Pane zoom / monocle
         Keybinding(modifiers: [.command, .shift], key: "f", action: .toggleZoom),
+        // Pane layout strategy — plan §P4.5
+        Keybinding(modifiers: [.command, .shift, .option], key: "h",
+                   action: .changeStrategy(.horizontal)),
+        Keybinding(modifiers: [.command, .shift, .option], key: "v",
+                   action: .changeStrategy(.vertical)),
+        Keybinding(modifiers: [.command, .shift, .option], key: "g",
+                   action: .changeStrategy(.grid)),
+        Keybinding(modifiers: [.command, .shift, .option], key: "m",
+                   action: .changeStrategy(.masterStack)),
+        Keybinding(modifiers: .option, key: "]",
+                   action: .cycleStrategy(forward: true)),
+        Keybinding(modifiers: .option, key: "[",
+                   action: .cycleStrategy(forward: false)),
         // Floating pane management
         Keybinding(modifiers: .option, key: "f", action: .toggleOrCreateFloatingPane),
         Keybinding(modifiers: .option, key: "n", action: .newFloatingPane),

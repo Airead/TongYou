@@ -26,6 +26,9 @@ enum TabAction {
     case growPane
     case shrinkPane
     case toggleZoom
+    // Pane strategy (plan §P4.5)
+    case changeStrategy(LayoutStrategyKind)
+    case cycleStrategy(forward: Bool)
     // Floating pane management
     case newFloatingPane
     case closeFloatingPane(UUID)
@@ -316,6 +319,7 @@ final class TabManager {
             return false
         case .splitVertical, .splitHorizontal, .closePane,
              .focusPane, .movePane, .paneExited, .growPane, .shrinkPane, .toggleZoom,
+             .changeStrategy, .cycleStrategy,
              .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane,
              .rerunFloatingPaneCommand, .dismissExitedPane, .rerunExitedPaneCommand,
              .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession,

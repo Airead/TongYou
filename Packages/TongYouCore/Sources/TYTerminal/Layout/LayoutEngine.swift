@@ -314,6 +314,159 @@ public enum LayoutEngine {
         }
     }
 
+    // MARK: - changeStrategy (tree-level)
+
+    /// Replace the `strategy` of the container identified by `containerID`
+    /// with `newKind` (plan §P4.5). The tree topology and container identity
+    /// are untouched — only the strategy is rewritten. `weights` are kept
+    /// verbatim (grid ignores them, master-stack continues to use
+    /// `weights[0]` as the master ratio).
+    ///
+    /// Returns `nil` when the container is not found **or** `newKind` equals
+    /// the current strategy (NOOP). Callers can treat `nil` as "no state
+    /// change, skip broadcasting a layoutUpdate."
+    public static func changeStrategy(
+        tree: PaneNode,
+        containerID: UUID,
+        newKind: LayoutStrategyKind
+    ) -> PaneNode? {
+        replaceContainerStrategy(
+            node: tree,
+            containerID: containerID,
+            newKind: newKind
+        )
+    }
+
+    private static func replaceContainerStrategy(
+        node: PaneNode,
+        containerID: UUID,
+        newKind: LayoutStrategyKind
+    ) -> PaneNode? {
+        switch node {
+        case .leaf:
+            return nil
+        case .container(let c):
+            if c.id == containerID {
+                guard c.strategy != newKind else { return nil }
+                return .container(Container(
+                    id: c.id,
+                    strategy: newKind,
+                    children: c.children,
+                    weights: c.weights
+                ))
+            }
+            for (i, child) in c.children.enumerated() {
+                guard let replaced = replaceContainerStrategy(
+                    node: child,
+                    containerID: containerID,
+                    newKind: newKind
+                ) else { continue }
+                var newChildren = c.children
+                newChildren[i] = replaced
+                return .container(Container(
+                    id: c.id,
+                    strategy: c.strategy,
+                    children: newChildren,
+                    weights: c.weights
+                ))
+            }
+            return nil
+        }
+    }
+
+    // MARK: - parentContainer (tree-level)
+
+    /// Return the container that directly holds `paneID` as a leaf child, or
+    /// `nil` when `paneID` is the tree's sole root leaf (no parent) or is
+    /// not in the tree. Used by callers that need to act on "the container
+    /// owning the focused pane" (plan §P4.5 — changeStrategy target).
+    public static func parentContainer(tree: PaneNode, paneID: UUID) -> Container? {
+        findParentContainer(node: tree, paneID: paneID)
+    }
+
+    private static func findParentContainer(
+        node: PaneNode,
+        paneID: UUID
+    ) -> Container? {
+        switch node {
+        case .leaf:
+            return nil
+        case .container(let c):
+            for child in c.children {
+                if case .leaf(let pane) = child, pane.id == paneID {
+                    return c
+                }
+            }
+            for child in c.children {
+                if let found = findParentContainer(node: child, paneID: paneID) {
+                    return found
+                }
+            }
+            return nil
+        }
+    }
+
+    // MARK: - flattenToStrategy (tree-level)
+
+    /// Collapse `tree` into a single flat container with `newKind`, placing
+    /// every leaf as a direct child in depth-first order with equal weights
+    /// (plan §P4.5). This is the "one strategy per tab" rewrite: when the
+    /// user picks a new layout we abandon all prior nesting and weight
+    /// distribution and re-tile every pane under the requested strategy.
+    ///
+    /// The new container gets a fresh UUID — any persisted reference to the
+    /// old container IDs (there shouldn't be any outside this engine) becomes
+    /// stale. Leaf `TerminalPane` values are preserved verbatim so focus
+    /// and zoom state remain valid.
+    ///
+    /// Returns `nil` when the call is a NOOP:
+    /// - `tree` is a single leaf (single-pane tab — no container exists to
+    ///   host a strategy), or
+    /// - `tree` is already a flat container (all children leaves) using
+    ///   `newKind`, so flattening would produce the same layout.
+    public static func flattenToStrategy(
+        tree: PaneNode,
+        newKind: LayoutStrategyKind
+    ) -> PaneNode? {
+        let panes = tree.allPanes
+        guard panes.count >= 2 else { return nil }
+        if case .container(let c) = tree,
+           c.strategy == newKind,
+           c.children.allSatisfy({ if case .leaf = $0 { true } else { false } }) {
+            return nil
+        }
+        return .container(Container(
+            strategy: newKind,
+            children: panes.map { .leaf($0) },
+            weights: Array(repeating: 1.0, count: panes.count)
+        ))
+    }
+
+    // MARK: - strategy cycling
+
+    /// Ordered strategies exposed to interactive cycling (plan §P4.5).
+    /// `.fibonacci` is omitted until its solver lands.
+    public static let userCycleableStrategies: [LayoutStrategyKind] = [
+        .horizontal, .vertical, .grid, .masterStack
+    ]
+
+    /// Compute the next strategy relative to `current` in
+    /// `userCycleableStrategies`. `forward == true` advances, `false` steps
+    /// back. A `current` that is not in the cycle list (e.g. `.fibonacci`)
+    /// anchors on the first entry so the cycle is still well-defined.
+    public static func nextStrategy(
+        current: LayoutStrategyKind,
+        forward: Bool
+    ) -> LayoutStrategyKind {
+        let order = userCycleableStrategies
+        let count = order.count
+        let baseIndex = order.firstIndex(of: current) ?? 0
+        let nextIndex = forward
+            ? (baseIndex + 1) % count
+            : (baseIndex - 1 + count) % count
+        return order[nextIndex]
+    }
+
     // MARK: - sanitize (tree-level)
 
     /// Re-establish `Container` invariants:
@@ -473,6 +626,38 @@ public enum LayoutEngine {
             sourceID: sourceID,
             targetID: targetID,
             side: side
+        ) else { return nil }
+        var next = tab
+        next.paneTree = newTree
+        return next
+    }
+
+    /// `TerminalTab` convenience over `changeStrategy(tree:…)`.
+    public static func changeStrategy(
+        tab: TerminalTab,
+        containerID: UUID,
+        newKind: LayoutStrategyKind
+    ) -> TerminalTab? {
+        guard let newTree = changeStrategy(
+            tree: tab.paneTree,
+            containerID: containerID,
+            newKind: newKind
+        ) else { return nil }
+        var next = tab
+        next.paneTree = newTree
+        return next
+    }
+
+    /// `TerminalTab` convenience over `flattenToStrategy(tree:…)`.
+    /// `focusedPaneID` and `zoomedPaneID` are preserved because every leaf's
+    /// UUID survives the rewrite.
+    public static func flattenToStrategy(
+        tab: TerminalTab,
+        newKind: LayoutStrategyKind
+    ) -> TerminalTab? {
+        guard let newTree = flattenToStrategy(
+            tree: tab.paneTree,
+            newKind: newKind
         ) else { return nil }
         var next = tab
         next.paneTree = newTree

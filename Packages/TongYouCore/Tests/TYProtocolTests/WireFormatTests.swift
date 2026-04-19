@@ -636,6 +636,27 @@ struct WireFormatTests {
         #expect(dSide == side)
     }
 
+    @Test(arguments: [
+        LayoutStrategyKind.horizontal,
+        LayoutStrategyKind.vertical,
+        LayoutStrategyKind.grid,
+        LayoutStrategyKind.masterStack,
+        LayoutStrategyKind.fibonacci,
+    ])
+    func roundTripChangeStrategy(kind: LayoutStrategyKind) throws {
+        let sid = SessionID()
+        let pid = PaneID()
+        let msg = ClientMessage.changeStrategy(sid, pid, kind)
+        let decoded = try encodeAndDecode(clientMessage: msg)
+        guard case .changeStrategy(let dSid, let dPid, let dKind) = decoded else {
+            Issue.record("Expected .changeStrategy")
+            return
+        }
+        #expect(dSid == sid)
+        #expect(dPid == pid)
+        #expect(dKind == kind)
+    }
+
     // MARK: - Unknown Type Codes
 
     @Test func unknownServerTypeThrows() throws {

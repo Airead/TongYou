@@ -254,6 +254,118 @@ struct ServerSessionManagerTests {
         manager.closeSession(id: session.id)
     }
 
+    @Test("changeStrategy rewrites parent container's strategy")
+    func changeStrategyApplies() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "ChangeStrategy Apply")
+        guard case .leaf(let first) = session.tabs[0].layout else {
+            Issue.record("Expected leaf layout"); return
+        }
+        let second = manager.splitPane(
+            sessionID: session.id, paneID: first, direction: .vertical
+        )!
+        // Initial tree: V[first, second] (vertical container).
+
+        #expect(manager.changeStrategy(
+            sessionID: session.id,
+            paneID: first,
+            kind: .grid
+        ))
+
+        let info = manager.sessionInfo(for: session.id)
+        guard case .container(let strategy, let children, let weights) =
+                info?.tabs[0].layout else {
+            Issue.record("Expected container layout"); return
+        }
+        #expect(strategy == .grid)
+        // Weights preserved verbatim even though grid ignores them.
+        #expect(weights == [1, 1])
+        let leafIDs = children.compactMap { child -> PaneID? in
+            if case .leaf(let id) = child { return id }
+            return nil
+        }
+        #expect(leafIDs == [first, second])
+
+        manager.closeSession(id: session.id)
+    }
+
+    @Test("changeStrategy NOOPs when kind already matches")
+    func changeStrategyNoop() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "ChangeStrategy Noop")
+        guard case .leaf(let first) = session.tabs[0].layout else {
+            Issue.record("Expected leaf layout"); return
+        }
+        _ = manager.splitPane(
+            sessionID: session.id, paneID: first, direction: .vertical
+        )
+        // Container is already vertical — asking for vertical again is a no-op.
+        #expect(!manager.changeStrategy(
+            sessionID: session.id, paneID: first, kind: .vertical
+        ))
+
+        manager.closeSession(id: session.id)
+    }
+
+    @Test("changeStrategy rejects single-pane tab and unknown pane")
+    func changeStrategyRejectsInvalid() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "ChangeStrategy Reject")
+        guard case .leaf(let first) = session.tabs[0].layout else {
+            Issue.record("Expected leaf layout"); return
+        }
+        // Single-pane tab — no container to install a strategy on.
+        #expect(!manager.changeStrategy(
+            sessionID: session.id, paneID: first, kind: .grid
+        ))
+        // Unknown pane — can't locate the owning tab.
+        #expect(!manager.changeStrategy(
+            sessionID: session.id, paneID: PaneID(), kind: .grid
+        ))
+
+        manager.closeSession(id: session.id)
+    }
+
+    @Test("changeStrategy flattens nested tree into a single container")
+    func changeStrategyFlattensNesting() {
+        // Build a nested layout:
+        //   first vertical-split  →  V[first, second]
+        //   split second horizontally → V[first, H[second, third]]
+        // Then change_strategy targets the whole tab: every pane ends up
+        // as a direct child of one grid container.
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "ChangeStrategy Flatten")
+        guard case .leaf(let first) = session.tabs[0].layout else {
+            Issue.record("Expected leaf layout"); return
+        }
+        let second = manager.splitPane(
+            sessionID: session.id, paneID: first, direction: .vertical
+        )!
+        let third = manager.splitPane(
+            sessionID: session.id, paneID: second, direction: .horizontal
+        )!
+
+        #expect(manager.changeStrategy(
+            sessionID: session.id, paneID: first, kind: .grid
+        ))
+
+        let info = manager.sessionInfo(for: session.id)
+        guard case .container(let strategy, let children, let weights) =
+                info?.tabs[0].layout else {
+            Issue.record("Expected container layout"); return
+        }
+        #expect(strategy == .grid)
+        // Nesting is gone: every child is a leaf.
+        let leafIDs = children.compactMap { child -> PaneID? in
+            if case .leaf(let id) = child { return id }
+            return nil
+        }
+        #expect(leafIDs == [first, second, third])
+        #expect(weights == [1, 1, 1])
+
+        manager.closeSession(id: session.id)
+    }
+
     @Test("movePane rejects missing or same-pane inputs")
     func movePaneRejectsInvalid() {
         let manager = ServerSessionManager()

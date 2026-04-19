@@ -582,6 +582,15 @@ public final class SocketServer: @unchecked Sendable {
             ) {
                 broadcastLayoutOrClosed(sessionID: sessionID)
             }
+
+        case .changeStrategy(let sessionID, let paneID, let kind):
+            if sessionManager.changeStrategy(
+                sessionID: sessionID,
+                paneID: paneID,
+                kind: kind
+            ) {
+                broadcastLayoutOrClosed(sessionID: sessionID)
+            }
         }
     }
 
