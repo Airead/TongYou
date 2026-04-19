@@ -816,6 +816,23 @@ public struct BinaryDecoder: Sendable {
             let paneID = try readPaneID()
             let kind = try readLayoutStrategyKind()
             return .changeStrategy(sessionID, paneID, kind)
+
+        case .createTabWithGridPanes:
+            let sessionID = try readSessionID()
+            let count = Int(try readUInt16())
+            var specs: [GridPaneSpec] = []
+            specs.reserveCapacity(count)
+            for _ in 0..<count {
+                let profileID = try readOptionalString()
+                let snapshot = try readOptionalStartupSnapshot()
+                let variables = try readStringMap()
+                specs.append(GridPaneSpec(
+                    profileID: profileID,
+                    snapshot: snapshot,
+                    variables: variables
+                ))
+            }
+            return .createTabWithGridPanes(sessionID, specs)
         }
     }
 }

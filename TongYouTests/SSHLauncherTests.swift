@@ -167,126 +167,54 @@ struct SSHLauncherTests {
         #expect(entries.isEmpty)
     }
 
-    // MARK: - Batch commit (Phase 7)
+    // MARK: - Batch validation + history (one-shot grid path)
 
-    @Test func batchSpawnChainsPaneIDs() async throws {
-        // First call should splitRight from the caller-supplied parent;
-        // subsequent calls should splitRight from the previous spawn's id,
-        // forming a chained column.
+    @Test func validateBatchReturnsSuccessWhenEveryProfileResolves() async throws {
         let env = try makeEnv()
         defer { env.cleanup() }
 
-        let parent = UUID()
-        let newA = UUID()
-        let newB = UUID()
-        env.spy.spawnIDs = [newA, newB]
+        let resolutions = Self.resolutions(env, targets: ["db1", "db2", "db3"])
+        let result = env.launcher.validateBatch(resolutions: resolutions)
 
-        let outcome = await env.launcher.commitBatch(
-            resolutions: Self.resolutions(env, targets: ["db1", "db2"]),
-            initialParent: parent
-        )
-
-        #expect(outcome.attempted == 2)
-        #expect(outcome.succeeded == 2)
-        #expect(outcome.failure == nil)
-        #expect(outcome.lastPaneID == newB)
-        #expect(env.spy.spawnCalls.count == 2)
-        #expect(env.spy.spawnCalls[0].placement == .splitRight(parentPaneID: parent))
-        #expect(env.spy.spawnCalls[1].placement == .splitRight(parentPaneID: newA))
+        guard case .success(let validated) = result else {
+            Issue.record("Expected .success, got \(result)")
+            return
+        }
+        #expect(validated.count == 3)
+        #expect(validated.map(\.candidate.target) == ["db1", "db2", "db3"])
     }
 
-    @Test func batchSpawnFirstItemFallsBackToNewTabWithoutParent() async throws {
-        // When no pane is focused (initialParent == nil) the first item
-        // opens a new tab; the returned pane id then parents the next split.
+    @Test func validateBatchSurfacesFirstFailure() async throws {
+        // First resolution that fails wins — callers surface that error to
+        // the user and abort the whole batch before any PTY spawns.
         let env = try makeEnv()
         defer { env.cleanup() }
+        env.spy.validationFailures = [1: .undefinedVariable(name: "HOST")]
 
-        let newA = UUID()
-        env.spy.spawnIDs = [newA, UUID()]
+        let resolutions = Self.resolutions(env, targets: ["db1", "db2", "db3"])
+        let result = env.launcher.validateBatch(resolutions: resolutions)
 
-        let outcome = await env.launcher.commitBatch(
-            resolutions: Self.resolutions(env, targets: ["db1", "db2"]),
-            initialParent: nil
-        )
-
-        #expect(outcome.succeeded == 2)
-        #expect(env.spy.spawnCalls[0].placement == .newTab)
-        #expect(env.spy.spawnCalls[1].placement == .splitRight(parentPaneID: newA))
+        guard case .failure(let failure) = result else {
+            Issue.record("Expected .failure, got \(result)")
+            return
+        }
+        #expect(failure.target == "db2")
+        #expect(failure.error == .undefinedVariable("HOST"))
     }
 
-    @Test func batchSpawnFallsBackToNewTabWhenChainIDMissing() async throws {
-        // Simulate a remote spawn: the first call returns nil (server
-        // allocates asynchronously), so the chain is broken and the second
-        // item restarts as a new tab rather than splitting a stale parent.
+    @Test func recordBatchHistoryAppendsEveryResolution() async throws {
+        // Called after a successful one-shot tab spawn: every resolution's
+        // target should land in history so the palette's next open
+        // surfaces the recency-sorted list.
         let env = try makeEnv()
         defer { env.cleanup() }
-        env.spy.spawnIDs = [nil, UUID()]
 
-        let outcome = await env.launcher.commitBatch(
-            resolutions: Self.resolutions(env, targets: ["db1", "db2"]),
-            initialParent: UUID()
-        )
-
-        #expect(outcome.succeeded == 2)
-        #expect(env.spy.spawnCalls[1].placement == .newTab)
-    }
-
-    @Test func batchSpawnStopsOnFirstFailure() async throws {
-        // Three resolutions, second one throws. The third must not fire and
-        // the outcome must report 1 success + the failing target.
-        let env = try makeEnv()
-        defer { env.cleanup() }
-        env.spy.spawnIDs = [UUID(), UUID(), UUID()]
-        env.spy.spawnFailures = [1: .undefinedVariable("HOST")]
-
-        let outcome = await env.launcher.commitBatch(
-            resolutions: Self.resolutions(env, targets: ["db1", "db2", "db3"]),
-            initialParent: UUID()
-        )
-
-        // spawnCalls only records successful appends (the throw happens
-        // before `.append`), so exactly one call landed before the failure.
-        #expect(env.spy.spawnCalls.count == 1)
-        #expect(env.spy.spawnCalls[0].variables["HOST"] == "db1")
-        #expect(outcome.attempted == 2)
-        #expect(outcome.succeeded == 1)
-        #expect(outcome.failure?.target == "db2")
-        #expect(outcome.failure?.error == .undefinedVariable("HOST"))
-    }
-
-    @Test func batchSpawnLastPaneIDIsLastSuccess() async throws {
-        // Focus after a batch goes to the most recent successful pane —
-        // the id of the one opened before the failure, not nil.
-        let env = try makeEnv()
-        defer { env.cleanup() }
-        let first = UUID()
-        env.spy.spawnIDs = [first, UUID()]
-        env.spy.spawnFailures = [1: .profileNotFound("ssh-prod")]
-
-        let outcome = await env.launcher.commitBatch(
-            resolutions: Self.resolutions(env, targets: ["db1", "db2"]),
-            initialParent: UUID()
-        )
-
-        #expect(outcome.lastPaneID == first)
-    }
-
-    @Test func batchSpawnAppendsHistoryOnlyForSuccesses() async throws {
-        // History reflects what actually launched: first two succeed, third
-        // fails, so the history should contain exactly two records.
-        let env = try makeEnv()
-        defer { env.cleanup() }
-        env.spy.spawnIDs = [UUID(), UUID(), UUID()]
-        env.spy.spawnFailures = [2: .undefinedVariable("HOST")]
-
-        _ = await env.launcher.commitBatch(
-            resolutions: Self.resolutions(env, targets: ["db1", "db2", "db3"]),
-            initialParent: UUID()
-        )
+        let resolutions = Self.resolutions(env, targets: ["db1", "db2", "db3"])
+        await env.launcher.recordBatchHistory(resolutions: resolutions)
 
         let entries = try await env.history.entries()
         let targets = Set(entries.map(\.target))
-        #expect(targets == ["db1", "db2"])
+        #expect(targets == ["db1", "db2", "db3"])
     }
 
     // MARK: - Helpers
@@ -309,6 +237,12 @@ struct SSHLauncherTests {
         /// Optional per-call override that throws instead of spawning.
         /// Key = 0-based call index. Used by the batch-failure test.
         var spawnFailures: [Int: SSHLauncherError] = [:]
+        /// Counter for how many times `validateProfile` has run — lets the
+        /// batch-validation test trigger a specific index to fail.
+        var validateCallIndex: Int = 0
+        /// Optional per-call override that makes `validateProfile` throw
+        /// instead of succeed. Key = 0-based call index.
+        var validationFailures: [Int: ProfileResolveError] = [:]
     }
 
     private struct Env {
@@ -334,6 +268,9 @@ struct SSHLauncherTests {
             sshConfigHosts: sshHosts,
             validateProfile: { _, _ in
                 if let err = validateError { throw err }
+                let index = spy.validateCallIndex
+                spy.validateCallIndex += 1
+                if let err = spy.validationFailures[index] { throw err }
             },
             spawn: { templateID, vars, placement in
                 let index = spy.spawnCalls.count

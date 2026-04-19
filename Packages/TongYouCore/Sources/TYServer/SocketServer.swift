@@ -594,6 +594,14 @@ public final class SocketServer: @unchecked Sendable {
             ) {
                 broadcastLayoutOrClosed(sessionID: sessionID)
             }
+
+        case .createTabWithGridPanes(let sessionID, let specs):
+            if sessionManager.createTabWithGridPanes(
+                sessionID: sessionID,
+                specs: specs
+            ) != nil {
+                broadcastLayoutOrClosed(sessionID: sessionID)
+            }
         }
     }
 

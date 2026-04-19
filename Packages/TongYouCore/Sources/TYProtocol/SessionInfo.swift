@@ -123,6 +123,28 @@ public struct FloatingPaneInfo: Equatable, Sendable, Codable {
     }
 }
 
+/// One pane to spawn as part of a batch `createTabWithGridPanes` request.
+/// Mirrors the fields `createTab` already carries, packaged so the wire
+/// format can ship an arbitrary-sized list in one message. The server
+/// spawns every spec up front, arranges them into a canonical grid tree,
+/// and sends a single `layoutUpdate` back — avoiding the N resize
+/// passes that sequential `splitPane` would cause.
+public struct GridPaneSpec: Equatable, Sendable {
+    public var profileID: String?
+    public var snapshot: StartupSnapshot?
+    public var variables: [String: String]
+
+    public init(
+        profileID: String? = nil,
+        snapshot: StartupSnapshot? = nil,
+        variables: [String: String] = [:]
+    ) {
+        self.profileID = profileID
+        self.snapshot = snapshot
+        self.variables = variables
+    }
+}
+
 /// Optional initial placement for a floating pane, carried on the
 /// `createFloatingPane` wire message. All values are normalized container
 /// coordinates (0–1), matching `updateFloatingPaneFrame`. When `nil` on the

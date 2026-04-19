@@ -290,87 +290,53 @@ final class SSHLauncher {
         let attempted: Int
         /// How many spawns succeeded.
         let succeeded: Int
-        /// The most recently-opened pane, when the underlying spawn
-        /// returned an id. Callers use this to restore focus.
-        let lastPaneID: UUID?
         /// Nil on full success; on failure, the resolution that failed and
         /// the translated error.
         let failure: BatchFailure?
 
-        struct BatchFailure: Equatable {
+        struct BatchFailure: Equatable, Error {
             let target: String
             let error: SSHLauncherError
         }
     }
 
-    /// Batch-spawn all `resolutions` as a chained right-split column,
-    /// starting from `initialParent` (nil → first item opens in a new tab,
-    /// then subsequent items chain off the newly-created pane). Each
-    /// subsequent item splits the pane created by the previous one. If a
-    /// spawn returns nil (remote session: server allocates asynchronously),
-    /// the chain is broken and later items fall back to `.newTab` so the
-    /// batch still completes rather than silently stacking onto a stale
-    /// parent.
-    ///
-    /// Stops on the first failure and records it in `outcome.failure`;
-    /// already-opened panes are not rolled back. The failing item is
-    /// counted in `attempted` but not in `succeeded`.
-    func commitBatch(
-        resolutions: [SSHResolution],
-        initialParent: UUID?
-    ) async -> BatchOutcome {
-        var chainParent: UUID? = initialParent
-        var succeeded = 0
-        var lastPaneID: UUID? = nil
-        var attempted = 0
-        var failure: BatchOutcome.BatchFailure? = nil
-
+    /// Pre-validate every `resolutions` entry (profile resolution + variable
+    /// expansion) and surface the first failure. Returns the resolutions in
+    /// order when every entry is valid. Kept separate from the actual
+    /// spawn path so callers (e.g. the palette) can fail fast without
+    /// partially opening panes.
+    func validateBatch(
+        resolutions: [SSHResolution]
+    ) -> Result<[SSHResolution], BatchOutcome.BatchFailure> {
         for resolution in resolutions {
-            attempted += 1
-            let placement: SSHPlacement
-            if let parent = chainParent {
-                placement = .splitRight(parentPaneID: parent)
-            } else {
-                placement = .newTab
-            }
             do {
-                let newID = try await commit(
-                    resolution: resolution,
-                    placement: placement
-                )
-                succeeded += 1
-                if let newID {
-                    lastPaneID = newID
-                    chainParent = newID
-                } else {
-                    // Remote spawn or other async id case — can't chain
-                    // reliably, so the next item restarts with `.newTab`.
-                    chainParent = nil
-                }
-            } catch let err as SSHLauncherError {
-                failure = .init(target: resolution.candidate.target, error: err)
-                break
+                try validateProfile(resolution.templateID, resolution.variables)
             } catch let err as ProfileResolveError {
-                failure = .init(
+                return .failure(.init(
                     target: resolution.candidate.target,
                     error: Self.translate(err)
-                )
-                break
+                ))
             } catch {
-                failure = .init(
+                return .failure(.init(
                     target: resolution.candidate.target,
                     error: .invalidProfile(String(describing: error))
-                )
-                break
+                ))
             }
         }
+        return .success(resolutions)
+    }
 
-        return BatchOutcome(
-            attempted: attempted,
-            succeeded: succeeded,
-            lastPaneID: lastPaneID,
-            failure: failure
-        )
+    /// Append history records for every successfully-committed resolution
+    /// and rebuild the in-memory candidate list. Called after the palette's
+    /// batch path finishes spawning the new tab.
+    func recordBatchHistory(resolutions: [SSHResolution]) async {
+        for resolution in resolutions {
+            try? await history.append(
+                template: resolution.templateID,
+                target: resolution.candidate.target
+            )
+        }
+        await rebuildCandidates()
     }
 
     /// Map core `ProfileResolveError` cases onto the user-visible enum.

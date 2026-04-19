@@ -89,6 +89,12 @@ public enum ClientMessageType: UInt16, Sendable {
     /// identifies which tab to rewrite; every leaf is re-parented under
     /// one new container with equal weights.
     case changeStrategy                = 0x0232
+    /// Create a new tab pre-populated with multiple panes laid out in a
+    /// canonical grid. Used by the command palette's batch SSH commit so
+    /// the server can spawn every PTY in one shot and send a single
+    /// `layoutUpdate`, avoiding the per-split resize churn of repeated
+    /// `splitPane` requests.
+    case createTabWithGridPanes        = 0x0233
 }
 
 // MARK: - Server Messages
@@ -253,6 +259,11 @@ public enum ClientMessage: Sendable {
     /// `LayoutTree` messages so this opcode deliberately avoids
     /// referencing specific nested containers.
     case changeStrategy(SessionID, PaneID, LayoutStrategyKind)
+    /// Create a new tab with N panes laid out as a canonical grid in one
+    /// request. The server spawns every pane from the supplied specs and
+    /// emits a single `layoutUpdate` so clients reshape once instead of
+    /// after every split.
+    case createTabWithGridPanes(SessionID, [GridPaneSpec])
 
     /// Human-readable summary for debug logging. Long payloads are truncated.
     public var debugDescription: String {
@@ -300,6 +311,8 @@ public enum ClientMessage: Sendable {
             return "setSplitRatio(session=\(sid), pane=\(pid), ratio=\(ratio))"
         case .createFloatingPane(let sid, let tid, let profileID, let snapshot, let variables, let frameHint):
             return "createFloatingPane(session=\(sid), tab=\(tid), profile=\(profileID ?? "nil"), hasSnapshot=\(snapshot != nil), vars=\(variables.count), hasFrameHint=\(frameHint != nil))"
+        case .createTabWithGridPanes(let sid, let specs):
+            return "createTabWithGridPanes(session=\(sid), panes=\(specs.count))"
         case .closeFloatingPane(let sid, let pid):
             return "closeFloatingPane(session=\(sid), pane=\(pid))"
         case .updateFloatingPaneFrame(let sid, let pid, let x, let y, let w, let h):
@@ -356,6 +369,7 @@ public enum ClientMessage: Sendable {
         case .rerunPane:                     return .rerunPane
         case .movePane:                      return .movePane
         case .changeStrategy:                return .changeStrategy
+        case .createTabWithGridPanes:        return .createTabWithGridPanes
         }
     }
 }

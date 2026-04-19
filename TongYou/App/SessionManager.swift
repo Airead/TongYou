@@ -603,6 +603,105 @@ final class SessionManager {
         return tab.id
     }
 
+    /// Spec for one pane in a batch grid tab. Mirrors the protocol-layer
+    /// `GridPaneSpec` but keeps the inputs as a client-facing profile id +
+    /// variables pair — `createTabWithGridPanes` resolves each spec
+    /// locally and threads it into either the `TerminalPane` tree (local
+    /// session) or the wire message (remote session).
+    struct GridPaneRequest: Equatable {
+        var profileID: String?
+        var variables: [String: String]
+        var overrides: [String]
+        var initialWorkingDirectory: String?
+
+        init(
+            profileID: String? = nil,
+            variables: [String: String] = [:],
+            overrides: [String] = [],
+            initialWorkingDirectory: String? = nil
+        ) {
+            self.profileID = profileID
+            self.variables = variables
+            self.overrides = overrides
+            self.initialWorkingDirectory = initialWorkingDirectory
+        }
+    }
+
+    /// Create a new tab seeded with N panes arranged as a canonical grid.
+    /// For local sessions the tree is materialised in one update so SwiftUI
+    /// lays out every pane at its final frame on the first pass (one PTY
+    /// resize per pane instead of one per intermediate split). For remote
+    /// sessions a single `createTabWithGridPanes` message is sent so the
+    /// server does the same work before broadcasting `layoutUpdate`.
+    ///
+    /// Returns the new tab's id when the caller can observe it locally
+    /// (local session, single pane). Remote sessions return nil — the tab
+    /// materialises when the server broadcasts `layoutUpdate`.
+    @discardableResult
+    func createTabWithGridPanes(
+        inSessionID: UUID? = nil,
+        title: String = "shell",
+        requests: [GridPaneRequest]
+    ) -> UUID? {
+        guard !requests.isEmpty else { return nil }
+        let targetIndex: Int
+        if let sid = inSessionID {
+            guard let i = sessions.firstIndex(where: { $0.id == sid }) else { return nil }
+            targetIndex = i
+        } else {
+            guard sessions.indices.contains(activeSessionIndex) else { return nil }
+            targetIndex = activeSessionIndex
+        }
+        let session = sessions[targetIndex]
+
+        if let serverSessionID = session.source.serverSessionID {
+            let specs = requests.map { req -> GridPaneSpec in
+                let bundle = resolveRemoteStartupBundle(
+                    profileID: req.profileID ?? TerminalPane.defaultProfileID,
+                    overrides: req.overrides,
+                    variables: req.variables,
+                    initialWorkingDirectory: req.initialWorkingDirectory
+                )
+                return GridPaneSpec(
+                    profileID: bundle.profileID,
+                    snapshot: bundle.snapshot,
+                    variables: req.variables
+                )
+            }
+            remoteClient?.createTabWithGridPanes(
+                sessionID: SessionID(serverSessionID),
+                specs: specs
+            )
+            return nil
+        }
+
+        let panes: [TerminalPane] = requests.map { req in
+            createPane(
+                profileID: req.profileID ?? TerminalPane.defaultProfileID,
+                overrides: req.overrides,
+                variables: req.variables,
+                initialWorkingDirectory: req.initialWorkingDirectory
+            )
+        }
+        let paneTree = LayoutEngine.canonicalGridTree(panes: panes)
+        let tab = TerminalTab(
+            id: UUID(),
+            title: title,
+            paneTree: paneTree
+        )
+        sessions[targetIndex].tabs.append(tab)
+        if GUIAutomationPolicy.shouldTakeViewFocus() {
+            sessions[targetIndex].activeTabIndex = sessions[targetIndex].tabs.count - 1
+        }
+        if attachedLocalSessionIDs.contains(session.id) {
+            for paneID in tab.allPaneIDsIncludingFloating {
+                _ = ensureLocalController(for: paneID)
+            }
+        }
+        scheduleLocalSaveIfNeeded(sessionID: session.id)
+        return tab.id
+    }
+
     /// Close a tab. Returns true if the tab was found.
     /// For remote sessions, sends the request to the server — local state
     /// updates when the server broadcasts a layoutUpdate.

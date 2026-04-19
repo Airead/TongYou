@@ -455,26 +455,42 @@ struct TerminalWindowView: View {
         }
     }
 
-    /// Phase 7 batch path. Chain-right-splits every resolution starting
-    /// from the currently focused pane, focuses the last successfully
-    /// opened pane, and toasts on partial failure
-    /// (`"SSH: 2/5 opened, \"host\": <err>"`).
+    /// Batch path. Opens every `resolution` in a brand-new tab, arranged
+    /// as a canonical grid in one shot — SessionManager builds the tree
+    /// before SwiftUI lays panes out, so every PTY sees exactly one
+    /// resize instead of one per intermediate split. Fails fast on the
+    /// first unresolvable profile and does **not** open any panes in that
+    /// case (toast only). Focus lands on the first pane of the new tab.
     private func handleBatchSSHCommit(resolutions: [SSHResolution]) {
-        let initialParent = focusManager.focusedPaneID
-        Task { @MainActor in
-            let outcome = await sshLauncher.commitBatch(
-                resolutions: resolutions,
-                initialParent: initialParent
+        switch sshLauncher.validateBatch(resolutions: resolutions) {
+        case .failure(let failure):
+            toastPresenter.show(
+                "SSH: \"\(failure.target)\": \(failure.error.localizedDescription)"
             )
-            rewirePaletteForSSH()
-            if let id = outcome.lastPaneID {
-                focusManager.focusPane(id: id)
-            }
-            if let failure = outcome.failure {
-                toastPresenter.show(
-                    "SSH: \(outcome.succeeded)/\(resolutions.count) opened, " +
-                    "\"\(failure.target)\": \(failure.error.localizedDescription)"
+            return
+        case .success(let resolved):
+            let requests = resolved.map { resolution in
+                SessionManager.GridPaneRequest(
+                    profileID: resolution.templateID,
+                    variables: resolution.variables
                 )
+            }
+            let createdTabID = sessionManager.createTabWithGridPanes(
+                requests: requests
+            )
+            Task { @MainActor in
+                await sshLauncher.recordBatchHistory(resolutions: resolved)
+                rewirePaletteForSSH()
+                // Local sessions: focus the first pane of the new tab
+                // (canonicalGridTree's row-major order) so the user lands
+                // on the top-left terminal. Remote sessions return nil —
+                // the server broadcasts a layoutUpdate that lights up
+                // the new tab and restores focus naturally.
+                if let tabID = createdTabID,
+                   let tab = sessionManager.tabs.first(where: { $0.id == tabID }),
+                   let firstPaneID = tab.paneTree.allPaneIDs.first {
+                    focusManager.focusPane(id: firstPaneID)
+                }
             }
         }
     }

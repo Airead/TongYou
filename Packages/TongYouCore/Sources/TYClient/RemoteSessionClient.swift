@@ -180,6 +180,17 @@ public final class RemoteSessionClient: @unchecked Sendable {
         ))
     }
 
+    /// Ship a batch `createTabWithGridPanes` request. The server spawns
+    /// every pane in one go, arranges them in a canonical grid, and emits
+    /// a single `layoutUpdate` — used by the command palette's batch SSH
+    /// path to avoid per-split resize churn on the remote side.
+    public func createTabWithGridPanes(
+        sessionID: SessionID,
+        specs: [GridPaneSpec]
+    ) {
+        connection?.send(.createTabWithGridPanes(sessionID, specs))
+    }
+
     public func closeTab(sessionID: SessionID, tabID: TabID) {
         connection?.send(.closeTab(sessionID, tabID))
     }

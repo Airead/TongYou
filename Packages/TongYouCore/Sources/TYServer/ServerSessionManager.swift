@@ -332,6 +332,50 @@ public final class ServerSessionManager {
         return tabID
     }
 
+    /// Create a new tab seeded with N panes arranged as a canonical grid.
+    /// Each spec is spawned in order, then `LayoutEngine.canonicalGridTree`
+    /// builds the final tree in one shot; the single resulting layout is
+    /// broadcast so clients only reshape once rather than after every
+    /// individual pane creation. Empty spec list is a no-op (returns nil).
+    @discardableResult
+    public func createTabWithGridPanes(
+        sessionID: SessionID,
+        specs: [GridPaneSpec]
+    ) -> TabID? {
+        guard sessions[sessionID] != nil, !specs.isEmpty else { return nil }
+
+        let tabID = TabID()
+        var panes: [TerminalPane] = []
+        var cores: [PaneID: TerminalCore] = [:]
+        panes.reserveCapacity(specs.count)
+        for spec in specs {
+            let (paneID, pane, core) = createAndStartPane(
+                sessionID: sessionID,
+                snapshot: spec.snapshot,
+                profileID: spec.profileID,
+                variables: spec.variables
+            )
+            panes.append(pane)
+            cores[paneID] = core
+        }
+
+        let paneTree = LayoutEngine.canonicalGridTree(panes: panes)
+        let tab = ServerTab(
+            id: tabID,
+            title: "Tab",
+            paneTree: paneTree,
+            terminalCores: cores
+        )
+        sessions[sessionID]!.tabs.append(tab)
+        sessions[sessionID]!.activeTabIndex = sessions[sessionID]!.tabs.count - 1
+        saveSession(id: sessionID)
+        Log.info(
+            "Tab created with \(panes.count) grid panes: \(tabID) in session \(sessionID)",
+            category: .session
+        )
+        return tabID
+    }
+
     public func closeTab(sessionID: SessionID, tabID: TabID) {
         guard var session = sessions[sessionID] else { return }
         guard let tabIndex = session.tabs.firstIndex(where: { $0.id == tabID }) else { return }

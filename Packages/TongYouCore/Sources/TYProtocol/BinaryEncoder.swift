@@ -595,6 +595,15 @@ public struct BinaryEncoder: Sendable {
             writeSessionID(sessionID)
             writePaneID(paneID)
             writeLayoutStrategyKind(kind)
+
+        case .createTabWithGridPanes(let sessionID, let specs):
+            writeSessionID(sessionID)
+            writeUInt16(UInt16(specs.count))
+            for spec in specs {
+                writeOptionalString(spec.profileID)
+                writeOptionalStartupSnapshot(spec.snapshot)
+                writeStringMap(spec.variables)
+            }
         }
     }
 }
