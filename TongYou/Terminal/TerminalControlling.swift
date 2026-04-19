@@ -23,6 +23,18 @@ protocol TerminalControlling: AnyObject {
     /// Bypasses NSEvent so automation callers don't need an AppKit event stream.
     func sendKey(_ input: KeyEncoder.KeyInput)
 
+    /// Replay `data` as if the user had typed it. Used by the broadcast-input
+    /// dispatcher to mirror input across sibling panes in the same tab.
+    /// Routes through the same clear-selection / scroll-to-bottom / write path
+    /// as `handleKeyDown`.
+    func receiveUserInput(_ data: Data)
+
+    /// Optional dispatcher invoked with the already-encoded bytes of a user
+    /// keystroke (keyDown or IME commit). When non-nil it replaces the
+    /// direct write so the caller (SessionManager) can fan out to other
+    /// panes. When nil, input is written to this controller only.
+    var onUserInputDispatched: (@MainActor (Data) -> Void)? { get set }
+
     // MARK: - Scrollback
 
     func scrollUp(lines: Int)

@@ -47,6 +47,8 @@ enum TabAction {
     case runInPlace(command: String, arguments: [String])
     case runCommand(command: String, arguments: [String], options: CommandOptions)
     case paneNotification(UUID, String, String)  // paneID, title, body
+    // Broadcast input (sync pane typing)
+    case toggleBroadcastInput
 }
 
 /// Manages the list of terminal tabs and the active tab index.
@@ -324,7 +326,7 @@ final class TabManager {
              .rerunFloatingPaneCommand, .dismissExitedPane, .rerunExitedPaneCommand,
              .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession,
              .renameSession, .runInPlace, .runCommand,
-             .paneNotification:
+             .paneNotification, .toggleBroadcastInput:
             // Pane/remote actions are handled by TerminalWindowView, not TabManager.
             return false
         }

@@ -74,6 +74,10 @@ final class ClientTerminalController: TerminalControlling {
 
     // MARK: - Keyboard & Text Input
 
+    /// Dispatcher for real user keystrokes (keyDown / IME commit). Installed
+    /// by `SessionManager` to fan out to broadcast-input targets.
+    var onUserInputDispatched: (@MainActor (Data) -> Void)?
+
     func handleKeyDown(_ event: NSEvent) {
         let input = KeyEncoder.KeyInput(event: event)
         let options = KeyEncoder.Options(
@@ -81,24 +85,12 @@ final class ClientTerminalController: TerminalControlling {
             optionAsAlt: optionAsAlt
         )
         guard let data = KeyEncoder.encode(input, options: options) else { return }
-        selection = nil
-        scrollToBottomIfNeeded()
-        remoteClient.sendInput(
-            sessionID: sessionID,
-            paneID: paneID,
-            data: Array(data)
-        )
+        dispatchUserInput(data)
     }
 
     func sendText(_ text: String) {
         guard !text.isEmpty, let data = text.data(using: .utf8) else { return }
-        selection = nil
-        scrollToBottomIfNeeded()
-        remoteClient.sendInput(
-            sessionID: sessionID,
-            paneID: paneID,
-            data: Array(data)
-        )
+        dispatchUserInput(data)
     }
 
     func sendKey(_ input: KeyEncoder.KeyInput) {
@@ -107,6 +99,22 @@ final class ClientTerminalController: TerminalControlling {
             optionAsAlt: optionAsAlt
         )
         guard let data = KeyEncoder.encode(input, options: options) else { return }
+        forwardInput(data)
+    }
+
+    func receiveUserInput(_ data: Data) {
+        forwardInput(data)
+    }
+
+    private func dispatchUserInput(_ data: Data) {
+        if let dispatcher = onUserInputDispatched {
+            dispatcher(data)
+        } else {
+            forwardInput(data)
+        }
+    }
+
+    private func forwardInput(_ data: Data) {
         selection = nil
         scrollToBottomIfNeeded()
         remoteClient.sendInput(

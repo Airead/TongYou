@@ -68,6 +68,12 @@ final class SessionManager {
 
     private var overlayStacks: [UUID: [TerminalController]] = [:]
 
+    /// Drives broadcast-input fan-out. When set, every local or remote
+    /// controller registered by this manager installs a dispatcher closure
+    /// that routes keystrokes through `dispatchUserInput(fromPane:data:)`.
+    /// Weak to avoid a retain cycle with `TerminalWindowView`.
+    @ObservationIgnored private weak var paneSelectionManager: PaneSelectionManager?
+
     /// Floating panes whose process has exited but are kept open for reading.
     /// ESC closes them, Enter re-runs the command.
     /// Maps pane ID to the process exit code.
@@ -1277,6 +1283,7 @@ final class SessionManager {
         let controller = TerminalController(columns: 80, rows: 24)
         controller.start(snapshot: pane.startupSnapshot)
         localControllers[paneID] = controller
+        armBroadcastDispatcher(forPane: paneID)
         return controller
     }
 
@@ -1623,7 +1630,7 @@ final class SessionManager {
              .rerunFloatingPaneCommand, .dismissExitedPane, .rerunExitedPaneCommand,
              .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession,
              .renameSession, .runInPlace(_, _), .runCommand(_, _, _),
-             .paneNotification:
+             .paneNotification, .toggleBroadcastInput:
             // Pane/remote actions are handled by TerminalWindowView.
             return false
         }
@@ -2260,6 +2267,7 @@ final class SessionManager {
                 paneID: serverPaneID
             )
             remoteControllers[pane.id] = controller
+            armBroadcastDispatcher(forPane: pane.id)
             serverToLocalPaneID[serverPaneID.uuid] = pane.id
             remotePaneProfileIDs[pane.id] = resolvedProfileID
             if let closeOnExit {
@@ -2499,6 +2507,7 @@ final class SessionManager {
         let controller = TerminalController(columns: 80, rows: 24)
         controller.start(snapshot: snapshot)
         localControllers[paneID] = controller
+        armBroadcastDispatcher(forPane: paneID)
         return controller
     }
 
@@ -2728,6 +2737,7 @@ final class SessionManager {
         let controller = TerminalController(columns: 80, rows: 24)
         controller.start(workingDirectory: workingDirectory, command: command, arguments: arguments)
         localControllers[pane.id] = controller
+        armBroadcastDispatcher(forPane: pane.id)
 
         scheduleLocalSaveIfNeeded(sessionID: session.id)
         return pane.id
@@ -2761,6 +2771,7 @@ final class SessionManager {
             arguments: cmdInfo.arguments
         )
         localControllers[paneID] = controller
+        armBroadcastDispatcher(forPane: paneID)
         return controller
     }
 
@@ -2789,6 +2800,65 @@ final class SessionManager {
             return local
         }
         return remoteControllers[paneID]
+    }
+
+    // MARK: - Broadcast Input
+
+    /// Install the `PaneSelectionManager` used for broadcast-input routing
+    /// and arm the dispatcher on every already-registered controller.
+    func attachPaneSelectionManager(_ manager: PaneSelectionManager) {
+        paneSelectionManager = manager
+        for paneID in localControllers.keys {
+            armBroadcastDispatcher(forPane: paneID)
+        }
+        for paneID in remoteControllers.keys {
+            armBroadcastDispatcher(forPane: paneID)
+        }
+    }
+
+    /// Wire the `onUserInputDispatched` closure on whichever controllers
+    /// (local and/or remote) are currently registered for `paneID`. Called
+    /// after every `localControllers[_] = ` / `remoteControllers[_] = `
+    /// assignment so freshly-created controllers participate in broadcast.
+    private func armBroadcastDispatcher(forPane paneID: UUID) {
+        let closure: (Data) -> Void = { [weak self] data in
+            self?.dispatchUserInput(fromPane: paneID, data: data)
+        }
+        if let local = localControllers[paneID] {
+            local.onUserInputDispatched = closure
+        }
+        if let remote = remoteControllers[paneID] {
+            remote.onUserInputDispatched = closure
+        }
+    }
+
+    /// Route user-typed bytes for a pane, applying broadcast fan-out when
+    /// the source pane is part of an active broadcasting selection. Falls
+    /// back to writing to the source pane alone when there is no broadcast
+    /// group for this tab.
+    private func dispatchUserInput(fromPane sourcePaneID: UUID, data: Data) {
+        let targets: Set<UUID>
+        if let manager = paneSelectionManager,
+           let tabID = tabID(forPane: sourcePaneID),
+           let broadcastTargets = manager.broadcastTargets(from: sourcePaneID, inTab: tabID) {
+            targets = broadcastTargets
+        } else {
+            targets = [sourcePaneID]
+        }
+        for targetID in targets {
+            activeController(for: targetID)?.receiveUserInput(data)
+        }
+    }
+
+    /// Lookup the tab UUID that owns `paneID`. Returns nil when the pane is
+    /// not present in any session (already closed, remote pane pending).
+    private func tabID(forPane paneID: UUID) -> UUID? {
+        for session in sessions {
+            for tab in session.tabs where tab.hasPane(id: paneID) {
+                return tab.id
+            }
+        }
+        return nil
     }
 }
 

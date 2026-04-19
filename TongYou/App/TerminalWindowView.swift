@@ -21,6 +21,8 @@ struct TerminalWindowView: View {
     @State private var sessionManager: SessionManager
     @State private var tabBarVisibility: TabBarVisibility = .auto
     @State private var focusManager = FocusManager()
+    @State private var paneSelectionManager = PaneSelectionManager()
+    @State private var toastPresenter = ToastPresenter()
     @State private var windowBackgroundColor: NSColor = .black
     @State private var sidebarVisibility: SidebarVisibility = .auto
     @State private var suppressAutoSidebar = true
@@ -201,8 +203,13 @@ struct TerminalWindowView: View {
                 sessionManager.onFocusPaneRequest = nil
             }
         ))
+        .overlay {
+            ToastOverlay(presenter: toastPresenter)
+        }
+        .environment(\.toastPresenter, toastPresenter)
         .onAppear {
             focusManager.attachViewStore(viewStore)
+            sessionManager.attachPaneSelectionManager(paneSelectionManager)
             sessionManager.restoreLocalSessions()
             loadWindowBackground()
             if configLoader.config.draftEnabled || sessionManager.tabs.isEmpty {
@@ -305,6 +312,7 @@ struct TerminalWindowView: View {
                 let hiddenCount = max(0, activeTab.paneTree.allPaneIDs.count - 1)
                 zoomedPaneView(
                     pane: zoomedPane,
+                    tabID: activeTab.id,
                     focusColor: paneFocusColor,
                     updateTabTitle: updateTabTitle,
                     hiddenPaneCount: hiddenCount
@@ -329,7 +337,9 @@ struct TerminalWindowView: View {
                     },
                     isTreePaneExited: { paneID in
                         sessionManager.exitedTreePanes[paneID] != nil
-                    }
+                    },
+                    paneSelectionManager: paneSelectionManager,
+                    tabID: activeTab.id
                 )
             }
 
@@ -363,7 +373,9 @@ struct TerminalWindowView: View {
                 },
                 isProcessExited: { paneID in
                     sessionManager.exitedFloatingPanes[paneID] != nil
-                }
+                },
+                paneSelectionManager: paneSelectionManager,
+                tabID: activeTab.id
             )
         }
     }
@@ -376,6 +388,7 @@ struct TerminalWindowView: View {
     @ViewBuilder
     private func zoomedPaneView(
         pane: TerminalPane,
+        tabID: UUID,
         focusColor: Color,
         updateTabTitle: @escaping (String) -> Void,
         hiddenPaneCount: Int
@@ -393,6 +406,9 @@ struct TerminalWindowView: View {
             onTitleChanged: updateTabTitle,
             onFocused: { focusManager.focusPane(id: pane.id) },
             onUserInteraction: { notificationStore.markRead(paneID: pane.id) },
+            onToggleSelection: {
+                paneSelectionManager.togglePane(pane.id, inTab: tabID)
+            },
             isProcessExited: { sessionManager.exitedTreePanes[pane.id] != nil },
             onSearchBarToggled: { isOpen in
                 if isOpen {
@@ -409,6 +425,11 @@ struct TerminalWindowView: View {
                 .opacity(isFocused ? 1 : 0)
                 .allowsHitTesting(false)
         )
+        .modifier(PaneSelectionBorder(
+            paneID: pane.id,
+            tabID: tabID,
+            selectionManager: paneSelectionManager
+        ))
         .overlay(alignment: .top) {
             if showBadge {
                 zoomBadgeLabel(hiddenPaneCount: hiddenPaneCount)
@@ -454,6 +475,7 @@ struct TerminalWindowView: View {
         for paneID in paneIDs {
             viewStore.tearDown(for: paneID)
             focusManager.removeFromHistory(id: paneID)
+            paneSelectionManager.didRemovePane(paneID)
         }
 
         if sessionManager.sessions.isEmpty {
@@ -521,6 +543,7 @@ struct TerminalWindowView: View {
             viewStore.tearDown(for: paneID)
         }
 
+        paneSelectionManager.didRemoveTab(tab.id)
         sessionManager.closeTab(at: index)
 
         if sessionManager.tabCount == 0 {
@@ -676,6 +699,7 @@ struct TerminalWindowView: View {
         notificationStore.clearAll(forPaneID: paneID)
         viewStore.tearDown(for: paneID)
         focusManager.removeFromHistory(id: paneID)
+        paneSelectionManager.didRemovePane(paneID)
 
         if let siblingID = sessionManager.closePane(id: paneID) {
             focusNextPane(fallback: siblingID)
@@ -729,6 +753,7 @@ struct TerminalWindowView: View {
         notificationStore.clearAll(forPaneID: paneID)
         viewStore.tearDown(for: paneID)
         focusManager.removeFromHistory(id: paneID)
+        paneSelectionManager.didRemovePane(paneID)
         sessionManager.closeFloatingPane(paneID: paneID)
 
         if let activeTab = sessionManager.activeTab {
@@ -860,6 +885,30 @@ struct TerminalWindowView: View {
             if paneID == focusManager.focusedPaneID {
                 viewStore.view(for: paneID)?.flashNotificationRing()
             }
+        case .toggleBroadcastInput:
+            toggleBroadcastInput()
+        }
+    }
+
+    /// Flip broadcast-input on the active tab. When no explicit selection
+    /// has been curated (via Cmd+Alt+click), defaults to "all panes in this
+    /// tab". Shows a toast if the tab has fewer than two panes to broadcast
+    /// between — the feature is a no-op in that case.
+    private func toggleBroadcastInput() {
+        guard let activeTab = sessionManager.activeTab else { return }
+        let candidates = activeTab.allPaneIDsIncludingFloating
+        let result = paneSelectionManager.toggleBroadcast(
+            tab: activeTab.id,
+            candidatePanes: candidates
+        )
+        switch result {
+        case .enabled:
+            let count = paneSelectionManager.selection(inTab: activeTab.id).count
+            toastPresenter.show("广播已开启 · \(count) 个 pane 同步输入")
+        case .disabled:
+            toastPresenter.show("广播已关闭")
+        case .rejectedTooFewPanes:
+            toastPresenter.show("当前 tab 至少需要 2 个 pane 才能广播")
         }
     }
 
@@ -1029,18 +1078,20 @@ struct TerminalWindowView: View {
     /// Wire the callback that fires when the server updates a remote session's layout.
     /// Handles MetalView teardown for removed panes and refocuses the active pane.
     private func wireRemoteLayoutCallback() {
-        sessionManager.onRemoteDetached = { [viewStore, focusManager] paneIDs in
+        sessionManager.onRemoteDetached = { [viewStore, focusManager, paneSelectionManager] paneIDs in
             for paneID in paneIDs {
                 viewStore.tearDown(for: paneID)
                 focusManager.removeFromHistory(id: paneID)
+                paneSelectionManager.didRemovePane(paneID)
             }
         }
 
-        sessionManager.onRemoteSessionEmpty = { [viewStore, focusManager, weak sessionManager] sessionID, removedPaneIDs in
+        sessionManager.onRemoteSessionEmpty = { [viewStore, focusManager, paneSelectionManager, weak sessionManager] sessionID, removedPaneIDs in
             guard let sessionManager else { return }
             for paneID in removedPaneIDs {
                 viewStore.tearDown(for: paneID)
                 focusManager.removeFromHistory(id: paneID)
+                paneSelectionManager.didRemovePane(paneID)
             }
             // Session may already be removed by handleRemoteSessionClosed;
             // close it here only if it still exists.
@@ -1049,6 +1100,7 @@ struct TerminalWindowView: View {
                 for paneID in paneIDs {
                     viewStore.tearDown(for: paneID)
                     focusManager.removeFromHistory(id: paneID)
+                    paneSelectionManager.didRemovePane(paneID)
                 }
             }
             // Skip window close when the session was torn down by an
@@ -1060,19 +1112,21 @@ struct TerminalWindowView: View {
             }
         }
 
-        sessionManager.onSessionClosed = { [viewStore, focusManager] _, removedPaneIDs in
+        sessionManager.onSessionClosed = { [viewStore, focusManager, paneSelectionManager] _, removedPaneIDs in
             for paneID in removedPaneIDs {
                 viewStore.tearDown(for: paneID)
                 focusManager.removeFromHistory(id: paneID)
+                paneSelectionManager.didRemovePane(paneID)
             }
         }
 
-        sessionManager.onRemoteLayoutChanged = { [viewStore, focusManager, weak sessionManager] sessionID, removedPaneIDs, addedPaneIDs in
+        sessionManager.onRemoteLayoutChanged = { [viewStore, focusManager, paneSelectionManager, weak sessionManager] sessionID, removedPaneIDs, addedPaneIDs in
             guard let sessionManager else { return }
             // Tear down MetalViews for removed panes.
             for paneID in removedPaneIDs {
                 viewStore.tearDown(for: paneID)
                 focusManager.removeFromHistory(id: paneID)
+                paneSelectionManager.didRemovePane(paneID)
             }
 
             guard sessionManager.activeSession?.id == sessionID,

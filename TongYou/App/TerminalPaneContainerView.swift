@@ -17,6 +17,9 @@ struct TerminalPaneContainerView: NSViewRepresentable {
     let onTitleChanged: (String) -> Void
     let onFocused: () -> Void
     let onUserInteraction: (() -> Void)?
+    /// Cmd+Alt+click on this pane. Used by `PaneSelectionManager` to toggle
+    /// broadcast-input membership without stealing focus.
+    var onToggleSelection: (() -> Void)?
     var isProcessExited: (() -> Bool)?
     /// Notifies when the in-pane search bar opens (`true`) or closes
     /// (`false`). Optional — callers that don't care about search state
@@ -32,6 +35,7 @@ struct TerminalPaneContainerView: NSViewRepresentable {
             existing.onTitleChanged = onTitleChanged
             existing.onFocused = onFocused
             existing.onUserInteraction = onUserInteraction
+            existing.onToggleSelection = onToggleSelection
             existing.isProcessExited = isProcessExited
             existing.onSearchBarToggled = onSearchBarToggled
             return existing
@@ -46,6 +50,7 @@ struct TerminalPaneContainerView: NSViewRepresentable {
         view.onTitleChanged = onTitleChanged
         view.onFocused = onFocused
         view.onUserInteraction = onUserInteraction
+        view.onToggleSelection = onToggleSelection
         view.isProcessExited = isProcessExited
         view.onSearchBarToggled = onSearchBarToggled
         viewStore.store(view, for: paneID)
@@ -60,6 +65,7 @@ struct TerminalPaneContainerView: NSViewRepresentable {
         nsView.onTitleChanged = onTitleChanged
         nsView.onFocused = onFocused
         nsView.onUserInteraction = onUserInteraction
+        nsView.onToggleSelection = onToggleSelection
         nsView.isProcessExited = isProcessExited
         nsView.onSearchBarToggled = onSearchBarToggled
         if nsView.externalController !== externalController {

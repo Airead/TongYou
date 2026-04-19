@@ -151,6 +151,8 @@ struct Keybinding: Equatable {
         case renameSession
         case runInPlace(command: String, arguments: [String])
         case runCommand(command: String, arguments: [String], options: CommandOptions)
+        // Toggle broadcast-input for the active tab (sync typing across selected panes).
+        case toggleBroadcastInput
         // Pass through to PTY (disables the keybinding)
         case unbind
 
@@ -210,6 +212,7 @@ struct Keybinding: Equatable {
                 Self.formatPrefixedAction(prefix: "run_in_place", command: cmd, arguments: args)
             case .runCommand(let cmd, let args, let opts):
                 Self.formatPrefixedAction(prefix: "run_command", command: cmd, arguments: args, options: opts)
+            case .toggleBroadcastInput: "toggle_broadcast_input"
             case .unbind: "unbind"
             }
         }
@@ -326,6 +329,7 @@ struct Keybinding: Equatable {
             case .renameSession: .renameSession
             case .runInPlace(let cmd, let args): .runInPlace(command: cmd, arguments: args)
             case .runCommand(let cmd, let args, let opts): .runCommand(command: cmd, arguments: args, options: opts)
+            case .toggleBroadcastInput: .toggleBroadcastInput
             case .copy, .paste, .search, .searchNext, .searchPrevious,
                  .resetFontSize, .increaseFontSize, .decreaseFontSize,
                  .unbind:
@@ -376,6 +380,7 @@ struct Keybinding: Equatable {
             case "show_session_picker": self = .showSessionPicker
             case "detach_session": self = .detachSession
             case "rename_session": self = .renameSession
+            case "toggle_broadcast_input": self = .toggleBroadcastInput
             case "unbind": self = .unbind
             default:
                 if rawValue.hasPrefix("goto_tab:"),

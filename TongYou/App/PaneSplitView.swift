@@ -151,6 +151,10 @@ struct PaneSplitView: View {
     /// Whether a tree pane's PTY process has exited (zombie state). Drives
     /// ESC-to-dismiss / Enter-to-rerun key handling inside the MetalView.
     let isTreePaneExited: (UUID) -> Bool
+    /// Drives the broadcast-input border + Cmd+Alt+click selection toggle.
+    let paneSelectionManager: PaneSelectionManager
+    /// ID of the tab this tree belongs to. Used as the selection-bucket key.
+    let tabID: UUID
 
     var body: some View {
         switch node {
@@ -169,7 +173,9 @@ struct PaneSplitView: View {
                 onTitleChanged: onTitleChanged,
                 onNodeChanged: onNodeChanged,
                 onUserInteraction: onUserInteraction,
-                isTreePaneExited: isTreePaneExited
+                isTreePaneExited: isTreePaneExited,
+                paneSelectionManager: paneSelectionManager,
+                tabID: tabID
             )
         }
     }
@@ -192,6 +198,9 @@ struct PaneSplitView: View {
             onUserInteraction: {
                 onUserInteraction?(pane.id)
             },
+            onToggleSelection: {
+                paneSelectionManager.togglePane(pane.id, inTab: tabID)
+            },
             isProcessExited: { isTreePaneExited(pane.id) }
         )
         .id(pane.id)
@@ -201,6 +210,38 @@ struct PaneSplitView: View {
                 .opacity(isFocused ? 1 : 0)
                 .allowsHitTesting(false)
         )
+        .modifier(PaneSelectionBorder(
+            paneID: pane.id,
+            tabID: tabID,
+            selectionManager: paneSelectionManager
+        ))
+    }
+}
+
+/// Orange dashed/solid border shown on panes in the broadcast-input
+/// selection. Dashed while broadcasting is off (the group is curated but
+/// inactive); solid once the Cmd+Alt+I shortcut enables broadcasting.
+struct PaneSelectionBorder: ViewModifier {
+    let paneID: UUID
+    let tabID: UUID
+    let selectionManager: PaneSelectionManager
+
+    func body(content: Content) -> some View {
+        let isSelected = selectionManager.isSelected(pane: paneID, inTab: tabID)
+        let isBroadcasting = selectionManager.isBroadcasting(tab: tabID)
+        content.overlay {
+            if isSelected {
+                Rectangle()
+                    .strokeBorder(
+                        Color.orange,
+                        style: StrokeStyle(
+                            lineWidth: 2,
+                            dash: isBroadcasting ? [] : [6, 4]
+                        )
+                    )
+                    .allowsHitTesting(false)
+            }
+        }
     }
 }
 
@@ -228,6 +269,8 @@ private struct ContainerView: View {
     let onNodeChanged: (PaneNode) -> Void
     let onUserInteraction: ((UUID) -> Void)?
     let isTreePaneExited: (UUID) -> Bool
+    let paneSelectionManager: PaneSelectionManager
+    let tabID: UUID
 
     /// Local weights used during a divider drag. Nil when not dragging.
     @State private var liveWeights: [CGFloat]?
@@ -519,7 +562,9 @@ private struct ContainerView: View {
                 onNodeChanged(.container(copy))
             },
             onUserInteraction: onUserInteraction,
-            isTreePaneExited: isTreePaneExited
+            isTreePaneExited: isTreePaneExited,
+            paneSelectionManager: paneSelectionManager,
+            tabID: tabID
         )
     }
 

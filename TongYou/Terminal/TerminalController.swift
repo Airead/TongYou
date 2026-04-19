@@ -228,6 +228,11 @@ final class TerminalController: TerminalControlling {
 
     // MARK: - Keyboard Input
 
+    /// Dispatcher for real user keystrokes (keyDown / IME commit). When set
+    /// by `SessionManager`, it routes each keystroke through the broadcast-
+    /// input fan-out so selected sibling panes receive the same bytes.
+    var onUserInputDispatched: (@MainActor (Data) -> Void)?
+
     func handleKeyDown(_ event: NSEvent) {
         let input = KeyEncoder.KeyInput(event: event)
         let options = KeyEncoder.Options(
@@ -235,16 +240,18 @@ final class TerminalController: TerminalControlling {
             optionAsAlt: optionAsAlt
         )
         guard let data = KeyEncoder.encode(input, options: options) else { return }
-        writeToPTY(data)
+        dispatchUserInput(data)
     }
 
     /// Send pre-composed text (e.g. from IME) directly to the PTY as UTF-8.
     func sendText(_ text: String) {
         guard !text.isEmpty, let data = text.data(using: .utf8) else { return }
-        writeToPTY(data)
+        dispatchUserInput(data)
     }
 
     /// Send a pre-composed key event (e.g. from automation) to the PTY.
+    /// Automation intentionally bypasses broadcast dispatch so scripted input
+    /// only lands on the controller it targeted.
     func sendKey(_ input: KeyEncoder.KeyInput) {
         let options = KeyEncoder.Options(
             appCursorMode: core.appCursorMode,
@@ -252,6 +259,18 @@ final class TerminalController: TerminalControlling {
         )
         guard let data = KeyEncoder.encode(input, options: options) else { return }
         writeToPTY(data)
+    }
+
+    func receiveUserInput(_ data: Data) {
+        writeToPTY(data)
+    }
+
+    private func dispatchUserInput(_ data: Data) {
+        if let dispatcher = onUserInputDispatched {
+            dispatcher(data)
+        } else {
+            writeToPTY(data)
+        }
     }
 
     /// Clear selection, auto-scroll to bottom, and write data to the PTY.

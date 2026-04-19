@@ -32,6 +32,8 @@ private final class MockMouseController: TerminalControlling {
     func handleKeyDown(_ event: NSEvent) {}
     func sendText(_ text: String) {}
     func sendKey(_ input: KeyEncoder.KeyInput) {}
+    func receiveUserInput(_ data: Data) {}
+    var onUserInputDispatched: (@MainActor (Data) -> Void)?
     func scrollUp(lines: Int) {}
     func scrollDown(lines: Int) {}
 

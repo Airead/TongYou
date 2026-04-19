@@ -99,6 +99,11 @@ final class MetalView: NSView {
     /// Callback when this pane receives focus (mouse click).
     var onFocused: (() -> Void)?
 
+    /// Callback to toggle this pane's membership in the broadcast-input
+    /// selection (Cmd+Alt+click). When fired the click does not focus the
+    /// pane nor reach the PTY — it's a pure selection-management gesture.
+    var onToggleSelection: (() -> Void)?
+
     /// Callback fired whenever the in-pane search bar opens or closes.
     /// Consumed by `TerminalWindowView` to hide the zoom badge while search
     /// is active (would otherwise visually conflict with the full-width bar).
@@ -510,13 +515,24 @@ final class MetalView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        let mods = event.modifierFlags
+        // Cmd+Alt+Click (exactly — no Ctrl/Shift) toggles this pane in the
+        // broadcast-input selection. Intentionally does NOT focus, open URL,
+        // or send a PTY mouse event — it's a selection-management gesture,
+        // not terminal interaction.
+        let relevant = mods.intersection([.command, .option, .control, .shift])
+        if relevant == [.command, .option] {
+            onToggleSelection?()
+            return
+        }
+
         onUserInteraction?()
         onFocused?()
         let inMouseMode = isMouseTrackingActive
         let forceSelection = isAltForcingSelection(event)
 
         // Cmd+Click: open URL
-        if event.modifierFlags.contains(.command) {
+        if mods.contains(.command) {
             terminalController?.setCommandKeyHeld(true)
             let (col, row) = gridPosition(for: event)
             if terminalController?.openURL(at: row, col: col) == true {
