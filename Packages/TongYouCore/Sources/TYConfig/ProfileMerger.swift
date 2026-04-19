@@ -46,10 +46,18 @@ public struct ProfileMerger: Sendable {
     /// expanded. `$$` escapes to a literal `$`. Unknown `${NAME}` throws
     /// `.undefinedVariable` so misconfiguration fails loudly instead of, say,
     /// SSH-ing to a literal `${HOST}`.
+    ///
+    /// Set `expandVariables` to `false` to skip the substitution pass entirely
+    /// and return the raw accumulator output verbatim. Rendering-time lookups
+    /// (`ProfileLoader.resolvedLive`) use this to get live fields like
+    /// `background` out of profiles whose chain references `${HOST}` in
+    /// unrelated fields — otherwise the missing variable would throw and the
+    /// pane would silently lose all live-field overrides.
     public func resolve(
         profileID: String,
         overrides: [String] = [],
-        variables: [String: String] = [:]
+        variables: [String: String] = [:],
+        expandVariables: Bool = true
     ) throws -> ResolvedProfile {
         let layers = try buildExtendsChain(rootID: profileID)
         let overrideEntries = try parseOverrides(overrides)
@@ -72,7 +80,9 @@ public struct ProfileMerger: Sendable {
         }
 
         var resolved = accumulator.build(profileID: profileID, warnings: warnings)
-        try Self.expandVariables(in: &resolved, variables: variables)
+        if expandVariables {
+            try Self.expandVariables(in: &resolved, variables: variables)
+        }
         return resolved
     }
 

@@ -225,6 +225,33 @@ struct ProfileLoaderTests {
         #expect(loader.resolvedLive(id: "x").scalars["font-size"] == "22")
     }
 
+    @Test func resolvedLiveToleratesUnexpandedVariables() throws {
+        // Regression: the rendering path used to call resolve() with the
+        // default (strict) variable-expansion mode, so any profile chain
+        // that referenced ${HOST} in startup or live fields blew up during
+        // lookup. The caught exception silently wiped the live fields and
+        // the pane lost its background. With the fix, live fields like
+        // `background` survive even when other chain members reference
+        // undefined variables.
+        let dir = try makeTempProfilesDir()
+        try writeProfile(dir: dir, id: "base", """
+        command = /usr/bin/ssh
+        args = ${HOST}
+        description = SSH to ${HOST}
+        """)
+        try writeProfile(dir: dir, id: "dev", """
+        extends = base
+        background = 0a1a2e
+        description = SSH dev: ${HOST}
+        """)
+        let loader = ProfileLoader(directory: dir)
+        try loader.reload()
+
+        let live = loader.resolvedLive(id: "dev")
+        #expect(live.scalars["background"] == "0a1a2e")
+        #expect(live.scalars["description"] == "SSH dev: ${HOST}")
+    }
+
     @Test func resolvedLiveReturnsEmptyForUnknownProfile() throws {
         let dir = try makeTempProfilesDir()
         let loader = ProfileLoader(directory: dir)

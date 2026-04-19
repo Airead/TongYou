@@ -408,6 +408,34 @@ struct ProfileMergerTests {
 
     // MARK: - Unknown key
 
+    @Test func expandVariablesFalsePreservesPlaceholders() throws {
+        // Rendering-time callers ask for a profile's resolved fields without
+        // having ${HOST} etc. available. They opt out of substitution by
+        // passing `expandVariables: false`; undefined ${NAME} is not an
+        // error in that mode, the literal stays intact, and unrelated live
+        // fields (like `background`) come through cleanly.
+        let env = try makeEnv { dir in
+            try self.write(dir: dir, id: "base", """
+            command = /usr/bin/ssh
+            args = ${HOST}
+            description = SSH to ${HOST}
+            """)
+            try self.write(dir: dir, id: "dev", """
+            extends = base
+            background = 0a1a2e
+            description = SSH dev: ${HOST}
+            """)
+        }
+
+        let resolved = try env.merger.resolve(
+            profileID: "dev",
+            expandVariables: false
+        )
+        #expect(resolved.live.scalars["background"] == "0a1a2e")
+        #expect(resolved.live.scalars["description"] == "SSH dev: ${HOST}")
+        #expect(resolved.startup.args == ["${HOST}"])
+    }
+
     @Test func descriptionIsRecognisedLiveScalar() throws {
         // Phase 9 seeds ssh / ssh-dev / ssh-prod profiles with a
         // `description` line. The parser must accept it without warning and

@@ -127,6 +127,16 @@ public final class ProfileLoader: @unchecked Sendable {
 
     /// Resolve and cache the Live fields for `profileID`. Missing profile
     /// returns an empty set — callers treat that as "fall back to defaults".
+    ///
+    /// Variable expansion is intentionally skipped here: rendering consumers
+    /// (e.g. `MetalView.effectiveConfig`) ask for live fields by profile id
+    /// alone and have no `${HOST}` / `${USER}` to supply. Without the skip,
+    /// any live field on a profile whose chain references an undefined
+    /// variable (e.g. ssh-dev extending ssh, which uses `${HOST}` in `args`)
+    /// would blow up resolution and the pane would silently lose its
+    /// background. Values that happen to contain `${NAME}` remain literal
+    /// here; callers that need expansion pass their own variables to
+    /// `ProfileMerger.resolve` directly (the SSH launcher spawn path does).
     public func resolvedLive(id profileID: String) -> ResolvedLiveFields {
         if let cached = liveCache[profileID] {
             return cached
@@ -134,7 +144,10 @@ public final class ProfileLoader: @unchecked Sendable {
         let merger = ProfileMerger(loader: self)
         let live: ResolvedLiveFields
         do {
-            live = try merger.resolve(profileID: profileID).live
+            live = try merger.resolve(
+                profileID: profileID,
+                expandVariables: false
+            ).live
         } catch {
             live = ResolvedLiveFields()
         }
