@@ -95,6 +95,29 @@ actor SSHHistory {
         }
     }
 
+    /// Remove every record whose `target` matches the given string.
+    /// Returns the number of records dropped — callers can use `0` to
+    /// detect "nothing was there" without a second `allRecords()` round-trip.
+    /// When the file becomes empty as a result, it is deleted (matching
+    /// `clearAll()` so `entries()` round-trips remain consistent).
+    @discardableResult
+    func remove(target: String) throws -> Int {
+        guard fm.fileExists(atPath: fileURL.path) else { return 0 }
+        let records = try allRecords()
+        let kept = records.filter { $0.target != target }
+        let dropped = records.count - kept.count
+        guard dropped > 0 else { return 0 }
+        if kept.isEmpty {
+            try fm.removeItem(at: fileURL)
+            return dropped
+        }
+        let text = kept
+            .map { Self.encodeLine(timestamp: $0.timestamp, template: $0.template, target: $0.target) }
+            .joined(separator: "\n") + "\n"
+        try text.write(to: fileURL, atomically: true, encoding: .utf8)
+        return dropped
+    }
+
     // MARK: - File IO
 
     private func ensureDirectory() throws {

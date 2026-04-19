@@ -300,6 +300,100 @@ struct CommandPaletteControllerTests {
         #expect(controller.rows.isEmpty)
     }
 
+    // MARK: - ⌘⌫ delete dispatch
+
+    @Test func deleteHighlightedInvokesSSHCallbackWithTarget() {
+        let controller = CommandPaletteController()
+        let real = SSHCandidate(target: "db1.prod", hostname: nil, isAdHoc: false)
+        let realResolution = SSHResolution(
+            candidate: real,
+            target: SSHTarget.parse("db1.prod"),
+            templateID: "ssh",
+            variables: [:]
+        )
+        controller.sshCandidates = [
+            PaletteCandidate(
+                primaryText: real.target,
+                scope: .ssh,
+                sshResolution: realResolution
+            ),
+        ]
+        var deleted: [String] = []
+        controller.onDeleteHistory = { deleted.append($0) }
+        controller.open()
+
+        let consumed = controller.deleteHighlighted()
+        #expect(consumed == true)
+        #expect(deleted == ["db1.prod"])
+    }
+
+    @Test func deleteHighlightedIgnoresSSHAdHocRow() {
+        // Ad-hoc rows have no history to delete — the callback must not fire
+        // and the return value must be false so the view falls back to the
+        // default text-field behaviour (no-op here, since we want ⌘⌫ on an
+        // ad-hoc row to do nothing rather than clear the query).
+        let controller = CommandPaletteController()
+        controller.sshCandidates = []
+        controller.sshAdHocBuilder = { query in
+            let cand = SSHCandidate(target: query, hostname: nil, isAdHoc: true)
+            let resolution = SSHResolution(
+                candidate: cand,
+                target: SSHTarget.parse(query),
+                templateID: "ssh",
+                variables: [:]
+            )
+            return PaletteCandidate(
+                primaryText: "Connect ad-hoc: \(query)",
+                scope: .ssh,
+                sshResolution: resolution
+            )
+        }
+        var deleted: [String] = []
+        controller.onDeleteHistory = { deleted.append($0) }
+        controller.open()
+        controller.input = "never-seen"
+
+        #expect(controller.rows.count == 1)
+        let consumed = controller.deleteHighlighted()
+        #expect(consumed == false)
+        #expect(deleted.isEmpty)
+    }
+
+    @Test func deleteHighlightedInvokesSessionCallbackWithID() {
+        let controller = CommandPaletteController()
+        let id = UUID()
+        controller.sessionCandidates = [
+            PaletteCandidate(id: id, primaryText: "work", scope: .session),
+        ]
+        var deleted: [UUID] = []
+        controller.onDeleteSession = { deleted.append($0) }
+        controller.openSessionScope()
+
+        let consumed = controller.deleteHighlighted()
+        #expect(consumed == true)
+        #expect(deleted == [id])
+    }
+
+    @Test func deleteHighlightedIsNoOpWhenEmpty() {
+        let controller = CommandPaletteController()
+        var sshCalls = 0
+        var sessionCalls = 0
+        controller.onDeleteHistory = { _ in sshCalls += 1 }
+        controller.onDeleteSession = { _ in sessionCalls += 1 }
+        controller.open()
+
+        #expect(controller.deleteHighlighted() == false)
+        #expect(sshCalls == 0)
+        #expect(sessionCalls == 0)
+    }
+
+    @Test func requestRefocusInputBumpsTick() {
+        let controller = CommandPaletteController()
+        let before = controller.refocusTick
+        controller.requestRefocusInput()
+        #expect(controller.refocusTick != before)
+    }
+
     @Test func sshAdHocOnlyFiresOnEmptyFuzzy() {
         // Even when the builder is set, a matching candidate suppresses
         // the ad-hoc row — the user should pick the real one.

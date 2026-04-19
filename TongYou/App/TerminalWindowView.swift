@@ -312,16 +312,26 @@ struct TerminalWindowView: View {
         }
 
         if commandPalette.isOpen {
-            modalOverlay(onDismiss: { commandPalette.close() }) {
+            modalOverlay(onDismiss: { dismissCommandPalette() }) {
                 CommandPaletteView(
                     controller: commandPalette,
                     themeForeground: configLoader.config.foreground,
                     themeBackground: configLoader.config.background,
                     onCommit: { mode in handlePaletteCommit(mode: mode) },
-                    onDismiss: { commandPalette.close() }
+                    onDismiss: { dismissCommandPalette() }
                 )
             }
         }
+    }
+
+    /// Single close path for the command palette. Restores first-responder
+    /// focus to the active tab's last-focused pane so keystrokes land on
+    /// the terminal immediately after the overlay goes away. Callers that
+    /// spawn a fresh pane (SSH commit) should *not* use this — the new
+    /// pane is focused by the commit path itself.
+    private func dismissCommandPalette() {
+        commandPalette.close()
+        restoreTabFocusedPane()
     }
 
     /// Dispatch a palette commit. Phase 6 handles the SSH scope's single-row
@@ -329,7 +339,7 @@ struct TerminalWindowView: View {
     /// multi-select. Other scopes fall through to a simple close (Phase 8).
     private func handlePaletteCommit(mode: PaletteEnterMode) {
         guard let committed = commandPalette.commit(mode: mode) else {
-            commandPalette.close()
+            dismissCommandPalette()
             return
         }
         switch commandPalette.scope {
@@ -340,7 +350,7 @@ struct TerminalWindowView: View {
         default:
             // Phases beyond 8 (profile / tab / command scopes) will plug
             // in here; until then, just close.
-            commandPalette.close()
+            dismissCommandPalette()
         }
     }
 
@@ -352,9 +362,12 @@ struct TerminalWindowView: View {
     private func handleSSHCommit(rows: [PaletteRow], mode: PaletteEnterMode) {
         let resolutions = rows.compactMap { $0.candidate.sshResolution }
         guard !resolutions.isEmpty else {
-            commandPalette.close()
+            dismissCommandPalette()
             return
         }
+        // The spawn path focuses the freshly created pane itself, so this
+        // close deliberately skips `dismissCommandPalette`'s focus-restore
+        // to avoid fighting with the new pane for first responder.
         commandPalette.close()
         if resolutions.count == 1 {
             handleSingleSSHCommit(resolution: resolutions[0], mode: mode)
@@ -441,13 +454,15 @@ struct TerminalWindowView: View {
     /// Phase 8 session commit. Plain Enter flips `activeSessionIndex` to
     /// the matching session; if the session has been closed since the
     /// palette was populated, surface that quietly rather than silently
-    /// doing nothing.
+    /// doing nothing. Detached sessions are attached before switching so
+    /// the user sees a live pane immediately — matching the quick-picker
+    /// behaviour in `switchToSessionFromPicker`.
     private func handleSessionCommit(rows: [PaletteRow], mode: PaletteEnterMode) {
         guard let row = rows.first else {
-            commandPalette.close()
+            dismissCommandPalette()
             return
         }
-        commandPalette.close()
+        dismissCommandPalette()
         switch Self.sessionCommitAction(for: row, mode: mode) {
         case .activate(let sessionID):
             guard let index = sessionManager.sessions.firstIndex(
@@ -456,10 +471,50 @@ struct TerminalWindowView: View {
                 toastPresenter.show("Session: \"\(row.candidate.primaryText)\" is no longer open")
                 return
             }
-            sessionManager.selectSession(at: index)
+            if sessionManager.isSessionDetached(at: index) {
+                attachSessionAtIndex(index)
+            } else {
+                switchToSession(at: index)
+            }
         case .notApplicable:
             toastPresenter.show("Session scope: only Enter is supported (no split / float)")
         }
+    }
+
+    /// Handle a ⌘⌫ inside the SSH scope: drop every history record whose
+    /// target matches, refresh the candidate list, and re-focus the
+    /// palette input so the user can keep pruning. Silent no-op when the
+    /// target has no history (ssh_config-only row) — the row stays
+    /// because ssh_config is the source of truth, not ours.
+    private func deleteSSHHistoryFromPalette(target: String) {
+        Task { @MainActor in
+            let dropped = await sshLauncher.deleteHistory(target: target)
+            rewirePaletteForSSH()
+            if dropped == 0 {
+                toastPresenter.show("SSH: \"\(target)\" 没有历史记录可删除")
+            }
+            commandPalette.requestRefocusInput()
+        }
+    }
+
+    /// Handle a ⌘⌫ inside the session scope: close the non-active session
+    /// with the given id and refresh candidates. Refuses to close the
+    /// currently active session — by design, palette delete must not
+    /// yank the pane the user is actively driving.
+    private func deleteSessionFromPalette(sessionID: UUID) {
+        guard let index = sessionManager.sessions.firstIndex(where: { $0.id == sessionID }) else {
+            rewirePaletteForSessions()
+            commandPalette.requestRefocusInput()
+            return
+        }
+        if index == sessionManager.activeSessionIndex {
+            toastPresenter.show("Session: 当前激活的 session 不能从面板删除")
+            commandPalette.requestRefocusInput()
+            return
+        }
+        closeSession(at: index, pickNext: false)
+        rewirePaletteForSessions()
+        commandPalette.requestRefocusInput()
     }
 
     /// Map Enter + modifier to a Phase 6 placement. Split variants fall
@@ -1159,6 +1214,9 @@ struct TerminalWindowView: View {
         commandPalette.sessionCandidates = sessionManager.sessions.map(
             Self.sessionPaletteCandidate(for:)
         )
+        commandPalette.onDeleteSession = { sessionID in
+            self.deleteSessionFromPalette(sessionID: sessionID)
+        }
     }
 
     /// Build one session-scope palette row. The candidate's `id` reuses
@@ -1197,6 +1255,9 @@ struct TerminalWindowView: View {
                     configLoader.profileLoader.resolvedLive(id: template).scalars["background"]
                 }
             )
+        }
+        commandPalette.onDeleteHistory = { target in
+            self.deleteSSHHistoryFromPalette(target: target)
         }
     }
 

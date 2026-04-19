@@ -153,6 +153,61 @@ final class CommandPaletteController {
         didSet { refreshRows(resetHighlight: true) }
     }
 
+    // MARK: - Delete (⌘⌫)
+
+    /// Invoked when the user hits ⌘⌫ on a highlighted SSH row whose
+    /// `sshResolution` targets a real (non ad-hoc) host. The string is the
+    /// `target` — the host key used by ``SSHHistory``. The outer layer is
+    /// expected to drop the matching history records, rebuild SSH
+    /// candidates, and call ``requestRefocusInput()``.
+    var onDeleteHistory: ((_ target: String) -> Void)?
+
+    /// Invoked when the user hits ⌘⌫ on a highlighted session row.
+    /// The UUID is the session id (stuffed into `candidate.id` by the
+    /// session-scope builder). The outer layer closes the session and
+    /// refreshes candidates.
+    var onDeleteSession: ((_ sessionID: UUID) -> Void)?
+
+    /// Bumped whenever the palette needs the input field to retake first
+    /// responder — after an external side-effect that may have stolen
+    /// focus (e.g. closing a session from the palette triggers
+    /// `focusActiveTabRootPane`, which promotes a MetalView). The view
+    /// observes changes to this counter via SwiftUI's update pass and
+    /// re-asserts `makeFirstResponder`.
+    private(set) var refocusTick: Int = 0
+
+    /// Ask the view layer to re-focus the palette input field on the next
+    /// update pass. Increments `refocusTick`.
+    func requestRefocusInput() {
+        refocusTick &+= 1
+    }
+
+    /// Dispatch ⌘⌫ for the currently highlighted row. Returns `true` when
+    /// a callback actually ran so the view can skip the default field
+    /// behaviour (which would clear the input). Returns `false` for
+    /// scopes / rows that have no delete semantics (ad-hoc SSH,
+    /// command/profile/tab) — in that case the key is ignored.
+    @discardableResult
+    func deleteHighlighted() -> Bool {
+        guard rows.indices.contains(highlightedIndex) else { return false }
+        let candidate = rows[highlightedIndex].candidate
+        switch candidate.scope {
+        case .ssh:
+            guard let resolution = candidate.sshResolution,
+                  !resolution.candidate.isAdHoc,
+                  let handler = onDeleteHistory
+            else { return false }
+            handler(resolution.candidate.target)
+            return true
+        case .session:
+            guard let handler = onDeleteSession else { return false }
+            handler(candidate.id)
+            return true
+        case .command, .profile, .tab:
+            return false
+        }
+    }
+
     // MARK: - Open / close
 
     /// Open the palette in SSH scope with an empty input.

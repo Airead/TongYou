@@ -146,6 +146,62 @@ struct SSHHistoryTests {
         #expect(entries.isEmpty)
     }
 
+    // MARK: - Remove
+
+    @Test func removeDropsAllRecordsForTarget() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+
+        try await env.history.append(template: "ssh", target: "db1",
+                                     timestamp: Date(timeIntervalSince1970: 1000))
+        try await env.history.append(template: "ssh-prod", target: "db1",
+                                     timestamp: Date(timeIntervalSince1970: 2000))
+        try await env.history.append(template: "ssh", target: "db2",
+                                     timestamp: Date(timeIntervalSince1970: 3000))
+
+        let dropped = try await env.history.remove(target: "db1")
+        #expect(dropped == 2)
+
+        let entries = try await env.history.entries()
+        #expect(entries.map(\.target) == ["db2"])
+    }
+
+    @Test func removeMissingTargetIsNoop() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+
+        try await env.history.append(template: "ssh", target: "db1",
+                                     timestamp: Date(timeIntervalSince1970: 1000))
+
+        let dropped = try await env.history.remove(target: "unknown")
+        #expect(dropped == 0)
+
+        let entries = try await env.history.entries()
+        #expect(entries.map(\.target) == ["db1"])
+    }
+
+    @Test func removeOnMissingFileReturnsZero() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+
+        let dropped = try await env.history.remove(target: "db1")
+        #expect(dropped == 0)
+    }
+
+    @Test func removeLastRecordDeletesFile() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+
+        try await env.history.append(template: "ssh", target: "db1",
+                                     timestamp: Date(timeIntervalSince1970: 1000))
+        let fileURL = env.directoryURL.appendingPathComponent(SSHHistory.fileName)
+        #expect(FileManager.default.fileExists(atPath: fileURL.path))
+
+        let dropped = try await env.history.remove(target: "db1")
+        #expect(dropped == 1)
+        #expect(!FileManager.default.fileExists(atPath: fileURL.path))
+    }
+
     // MARK: - Malformed input
 
     @Test func malformedLineSkipped() async throws {

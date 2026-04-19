@@ -84,8 +84,10 @@ struct CommandPaletteView: View {
                 text: $controller.input,
                 placeholder: placeholderText,
                 textColor: themeForeground.nsColor,
+                refocusTick: controller.refocusTick,
                 onCommit: { mode in onCommit(mode) },
-                onCancel: { onDismiss() }
+                onCancel: { onDismiss() },
+                onDelete: { controller.deleteHighlighted() }
             )
             .frame(maxWidth: .infinity, minHeight: 22)
         }
@@ -287,8 +289,17 @@ private struct PaletteTextField: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
     let textColor: NSColor
+    /// Monotonically increasing counter. Each time it changes, the text
+    /// field re-promotes itself to first responder on the next update
+    /// pass. Lets the controller reclaim focus after an external action
+    /// (e.g. closing a session from the palette) promoted a MetalView.
+    let refocusTick: Int
     let onCommit: (PaletteEnterMode) -> Void
     let onCancel: () -> Void
+    /// Called on ⌘⌫ in the field. Coordinator intercepts
+    /// `deleteToBeginningOfLine:` and forwards to this closure instead of
+    /// clearing the input line.
+    let onDelete: () -> Void
 
     func makeNSView(context: Context) -> NSTextField {
         let field = ActivatingPaletteField()
@@ -315,6 +326,7 @@ private struct PaletteTextField: NSViewRepresentable {
             name: NSText.didChangeNotification,
             object: nil
         )
+        context.coordinator.lastRefocusTick = refocusTick
         return field
     }
 
@@ -323,25 +335,47 @@ private struct PaletteTextField: NSViewRepresentable {
             nsView.stringValue = text
         }
         nsView.placeholderString = placeholder
+        if context.coordinator.lastRefocusTick != refocusTick {
+            context.coordinator.lastRefocusTick = refocusTick
+            // Defer so any in-flight AppKit responder switch (caused by
+            // the same action that asked us to refocus) has settled.
+            DispatchQueue.main.async { [weak nsView] in
+                guard let nsView, let window = nsView.window else { return }
+                window.makeFirstResponder(nsView)
+                let end = nsView.stringValue.count
+                nsView.currentEditor()?.selectedRange = NSRange(location: end, length: 0)
+            }
+        }
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, onCommit: onCommit, onCancel: onCancel)
+        Coordinator(
+            text: $text,
+            onCommit: onCommit,
+            onCancel: onCancel,
+            onDelete: onDelete
+        )
     }
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
         @Binding var text: String
         let onCommit: (PaletteEnterMode) -> Void
         let onCancel: () -> Void
+        let onDelete: () -> Void
+        /// Snapshot of the last seen `refocusTick` from the representable,
+        /// so `updateNSView` can detect a bump and re-promote the field.
+        var lastRefocusTick: Int = 0
 
         init(
             text: Binding<String>,
             onCommit: @escaping (PaletteEnterMode) -> Void,
-            onCancel: @escaping () -> Void
+            onCancel: @escaping () -> Void,
+            onDelete: @escaping () -> Void
         ) {
             self._text = text
             self.onCommit = onCommit
             self.onCancel = onCancel
+            self.onDelete = onDelete
         }
 
         @objc func textDidChange(_ notification: Notification) {
@@ -357,6 +391,11 @@ private struct PaletteTextField: NSViewRepresentable {
                 return true
             case #selector(NSResponder.cancelOperation(_:)):
                 onCancel()
+                return true
+            case #selector(NSResponder.deleteToBeginningOfLine(_:)):
+                // ⌘⌫ in an NSTextField normally clears the input up to the
+                // line start. We repurpose it as "delete highlighted row".
+                onDelete()
                 return true
             case #selector(NSResponder.moveUp(_:)),
                  #selector(NSResponder.moveDown(_:)),

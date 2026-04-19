@@ -143,6 +143,19 @@ final class SSHLauncher {
         await rebuildCandidates()
     }
 
+    /// Drop every history record whose target matches, then rebuild the
+    /// candidate list so the palette stops showing it. No-op when the
+    /// target has no history (e.g. ssh_config-only aliases — the palette
+    /// row will stay since it is sourced from the config file).
+    /// Returns the number of dropped records for callers that want to
+    /// distinguish "nothing happened" from "deleted".
+    @discardableResult
+    func deleteHistory(target: String) async -> Int {
+        let dropped = (try? await history.remove(target: target)) ?? 0
+        await rebuildCandidates()
+        return dropped
+    }
+
     /// Rebuild the in-memory candidate list without re-reading the
     /// on-disk files. Callers use this after an append-to-history so the
     /// freshly used target bubbles to the top.
