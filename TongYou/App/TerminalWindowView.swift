@@ -67,8 +67,8 @@ struct TerminalWindowView: View {
                 try manager?.tryResolveProfile(id: templateID, variables: vars)
             },
             spawn: { [weak manager] templateID, vars, placement in
-                guard let manager else { return }
-                try Self.spawnSSH(
+                guard let manager else { return nil }
+                return try Self.spawnSSH(
                     manager: manager,
                     templateID: templateID,
                     variables: vars,
@@ -79,38 +79,42 @@ struct TerminalWindowView: View {
     }
 
     /// Launch an SSH session with the resolved template + variables at the
-    /// requested placement. Split into a static helper so `init` can
-    /// capture it without touching `self` (which is a struct; @State isn't
-    /// initialised yet at closure-capture time).
+    /// requested placement. Returns the new pane's UUID when the underlying
+    /// SessionManager call exposes one synchronously (local sessions), nil
+    /// for remote sessions (server allocates asynchronously via
+    /// layoutUpdate) or when the split target could not be resolved.
+    /// Split into a static helper so `init` can capture it without
+    /// touching `self` (which is a struct; @State isn't initialised yet at
+    /// closure-capture time).
     @MainActor
     private static func spawnSSH(
         manager: SessionManager,
         templateID: String,
         variables: [String: String],
         placement: SSHPlacement
-    ) throws {
+    ) throws -> UUID? {
         switch placement {
         case .newTab:
-            _ = manager.createTab(
+            return manager.createTab(
                 profileID: templateID,
                 variables: variables
             )
-        case .splitRight(let parent):
-            _ = manager.splitPane(
+        case .splitRight(let parent), .currentTab(let parent):
+            return manager.splitPane(
                 parentPaneID: parent,
                 direction: .vertical,
                 profileID: templateID,
                 variables: variables
             )
-        case .splitBelow(let parent), .currentTab(let parent):
-            _ = manager.splitPane(
+        case .splitBelow(let parent):
+            return manager.splitPane(
                 parentPaneID: parent,
                 direction: .horizontal,
                 profileID: templateID,
                 variables: variables
             )
         case .floatPane:
-            _ = manager.createFloatingPane(
+            return manager.createFloatingPane(
                 profileID: templateID,
                 variables: variables
             )
@@ -321,8 +325,8 @@ struct TerminalWindowView: View {
     }
 
     /// Dispatch a palette commit. Phase 6 handles the SSH scope's single-row
-    /// commit for the four Enter variants; other scopes fall through to a
-    /// simple close (they land in Phases 7/8).
+    /// commit for the four Enter variants; Phase 7 adds a batch path for
+    /// multi-select. Other scopes fall through to a simple close (Phase 8).
     private func handlePaletteCommit(mode: PaletteEnterMode) {
         guard let committed = commandPalette.commit(mode: mode) else {
             commandPalette.close()
@@ -337,17 +341,30 @@ struct TerminalWindowView: View {
         }
     }
 
-    /// Phase 6 single-row SSH commit. Split variants require a parent
-    /// pane; when no pane is focused we degrade to `newTab` so Enter is
-    /// never a no-op after typing a host.
+    /// SSH scope commit. With a single row, Phase 6's four Enter variants
+    /// dispatch to new tab / split-right / split-below / float. With
+    /// multiple rows (Tab-multi-select), Phase 7 always runs the chained
+    /// right-split column regardless of modifier — the other variants are
+    /// reserved for future phases.
     private func handleSSHCommit(rows: [PaletteRow], mode: PaletteEnterMode) {
-        guard let first = rows.first,
-              let resolution = first.candidate.sshResolution else {
+        let resolutions = rows.compactMap { $0.candidate.sshResolution }
+        guard !resolutions.isEmpty else {
             commandPalette.close()
             return
         }
-        let placement = sshPlacement(for: mode)
         commandPalette.close()
+        if resolutions.count == 1 {
+            handleSingleSSHCommit(resolution: resolutions[0], mode: mode)
+        } else {
+            handleBatchSSHCommit(resolutions: resolutions)
+        }
+    }
+
+    /// Phase 6 single-row path. Split variants require a parent pane; when
+    /// no pane is focused we degrade to `newTab` so Enter is never a no-op
+    /// after typing a host.
+    private func handleSingleSSHCommit(resolution: SSHResolution, mode: PaletteEnterMode) {
+        let placement = sshPlacement(for: mode)
         Task { @MainActor in
             do {
                 try await sshLauncher.commit(
@@ -359,6 +376,30 @@ struct TerminalWindowView: View {
                 toastPresenter.show("SSH: \(err.localizedDescription)")
             } catch {
                 toastPresenter.show("SSH: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Phase 7 batch path. Chain-right-splits every resolution starting
+    /// from the currently focused pane, focuses the last successfully
+    /// opened pane, and toasts on partial failure
+    /// (`"SSH: 2/5 opened, \"host\": <err>"`).
+    private func handleBatchSSHCommit(resolutions: [SSHResolution]) {
+        let initialParent = focusManager.focusedPaneID
+        Task { @MainActor in
+            let outcome = await sshLauncher.commitBatch(
+                resolutions: resolutions,
+                initialParent: initialParent
+            )
+            rewirePaletteForSSH()
+            if let id = outcome.lastPaneID {
+                focusManager.focusPane(id: id)
+            }
+            if let failure = outcome.failure {
+                toastPresenter.show(
+                    "SSH: \(outcome.succeeded)/\(resolutions.count) opened, " +
+                    "\"\(failure.target)\": \(failure.error.localizedDescription)"
+                )
             }
         }
     }

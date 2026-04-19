@@ -150,6 +150,21 @@ struct CommandPaletteControllerTests {
         #expect(controller.selection.first == controller.rows[0].id)
     }
 
+    @Test func selectionRemovesOnSecondTab() {
+        // Re-toggling the same highlighted row removes it — so a user can
+        // un-pick a selection without having to clear the whole bag.
+        let controller = CommandPaletteController()
+        controller.sshCandidates = (0..<3).map {
+            PaletteCandidate(primaryText: "h\($0)", scope: .ssh)
+        }
+        controller.open()
+        controller.toggleSelection()
+        #expect(controller.selection.count == 1)
+
+        controller.toggleSelection()
+        #expect(controller.selection.isEmpty)
+    }
+
     @Test func commitReturnsHighlightedRowByDefault() {
         let controller = CommandPaletteController()
         controller.sshCandidates = (0..<3).map {

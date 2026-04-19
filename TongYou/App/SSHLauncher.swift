@@ -92,7 +92,11 @@ final class SSHLauncher {
 
     // MARK: - Collaborators
 
-    private let spawn: @MainActor (String, [String: String], SSHPlacement) throws -> Void
+    /// Returns the new pane's UUID when the spawn is local and the id is
+    /// known synchronously, or nil for remote spawns (server allocates
+    /// asynchronously) / non-local fallbacks. Batch commits use the
+    /// returned id to chain subsequent splits off the previous pane.
+    private let spawn: @MainActor (String, [String: String], SSHPlacement) throws -> UUID?
     private let validateProfile: @MainActor (String, [String: String]) throws -> Void
     private let history: SSHHistory
     private var matcher: SSHRuleMatcher
@@ -113,7 +117,7 @@ final class SSHLauncher {
         matcher: SSHRuleMatcher = SSHRuleMatcher(),
         sshConfigHosts: [SSHConfigHost] = [],
         validateProfile: @escaping @MainActor (String, [String: String]) throws -> Void,
-        spawn: @escaping @MainActor (String, [String: String], SSHPlacement) throws -> Void
+        spawn: @escaping @MainActor (String, [String: String], SSHPlacement) throws -> UUID?
     ) {
         self.history = history
         self.matcher = matcher
@@ -235,11 +239,15 @@ final class SSHLauncher {
 
     /// Launch the SSH session described by `resolution` at `placement`. On
     /// success, append a history record; on failure, throw and do not
-    /// write history (plan: "historyNotAppendedOnFailure").
+    /// write history (plan: "historyNotAppendedOnFailure"). Returns the new
+    /// pane's UUID when the underlying spawn exposes one synchronously
+    /// (local sessions), nil for remote spawns where the server allocates
+    /// the id asynchronously.
+    @discardableResult
     func commit(
         resolution: SSHResolution,
         placement: SSHPlacement
-    ) async throws {
+    ) async throws -> UUID? {
         // Validate first so we can surface `.undefinedVariable` etc. without
         // silently falling back to the default profile (which is how
         // `createPane` handles resolve failures internally).
@@ -249,13 +257,107 @@ final class SSHLauncher {
             throw Self.translate(err)
         }
 
-        try spawn(resolution.templateID, resolution.variables, placement)
+        let paneID = try spawn(resolution.templateID, resolution.variables, placement)
 
         try? await history.append(
             template: resolution.templateID,
             target: resolution.candidate.target
         )
         await rebuildCandidates()
+        return paneID
+    }
+
+    // MARK: - Batch commit (Phase 7)
+
+    /// Outcome of a batch spawn. Surfaced to the caller so the palette can
+    /// decide what to toast and which pane to focus.
+    struct BatchOutcome: Equatable {
+        /// How many resolutions were attempted (≤ input count; stops early
+        /// on the first failure).
+        let attempted: Int
+        /// How many spawns succeeded.
+        let succeeded: Int
+        /// The most recently-opened pane, when the underlying spawn
+        /// returned an id. Callers use this to restore focus.
+        let lastPaneID: UUID?
+        /// Nil on full success; on failure, the resolution that failed and
+        /// the translated error.
+        let failure: BatchFailure?
+
+        struct BatchFailure: Equatable {
+            let target: String
+            let error: SSHLauncherError
+        }
+    }
+
+    /// Batch-spawn all `resolutions` as a chained right-split column,
+    /// starting from `initialParent` (nil → first item opens in a new tab,
+    /// then subsequent items chain off the newly-created pane). Each
+    /// subsequent item splits the pane created by the previous one. If a
+    /// spawn returns nil (remote session: server allocates asynchronously),
+    /// the chain is broken and later items fall back to `.newTab` so the
+    /// batch still completes rather than silently stacking onto a stale
+    /// parent.
+    ///
+    /// Stops on the first failure and records it in `outcome.failure`;
+    /// already-opened panes are not rolled back. The failing item is
+    /// counted in `attempted` but not in `succeeded`.
+    func commitBatch(
+        resolutions: [SSHResolution],
+        initialParent: UUID?
+    ) async -> BatchOutcome {
+        var chainParent: UUID? = initialParent
+        var succeeded = 0
+        var lastPaneID: UUID? = nil
+        var attempted = 0
+        var failure: BatchOutcome.BatchFailure? = nil
+
+        for resolution in resolutions {
+            attempted += 1
+            let placement: SSHPlacement
+            if let parent = chainParent {
+                placement = .splitRight(parentPaneID: parent)
+            } else {
+                placement = .newTab
+            }
+            do {
+                let newID = try await commit(
+                    resolution: resolution,
+                    placement: placement
+                )
+                succeeded += 1
+                if let newID {
+                    lastPaneID = newID
+                    chainParent = newID
+                } else {
+                    // Remote spawn or other async id case — can't chain
+                    // reliably, so the next item restarts with `.newTab`.
+                    chainParent = nil
+                }
+            } catch let err as SSHLauncherError {
+                failure = .init(target: resolution.candidate.target, error: err)
+                break
+            } catch let err as ProfileResolveError {
+                failure = .init(
+                    target: resolution.candidate.target,
+                    error: Self.translate(err)
+                )
+                break
+            } catch {
+                failure = .init(
+                    target: resolution.candidate.target,
+                    error: .invalidProfile(String(describing: error))
+                )
+                break
+            }
+        }
+
+        return BatchOutcome(
+            attempted: attempted,
+            succeeded: succeeded,
+            lastPaneID: lastPaneID,
+            failure: failure
+        )
     }
 
     /// Map core `ProfileResolveError` cases onto the user-visible enum.
