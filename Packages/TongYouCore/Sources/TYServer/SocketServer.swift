@@ -90,15 +90,6 @@ public final class SocketServer: @unchecked Sendable {
         self.sessionManager = sessionManager
         self.authToken = authToken
         wireSessionManagerCallbacks()
-        DirtyTrace.log = { msg in
-            // [RESIZE] messages belong to the cursorTrace investigation;
-            // the rest are dirty-region traces. Both hooks are temporary.
-            if msg.hasPrefix("[RESIZE") {
-                Log.debug(msg, category: .cursorTrace)
-            } else {
-                Log.debug(msg)
-            }
-        }
     }
 
     public func start() throws {
