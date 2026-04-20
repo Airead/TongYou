@@ -7,6 +7,14 @@ final class CodepointResolver {
     private let emojiFont: CTFont?
     private let fontSystem: FontSystem
 
+    /// Primary font for each style, snapshotted at init so the ASCII fast path
+    /// in `resolveFont` can return without a dict lookup or LRU touch.
+    /// Missing styles fall back to `regularFont`.
+    private let regularFont: CTFont
+    private let boldFont: CTFont?
+    private let italicFont: CTFont?
+    private let boldItalicFont: CTFont?
+
     private struct CacheKey: Hashable {
         let cluster: GraphemeCluster
         let style: FontCollection.Style
@@ -35,11 +43,24 @@ final class CodepointResolver {
         self.baseFont = baseFont
         self.emojiFont = emojiFont
         self.fontSystem = fontSystem
+        self.regularFont = collection.fonts(for: .regular).first ?? baseFont
+        self.boldFont = collection.fonts(for: .bold).first
+        self.italicFont = collection.fonts(for: .italic).first
+        self.boldItalicFont = collection.fonts(for: .boldItalic).first
     }
 
     func resolveFont(for cluster: GraphemeCluster, style: FontCollection.Style) -> CTFont {
-        if cluster.resolvedPresentation == .emoji {
+        if cluster.isEmojiContent {
             return emojiFont ?? baseFont
+        }
+
+        // Fast path: a single printable-ASCII scalar is always covered by the
+        // primary font of the requested style — no fallback chain, no LRU.
+        // Skips the hash + dict + moveToTail overhead that dominates buildRuns.
+        if cluster.scalarCount == 1,
+           let scalar = cluster.firstScalar,
+           scalar.value >= 0x20 && scalar.value < 0x7F {
+            return styleFont(style)
         }
 
         let key = CacheKey(cluster: cluster, style: style)
@@ -51,6 +72,15 @@ final class CodepointResolver {
         let font = resolveThroughFallbackChain(cluster: cluster, style: style)
         insertIntoCache(key, font: font)
         return font
+    }
+
+    private func styleFont(_ style: FontCollection.Style) -> CTFont {
+        switch style {
+        case .regular: return regularFont
+        case .bold: return boldFont ?? regularFont
+        case .italic: return italicFont ?? regularFont
+        case .boldItalic: return boldItalicFont ?? regularFont
+        }
     }
 
     private func resolveThroughFallbackChain(cluster: GraphemeCluster, style: FontCollection.Style) -> CTFont {
