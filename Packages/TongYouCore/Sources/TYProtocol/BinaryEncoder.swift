@@ -610,9 +610,10 @@ public struct BinaryEncoder: Sendable {
                 writeStringMap(spec.variables)
             }
 
-        case .refreshPane(let sessionID, let paneID):
+        case .paneFocusEvent(let sessionID, let paneID, let focused):
             writeSessionID(sessionID)
             writePaneID(paneID)
+            writeBool(focused)
         }
     }
 }

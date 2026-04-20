@@ -20,6 +20,10 @@ public final class TerminalCore: @unchecked Sendable {
     nonisolated(unsafe) private var streamHandler: StreamHandler
     nonisolated(unsafe) private var screenDirty = false
 
+    /// Whether the application has subscribed to focus events via DECSET 1004.
+    /// Confined to ptyQueue.
+    nonisolated(unsafe) private var focusReportingEnabled = false
+
     /// Title for dedup — confined to ptyQueue.
     nonisolated(unsafe) private var windowTitle: String = ""
 
@@ -79,29 +83,12 @@ public final class TerminalCore: @unchecked Sendable {
         )
         self.screen = screen
         self.streamHandler = StreamHandler(screen: screen)
-    }
 
-    /// Stamp a short identifier (typically the pane UUID's first 8 chars) into
-    /// the owning Screen so `[ALT]` / `[RESIZE server]` / `[MODE]` trace lines
-    /// can be attributed to a pane. Also emits a one-shot `[ENV]` trace
-    /// listing the environment variables that TUI apps (claude code, vim,
-    /// nvim, …) commonly probe to decide alt-screen behavior — compare local
-    /// vs remote `[ENV]` output to find which variable drives the split-pane
-    /// misalignment bug. Temporary — remove with the cursorTrace category.
-    public func setDebugPaneTag(_ tag: String) {
-        ptyQueue.async { [self] in
-            self.screen.debugPaneTag = tag
+        // Wire screen-state callbacks that don't depend on a running PTY so
+        // they remain active in headless usage (tests, pre-start bootstrap).
+        streamHandler.onFocusReportingChanged = { [weak self] enabled in
+            self?.focusReportingEnabled = enabled
         }
-        let env = ProcessInfo.processInfo.environment
-        let interestingKeys = [
-            "TERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION",
-            "COLORTERM", "LANG", "LC_ALL", "LC_TERMINAL",
-            "NO_COLOR", "FORCE_COLOR", "CI", "SSH_CONNECTION",
-        ]
-        let dumped = interestingKeys
-            .map { "\($0)=\(env[$0].map { "\"\($0)\"" } ?? "<nil>")" }
-            .joined(separator: " ")
-        DirtyTrace.emit("[ENV] pane=\(tag) \(dumped)")
     }
 
     // MARK: - Lifecycle
@@ -216,6 +203,59 @@ public final class TerminalCore: @unchecked Sendable {
 
     public func write(_ bytes: [UInt8]) {
         write(Data(bytes))
+    }
+
+    /// Report a focus change to the PTY if the application has subscribed
+    /// via DECSET 1004. Writes `CSI I` (focus in) or `CSI O` (focus out).
+    /// No-op when mode 1004 is not enabled.
+    public func reportFocus(_ focused: Bool) {
+        ptyQueue.async { [weak self] in
+            guard let self, self.focusReportingEnabled else { return }
+            let sequence: [UInt8] = focused
+                ? [0x1B, 0x5B, 0x49]  // ESC [ I
+                : [0x1B, 0x5B, 0x4F]  // ESC [ O
+            self.ptyProcess?.write(Data(sequence))
+        }
+    }
+
+    /// Test-only accessor for focus reporting state. Exposed via `@testable`
+    /// so tests can verify DECSET 1004 toggles land on the core without
+    /// launching a real PTY loopback.
+    internal var isFocusReportingEnabledForTesting: Bool {
+        ptyQueue.sync { focusReportingEnabled }
+    }
+
+    // MARK: - Synchronized Update (DECSET 2026)
+
+    /// Whether this pane currently has an open BSU..ESU window. Checked by
+    /// `SocketServer.performFlush` to decide whether to defer snapshot
+    /// delivery.
+    public var isSyncedUpdateActive: Bool {
+        ptyQueue.sync { screen.syncedUpdateActive }
+    }
+
+    /// Auto-clear a synced-update window that has been open longer than
+    /// `timeout`. Returns true iff this call cleared it. Called by
+    /// `SocketServer.performFlush` as a safety net so a crashed TUI does
+    /// not freeze the client view indefinitely.
+    @discardableResult
+    public func expireStaleSyncedUpdate(timeout: TimeInterval) -> Bool {
+        ptyQueue.sync { screen.expireSyncedUpdateIfStale(timeout: timeout) }
+    }
+
+    /// Test-only byte feed that drives the same `processBytes` path used
+    /// by the real PTY read callback, so tests can exercise state
+    /// transitions without standing up a PTY subprocess.
+    internal func feedBytesForTesting(_ bytes: [UInt8]) {
+        ptyQueue.sync {
+            bytes.withUnsafeBufferPointer { ptr in
+                self.vtParser.feed(ptr) { action in
+                    self.streamHandler.handle(action)
+                }
+            }
+            self.streamHandler.flush()
+            self.markScreenDirty()
+        }
     }
 
     /// Encode a mouse event using the terminal's current tracking mode/format and write to PTY.

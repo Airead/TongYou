@@ -12,6 +12,9 @@ import TYConfig
 /// - `daemon-min-coalesce-delay` — min screen update delay in seconds (Float, > 0)
 /// - `daemon-max-coalesce-delay` — max screen update delay in seconds (Float, > 0)
 /// - `daemon-max-pending-screen-updates` — per-client queue limit (Int, > 0)
+/// - `daemon-synced-update-timeout` — DECSET 2026 safety timeout in seconds
+///   (Float, > 0). Snapshot delivery resumes after this many seconds if the
+///   app never closes the sync window (crash protection).
 /// - `daemon-stats-interval` — stats logging interval in seconds (Float, ≥ 0; 0 disables)
 /// - `daemon-auto-exit-on-no-sessions` — exit when last session closes (Bool)
 /// - `daemon-debug-log-level` — file log level: off/debug/info/warning/error (empty = CLI default).
@@ -151,6 +154,16 @@ public final class DaemonConfigLoader: @unchecked Sendable {
                 config.maxPendingScreenUpdates = v
             }
 
+        case "daemon-synced-update-timeout":
+            if value.isEmpty {
+                config.syncedUpdateTimeout = ServerConfig.defaultSyncedUpdateTimeout
+            } else {
+                guard let v = Double(value), v > 0 else {
+                    throw ConfigError.invalidValue(key: key, value: value)
+                }
+                config.syncedUpdateTimeout = v
+            }
+
         case "daemon-stats-interval":
             if value.isEmpty {
                 config.statsInterval = ServerConfig.defaultStatsInterval
@@ -274,6 +287,9 @@ public final class DaemonConfigLoader: @unchecked Sendable {
         }
         if old.maxPendingScreenUpdates != new.maxPendingScreenUpdates {
             changes.append("daemon-max-pending-screen-updates=\(new.maxPendingScreenUpdates)")
+        }
+        if old.syncedUpdateTimeout != new.syncedUpdateTimeout {
+            changes.append("daemon-synced-update-timeout=\(new.syncedUpdateTimeout)")
         }
         if old.statsInterval != new.statsInterval {
             changes.append("daemon-stats-interval=\(new.statsInterval)")

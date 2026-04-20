@@ -98,3 +98,82 @@ struct StreamHandlerACSTests {
         #expect(screen.cell(at: 1, row: 0).content.firstScalar == Unicode.Scalar(0x2500)) // q restored ACS -> ─
     }
 }
+
+@Suite("StreamHandler synchronized output (mode 2026) tests", .serialized)
+struct StreamHandlerSyncedUpdateTests {
+
+    /// Feed bytes through parser + handler and return the owning screen plus
+    /// any `onWriteBack` bytes captured (DECRQM replies, DSR, etc.).
+    private func drive(_ s: String) -> (Screen, [UInt8]) {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var written: [UInt8] = []
+        handler.onWriteBack = { written.append(contentsOf: $0) }
+        var parser = VTParser()
+        let bytes = Array(s.utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        return (screen, written)
+    }
+
+    @Test func mode2026BeginAndEndTogglesSyncFlag() {
+        let (screenBegin, _) = drive("\u{1B}[?2026h")
+        #expect(screenBegin.syncedUpdateActive == true)
+
+        let (screenEnd, _) = drive("\u{1B}[?2026h\u{1B}[?2026l")
+        #expect(screenEnd.syncedUpdateActive == false)
+    }
+
+    @Test func decrqm2026ReportsResetWhenInactive() {
+        let (_, written) = drive("\u{1B}[?2026$p")
+        let reply = String(bytes: written, encoding: .ascii)
+        #expect(reply == "\u{1B}[?2026;2$y")
+    }
+
+    @Test func decrqm2026ReportsSetWhenActive() {
+        let (_, written) = drive("\u{1B}[?2026h\u{1B}[?2026$p")
+        let reply = String(bytes: written, encoding: .ascii)
+        #expect(reply == "\u{1B}[?2026;1$y")
+    }
+
+    @Test func decrqmUnrelatedModeIsSilentlyDropped() {
+        // Phase 2 deliberately answers only mode 2026 — others should not
+        // trigger any write-back.
+        let (_, written) = drive("\u{1B}[?1004$p")
+        #expect(written.isEmpty)
+    }
+}
+
+@Suite("StreamHandler focus reporting (mode 1004) tests", .serialized)
+struct StreamHandlerFocusReportingTests {
+
+    /// Drive a sequence of bytes through the handler, recording every
+    /// `onFocusReportingChanged` notification in order.
+    private func run(_ s: String) -> [Bool] {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var events: [Bool] = []
+        handler.onFocusReportingChanged = { events.append($0) }
+        var parser = VTParser()
+        let bytes = Array(s.utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        return events
+    }
+
+    @Test func focusReportingInitiallyOff() {
+        let screen = Screen(columns: 10, rows: 2)
+        let handler = StreamHandler(screen: screen)
+        #expect(handler.modes.isSet(.focusEvents) == false)
+    }
+
+    @Test func focusReportingModeToggles() {
+        #expect(run("\u{1B}[?1004h") == [true])
+        #expect(run("\u{1B}[?1004l") == [false])
+        #expect(run("\u{1B}[?1004h\u{1B}[?1004l") == [true, false])
+    }
+}

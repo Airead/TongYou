@@ -132,6 +132,49 @@ struct TerminalCoreTests {
         #expect(core.bracketedPasteMode == false)
         #expect(core.mouseTrackingMode == .none)
     }
+
+    @Test("Focus reporting flag is off by default")
+    func focusReportingInitiallyOff() {
+        let core = TerminalCore(columns: 80, rows: 24)
+        #expect(core.isFocusReportingEnabledForTesting == false)
+    }
+
+    @Test("DECSET 1004 toggles focus reporting flag on core")
+    func focusReportingModeToggles() {
+        let core = TerminalCore(columns: 80, rows: 24)
+        core.feedBytesForTesting(Array("\u{1B}[?1004h".utf8))
+        #expect(core.isFocusReportingEnabledForTesting == true)
+        core.feedBytesForTesting(Array("\u{1B}[?1004l".utf8))
+        #expect(core.isFocusReportingEnabledForTesting == false)
+    }
+
+    @Test("reportFocus is a no-op when PTY not started")
+    func reportFocusNoCrashWhenNotStarted() {
+        let core = TerminalCore(columns: 80, rows: 24)
+        core.reportFocus(true)
+        core.reportFocus(false)
+        // Must not crash; flag remains off since no app subscribed.
+        #expect(core.isFocusReportingEnabledForTesting == false)
+    }
+
+    // MARK: - Synchronized Update (DECSET 2026)
+
+    @Test("DECSET 2026 toggles isSyncedUpdateActive on the core")
+    func syncedUpdateModeToggles() {
+        let core = TerminalCore(columns: 80, rows: 24)
+        #expect(core.isSyncedUpdateActive == false)
+        core.feedBytesForTesting(Array("\u{1B}[?2026h".utf8))
+        #expect(core.isSyncedUpdateActive == true)
+        core.feedBytesForTesting(Array("\u{1B}[?2026l".utf8))
+        #expect(core.isSyncedUpdateActive == false)
+    }
+
+    @Test("expireStaleSyncedUpdate is a no-op when inactive")
+    func expireStaleSyncedUpdateWhenInactive() {
+        let core = TerminalCore(columns: 80, rows: 24)
+        #expect(core.expireStaleSyncedUpdate(timeout: 0.2) == false)
+        #expect(core.isSyncedUpdateActive == false)
+    }
 }
 
 /// Simple thread-safe wrapper for test assertions.

@@ -1,3 +1,4 @@
+import Foundation
 import simd
 
 /// Tracks which rows changed since the last snapshot, enabling partial buffer updates.
@@ -355,10 +356,14 @@ public final class Screen {
 
     private let tabWidth: Int
 
-    /// Short tag (e.g. first 8 chars of the owning paneID's UUID) stamped into
-    /// `[ALT]` / `[RESIZE server]` trace lines. Settable from `TerminalCore`.
-    /// Temporary — remove alongside the cursorTrace category.
-    public var debugPaneTag: String = "-"
+    // MARK: - Synchronized Update (DECSET 2026)
+
+    /// True while an app has an open BSU..ESU window. Snapshot delivery to
+    /// clients is deferred while this is set — see `SocketServer.performFlush`.
+    public private(set) var syncedUpdateActive: Bool = false
+    /// Wall-clock moment the current sync window opened. Used by the safety
+    /// timeout so a crashed TUI does not freeze the client view forever.
+    private var syncedUpdateStartedAt: Date?
 
     public init(columns: Int, rows: Int, maxScrollback: Int = 10000, tabWidth: Int = 8) {
         self.columns = max(1, columns)
@@ -1084,12 +1089,6 @@ public final class Screen {
 
     /// Switch to alternate screen buffer (DECSET 1049).
     public func switchToAltScreen() {
-        let alreadyAlt = altCells != nil
-        DirtyTrace.emit(
-            "[ALT enter] pane=\(debugPaneTag) dims=\(columns)x\(rows)"
-            + " cursor=(\(cursorRow),\(cursorCol))"
-            + " alreadyAlt=\(alreadyAlt)"
-        )
         guard altCells == nil else { return }
         altCells = cells
         altRowBase = rowBase
@@ -1107,12 +1106,6 @@ public final class Screen {
 
     /// Switch back to main screen buffer (DECRST 1049).
     public func switchToMainScreen() {
-        let hadAlt = altCells != nil
-        DirtyTrace.emit(
-            "[ALT leave] pane=\(debugPaneTag) dims=\(columns)x\(rows)"
-            + " cursor=(\(cursorRow),\(cursorCol))"
-            + " hadAlt=\(hadAlt)"
-        )
         guard let saved = altCells else { return }
         cells = saved
         altCells = nil
@@ -1131,15 +1124,38 @@ public final class Screen {
         dirtyRegion.markFull()
     }
 
+    // MARK: - Synchronized Update (DECSET 2026)
+
+    /// Begin a synchronized update window. Repeated calls restart the
+    /// timeout clock so a second BSU inside an existing window is treated
+    /// as a fresh start.
+    public func beginSyncedUpdate(now: Date = Date()) {
+        syncedUpdateActive = true
+        syncedUpdateStartedAt = now
+    }
+
+    /// End the synchronized update window. Idempotent.
+    public func endSyncedUpdate() {
+        syncedUpdateActive = false
+        syncedUpdateStartedAt = nil
+    }
+
+    /// Auto-clear sync state if the window has been open for at least
+    /// `timeout` seconds. Returns true if this call was the one that
+    /// cleared it, false if there was nothing to expire.
+    @discardableResult
+    public func expireSyncedUpdateIfStale(now: Date = Date(), timeout: TimeInterval) -> Bool {
+        guard syncedUpdateActive, let started = syncedUpdateStartedAt else { return false }
+        guard now.timeIntervalSince(started) >= timeout else { return false }
+        syncedUpdateActive = false
+        syncedUpdateStartedAt = nil
+        return true
+    }
+
     // MARK: - Full Reset
 
     /// Full terminal reset (RIS).
     public func fullReset() {
-        let hadAlt = altCells != nil
-        DirtyTrace.emit(
-            "[ALT reset] pane=\(debugPaneTag) dims=\(columns)x\(rows)"
-            + " hadAlt=\(hadAlt)"
-        )
         cells = [Cell](repeating: .empty, count: columns * rows)
         lineFlags = [LineFlags](repeating: LineFlags(), count: rows)
         rowBase = 0
@@ -1157,6 +1173,8 @@ public final class Screen {
         altCharsetState = nil
         charsetState = CharsetState()
         resetScrollback(deallocate: false)
+        syncedUpdateActive = false
+        syncedUpdateStartedAt = nil
         dirtyRegion.markFull()
     }
 
@@ -1176,9 +1194,7 @@ public final class Screen {
         // Temporary cursorTrace: report server-side resize. Remove along with
         // the cursorTrace category when the split-pane misalignment bug is fixed.
         DirtyTrace.emit(
-            "[RESIZE server] pane=\(debugPaneTag)"
-            + " cols=\(oldCols)->\(newCols) rows=\(oldRows)->\(newRows)"
-            + " altPresent=\(altCells != nil)"
+            "[RESIZE server] cols=\(oldCols)->\(newCols) rows=\(oldRows)->\(newRows)"
         )
 
         // Reflow main screen (scrollback + active) when columns change.

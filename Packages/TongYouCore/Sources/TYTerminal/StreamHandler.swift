@@ -32,6 +32,8 @@ public struct StreamHandler {
     public var onRunningCommandChanged: ((String?) -> Void)?
     /// Callback: pane notification triggered by OSC 9 / 777 / 1337 (title, body).
     public var onPaneNotification: ((String, String) -> Void)?
+    /// Callback: focus event reporting (DECSET 1004) toggled on/off.
+    public var onFocusReportingChanged: ((Bool) -> Void)?
 
     public init(screen: Screen) {
         self.screen = screen
@@ -263,6 +265,14 @@ public struct StreamHandler {
                 }
             }
 
+        // --- DECRQM (Request Mode) ---
+        case 0x70: // 'p' — DECRQM query (`CSI ? <mode> $ p`).
+            // Only handled when both '?' (private) and '$' (intermediate) are
+            // present; plain 'p' sequences are unused by us and silently dropped.
+            if hasQuestion && params.hasIntermediate(0x24) {
+                handleDECRQM(params)
+            }
+
         // --- Window Manipulation ---
         case 0x74: // 't' - XTWINOPS (Window manipulation)
             handleWindowManipulation(params)
@@ -478,20 +488,11 @@ public struct StreamHandler {
 
     private mutating func setDECMode(_ rawParam: UInt16, value: Bool) {
         // Try mouse tracking modes first (9, 1000, 1002, 1003)
-        if modes.setMouseTracking(rawParam: rawParam, enabled: value) {
-            emitModeTrace(rawParam, value: value, handled: "mouseTrack")
-            return
-        }
+        if modes.setMouseTracking(rawParam: rawParam, enabled: value) { return }
         // Try mouse format modes (1006)
-        if modes.setMouseFormat(rawParam: rawParam, enabled: value) {
-            emitModeTrace(rawParam, value: value, handled: "mouseFmt")
-            return
-        }
+        if modes.setMouseFormat(rawParam: rawParam, enabled: value) { return }
 
-        guard let mode = TerminalModes.from(rawValue: rawParam) else {
-            emitModeTrace(rawParam, value: value, handled: "unknown")
-            return
-        }
+        guard let mode = TerminalModes.from(rawValue: rawParam) else { return }
 
         modes.set(mode, value)
 
@@ -508,20 +509,32 @@ public struct StreamHandler {
                 screen.switchToMainScreen()
                 restoreCursor()
             }
+        case .focusEvents:
+            onFocusReportingChanged?(value)
+        case .syncedUpdate:
+            if value {
+                screen.beginSyncedUpdate()
+            } else {
+                screen.endSyncedUpdate()
+            }
         default:
             break
         }
-        emitModeTrace(rawParam, value: value, handled: "\(mode)")
     }
 
-    /// Temporary cursorTrace helper — remove with the cursorTrace category.
-    /// Routes through `DirtyTrace` so the server-side Log hook can tag these
-    /// as `cursorTrace` (paired with the `[MODE` prefix in SocketServer).
-    private func emitModeTrace(_ rawParam: UInt16, value: Bool, handled: String) {
-        DirtyTrace.emit(
-            "[MODE] pane=\(screen.debugPaneTag) raw=\(rawParam)"
-            + " value=\(value) handled=\(handled)"
-        )
+    // MARK: - DECRQM (Request Mode)
+
+    /// Respond to a DECRQM query. Only mode 2026 (synchronized output) is
+    /// answered — Phase 2 deliberately skips a generic DECRQM framework to
+    /// avoid scope creep. Response: `CSI ? 2026 ; <state> $ y` where state
+    /// is 1 (set) or 2 (reset).
+    private func handleDECRQM(_ params: CSIParams) {
+        guard params.count >= 1 else { return }
+        let mode = params[0]
+        guard mode == 2026 else { return }
+        let state: Int = screen.syncedUpdateActive ? 1 : 2
+        let response = "\u{1B}[?2026;\(state)$y"
+        onWriteBack?(Data(response.utf8))
     }
 
     // MARK: - DSR (Device Status Report)

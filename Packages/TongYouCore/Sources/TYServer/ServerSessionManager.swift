@@ -415,6 +415,28 @@ public final class ServerSessionManager {
         saveSession(id: sessionID)
     }
 
+    /// Forward a focus in/out transition to the PTY backing `paneID`. The
+    /// underlying `TerminalCore` only writes `CSI I` / `CSI O` when the
+    /// running app has subscribed via DECSET 1004; otherwise this is a
+    /// no-op. Unlike `focusPane`, it does not mutate layout state.
+    public func reportPaneFocus(paneID: PaneID, focused: Bool) {
+        coreLookup[paneID]?.reportFocus(focused)
+    }
+
+    /// Whether the PTY backing `paneID` has an open DECSET 2026
+    /// synchronized-update window. Unknown panes report false.
+    public func isSyncedUpdateActive(paneID: PaneID) -> Bool {
+        coreLookup[paneID]?.isSyncedUpdateActive ?? false
+    }
+
+    /// Auto-expire a stale synchronized-update window on `paneID`. Returns
+    /// true iff the window was cleared by this call. Unknown panes return
+    /// false without side effects.
+    @discardableResult
+    public func expireStaleSyncedUpdate(paneID: PaneID, timeout: TimeInterval) -> Bool {
+        coreLookup[paneID]?.expireStaleSyncedUpdate(timeout: timeout) ?? false
+    }
+
     // MARK: - Pane Operations
 
     @discardableResult
@@ -1215,7 +1237,6 @@ public final class ServerSessionManager {
             rows: Int(config.defaultRows),
             maxScrollback: config.maxScrollback
         )
-        core.setDebugPaneTag(String(actualPaneID.uuid.uuidString.prefix(8)))
 
         wireStandardCallbacks(core, sessionID: sessionID, paneID: actualPaneID)
         coreLookup[actualPaneID] = core

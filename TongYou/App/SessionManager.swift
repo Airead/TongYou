@@ -810,32 +810,13 @@ final class SessionManager {
         remoteClient?.selectTab(sessionID: SessionID(serverSessionID), tabIndex: UInt16(tabIndex))
     }
 
-    /// Diagnostic — ask the remote server to re-emit a full screen snapshot
-    /// for `paneID`. No-op in local sessions. Used to triage the split-pane
-    /// misalignment bug: if this "heals" the mis-render then the server's
-    /// Screen buffer is fine and the fault is in client-side backing.
-    /// Temporary — paired with the `debug_refresh_pane` keybinding.
-    func debugRefreshPane(_ paneID: UUID) {
-        guard sessions.indices.contains(activeSessionIndex) else { return }
-        guard let serverSessionID = sessions[activeSessionIndex].source.serverSessionID,
-              let serverPaneUUID = serverPaneUUID(for: paneID) else { return }
-        remoteClient?.refreshPane(
-            sessionID: SessionID(serverSessionID),
-            paneID: PaneID(serverPaneUUID)
-        )
-        GUILog.debug(
-            "[REFRESH] pane=\(String(paneID.uuidString.prefix(8)))"
-            + " server=\(String(serverPaneUUID.uuidString.prefix(8)))",
-            category: .cursorTrace
-        )
-    }
-
     /// Record the focused pane on the current tab (local state) and notify the server if remote.
     func notifyPaneFocused(_ paneID: UUID) {
         guard sessions.indices.contains(activeSessionIndex) else { return }
         let tabIndex = sessions[activeSessionIndex].activeTabIndex
         guard sessions[activeSessionIndex].tabs.indices.contains(tabIndex) else { return }
-        guard sessions[activeSessionIndex].tabs[tabIndex].focusedPaneID != paneID else { return }
+        let previousPaneID = sessions[activeSessionIndex].tabs[tabIndex].focusedPaneID
+        guard previousPaneID != paneID else { return }
         sessions[activeSessionIndex].tabs[tabIndex].focusedPaneID = paneID
 
         if let serverSessionID = sessions[activeSessionIndex].source.serverSessionID,
@@ -846,9 +827,46 @@ final class SessionManager {
             )
         }
 
+        if let previousPaneID {
+            dispatchFocusEvent(paneID: previousPaneID, focused: false)
+        }
+        dispatchFocusEvent(paneID: paneID, focused: true)
+
         if sessions[activeSessionIndex].source == .local {
             scheduleLocalSaveIfNeeded(sessionID: sessions[activeSessionIndex].id)
         }
+    }
+
+    /// Dispatch a DECSET 1004 focus event for the currently focused pane
+    /// (if any) when the host app / window active state changes. Drives
+    /// vim's `FocusGained` / `FocusLost` autocommands and similar TUI
+    /// focus reporting.
+    func reportWindowActiveChanged(_ active: Bool) {
+        guard sessions.indices.contains(activeSessionIndex) else { return }
+        let tabIndex = sessions[activeSessionIndex].activeTabIndex
+        guard sessions[activeSessionIndex].tabs.indices.contains(tabIndex),
+              let paneID = sessions[activeSessionIndex].tabs[tabIndex].focusedPaneID
+        else { return }
+        dispatchFocusEvent(paneID: paneID, focused: active)
+    }
+
+    /// Deliver a focus in/out event to the PTY backing `paneID`. Routes
+    /// through the local `TerminalController` for local sessions and the
+    /// remote RPC for remote sessions. The receiver is responsible for
+    /// gating on DECSET 1004 — here we send unconditionally.
+    private func dispatchFocusEvent(paneID: UUID, focused: Bool) {
+        guard sessions.indices.contains(activeSessionIndex) else { return }
+        let session = sessions[activeSessionIndex]
+        if let serverSessionID = session.source.serverSessionID,
+           let serverPaneUUID = serverPaneUUID(for: paneID) {
+            remoteClient?.reportPaneFocus(
+                sessionID: SessionID(serverSessionID),
+                paneID: PaneID(serverPaneUUID),
+                focused: focused
+            )
+            return
+        }
+        localControllers[paneID]?.reportFocus(focused)
     }
 
     /// Cmd+9 always goes to the last tab (browser/terminal convention).
@@ -1805,7 +1823,7 @@ final class SessionManager {
              .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession,
              .renameSession, .runInPlace(_, _), .runCommand(_, _, _),
              .paneNotification, .toggleBroadcastInput, .clearPaneSelection,
-             .showCommandPalette, .debugRefreshPane:
+             .showCommandPalette:
             // Pane/remote actions are handled by TerminalWindowView.
             return false
         }
@@ -2684,7 +2702,6 @@ final class SessionManager {
             snapshot.cwd = pane?.initialWorkingDirectory
         }
         let controller = TerminalController(columns: 80, rows: 24)
-        controller.setDebugPaneTag(String(paneID.uuidString.prefix(8)))
         controller.start(snapshot: snapshot)
         localControllers[paneID] = controller
         armBroadcastDispatcher(forPane: paneID)

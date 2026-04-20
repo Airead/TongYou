@@ -266,6 +266,10 @@ struct TerminalWindowView: View {
             if let paneID = focusManager.focusedPaneID {
                 notificationStore.markRead(paneID: paneID)
             }
+            sessionManager.reportWindowActiveChanged(true)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            sessionManager.reportWindowActiveChanged(false)
         }
         .onChange(of: notificationStore.unreadPaneIDs) { _, newIDs in
             for (paneID, view) in viewStore.allViews {
@@ -1253,10 +1257,6 @@ struct TerminalWindowView: View {
             clearPaneSelection()
         case .showCommandPalette:
             openCommandPalette()
-        case .debugRefreshPane:
-            if let paneID = focusManager.focusedPaneID {
-                sessionManager.debugRefreshPane(paneID)
-            }
         }
     }
 

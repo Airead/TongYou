@@ -123,14 +123,6 @@ final class TerminalController: TerminalControlling {
         }
     }
 
-    /// Temporary cursorTrace passthrough: stamp the owning pane's short id
-    /// into the Screen so `[ALT]` / `[MODE]` / `[RESIZE server]` / `[ENV]`
-    /// traces can be attributed to a pane in local mode. Remove with the
-    /// cursorTrace category.
-    func setDebugPaneTag(_ tag: String) {
-        core.setDebugPaneTag(tag)
-    }
-
     /// Apply updated configuration (called from MetalView on hot reload).
     func applyConfig(_ config: Config) {
         bellMode = config.bell
@@ -271,6 +263,13 @@ final class TerminalController: TerminalControlling {
 
     func receiveUserInput(_ data: Data) {
         writeToPTY(data)
+    }
+
+    /// Report a focus in/out transition to the PTY. The underlying
+    /// `TerminalCore` only writes `CSI I` / `CSI O` when the running app
+    /// has enabled DECSET 1004; otherwise this is a no-op.
+    func reportFocus(_ focused: Bool) {
+        core.reportFocus(focused)
     }
 
     private func dispatchUserInput(_ data: Data) {

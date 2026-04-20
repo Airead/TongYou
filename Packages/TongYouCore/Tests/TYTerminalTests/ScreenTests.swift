@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import TYTerminal
 
@@ -132,5 +133,53 @@ struct ScreenTests {
         #expect(screen.scrollbackCell(line: 0, col: 0).codepoint == "A")
         let lastCP = UnicodeScalar(UInt32(0x41 + (1024 % 26)))!
         #expect(screen.scrollbackCell(line: 1024, col: 0).codepoint == Unicode.Scalar(lastCP))
+    }
+
+    // MARK: - Synchronized Update (DECSET 2026)
+
+    @Test func syncedUpdateDefaultsOff() {
+        let screen = Screen(columns: 80, rows: 24)
+        #expect(screen.syncedUpdateActive == false)
+    }
+
+    @Test func syncedUpdateBeginAndEndTogglesFlag() {
+        let screen = Screen(columns: 80, rows: 24)
+        screen.beginSyncedUpdate()
+        #expect(screen.syncedUpdateActive == true)
+        screen.endSyncedUpdate()
+        #expect(screen.syncedUpdateActive == false)
+    }
+
+    @Test func expireSyncedUpdateReturnsFalseWhenInactive() {
+        let screen = Screen(columns: 80, rows: 24)
+        #expect(screen.expireSyncedUpdateIfStale(timeout: 0.2) == false)
+        #expect(screen.syncedUpdateActive == false)
+    }
+
+    @Test func expireSyncedUpdateReturnsFalseBeforeTimeout() {
+        let screen = Screen(columns: 80, rows: 24)
+        let start = Date(timeIntervalSince1970: 1_000)
+        screen.beginSyncedUpdate(now: start)
+        let before = start.addingTimeInterval(0.1)
+        #expect(screen.expireSyncedUpdateIfStale(now: before, timeout: 0.2) == false)
+        #expect(screen.syncedUpdateActive == true)
+    }
+
+    @Test func expireSyncedUpdateClearsAfterTimeout() {
+        let screen = Screen(columns: 80, rows: 24)
+        let start = Date(timeIntervalSince1970: 1_000)
+        screen.beginSyncedUpdate(now: start)
+        let after = start.addingTimeInterval(0.25)
+        #expect(screen.expireSyncedUpdateIfStale(now: after, timeout: 0.2) == true)
+        #expect(screen.syncedUpdateActive == false)
+        // Second call is a no-op.
+        #expect(screen.expireSyncedUpdateIfStale(now: after, timeout: 0.2) == false)
+    }
+
+    @Test func fullResetClearsSyncedUpdate() {
+        let screen = Screen(columns: 80, rows: 24)
+        screen.beginSyncedUpdate()
+        screen.fullReset()
+        #expect(screen.syncedUpdateActive == false)
     }
 }

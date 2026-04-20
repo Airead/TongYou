@@ -28,6 +28,12 @@ public struct ServerConfig: Sendable, Equatable {
     /// timer tick will send fresh data anyway.
     public var maxPendingScreenUpdates: Int
 
+    /// Safety timeout for DECSET 2026 synchronized updates (seconds).
+    /// If an app opens a BSU window and never emits the matching ESU
+    /// (typical crash scenario), snapshot delivery resumes after this
+    /// many seconds so the client view cannot stay frozen indefinitely.
+    public var syncedUpdateTimeout: TimeInterval
+
     /// Interval in seconds between periodic stats logging (0 = disabled).
     public var statsInterval: TimeInterval
 
@@ -53,6 +59,8 @@ public struct ServerConfig: Sendable, Equatable {
     public static let defaultStatsInterval: TimeInterval = 30.0
     public static let defaultDebugLogLevel: String = ""
     public static let defaultDebugLogCategories: Set<String> = []
+    /// Matches the 200ms figure referenced by WezTerm / Windows Terminal.
+    public static let defaultSyncedUpdateTimeout: TimeInterval = 0.200
 
     public init(
         socketPath: String? = nil,
@@ -67,7 +75,8 @@ public struct ServerConfig: Sendable, Equatable {
         statsInterval: TimeInterval = defaultStatsInterval,
         persistenceDirectory: String? = nil,
         debugLogLevel: String = defaultDebugLogLevel,
-        debugLogCategories: Set<String> = defaultDebugLogCategories
+        debugLogCategories: Set<String> = defaultDebugLogCategories,
+        syncedUpdateTimeout: TimeInterval = defaultSyncedUpdateTimeout
     ) {
         self.socketPath = socketPath ?? Self.defaultSocketPath()
         self.autoExitOnNoSessions = autoExitOnNoSessions
@@ -82,6 +91,7 @@ public struct ServerConfig: Sendable, Equatable {
         self.persistenceDirectory = persistenceDirectory
         self.debugLogLevel = debugLogLevel
         self.debugLogCategories = debugLogCategories
+        self.syncedUpdateTimeout = syncedUpdateTimeout
     }
 
     public static func defaultSocketPath() -> String {

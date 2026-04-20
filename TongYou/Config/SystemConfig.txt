@@ -142,7 +142,6 @@ daemon-auto-exit-on-no-sessions = false
 #   run_in_place:command, run_in_place:command:arg1,arg2,
 #   run_command[opts]:command, run_command[opts]:command:arg1,arg2,
 #   toggle_broadcast_input, clear_pane_selection,
-#   debug_refresh_pane,
 #   unbind
 #
 # run_in_place    – Suspend the active shell, run command full-screen,
@@ -270,13 +269,6 @@ keybind = cmd+p=show_command_palette
 # Cmd+Alt+. clears the selection (and turns off broadcasting if on).
 keybind = cmd+alt+i=toggle_broadcast_input
 keybind = cmd+alt+.=clear_pane_selection
-
-# Diagnostic: ask the remote daemon to re-push a full screen snapshot for
-# the focused pane. No PTY side-effect (unlike Ctrl+L, which is handled by
-# the foreground program). Used to triage the split-pane misalignment bug;
-# remove this keybinding and the `debug_refresh_pane` action once the
-# investigation is done.
-keybind = cmd+shift+l=debug_refresh_pane
 
 # ── Auto Passthrough ─────────────────────────────────────────────
 # Comma-separated list of program names that automatically receive
