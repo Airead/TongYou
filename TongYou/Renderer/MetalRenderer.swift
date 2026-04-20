@@ -1252,7 +1252,7 @@ final class MetalRenderer {
             let cellFont = fontSystem.font(for: cell.content, attributes: cell.attributes)
 
             if let attrs = currentAttrs, let font = currentFont {
-                if cell.attributes == attrs && CTFontCopyFontDescriptor(font) === CTFontCopyFontDescriptor(cellFont) {
+                if cell.attributes == attrs && font === cellFont {
                     currentCells.append(cell)
                 } else {
                     flushCurrentRun()
