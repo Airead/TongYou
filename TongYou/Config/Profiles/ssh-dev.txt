@@ -5,4 +5,4 @@
 
 extends = ssh
 background = 18284a
-description = SSH dev: ${HOST}
+description = SSH dev: ${CMDPLT_SSH_HOST}

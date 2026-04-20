@@ -77,7 +77,7 @@ struct SSHLauncherTests {
         let candidate = SSHCandidate(target: "db-prod-1", hostname: nil, isAdHoc: false)
         let resolution = env.launcher.resolve(candidate: candidate)
         #expect(resolution.templateID == "ssh-prod")
-        #expect(resolution.variables["HOST"] == "db-prod-1")
+        #expect(resolution.variables["CMDPLT_SSH_HOST"] == "db-prod-1")
     }
 
     @Test func ruleHitsTemplateForHostname() throws {
@@ -123,20 +123,20 @@ struct SSHLauncherTests {
         #expect(env.spy.spawnCalls.count == 1)
         let call = env.spy.spawnCalls[0]
         #expect(call.templateID == SSHLauncher.fallbackTemplate)
-        #expect(call.variables["HOST"] == "db1.example.com")
-        #expect(call.variables["USER"] == "alice")
+        #expect(call.variables["CMDPLT_SSH_HOST"] == "db1.example.com")
+        #expect(call.variables["CMDPLT_SSH_USER"] == "alice")
         #expect(call.placement == .newTab)
     }
 
     @Test func spawnUndefinedVariableShowsError() async throws {
         let env = try makeEnv(
-            validateError: .undefinedVariable(name: "HOST")
+            validateError: .undefinedVariable(name: "CMDPLT_SSH_HOST")
         )
         defer { env.cleanup() }
         let candidate = SSHCandidate(target: "db1", hostname: nil, isAdHoc: false)
         let resolution = env.launcher.resolve(candidate: candidate)
 
-        await #expect(throws: SSHLauncherError.undefinedVariable("HOST")) {
+        await #expect(throws: SSHLauncherError.undefinedVariable("CMDPLT_SSH_HOST")) {
             try await env.launcher.commit(resolution: resolution, placement: .newTab)
         }
         #expect(env.spy.spawnCalls.isEmpty)
@@ -189,7 +189,7 @@ struct SSHLauncherTests {
         // the user and abort the whole batch before any PTY spawns.
         let env = try makeEnv()
         defer { env.cleanup() }
-        env.spy.validationFailures = [1: .undefinedVariable(name: "HOST")]
+        env.spy.validationFailures = [1: .undefinedVariable(name: "CMDPLT_SSH_HOST")]
 
         let resolutions = Self.resolutions(env, targets: ["db1", "db2", "db3"])
         let result = env.launcher.validateBatch(resolutions: resolutions)
@@ -199,7 +199,7 @@ struct SSHLauncherTests {
             return
         }
         #expect(failure.target == "db2")
-        #expect(failure.error == .undefinedVariable("HOST"))
+        #expect(failure.error == .undefinedVariable("CMDPLT_SSH_HOST"))
     }
 
     @Test func recordBatchHistoryAppendsEveryResolution() async throws {

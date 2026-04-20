@@ -49,7 +49,7 @@ struct SSHCandidate: Equatable {
 
 /// The "user@host" parse of a target string.
 struct SSHTarget: Equatable {
-    /// The text before `@`, if present. Nil means "profile provides USER".
+    /// The text before `@`, if present. Nil means "profile provides CMDPLT_SSH_USER".
     let user: String?
     /// The text after `@`, or the entire target when no `@` was supplied.
     let host: String
@@ -68,7 +68,7 @@ struct SSHTarget: Equatable {
 }
 
 /// A resolved candidate paired with the template it will be launched with
-/// and the variables that get fed to `${HOST}` / `${USER}`. The palette
+/// and the variables that get fed to `${CMDPLT_SSH_HOST}` / `${CMDPLT_SSH_USER}`. The palette
 /// uses this to show the template subtitle *before* Enter is pressed so
 /// the user can see which colour they're about to get.
 struct SSHResolution: Equatable {
@@ -221,9 +221,9 @@ final class SSHLauncher {
     func resolve(candidate: SSHCandidate) -> SSHResolution {
         let target = SSHTarget.parse(candidate.target)
         let templateID = templateForCandidate(candidate, target: target)
-        var variables: [String: String] = ["HOST": target.host]
+        var variables: [String: String] = ["CMDPLT_SSH_HOST": target.host]
         if let user = target.user, !user.isEmpty {
-            variables["USER"] = user
+            variables["CMDPLT_SSH_USER"] = user
         }
         return SSHResolution(
             candidate: candidate,

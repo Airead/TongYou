@@ -6,4 +6,4 @@
 
 extends = ssh
 background = 4a1818
-description = SSH prod: ${HOST}
+description = SSH prod: ${CMDPLT_SSH_HOST}

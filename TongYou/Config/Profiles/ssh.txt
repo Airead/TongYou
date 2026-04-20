@@ -1,17 +1,25 @@
 # TongYou SSH base template.
 #
 # Used by the command palette (⌘P) to launch ssh to an arbitrary host.
-# The palette sets `${HOST}` from the typed target and (when the input
-# has the `user@` form) also `${USER}`. This base template only uses
-# `${HOST}` so plain `host` input works without a user prefix.
+# The palette sets `${CMDPLT_SSH_HOST}` from the typed target and (when the input
+# has the `user@` form) also `${CMDPLT_SSH_USER}`. This base template only uses
+# `${CMDPLT_SSH_HOST}` so plain `host` input works without a user prefix.
 #
 # ssh itself understands `user@host` in the argument, so typing
 # `alice@db1` in the palette will still resolve correctly when the
 # palette forwards the full target — override `args` in a personal
-# profile if you want an explicit `-l ${USER}` flag.
+# profile if you want an explicit `-l ${CMDPLT_SSH_USER}` flag.
+#
+# IMPORTANT: We launch ssh through a login shell (`/bin/sh -l -c`) so that
+# the user's shell profile files (e.g. ~/.profile, ~/.bash_profile, ~/.zprofile)
+# are sourced before ssh runs. This ensures environment variables like PATH
+# are correctly set — without this, ssh would inherit TongYou's bare
+# environment and tools such as the AWS Session Manager plugin would not
+# be found.
 
-command = /usr/bin/ssh
-args = -t
-args = ${HOST}
+command = /bin/sh
+args = -l
+args = -c
+args = ssh -t ${CMDPLT_SSH_HOST}
 close-on-exit = true
-description = SSH to ${HOST}
+description = SSH to ${CMDPLT_SSH_HOST}

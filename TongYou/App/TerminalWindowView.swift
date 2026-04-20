@@ -432,11 +432,30 @@ struct TerminalWindowView: View {
         // close deliberately skips `dismissCommandPalette`'s focus-restore
         // to avoid fighting with the new pane for first responder.
         commandPalette.close()
-        if resolutions.count == 1 {
-            handleSingleSSHCommit(resolution: resolutions[0], mode: mode)
+        let mergedResolutions = resolutions.map { resolutionWithInheritedVariables($0) }
+        if mergedResolutions.count == 1 {
+            handleSingleSSHCommit(resolution: mergedResolutions[0], mode: mode)
         } else {
-            handleBatchSSHCommit(resolutions: resolutions)
+            handleBatchSSHCommit(resolutions: mergedResolutions)
         }
+    }
+
+    /// Merge the current focused pane's variables into an SSH resolution.
+    /// The palette's SSH-specific keys (`CMDPLT_SSH_HOST`, `CMDPLT_SSH_USER`)
+    /// take precedence over inherited variables so the user's explicit target
+    /// is never shadowed.
+    private func resolutionWithInheritedVariables(_ resolution: SSHResolution) -> SSHResolution {
+        let inherited = focusManager.focusedPaneID.flatMap { sessionManager.variables(ofPane: $0) } ?? [:]
+        var merged = inherited
+        for (key, value) in resolution.variables {
+            merged[key] = value
+        }
+        return SSHResolution(
+            candidate: resolution.candidate,
+            target: resolution.target,
+            templateID: resolution.templateID,
+            variables: merged
+        )
     }
 
     /// Phase 6 single-row path. Split variants require a parent pane; when
