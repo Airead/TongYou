@@ -242,20 +242,20 @@ struct CommandPaletteView: View {
         if matched.isEmpty {
             return Text(text).foregroundColor(fgColor)
         }
-        var result = Text("")
+        var attr = AttributedString()
         var index = text.startIndex
         while index < text.endIndex {
-            let slice = Text(String(text[index]))
+            var piece = AttributedString(String(text[index]))
             if matched.contains(index) {
-                result = result + slice
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(.accentColor)
+                piece.font = .system(size: 13, weight: .semibold)
+                piece.foregroundColor = .accentColor
             } else {
-                result = result + slice.foregroundColor(fgColor)
+                piece.foregroundColor = fgColor
             }
+            attr += piece
             index = text.index(after: index)
         }
-        return result
+        return Text(attr)
     }
 
     // MARK: - Selection chip

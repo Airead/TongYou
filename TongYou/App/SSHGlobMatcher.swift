@@ -17,7 +17,7 @@ import Foundation
 /// Highlight indices point only at positions covered by literal (non-
 /// wildcard) characters, so the view underlines the same letters the user
 /// actually typed.
-enum SSHGlobMatcher {
+nonisolated enum SSHGlobMatcher {
 
     /// Which characters activate glob/multi-pattern mode. When *none* of
     /// these appear in the SSH query, the caller should fall back to its

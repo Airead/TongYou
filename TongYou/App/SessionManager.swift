@@ -2954,7 +2954,7 @@ final class SessionManager {
     /// after every `localControllers[_] = ` / `remoteControllers[_] = `
     /// assignment so freshly-created controllers participate in broadcast.
     private func armBroadcastDispatcher(forPane paneID: UUID) {
-        let closure: (Data) -> Void = { [weak self] data in
+        let closure: @MainActor @Sendable (Data) -> Void = { [weak self] data in
             self?.dispatchUserInput(fromPane: paneID, data: data)
         }
         if let local = localControllers[paneID] {
