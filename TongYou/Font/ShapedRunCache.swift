@@ -1,7 +1,8 @@
+import CoreText
 import Foundation
 import TYTerminal
 
-/// Cached shaping result for a single row of terminal cells.
+/// Cached shaping result aggregated for a single row of terminal cells.
 struct CachedShapedRow {
     /// Shaped text runs: (run, glyphs).
     let textRuns: [(run: TextRun, glyphs: [ShapedGlyph])]
@@ -9,13 +10,18 @@ struct CachedShapedRow {
     let emojis: [(col: Int, cluster: GraphemeCluster, width: CellWidth)]
 }
 
-/// Row-level cache for CoreText shaping results.
+/// Run-level cache for CoreText shaping results.
 ///
-/// Key is derived from the cell contents and attributes of the entire row.
-/// When the font configuration changes, the cache must be cleared by the owner.
-final class ShapedRowCache {
+/// A terminal row typically contains multiple text runs (different fonts, attributes,
+/// or emoji boundaries). Caching at the run level — rather than the whole row — lets
+/// a partially-changed row still hit cache for the unchanged runs (e.g. split-pane
+/// scrolling where only one half of each line changes).
+///
+/// Key: (cells content, CTFont identity, CellAttributes). When the font configuration
+/// changes, the cache must be cleared by the owner.
+final class ShapedRunCache {
     private struct Entry {
-        var row: CachedShapedRow
+        var glyphs: [ShapedGlyph]
         var hash: Int
         var digest: Int
         var prev: Int?
@@ -35,44 +41,42 @@ final class ShapedRowCache {
     private(set) var hits: UInt64 = 0
     private(set) var misses: UInt64 = 0
 
-    init(capacity: Int = 300) {
+    init(capacity: Int = 2000) {
         self.capacity = capacity
     }
 
-    /// Look up a cached shaping result for the given row of cells.
-    func get(cells: ArraySlice<Cell>) -> CachedShapedRow? {
-        let hash = Self.hashCells(cells)
+    /// Look up cached glyphs for the given text run.
+    func get(cells: ArraySlice<Cell>, font: CTFont, attributes: CellAttributes) -> [ShapedGlyph]? {
+        let (hash, digest) = Self.computeKeys(cells: cells, font: font, attributes: attributes)
         guard let slot = hashToSlot[hash] else {
             misses += 1
             return nil
         }
-        let digest = Self.digestCells(cells)
         guard slots[slot].digest == digest else {
             misses += 1
             return nil
         }
         hits += 1
         moveToTail(slot)
-        return slots[slot].row
+        return slots[slot].glyphs
     }
 
-    /// Store a shaping result for the given row of cells.
-    func set(cells: ArraySlice<Cell>, value: CachedShapedRow) {
-        let hash = Self.hashCells(cells)
-        let digest = Self.digestCells(cells)
+    /// Store shaped glyphs for the given text run.
+    func set(cells: ArraySlice<Cell>, font: CTFont, attributes: CellAttributes, value: [ShapedGlyph]) {
+        let (hash, digest) = Self.computeKeys(cells: cells, font: font, attributes: attributes)
         if let existing = hashToSlot[hash] {
             if slots[existing].digest == digest {
-                slots[existing].row = value
+                slots[existing].glyphs = value
                 moveToTail(existing)
                 return
             }
-            // Hash collision with different cells — evict the colliding entry.
+            // Hash collision with different key — evict the colliding entry.
             unlinkSlot(existing)
             freeSlots.append(existing)
         } else if hashToSlot.count >= capacity {
             evictHead()
         }
-        let slot = allocSlot(Entry(row: value, hash: hash, digest: digest))
+        let slot = allocSlot(Entry(glyphs: value, hash: hash, digest: digest))
         hashToSlot[hash] = slot
         appendToTail(slot)
     }
@@ -90,29 +94,46 @@ final class ShapedRowCache {
 
     // MARK: - Private
 
-    private static func hashCells(_ cells: ArraySlice<Cell>) -> Int {
+    /// Compute primary hash (Dict key) and secondary digest (collision verifier)
+    /// in a single pass over the run cells + font/attribute factors.
+    ///
+    /// Font identity uses the CTFont pointer. This is stable because CodepointResolver
+    /// caches returned CTFont instances (LRU-keyed), so the same logical font always
+    /// returns the same object reference during a session.
+    private static func computeKeys(
+        cells: ArraySlice<Cell>,
+        font: CTFont,
+        attributes: CellAttributes
+    ) -> (hash: Int, digest: Int) {
         var hasher = Hasher()
-        for cell in cells {
-            hasher.combine(cell.content)
-            hasher.combine(cell.attributes.flags.rawValue)
-            hasher.combine(cell.attributes.fgColor.raw)
-            hasher.combine(cell.attributes.bgColor.raw)
-            hasher.combine(cell.width.rawValue)
-        }
-        return hasher.finalize()
-    }
-
-    /// Secondary fast digest for verifying hash hits without storing the full cell array.
-    private static func digestCells(_ cells: ArraySlice<Cell>) -> Int {
         var digest = 0
+
+        let fontID = Int(bitPattern: Unmanaged.passUnretained(font).toOpaque())
+        let flags = Int(attributes.flags.rawValue)
+        let fg = Int(attributes.fgColor.raw)
+        let bg = Int(attributes.bgColor.raw)
+
+        hasher.combine(fontID)
+        hasher.combine(flags)
+        hasher.combine(fg)
+        hasher.combine(bg)
+
+        digest = digest &* 31 &+ fontID
+        digest = digest &* 31 &+ flags
+        digest = digest &* 31 &+ fg
+        digest = digest &* 31 &+ bg
+
         for cell in cells {
-            digest ^= cell.content.hashValue
-            digest = digest &* 31 &+ Int(cell.attributes.flags.rawValue)
-            digest = digest &* 31 &+ Int(cell.attributes.fgColor.raw)
-            digest = digest &* 31 &+ Int(cell.attributes.bgColor.raw)
-            digest = digest &* 31 &+ Int(cell.width.rawValue)
+            let contentHash = cell.content.hashValue
+            let width = Int(cell.width.rawValue)
+
+            hasher.combine(contentHash)
+            hasher.combine(width)
+
+            digest ^= contentHash
+            digest = digest &* 31 &+ width
         }
-        return digest
+        return (hasher.finalize(), digest)
     }
 
     private func allocSlot(_ entry: Entry) -> Int {

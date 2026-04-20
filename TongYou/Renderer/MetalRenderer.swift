@@ -71,7 +71,7 @@ final class MetalRenderer {
         var arcCorner: [ArcCornerInstance] = []
     }
 
-    private var shapedRowCache = ShapedRowCache()
+    private var shapedRunCache = ShapedRunCache()
 
     /// Accumulated dirty region across setContent() calls, consumed by render().
     private(set) var pendingDirtyRegion = DirtyRegion.full
@@ -1252,7 +1252,7 @@ final class MetalRenderer {
             let cellFont = fontSystem.font(for: cell.content, attributes: cell.attributes)
 
             if let attrs = currentAttrs, let font = currentFont {
-                if cell.attributes == attrs && CTFontCopyFontDescriptor(font) === CTFontCopyFontDescriptor(cellFont) {
+                if cell.attributes == attrs && font === cellFont {
                     currentCells.append(cell)
                 } else {
                     flushCurrentRun()
@@ -1273,19 +1273,37 @@ final class MetalRenderer {
         return runs
     }
 
-    /// Build shaped runs for a single row, utilizing the row-level cache.
+    /// Build shaped runs for a single row, utilizing the run-level cache.
     private func shapeRow(row: Int, shaper: CoreTextShaper) -> CachedShapedRow {
-        let rowBase = row * backingColumns
-        let snapCols = backingColumns
-        let rowSlice = backingCells[rowBase..<(rowBase + snapCols)]
-
-        if let cached = shapedRowCache.get(cells: rowSlice) {
-            return cached
-        }
-
         let runs = buildRuns(forRow: row)
         var cachedTextRuns: [(run: TextRun, glyphs: [ShapedGlyph])] = []
         var cachedEmojis: [(col: Int, cluster: GraphemeCluster, width: CellWidth)] = []
+
+        func shapeCachedTextRun(cellsSlice: ArraySlice<Cell>, startCol: Int, font: CTFont, attributes: CellAttributes) {
+            let glyphs: [ShapedGlyph]
+            if let cached = shapedRunCache.get(cells: cellsSlice, font: font, attributes: attributes) {
+                glyphs = cached
+            } else {
+                let textRun = TextRun(
+                    cells: Array(cellsSlice),
+                    startCol: startCol,
+                    font: font,
+                    attributes: attributes
+                )
+                glyphs = shaper.shape(textRun)
+                shapedRunCache.set(cells: cellsSlice, font: font, attributes: attributes, value: glyphs)
+                cachedTextRuns.append((textRun, glyphs))
+                return
+            }
+            // Cache hit: synthesize a lightweight TextRun wrapper around the same glyphs.
+            let textRun = TextRun(
+                cells: Array(cellsSlice),
+                startCol: startCol,
+                font: font,
+                attributes: attributes
+            )
+            cachedTextRuns.append((textRun, glyphs))
+        }
 
         for run in runs {
             var textSegmentStart: Int? = nil
@@ -1296,14 +1314,12 @@ final class MetalRenderer {
 
                 if isEmoji {
                     if let start = textSegmentStart {
-                        let end = offset
-                        let textRun = TextRun(
-                            cells: Array(run.cells[start..<end]),
+                        shapeCachedTextRun(
+                            cellsSlice: run.cells[start..<offset],
                             startCol: run.startCol + start,
                             font: run.font,
                             attributes: run.attributes
                         )
-                        cachedTextRuns.append((textRun, shaper.shape(textRun)))
                         textSegmentStart = nil
                     }
                     cachedEmojis.append((col, cell.content, cell.width))
@@ -1315,19 +1331,16 @@ final class MetalRenderer {
             }
 
             if let start = textSegmentStart {
-                let textRun = TextRun(
-                    cells: Array(run.cells[start..<run.cells.count]),
+                shapeCachedTextRun(
+                    cellsSlice: run.cells[start..<run.cells.count],
                     startCol: run.startCol + start,
                     font: run.font,
                     attributes: run.attributes
                 )
-                cachedTextRuns.append((textRun, shaper.shape(textRun)))
             }
         }
 
-        let cached = CachedShapedRow(textRuns: cachedTextRuns, emojis: cachedEmojis)
-        shapedRowCache.set(cells: rowSlice, value: cached)
-        return cached
+        return CachedShapedRow(textRuns: cachedTextRuns, emojis: cachedEmojis)
     }
 
     /// Rebuild text/emoji instances for a single row.
@@ -1781,8 +1794,8 @@ final class MetalRenderer {
             rebuiltRowCount: frameMetrics?.rebuiltRowCount ?? 0,
             pendingDirtyRows: frameStateDirtyRegions.reduce(0) { $0 + $1.dirtyRows.count },
             totalRowCount: Int(gridSize.rows),
-            shapedRowCacheHits: shapedRowCache.hits,
-            shapedRowCacheMisses: shapedRowCache.misses
+            shapedRunCacheHits: shapedRunCache.hits,
+            shapedRunCacheMisses: shapedRunCache.misses
         )
     }
 }

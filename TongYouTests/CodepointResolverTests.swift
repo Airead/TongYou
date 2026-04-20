@@ -123,4 +123,67 @@ struct CodepointResolverTests {
         let resolvedName = CTFontCopyPostScriptName(font) as String
         #expect(resolvedName.contains("AppleColorEmoji"))
     }
+
+    @Test func cacheSizeStaysBoundedUnderManyInserts() {
+        let (resolver, _) = makeResolver()
+        // Insert well beyond the 512-entry cap using a wide range of CJK scalars.
+        for code in 0x4E00..<0x5400 {
+            guard let scalar = Unicode.Scalar(code) else { continue }
+            _ = resolver.resolveFont(for: GraphemeCluster(scalar), style: .regular)
+        }
+        #expect(resolver._cacheCount <= 512)
+    }
+
+    @Test func asciiFastPathBypassesLRU() {
+        // ASCII printable scalars should be served directly from the style-font
+        // snapshot — they must never enter the LRU cache.
+        let (resolver, _) = makeResolver()
+        #expect(resolver._cacheCount == 0)
+        for code in 0x20..<0x7F {
+            guard let scalar = Unicode.Scalar(code) else { continue }
+            _ = resolver.resolveFont(for: GraphemeCluster(scalar), style: .regular)
+        }
+        #expect(resolver._cacheCount == 0)
+    }
+
+    @Test func asciiFastPathReturnsStyleFont() {
+        // Different styles should still return different fonts via the fast path.
+        let fontSystem = FontSystem(scaleFactor: 2.0)
+        let baseFont = fontSystem.ctFont
+        let boldFont = CTFontCreateWithName("Menlo-Bold" as CFString, 26.0, nil)
+        var collection = FontCollection()
+        collection.addFont(baseFont, style: .regular)
+        collection.addFont(boldFont, style: .bold)
+        let resolver = CodepointResolver(
+            collection: collection,
+            baseFont: baseFont,
+            emojiFont: nil,
+            fontSystem: fontSystem
+        )
+
+        let regular = resolver.resolveFont(for: GraphemeCluster("A"), style: .regular)
+        let bold = resolver.resolveFont(for: GraphemeCluster("A"), style: .bold)
+        let regularName = CTFontCopyPostScriptName(regular) as String
+        let boldName = CTFontCopyPostScriptName(bold) as String
+        #expect(regularName != boldName)
+        #expect(resolver._cacheCount == 0)
+    }
+
+    @Test func touchedEntrySurvivesEvictionPressure() {
+        let (resolver, _) = makeResolver()
+        let hotCluster = GraphemeCluster(Unicode.Scalar(0x4E00)!)
+        let hotFont = resolver.resolveFont(for: hotCluster, style: .regular)
+
+        // Fill past capacity while repeatedly touching the hot entry, so it
+        // should remain at the MRU end of the LRU and never be evicted.
+        for code in 0x4E01..<0x5200 {
+            guard let scalar = Unicode.Scalar(code) else { continue }
+            _ = resolver.resolveFont(for: GraphemeCluster(scalar), style: .regular)
+            _ = resolver.resolveFont(for: hotCluster, style: .regular)
+        }
+
+        // If the hot entry stayed cached, the same CTFont instance is returned.
+        let hotAgain = resolver.resolveFont(for: hotCluster, style: .regular)
+        #expect(hotFont === hotAgain)
+    }
 }

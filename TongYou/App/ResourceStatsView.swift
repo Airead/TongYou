@@ -300,10 +300,10 @@ struct ResourceStatsView: View {
             }
 
             HStack(spacing: 12) {
-                let total = metrics.shapedRowCacheHits + metrics.shapedRowCacheMisses
-                let rate = total > 0 ? Double(metrics.shapedRowCacheHits) / Double(total) : 0
-                compactMetric("ShapeHit", "\(metrics.shapedRowCacheHits)", fgColor)
-                compactMetric("ShapeMiss", "\(metrics.shapedRowCacheMisses)", fgColor)
+                let total = metrics.shapedRunCacheHits + metrics.shapedRunCacheMisses
+                let rate = total > 0 ? Double(metrics.shapedRunCacheHits) / Double(total) : 0
+                compactMetric("ShapeHit", "\(metrics.shapedRunCacheHits)", fgColor)
+                compactMetric("ShapeMiss", "\(metrics.shapedRunCacheMisses)", fgColor)
                 compactMetric("ShapeRate", String(format: "%.1f%%", rate * 100), fgColor)
                 Spacer(minLength: 0)
             }

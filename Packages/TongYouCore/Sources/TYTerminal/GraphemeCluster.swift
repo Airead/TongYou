@@ -20,6 +20,9 @@ public struct GraphemeCluster: Equatable, Sendable, Hashable {
     private var _heapStorage: [UInt32]?
     /// Explicit presentation from variation selector: 0=none, 1=text(VS15), 2=emoji(VS16).
     private var _explicitPresentation: UInt8
+    /// Resolved emoji flag, precomputed at init: 0=text, 1=emoji. Avoids repeating
+    /// the Unicode property-table lookup on every access during rendering.
+    private var _cachedIsEmoji: UInt8
 
     private var _isHeapAllocated: Bool {
         _count > Self.inlineCapacity
@@ -30,6 +33,7 @@ public struct GraphemeCluster: Equatable, Sendable, Hashable {
         self._count = 0
         self._heapStorage = nil
         self._explicitPresentation = 0
+        self._cachedIsEmoji = 0
     }
 
     public init(_ scalar: Unicode.Scalar) {
@@ -37,6 +41,7 @@ public struct GraphemeCluster: Equatable, Sendable, Hashable {
         self._count = 1
         self._heapStorage = nil
         self._explicitPresentation = 0
+        self._cachedIsEmoji = scalar.isEmojiPresentation ? 1 : 0
     }
 
     public init(_ character: Character) {
@@ -59,11 +64,42 @@ public struct GraphemeCluster: Equatable, Sendable, Hashable {
         }
 
         // Detect explicit presentation from variation selectors.
-        self._explicitPresentation = 0
+        var explicit: UInt8 = 0
         for s in scalars.prefix(count) {
-            if s.value == 0xFE0E { self._explicitPresentation = 1; break }
-            if s.value == 0xFE0F { self._explicitPresentation = 2; break }
+            if s.value == 0xFE0E { explicit = 1; break }
+            if s.value == 0xFE0F { explicit = 2; break }
         }
+        self._explicitPresentation = explicit
+
+        // Precompute resolved emoji status so the hot render path doesn't pay
+        // for isEmojiPresentation / emoji-marker scans on every cell per frame.
+        let cached: UInt8
+        if explicit == 1 {
+            cached = 0  // VS15 forces text
+        } else if explicit == 2 {
+            cached = 1  // VS16 forces emoji
+        } else if count > 1 && Self._scalarsHaveEmojiMarker(scalars.prefix(count)) {
+            cached = 1  // ZWJ / VS16 / skin-tone / regional indicator / tag
+        } else if let first = scalars.first, first.isEmojiPresentation {
+            cached = 1  // default emoji presentation
+        } else {
+            cached = 0
+        }
+        self._cachedIsEmoji = cached
+    }
+
+    private static func _scalarsHaveEmojiMarker(_ scalars: ArraySlice<Unicode.Scalar>) -> Bool {
+        for s in scalars {
+            let v = s.value
+            if v == 0x200D ||                     // ZWJ
+               v == 0xFE0F ||                     // VS16
+               (v >= 0x1F3FB && v <= 0x1F3FF) ||  // skin tones
+               (v >= 0x1F1E6 && v <= 0x1F1FF) ||  // regional indicators
+               (v >= 0xE0020 && v <= 0xE007F) {   // tags
+                return true
+            }
+        }
+        return false
     }
     
     public var scalarCount: Int {
@@ -111,10 +147,7 @@ public struct GraphemeCluster: Equatable, Sendable, Hashable {
     /// Characters with Emoji=Yes but Emoji_Presentation=No (e.g. U+23FA)
     /// default to text and only become emoji with explicit VS16.
     public var resolvedPresentation: Presentation {
-        if let explicit = explicitPresentation { return explicit }
-        if isEmojiSequence { return .emoji }
-        if let first = firstScalar, first.isEmojiPresentation { return .emoji }
-        return .text
+        _cachedIsEmoji == 1 ? .emoji : .text
     }
 
     public var isEmojiSequence: Bool {
@@ -123,7 +156,7 @@ public struct GraphemeCluster: Equatable, Sendable, Hashable {
     }
 
     public var isEmojiContent: Bool {
-        resolvedPresentation == .emoji
+        _cachedIsEmoji == 1
     }
 
     private func _checkForEmojiMarkers() -> Bool {
