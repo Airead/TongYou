@@ -60,6 +60,7 @@ public final class SocketServer: @unchecked Sendable {
         self.sessionManager = sessionManager
         self.authToken = authToken
         wireSessionManagerCallbacks()
+        DirtyTrace.log = { Log.debug($0) }
     }
 
     public func start() throws {
@@ -356,6 +357,20 @@ public final class SocketServer: @unchecked Sendable {
             let hasScrollDelta = snapshot.dirtyRegion.scrollDelta > 0
             let dirtyCount = snapshot.isPartial ? snapshot.dirtyRows.count : snapshot.dirtyRegion.dirtyCount
             let mostlyDirty = !hasScrollDelta && dirtyCount >= snapshot.rows * 4 / 5
+            if mostlyDirty && snapshot.isPartial {
+                let sampleCount = min(5, snapshot.partialRows.count)
+                let sample = snapshot.partialRows.prefix(sampleCount).map { row, cells -> String in
+                    let firstNonBlank = cells.first { $0.codepoint != " " && $0.width.isRenderable }
+                    let cp = firstNonBlank.map { String($0.codepoint) } ?? "·"
+                    return "r\(row):\(cp)"
+                }.joined(separator: " ")
+                Log.debug(
+                    "High-dirty partial for pane \(paneShort) rows=\(dirtyCount)/\(snapshot.rows)"
+                    + " fullRebuild=\(snapshot.dirtyRegion.fullRebuild)"
+                    + " scrollDelta=\(snapshot.dirtyRegion.scrollDelta)"
+                    + " sample=[\(sample)]"
+                )
+            }
             if !snapshot.isPartial && (snapshot.dirtyRegion.fullRebuild || mostlyDirty) {
                 message = .screenFull(key.sessionID, key.paneID, snapshot, mouseTrackingMode: mouseMode)
             } else {

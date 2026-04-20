@@ -914,6 +914,9 @@ public final class Screen {
         }
         clearRows((scrollBottom - n + 1)..<(scrollBottom + 1))
         dirtyRegion.markRange(scrollTop..<(scrollBottom + 1))
+        if scrollTop == 0 && scrollBottom == rows - 1 {
+            DirtyTrace.emit("scrollUp(count=\(n)) full-region -> mark \(rows) rows dirty")
+        }
     }
 
     /// Scroll down by `count` lines within the scroll region.
@@ -930,6 +933,9 @@ public final class Screen {
         }
         clearRows(scrollTop..<(scrollTop + n))
         dirtyRegion.markRange(scrollTop..<(scrollBottom + 1))
+        if scrollTop == 0 && scrollBottom == rows - 1 {
+            DirtyTrace.emit("scrollDown(count=\(n)) full-region -> mark \(rows) rows dirty")
+        }
     }
 
     /// Set scroll region (DECSTBM). Values are 0-based inclusive.
@@ -1796,6 +1802,9 @@ public final class Screen {
             clearRows(scrollTop..<(scrollTop + 1))
         }
         dirtyRegion.markRange(scrollTop..<(scrollBottom + 1))
+        if scrollTop == 0 && scrollBottom == rows - 1 {
+            DirtyTrace.emit("scrollRegionDown (RI at top) full-region -> mark \(rows) rows dirty")
+        }
     }
 
     /// Move cursor row, marking both old and new rows dirty if changed.
