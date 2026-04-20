@@ -91,6 +91,10 @@ public final class TerminalCore: @unchecked Sendable {
         streamHandler.onFocusReportingChanged = { [weak self] enabled in
             self?.focusReportingEnabled = enabled
         }
+        streamHandler.onUnsupportedMode = { [weak self] mode in
+            Log.warning("Unsupported terminal mode: \(mode)", category: .session)
+            self?.onUnsupportedMode?(mode)
+        }
     }
 
     // MARK: - Lifecycle
@@ -182,10 +186,6 @@ public final class TerminalCore: @unchecked Sendable {
         }
         streamHandler.onPaneNotification = { [weak self] title, body in
             self?.onPaneNotification?(title, body)
-        }
-        streamHandler.onUnsupportedMode = { [weak self] mode in
-            Log.warning("Unsupported terminal mode: \(mode)", category: .session)
-            self?.onUnsupportedMode?(mode)
         }
 
         try launcher(process)
