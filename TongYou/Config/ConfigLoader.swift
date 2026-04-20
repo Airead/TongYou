@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import TYConfig
+import TYServer
 
 /// Loads configuration from disk and watches for changes.
 ///

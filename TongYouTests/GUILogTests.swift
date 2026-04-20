@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import TYServer
 @testable import TongYou
 
 @Suite("GUILog", .serialized)

@@ -19,37 +19,7 @@ public enum Log {
         case cursorTrace
     }
 
-    public enum Level: Int, Sendable, Comparable {
-        case debug = 0
-        case info = 1
-        case warning = 2
-        case error = 3
-
-        var label: String {
-            switch self {
-            case .debug:   return "DEBUG"
-            case .info:    return "INFO"
-            case .warning: return "WARN"
-            case .error:   return "ERROR"
-            }
-        }
-
-        /// Parse from config string. Returns nil for unrecognized values.
-        /// Caller interprets "off" separately (disables logging entirely).
-        public init?(configValue: String) {
-            switch configValue.lowercased() {
-            case "debug":           self = .debug
-            case "info":            self = .info
-            case "warning", "warn": self = .warning
-            case "error":           self = .error
-            default: return nil
-            }
-        }
-
-        public static func < (lhs: Level, rhs: Level) -> Bool {
-            lhs.rawValue < rhs.rawValue
-        }
-    }
+    public typealias Level = LogLevel
 
     // MARK: - State
 
@@ -59,31 +29,21 @@ public enum Log {
     nonisolated(unsafe) private static var minLevel: Level = .info
     nonisolated(unsafe) private static var enabledCategories: Set<Category>?
 
-    /// Serial queue for file I/O. Matches the GUILog design so neither logger
-    /// blocks the caller's thread.
-    private static let fileQueue = DispatchQueue(
-        label: "io.github.airead.tongyou.log.file",
-        qos: .utility
+    private static let fileWriter = FileLogWriter(
+        filePrefix: "daemon",
+        queueLabel: "io.github.airead.tongyou.log.file"
     )
-
-    nonisolated(unsafe) private static var fileHandle: FileHandle?
-    nonisolated(unsafe) private static var currentDateString: String?
 
     /// Override for the log directory. When set, the daemon log writes here
     /// instead of the default `~/.local/share/TongYou/logs`. Intended for tests.
-    nonisolated(unsafe) public static var logDirectoryOverride: URL?
+    public nonisolated(unsafe) static var logDirectoryOverride: URL? {
+        get { fileWriter.logDirectoryOverride }
+        set { fileWriter.logDirectoryOverride = newValue }
+    }
 
     private static let timestampFormatter: DateFormatter = {
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
-        fmt.timeZone = TimeZone(identifier: "UTC")
-        fmt.locale = Locale(identifier: "en_US_POSIX")
-        return fmt
-    }()
-
-    private static let dateOnlyFormatter: DateFormatter = {
-        let fmt = DateFormatter()
-        fmt.dateFormat = "yyyy-MM-dd"
         fmt.timeZone = TimeZone(identifier: "UTC")
         fmt.locale = Locale(identifier: "en_US_POSIX")
         return fmt
@@ -107,9 +67,7 @@ public enum Log {
         self.enabledCategories = nil
         self.writeToStderr = !daemonize
         self.writeToFile = true
-        fileQueue.async {
-            openLogFileIfNeeded()
-        }
+        fileWriter.openFile()
     }
 
     /// Refine the file logger after config is loaded. Applies in both
@@ -124,17 +82,17 @@ public enum Log {
             enabledCategories = categories
             if !writeToFile {
                 writeToFile = true
-                fileQueue.async { openLogFileIfNeeded() }
+                fileWriter.openFile()
             }
         } else {
             writeToFile = false
-            fileQueue.async { closeLogFile() }
+            fileWriter.closeFile()
         }
     }
 
     /// Block until all pending file writes are flushed. For tests only.
     public static func flush() {
-        fileQueue.sync {}
+        fileWriter.flush()
     }
 
     /// Atomically restore default state (no file, stderr on, info level, no
@@ -142,9 +100,7 @@ public enum Log {
     /// opens can race with the override being cleared. Tests only.
     public static func resetForTesting() {
         writeToFile = false
-        fileQueue.sync {
-            closeLogFile()
-        }
+        fileWriter.closeFile()
         writeToStderr = true
         minLevel = .info
         enabledCategories = nil
@@ -187,65 +143,6 @@ public enum Log {
         let now = Date()
         let timestamp = timestampFormatter.string(from: now)
         let line = "[\(timestamp)] [\(level.label)] [\(category.rawValue)] \(message)\n"
-        fileQueue.async {
-            rollDateIfNeeded(now)
-            if fileHandle == nil {
-                openLogFileIfNeeded()
-            }
-            guard let handle = fileHandle else { return }
-            if let data = line.data(using: .utf8) {
-                handle.write(data)
-            }
-        }
-    }
-
-    // MARK: - File Management (all called on fileQueue)
-
-    private static func logDirectory() -> URL {
-        if let override = logDirectoryOverride {
-            return override
-        }
-        let home = NSHomeDirectory()
-        return URL(fileURLWithPath: home)
-            .appendingPathComponent(".local/share/TongYou/logs")
-    }
-
-    private static func logFilePath(for dateString: String) -> URL {
-        logDirectory().appendingPathComponent("daemon-\(dateString).log")
-    }
-
-    private static func openLogFileIfNeeded() {
-        let dateString = dateOnlyFormatter.string(from: Date())
-        let dir = logDirectory()
-        let filePath = logFilePath(for: dateString)
-
-        do {
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            if !FileManager.default.fileExists(atPath: filePath.path) {
-                FileManager.default.createFile(atPath: filePath.path, contents: nil)
-            }
-            let handle = try FileHandle(forWritingTo: filePath)
-            handle.seekToEndOfFile()
-            fileHandle = handle
-            currentDateString = dateString
-        } catch {
-            // Logging failure must not crash the daemon.
-            fputs("[tongyou] [Log] failed to open daemon log file: \(error)\n", stderr)
-        }
-    }
-
-    private static func closeLogFile() {
-        try? fileHandle?.synchronize()
-        try? fileHandle?.close()
-        fileHandle = nil
-        currentDateString = nil
-    }
-
-    private static func rollDateIfNeeded(_ now: Date) {
-        let dateString = dateOnlyFormatter.string(from: now)
-        if dateString != currentDateString {
-            closeLogFile()
-            openLogFileIfNeeded()
-        }
+        fileWriter.writeLine(line, date: now)
     }
 }
