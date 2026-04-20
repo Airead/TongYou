@@ -98,9 +98,7 @@ final class SessionManager {
 
     /// Default location for profile files (`~/.config/tongyou/profiles/`).
     private static func defaultProfileDirectory() -> URL {
-        let expanded = NSString(string: "~/.config/tongyou/profiles")
-            .expandingTildeInPath
-        return URL(fileURLWithPath: expanded)
+        ConfigPaths.profileDirectory
     }
 
     /// Environment variable that acts as a fallback profile id when a

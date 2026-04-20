@@ -4,7 +4,7 @@ import TYConfig
 /// Loads daemon-specific configuration from the shared user config file.
 ///
 /// Reads `daemon-` prefixed keys from `~/.config/tongyou/user_config.txt`
-/// (or the file at `$XDG_CONFIG_HOME/tongyou/user_config.txt`) and applies
+/// (resolved via `ConfigPaths`, which is also used by the GUI) and applies
 /// them to a `ServerConfig`. Supports hot reload via file system watching.
 ///
 /// Supported keys:
@@ -72,28 +72,10 @@ public final class DaemonConfigLoader: @unchecked Sendable {
         setupWatchers(for: paths)
     }
 
-    // MARK: - Config File Path
-
-    /// Returns the user config file URL.
-    public static func userConfigURL() -> URL {
-        configDirectory().appendingPathComponent("user_config.txt")
-    }
-
-    /// Returns the XDG config directory for tongyou.
-    static func configDirectory() -> URL {
-        let xdgHome: String
-        if let env = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"], !env.isEmpty {
-            xdgHome = env
-        } else {
-            xdgHome = NSString(string: "~/.config").expandingTildeInPath
-        }
-        return URL(fileURLWithPath: xdgHome).appendingPathComponent("tongyou")
-    }
-
     // MARK: - Private: Loading
 
     private func loadFromDisk(urls: [URL]? = nil) -> (ServerConfig, existingPaths: [String]) {
-        let fileURLs = urls ?? [Self.userConfigURL()]
+        let fileURLs = urls ?? [ConfigPaths.userConfigURL]
         var allEntries: [ConfigParser.Entry] = []
         var existingPaths: [String] = []
 
@@ -243,7 +225,7 @@ public final class DaemonConfigLoader: @unchecked Sendable {
         }
 
         // Watch the config directory so we detect file creation
-        let dir = Self.configDirectory().path
+        let dir = ConfigPaths.configDirectory.path
         var isDir: ObjCBool = false
         if FileManager.default.fileExists(atPath: dir, isDirectory: &isDir), isDir.boolValue {
             if let watcher = FileWatcher(path: dir, handler: { [weak self] in

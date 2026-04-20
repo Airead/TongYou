@@ -6,7 +6,7 @@ import TYConfig
 ///
 /// Load order (later overrides earlier):
 /// 1. Built-in defaults (`Config.default`)
-/// 2. `$XDG_CONFIG_HOME/tongyou/system_config.txt` (default `~/.config/tongyou/system_config.txt`)
+/// 2. `~/.config/tongyou/system_config.txt` (path resolved via `ConfigPaths`)
 /// 3. Files referenced by `config-file` directives (including `user_config.txt`)
 ///
 /// `system_config.txt` is auto-generated on every launch from the bundled template.
@@ -115,7 +115,7 @@ final class ConfigLoader {
     /// Always overwrites `system_config.txt` with the bundled template.
     func load() {
         writeSystemConfig()
-        Self.seedProfiles(into: Self.configDirectory())
+        Self.seedProfiles(into: ConfigPaths.configDirectory)
         let (newConfig, entries, paths) = loadFromDisk()
         config = newConfig
         globalEntries = entries
@@ -143,39 +143,30 @@ final class ConfigLoader {
     }
 
     // MARK: - Config File Paths
-
-    /// Returns the XDG config directory for tongyou.
-    static func configDirectory() -> URL {
-        let xdgHome: String
-        if let env = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"], !env.isEmpty {
-            xdgHome = env
-        } else {
-            xdgHome = NSString(string: "~/.config").expandingTildeInPath
-        }
-        return URL(fileURLWithPath: xdgHome).appendingPathComponent("tongyou")
-    }
+    //
+    // All paths now come from `TYConfig.ConfigPaths` — the same source the
+    // daemon uses — so GUI and daemon always look at the same files.
 
     /// Returns the ordered list of config file paths to load.
     static func configFilePaths() -> [URL] {
-        let dir = configDirectory()
-        return [dir.appendingPathComponent("system_config.txt")]
+        [ConfigPaths.systemConfigURL]
     }
 
     /// Returns the path to user_config.txt.
     static func userConfigPath() -> URL {
-        configDirectory().appendingPathComponent("user_config.txt")
+        ConfigPaths.userConfigURL
     }
 
     /// Returns the profile directory (`~/.config/tongyou/profiles/`).
     static func profileDirectory() -> URL {
-        configDirectory().appendingPathComponent("profiles")
+        ConfigPaths.profileDirectory
     }
 
     /// Returns the SSH template rules path (`~/.config/tongyou/ssh-rules.txt`).
     /// The file is optional; `SSHRuleMatcher.load` returns an empty matcher
     /// when it doesn't exist (see plan Phase 2 / Phase 9).
     static func sshRulesPath() -> URL {
-        configDirectory().appendingPathComponent("ssh-rules.txt")
+        ConfigPaths.sshRulesURL
     }
 
     // MARK: - System Config Generation
