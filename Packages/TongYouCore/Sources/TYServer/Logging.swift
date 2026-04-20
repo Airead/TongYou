@@ -53,11 +53,6 @@ public enum Log {
 
     // MARK: - State
 
-    /// True once `configure(daemonize: true, ...)` has been called. Foreground
-    /// mode ignores `updateFileLogging` to avoid accidentally opening a file
-    /// when no one asked for it.
-    nonisolated(unsafe) private static var daemonMode = false
-
     nonisolated(unsafe) private static var writeToStderr = true
     nonisolated(unsafe) private static var writeToFile = false
 
@@ -97,30 +92,33 @@ public enum Log {
     // MARK: - Public API
 
     /// Boot-time configuration. Call once at startup before any logging.
+    ///
+    /// Both foreground and daemon modes write to the log file; stderr is
+    /// additionally enabled in foreground so operators see live output in
+    /// their terminal. The file may be disabled afterwards via
+    /// `updateFileLogging(level: nil, ...)` once config is loaded.
+    ///
     /// - Parameters:
-    ///   - daemonize: `true` to write to the daemon log file, `false` for stderr.
+    ///   - daemonize: `true` to suppress stderr (daemonized process has no
+    ///     usable stderr anyway); `false` to keep stderr active.
     ///   - minLevel: Minimum level to emit. Messages below this are skipped.
     public static func configure(daemonize: Bool, minLevel: Level = .info) {
-        self.daemonMode = daemonize
         self.minLevel = minLevel
         self.enabledCategories = nil
         self.writeToStderr = !daemonize
-        self.writeToFile = daemonize
-        if daemonize {
-            fileQueue.async {
-                openLogFileIfNeeded()
-            }
+        self.writeToFile = true
+        fileQueue.async {
+            openLogFileIfNeeded()
         }
     }
 
-    /// Refine the daemon file logger after configuration is loaded.
+    /// Refine the file logger after config is loaded. Applies in both
+    /// foreground and daemon modes.
     /// - Parameters:
-    ///   - level: New minimum level. Pass `nil` to disable file logging entirely.
+    ///   - level: New minimum level. Pass `nil` to disable file logging
+    ///     entirely (stderr, if active, keeps flowing under the prior level).
     ///   - categories: Whitelist of categories. `nil` means all categories.
-    ///
-    /// No-op in foreground mode — we never open a file there.
     public static func updateFileLogging(level: Level?, categories: Set<Category>?) {
-        guard daemonMode else { return }
         if let level {
             minLevel = level
             enabledCategories = categories
@@ -137,6 +135,20 @@ public enum Log {
     /// Block until all pending file writes are flushed. For tests only.
     public static func flush() {
         fileQueue.sync {}
+    }
+
+    /// Atomically restore default state (no file, stderr on, info level, no
+    /// category filter, no override). Drains the file queue so no deferred
+    /// opens can race with the override being cleared. Tests only.
+    public static func resetForTesting() {
+        writeToFile = false
+        fileQueue.sync {
+            closeLogFile()
+        }
+        writeToStderr = true
+        minLevel = .info
+        enabledCategories = nil
+        logDirectoryOverride = nil
     }
 
     public static func debug(_ message: @autoclosure () -> String, category: Category = .server) {

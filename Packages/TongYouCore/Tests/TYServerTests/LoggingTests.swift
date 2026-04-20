@@ -11,11 +11,7 @@ struct LoggingTests {
 
         Log.logDirectoryOverride = dir
         Log.configure(daemonize: true, minLevel: .debug)
-        defer {
-            Log.updateFileLogging(level: nil, categories: nil)
-            Log.configure(daemonize: false, minLevel: .info)
-            Log.logDirectoryOverride = nil
-        }
+        defer { Log.resetForTesting() }
 
         Log.debug("hello-daemon", category: .cursorTrace)
         Log.flush()
@@ -25,21 +21,39 @@ struct LoggingTests {
         #expect(contents.contains("[cursorTrace]"))
     }
 
-    @Test func foregroundModeDoesNotWriteFile() throws {
+    @Test func foregroundModeAlsoWritesToFile() throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
 
         Log.logDirectoryOverride = dir
         Log.configure(daemonize: false, minLevel: .debug)
-        defer {
-            Log.logDirectoryOverride = nil
-        }
+        defer { Log.resetForTesting() }
 
-        Log.debug("should-not-be-in-file")
+        Log.debug("hello-foreground")
         Log.flush()
 
-        let files = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
-        #expect(files.isEmpty)
+        let contents = try readSingleLogFile(in: dir)
+        #expect(contents.contains("hello-foreground"))
+    }
+
+    @Test func offDisablesFileInForeground() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        Log.logDirectoryOverride = dir
+        Log.configure(daemonize: false, minLevel: .debug)
+        defer { Log.resetForTesting() }
+
+        Log.debug("before-disable")
+        Log.flush()
+
+        Log.updateFileLogging(level: nil, categories: nil)
+        Log.debug("after-disable")
+        Log.flush()
+
+        let contents = try readSingleLogFile(in: dir)
+        #expect(contents.contains("before-disable"))
+        #expect(!contents.contains("after-disable"))
     }
 
     @Test func updateFileLoggingOffDisablesFile() throws {
@@ -48,11 +62,7 @@ struct LoggingTests {
 
         Log.logDirectoryOverride = dir
         Log.configure(daemonize: true, minLevel: .debug)
-        defer {
-            Log.updateFileLogging(level: nil, categories: nil)
-            Log.configure(daemonize: false, minLevel: .info)
-            Log.logDirectoryOverride = nil
-        }
+        defer { Log.resetForTesting() }
 
         Log.debug("first-line", category: .server)
         Log.flush()
@@ -73,11 +83,7 @@ struct LoggingTests {
         Log.logDirectoryOverride = dir
         Log.configure(daemonize: true, minLevel: .debug)
         Log.updateFileLogging(level: .debug, categories: [.cursorTrace])
-        defer {
-            Log.updateFileLogging(level: nil, categories: nil)
-            Log.configure(daemonize: false, minLevel: .info)
-            Log.logDirectoryOverride = nil
-        }
+        defer { Log.resetForTesting() }
 
         Log.debug("in-scope", category: .cursorTrace)
         Log.debug("out-of-scope", category: .server)
@@ -95,11 +101,7 @@ struct LoggingTests {
         Log.logDirectoryOverride = dir
         Log.configure(daemonize: true, minLevel: .debug)
         Log.updateFileLogging(level: .warning, categories: nil)
-        defer {
-            Log.updateFileLogging(level: nil, categories: nil)
-            Log.configure(daemonize: false, minLevel: .info)
-            Log.logDirectoryOverride = nil
-        }
+        defer { Log.resetForTesting() }
 
         Log.debug("dropped-debug")
         Log.warning("kept-warning")
