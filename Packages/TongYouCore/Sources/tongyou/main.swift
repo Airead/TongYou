@@ -711,9 +711,6 @@ func applyDaemonLogConfig(_ config: ServerConfig, cliDefault: Log.Level) {
 }
 
 func runServer(daemonize: Bool, debug: Bool) {
-    // Configure logging before anything else.
-    Log.configure(daemonize: daemonize, minLevel: debug ? .debug : .info)
-
     if let existingPID = DaemonLifecycle.checkExistingProcess() {
         fputs("tongyou: server already running (pid \(existingPID))\n", stderr)
         exit(1)
@@ -722,6 +719,12 @@ func runServer(daemonize: Bool, debug: Bool) {
     if daemonize {
         _ = DaemonLifecycle.daemonize()
     }
+
+    // Configure logging AFTER daemonize() — `Log`'s file backend uses a GCD
+    // serial queue, and GCD worker threads do not survive fork(). Creating
+    // the queue in the parent leaves the child with a dead queue whose async
+    // writes never run. Defer queue creation to the post-fork child.
+    Log.configure(daemonize: daemonize, minLevel: debug ? .debug : .info)
 
     let baseConfig = ServerConfig(persistenceDirectory: ServerConfig.defaultPersistenceDirectory())
     let configLoader = DaemonConfigLoader(baseConfig: baseConfig)
