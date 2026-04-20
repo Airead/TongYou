@@ -8,10 +8,30 @@ import TYPTY
 /// No AppKit, no UI — pure backend logic suitable for both
 /// the server daemon and headless testing.
 ///
-/// Thread safety:
-/// - PTY reads, VT parsing, and screen mutations happen on `ptyQueue`.
-/// - Callbacks (`onScreenDirty`, `onTitleChanged`, etc.) fire on `ptyQueue`.
-/// - `consumeSnapshot()` and query properties synchronize via `ptyQueue.sync`.
+/// ## Thread safety
+///
+/// `TerminalCore` is `@unchecked Sendable` because its mutable state is
+/// serialized by `ptyQueue`, a custom serial `DispatchQueue` that the Swift
+/// type system cannot see. `ptyQueue` plays the role an `actor` would; it
+/// is kept as a queue (instead of converting this type to `actor`) because
+/// PTY byte reads must preserve strict FIFO order, which actor re-entrancy
+/// does not guarantee.
+///
+/// Invariants:
+/// - `screen`, `vtParser`, `streamHandler`, `screenDirty`,
+///   `focusReportingEnabled`, and `windowTitle` are mutated only on
+///   `ptyQueue`. They are marked `nonisolated(unsafe)` to document this.
+/// - PTY reads (`PTYProcess.onRead`) already run on `ptyQueue` because the
+///   process is created with `readQueue: ptyQueue`.
+/// - Every public entry point that touches the confined state enters
+///   `ptyQueue` via `sync` (queries / snapshots) or `async` (mutations).
+/// - Callbacks (`onScreenDirty`, `onTitleChanged`, etc.) fire on
+///   `ptyQueue`. Callers that need a different execution context must hop
+///   themselves (e.g., `Task { await someActor.handle(...) }`).
+///
+/// When adding new mutable fields or public APIs: keep everything that
+/// touches the confined state behind `ptyQueue`, and do not expose raw
+/// references to `screen`, `vtParser`, or `streamHandler`.
 public final class TerminalCore: @unchecked Sendable {
 
     // Screen, parser, and handler are confined to ptyQueue.
