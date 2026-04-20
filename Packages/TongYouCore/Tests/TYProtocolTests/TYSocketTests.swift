@@ -14,21 +14,22 @@ struct TYSocketTests {
         let server = try TYSocket.listen(path: socketPath)
         defer { server.closeSocket() }
 
-        // Connect client (in a thread since accept() is blocking)
+        // Connect client (in a thread since accept() is blocking).
+        // The semaphore establishes a happens-before edge between the
+        // accepting thread's write and the main thread's read — a plain
+        // `Thread.sleep` races (TSan will flag it).
         nonisolated(unsafe) var acceptedClient: TYSocket?
+        let acceptDone = DispatchSemaphore(value: 0)
         let acceptThread = Thread {
             acceptedClient = try? server.accept()
+            acceptDone.signal()
         }
         acceptThread.start()
-
-        // Give server a moment to start accepting
-        Thread.sleep(forTimeInterval: 0.05)
 
         let client = try TYSocket.connect(path: socketPath)
         defer { client.closeSocket() }
 
-        // Wait for accept to complete
-        Thread.sleep(forTimeInterval: 0.05)
+        acceptDone.wait()
 
         guard let serverSide = acceptedClient else {
             Issue.record("Server failed to accept connection")
@@ -89,15 +90,17 @@ struct TYSocketTests {
         defer { server.closeSocket() }
 
         nonisolated(unsafe) var acceptedClient: TYSocket?
+        let acceptDone = DispatchSemaphore(value: 0)
         let acceptThread = Thread {
             acceptedClient = try? server.accept()
+            acceptDone.signal()
         }
         acceptThread.start()
-        Thread.sleep(forTimeInterval: 0.05)
 
         let client = try TYSocket.connect(path: socketPath)
         defer { client.closeSocket() }
-        Thread.sleep(forTimeInterval: 0.05)
+
+        acceptDone.wait()
 
         guard let serverSide = acceptedClient else {
             Issue.record("Server failed to accept connection")
@@ -140,15 +143,17 @@ struct TYSocketTests {
         defer { server.closeSocket() }
 
         nonisolated(unsafe) var acceptedClient: TYSocket?
+        let acceptDone = DispatchSemaphore(value: 0)
         let acceptThread = Thread {
             acceptedClient = try? server.accept()
+            acceptDone.signal()
         }
         acceptThread.start()
-        Thread.sleep(forTimeInterval: 0.05)
 
         let client = try TYSocket.connect(path: socketPath)
         defer { client.closeSocket() }
-        Thread.sleep(forTimeInterval: 0.05)
+
+        acceptDone.wait()
 
         guard let serverSide = acceptedClient else {
             Issue.record("Server failed to accept connection")

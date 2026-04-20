@@ -29,6 +29,13 @@ public enum Log {
     nonisolated(unsafe) private static var minLevel: Level = .info
     nonisolated(unsafe) private static var enabledCategories: Set<Category>?
 
+    /// Guards the four static fields above. `Log.*` is called from every
+    /// thread in the process, so unlocked reads/writes are a data race —
+    /// e.g. a test reconfiguring `Log` while another test emits through
+    /// `Log.info` from a GCD worker. Keep the critical section tiny:
+    /// snapshot into locals, then do stderr/file I/O outside the lock.
+    private static let configLock = NSLock()
+
     private static let fileWriter = FileLogWriter(
         filePrefix: "daemon",
         queueLabel: "io.github.airead.tongyou.log.file"
@@ -63,10 +70,12 @@ public enum Log {
     ///     usable stderr anyway); `false` to keep stderr active.
     ///   - minLevel: Minimum level to emit. Messages below this are skipped.
     public static func configure(daemonize: Bool, minLevel: Level = .info) {
-        self.minLevel = minLevel
-        self.enabledCategories = nil
-        self.writeToStderr = !daemonize
-        self.writeToFile = true
+        configLock.withLock {
+            self.minLevel = minLevel
+            self.enabledCategories = nil
+            self.writeToStderr = !daemonize
+            self.writeToFile = true
+        }
         fileWriter.openFile()
     }
 
@@ -77,16 +86,25 @@ public enum Log {
     ///     entirely (stderr, if active, keeps flowing under the prior level).
     ///   - categories: Whitelist of categories. `nil` means all categories.
     public static func updateFileLogging(level: Level?, categories: Set<Category>?) {
-        if let level {
-            minLevel = level
-            enabledCategories = categories
-            if !writeToFile {
-                writeToFile = true
-                fileWriter.openFile()
+        enum Action { case none, open, close }
+        let action: Action = configLock.withLock {
+            if let level {
+                minLevel = level
+                enabledCategories = categories
+                if !writeToFile {
+                    writeToFile = true
+                    return .open
+                }
+                return .none
+            } else {
+                writeToFile = false
+                return .close
             }
-        } else {
-            writeToFile = false
-            fileWriter.closeFile()
+        }
+        switch action {
+        case .none: break
+        case .open: fileWriter.openFile()
+        case .close: fileWriter.closeFile()
         }
     }
 
@@ -99,11 +117,13 @@ public enum Log {
     /// category filter, no override). Drains the file queue so no deferred
     /// opens can race with the override being cleared. Tests only.
     public static func resetForTesting() {
-        writeToFile = false
+        configLock.withLock {
+            writeToFile = false
+            writeToStderr = true
+            minLevel = .info
+            enabledCategories = nil
+        }
         fileWriter.closeFile()
-        writeToStderr = true
-        minLevel = .info
-        enabledCategories = nil
         logDirectoryOverride = nil
     }
 
@@ -130,16 +150,22 @@ public enum Log {
     // MARK: - Private
 
     private static func shouldEmit(level: Level, category: Category) -> Bool {
-        if level < minLevel { return false }
-        if let cats = enabledCategories, !cats.contains(category) { return false }
+        let (currMinLevel, cats): (Level, Set<Category>?) = configLock.withLock {
+            (minLevel, enabledCategories)
+        }
+        if level < currMinLevel { return false }
+        if let cats, !cats.contains(category) { return false }
         return true
     }
 
     private static func emit(level: Level, category: Category, message: String) {
-        if writeToStderr {
+        let (toStderr, toFile): (Bool, Bool) = configLock.withLock {
+            (writeToStderr, writeToFile)
+        }
+        if toStderr {
             fputs("[tongyou] [\(level.label)] [\(category.rawValue)] \(message)\n", stderr)
         }
-        guard writeToFile else { return }
+        guard toFile else { return }
         let now = Date()
         let timestamp = timestampFormatter.string(from: now)
         let line = "[\(timestamp)] [\(level.label)] [\(category.rawValue)] \(message)\n"
