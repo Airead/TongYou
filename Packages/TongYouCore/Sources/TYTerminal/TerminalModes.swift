@@ -36,6 +36,11 @@ public struct TerminalModes: Equatable, Sendable {
         case altScreen = 1049
         /// Bracketed paste mode (mode 2004).
         case bracketedPaste = 2004
+        /// Synchronized output (mode 2026). While active the terminal keeps
+        /// processing escape sequences internally but holds snapshot
+        /// delivery to the client until the app ends the update or the
+        /// safety timeout elapses.
+        case syncedUpdate = 2026
     }
 
     /// Mouse tracking modes — mutually exclusive (setting one clears others).
@@ -123,6 +128,7 @@ public struct TerminalModes: Equatable, Sendable {
         case .altScreen:      return 1 << 3
         case .bracketedPaste: return 1 << 4
         case .focusEvents:    return 1 << 5
+        case .syncedUpdate:   return 1 << 6
         }
     }
 

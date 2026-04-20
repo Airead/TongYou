@@ -265,6 +265,14 @@ public struct StreamHandler {
                 }
             }
 
+        // --- DECRQM (Request Mode) ---
+        case 0x70: // 'p' — DECRQM query (`CSI ? <mode> $ p`).
+            // Only handled when both '?' (private) and '$' (intermediate) are
+            // present; plain 'p' sequences are unused by us and silently dropped.
+            if hasQuestion && params.hasIntermediate(0x24) {
+                handleDECRQM(params)
+            }
+
         // --- Window Manipulation ---
         case 0x74: // 't' - XTWINOPS (Window manipulation)
             handleWindowManipulation(params)
@@ -512,6 +520,12 @@ public struct StreamHandler {
             }
         case .focusEvents:
             onFocusReportingChanged?(value)
+        case .syncedUpdate:
+            if value {
+                screen.beginSyncedUpdate()
+            } else {
+                screen.endSyncedUpdate()
+            }
         default:
             break
         }
@@ -526,6 +540,21 @@ public struct StreamHandler {
             "[MODE] pane=\(screen.debugPaneTag) raw=\(rawParam)"
             + " value=\(value) handled=\(handled)"
         )
+    }
+
+    // MARK: - DECRQM (Request Mode)
+
+    /// Respond to a DECRQM query. Only mode 2026 (synchronized output) is
+    /// answered — Phase 2 deliberately skips a generic DECRQM framework to
+    /// avoid scope creep. Response: `CSI ? 2026 ; <state> $ y` where state
+    /// is 1 (set) or 2 (reset).
+    private func handleDECRQM(_ params: CSIParams) {
+        guard params.count >= 1 else { return }
+        let mode = params[0]
+        guard mode == 2026 else { return }
+        let state: Int = screen.syncedUpdateActive ? 1 : 2
+        let response = "\u{1B}[?2026;\(state)$y"
+        onWriteBack?(Data(response.utf8))
     }
 
     // MARK: - DSR (Device Status Report)

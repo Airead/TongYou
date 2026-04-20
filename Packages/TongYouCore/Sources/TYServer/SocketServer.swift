@@ -42,6 +42,11 @@ public final class SocketServer: @unchecked Sendable {
     /// Used to compute the adaptive coalesce delay. Managed on `messageQueue`.
     private var consecutiveFlushCount = 0
 
+    /// Fixed retry delay for panes stuck in a DECSET 2026 synchronized update.
+    /// Independent of the ramping coalesce delay so a long sync does not
+    /// make the next real flush arbitrarily slow.
+    private static let syncedUpdateRetryDelay: TimeInterval = 0.020
+
     /// Periodic stats logging timer.
     private var statsTimer: DispatchSourceTimer?
 
@@ -396,7 +401,32 @@ public final class SocketServer: @unchecked Sendable {
             return
         }
 
+        // Panes currently inside a DECSET 2026 BSU..ESU window are deferred
+        // instead of flushed; they go back into `dirtyPanes` at the end so
+        // the next tick re-examines them.
+        var deferred: Set<DirtyPaneKey> = []
+        var processedCount = 0
+        let syncTimeout = config.syncedUpdateTimeout
+
         for key in panes {
+            // Safety net: auto-close a sync window that has been open longer
+            // than the configured timeout (handles a TUI that crashed with
+            // an open BSU and never sent the matching ESU).
+            if sessionManager.expireStaleSyncedUpdate(
+                paneID: key.paneID, timeout: syncTimeout
+            ) {
+                Log.debug(
+                    "Synced update expired for pane"
+                    + " \(key.paneID.uuid.uuidString.prefix(8))"
+                    + " after \(syncTimeout)s"
+                )
+            }
+
+            if sessionManager.isSyncedUpdateActive(paneID: key.paneID) {
+                deferred.insert(key)
+                continue
+            }
+
             guard let snapshot = sessionManager.consumeSnapshot(
                 paneID: key.paneID
             ) else { continue }
@@ -461,6 +491,14 @@ public final class SocketServer: @unchecked Sendable {
             logCursorTraceSend(paneID: key.paneID, paneShort: paneShort, snapshot: snapshot)
 
             forEachAttachedClient(session: key.sessionID) { $0.send(message) }
+            processedCount += 1
+        }
+
+        // Re-queue deferred panes so they are revisited on the next tick.
+        if !deferred.isEmpty {
+            dirtyLock.lock()
+            dirtyPanes.formUnion(deferred)
+            dirtyLock.unlock()
         }
 
         // Check if more dirty panes arrived during the flush.
@@ -472,12 +510,32 @@ public final class SocketServer: @unchecked Sendable {
         dirtyLock.unlock()
 
         if hasPending {
-            consecutiveFlushCount += 1
-            scheduleFlush()
+            if processedCount == 0 {
+                // Every dirty pane is currently in a sync window. Schedule a
+                // fixed-delay retry that does not ramp the coalesce counter —
+                // the dirt is all "waiting for ESU", not sustained output.
+                scheduleSyncedUpdateRetry()
+            } else {
+                consecutiveFlushCount += 1
+                scheduleFlush()
+            }
         } else {
             flushTimer = nil
             consecutiveFlushCount = 0
         }
+    }
+
+    /// Fixed-delay retry for panes that were deferred because their PTY is
+    /// inside a DECSET 2026 synchronized update. Must run on `messageQueue`.
+    private func scheduleSyncedUpdateRetry() {
+        let timer = DispatchSource.makeTimerSource(queue: messageQueue)
+        timer.schedule(deadline: .now() + Self.syncedUpdateRetryDelay)
+        timer.setEventHandler { [weak self] in
+            self?.performFlush()
+        }
+        timer.resume()
+        flushTimer?.cancel()
+        flushTimer = timer
     }
 
     private func logStats() {

@@ -248,6 +248,24 @@ public final class TerminalCore: @unchecked Sendable {
         ptyQueue.sync { focusReportingEnabled }
     }
 
+    // MARK: - Synchronized Update (DECSET 2026)
+
+    /// Whether this pane currently has an open BSU..ESU window. Checked by
+    /// `SocketServer.performFlush` to decide whether to defer snapshot
+    /// delivery.
+    public var isSyncedUpdateActive: Bool {
+        ptyQueue.sync { screen.syncedUpdateActive }
+    }
+
+    /// Auto-clear a synced-update window that has been open longer than
+    /// `timeout`. Returns true iff this call cleared it. Called by
+    /// `SocketServer.performFlush` as a safety net so a crashed TUI does
+    /// not freeze the client view indefinitely.
+    @discardableResult
+    public func expireStaleSyncedUpdate(timeout: TimeInterval) -> Bool {
+        ptyQueue.sync { screen.expireSyncedUpdateIfStale(timeout: timeout) }
+    }
+
     /// Test-only byte feed that drives the same `processBytes` path used
     /// by the real PTY read callback, so tests can exercise state
     /// transitions without standing up a PTY subprocess.
@@ -259,6 +277,7 @@ public final class TerminalCore: @unchecked Sendable {
                 }
             }
             self.streamHandler.flush()
+            self.markScreenDirty()
         }
     }
 

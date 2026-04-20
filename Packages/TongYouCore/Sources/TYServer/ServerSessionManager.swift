@@ -423,6 +423,20 @@ public final class ServerSessionManager {
         coreLookup[paneID]?.reportFocus(focused)
     }
 
+    /// Whether the PTY backing `paneID` has an open DECSET 2026
+    /// synchronized-update window. Unknown panes report false.
+    public func isSyncedUpdateActive(paneID: PaneID) -> Bool {
+        coreLookup[paneID]?.isSyncedUpdateActive ?? false
+    }
+
+    /// Auto-expire a stale synchronized-update window on `paneID`. Returns
+    /// true iff the window was cleared by this call. Unknown panes return
+    /// false without side effects.
+    @discardableResult
+    public func expireStaleSyncedUpdate(paneID: PaneID, timeout: TimeInterval) -> Bool {
+        coreLookup[paneID]?.expireStaleSyncedUpdate(timeout: timeout) ?? false
+    }
+
     // MARK: - Pane Operations
 
     @discardableResult

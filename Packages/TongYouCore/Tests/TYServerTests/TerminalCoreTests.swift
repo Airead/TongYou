@@ -156,6 +156,25 @@ struct TerminalCoreTests {
         // Must not crash; flag remains off since no app subscribed.
         #expect(core.isFocusReportingEnabledForTesting == false)
     }
+
+    // MARK: - Synchronized Update (DECSET 2026)
+
+    @Test("DECSET 2026 toggles isSyncedUpdateActive on the core")
+    func syncedUpdateModeToggles() {
+        let core = TerminalCore(columns: 80, rows: 24)
+        #expect(core.isSyncedUpdateActive == false)
+        core.feedBytesForTesting(Array("\u{1B}[?2026h".utf8))
+        #expect(core.isSyncedUpdateActive == true)
+        core.feedBytesForTesting(Array("\u{1B}[?2026l".utf8))
+        #expect(core.isSyncedUpdateActive == false)
+    }
+
+    @Test("expireStaleSyncedUpdate is a no-op when inactive")
+    func expireStaleSyncedUpdateWhenInactive() {
+        let core = TerminalCore(columns: 80, rows: 24)
+        #expect(core.expireStaleSyncedUpdate(timeout: 0.2) == false)
+        #expect(core.isSyncedUpdateActive == false)
+    }
 }
 
 /// Simple thread-safe wrapper for test assertions.
