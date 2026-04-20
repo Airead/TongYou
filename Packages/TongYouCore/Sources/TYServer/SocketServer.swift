@@ -70,13 +70,9 @@ public final class SocketServer: @unchecked Sendable {
         self.authToken = authToken
         wireSessionManagerCallbacks()
         DirtyTrace.log = { msg in
-            // [RESIZE] / [ALT] / [MODE] / [ENV] messages belong to the
-            // cursorTrace investigation; the rest are dirty-region traces.
-            // Both hooks are temporary.
-            if msg.hasPrefix("[RESIZE")
-                || msg.hasPrefix("[ALT")
-                || msg.hasPrefix("[MODE")
-                || msg.hasPrefix("[ENV") {
+            // [RESIZE] messages belong to the cursorTrace investigation;
+            // the rest are dirty-region traces. Both hooks are temporary.
+            if msg.hasPrefix("[RESIZE") {
                 Log.debug(msg, category: .cursorTrace)
             } else {
                 Log.debug(msg)
@@ -764,17 +760,6 @@ public final class SocketServer: @unchecked Sendable {
                 broadcastLayoutOrClosed(sessionID: sessionID)
             }
 
-        case .refreshPane(let sessionID, let paneID):
-            // Diagnostic — just force-push the current Screen state back to
-            // this client (no PTY side-effect). Used to triage the split-pane
-            // misalignment bug against the real Ctrl+L (which triggers an
-            // app-level redraw in the foreground program).
-            Log.debug(
-                "[REFRESH] pane=\(String(paneID.uuid.uuidString.prefix(8)))"
-                + " session=\(sessionID)",
-                category: .cursorTrace
-            )
-            sendFullSnapshot(to: client, sessionID: sessionID, paneID: paneID)
         }
     }
 

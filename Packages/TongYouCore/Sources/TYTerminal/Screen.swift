@@ -356,11 +356,6 @@ public final class Screen {
 
     private let tabWidth: Int
 
-    /// Short tag (e.g. first 8 chars of the owning paneID's UUID) stamped into
-    /// `[ALT]` / `[RESIZE server]` trace lines. Settable from `TerminalCore`.
-    /// Temporary — remove alongside the cursorTrace category.
-    public var debugPaneTag: String = "-"
-
     // MARK: - Synchronized Update (DECSET 2026)
 
     /// True while an app has an open BSU..ESU window. Snapshot delivery to
@@ -1094,12 +1089,6 @@ public final class Screen {
 
     /// Switch to alternate screen buffer (DECSET 1049).
     public func switchToAltScreen() {
-        let alreadyAlt = altCells != nil
-        DirtyTrace.emit(
-            "[ALT enter] pane=\(debugPaneTag) dims=\(columns)x\(rows)"
-            + " cursor=(\(cursorRow),\(cursorCol))"
-            + " alreadyAlt=\(alreadyAlt)"
-        )
         guard altCells == nil else { return }
         altCells = cells
         altRowBase = rowBase
@@ -1117,12 +1106,6 @@ public final class Screen {
 
     /// Switch back to main screen buffer (DECRST 1049).
     public func switchToMainScreen() {
-        let hadAlt = altCells != nil
-        DirtyTrace.emit(
-            "[ALT leave] pane=\(debugPaneTag) dims=\(columns)x\(rows)"
-            + " cursor=(\(cursorRow),\(cursorCol))"
-            + " hadAlt=\(hadAlt)"
-        )
         guard let saved = altCells else { return }
         cells = saved
         altCells = nil
@@ -1173,11 +1156,6 @@ public final class Screen {
 
     /// Full terminal reset (RIS).
     public func fullReset() {
-        let hadAlt = altCells != nil
-        DirtyTrace.emit(
-            "[ALT reset] pane=\(debugPaneTag) dims=\(columns)x\(rows)"
-            + " hadAlt=\(hadAlt)"
-        )
         cells = [Cell](repeating: .empty, count: columns * rows)
         lineFlags = [LineFlags](repeating: LineFlags(), count: rows)
         rowBase = 0
@@ -1216,9 +1194,7 @@ public final class Screen {
         // Temporary cursorTrace: report server-side resize. Remove along with
         // the cursorTrace category when the split-pane misalignment bug is fixed.
         DirtyTrace.emit(
-            "[RESIZE server] pane=\(debugPaneTag)"
-            + " cols=\(oldCols)->\(newCols) rows=\(oldRows)->\(newRows)"
-            + " altPresent=\(altCells != nil)"
+            "[RESIZE server] cols=\(oldCols)->\(newCols) rows=\(oldRows)->\(newRows)"
         )
 
         // Reflow main screen (scrollback + active) when columns change.

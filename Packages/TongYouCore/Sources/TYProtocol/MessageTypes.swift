@@ -104,13 +104,6 @@ public enum ClientMessageType: UInt16, Sendable {
     /// `layoutUpdate`, avoiding the per-split resize churn of repeated
     /// `splitPane` requests.
     case createTabWithGridPanes        = 0x0233
-    /// Temporary diagnostic: client asks server to re-emit a full snapshot
-    /// for the given pane (no PTY side-effects — just forces the server's
-    /// current Screen state back to the client). Used to investigate the
-    /// split-pane misalignment bug: if this resolves the mis-render then
-    /// the issue is in the client-side backing buffer; otherwise the
-    /// server's Screen itself is wrong.
-    case refreshPane                   = 0x0234
 }
 
 // MARK: - Server Messages
@@ -285,9 +278,6 @@ public enum ClientMessage: Sendable {
     /// emits a single `layoutUpdate` so clients reshape once instead of
     /// after every split.
     case createTabWithGridPanes(SessionID, [GridPaneSpec])
-    /// Diagnostic: ask the server to re-emit a full screen snapshot for
-    /// `paneID` right away. Temporary — paired with `ClientMessageType.refreshPane`.
-    case refreshPane(SessionID, PaneID)
     /// Report a focus in/out transition for `paneID`. The server writes
     /// `CSI I` / `CSI O` to the PTY only if the running app has enabled
     /// DECSET 1004; otherwise it is a silent no-op. Separate from
@@ -366,8 +356,6 @@ public enum ClientMessage: Sendable {
             return "movePane(session=\(sid), source=\(source), target=\(target), side=\(side))"
         case .changeStrategy(let sid, let pid, let kind):
             return "changeStrategy(session=\(sid), pane=\(pid), kind=\(kind.rawValue))"
-        case .refreshPane(let sid, let pid):
-            return "refreshPane(session=\(sid), pane=\(pid))"
         case .paneFocusEvent(let sid, let pid, let focused):
             return "paneFocusEvent(session=\(sid), pane=\(pid), focused=\(focused))"
         }
@@ -408,7 +396,6 @@ public enum ClientMessage: Sendable {
         case .movePane:                      return .movePane
         case .changeStrategy:                return .changeStrategy
         case .createTabWithGridPanes:        return .createTabWithGridPanes
-        case .refreshPane:                   return .refreshPane
         case .paneFocusEvent:                return .paneFocusEvent
         }
     }

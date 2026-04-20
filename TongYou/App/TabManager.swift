@@ -53,9 +53,6 @@ enum TabAction {
     case clearPaneSelection
     // Command palette (⌘P) — opens fuzzy panel in session scope by default.
     case showCommandPalette
-    // Diagnostic: ask remote daemon to re-push full snapshot for focused pane.
-    // Temporary — used to triage the split-pane misalignment bug.
-    case debugRefreshPane
 }
 
 /// Manages the list of terminal tabs and the active tab index.
@@ -334,7 +331,7 @@ final class TabManager {
              .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession,
              .renameSession, .runInPlace, .runCommand,
              .paneNotification, .toggleBroadcastInput, .clearPaneSelection,
-             .showCommandPalette, .debugRefreshPane:
+             .showCommandPalette:
             // Pane/remote actions are handled by TerminalWindowView, not TabManager.
             return false
         }

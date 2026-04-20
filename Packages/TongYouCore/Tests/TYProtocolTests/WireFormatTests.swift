@@ -408,19 +408,6 @@ struct WireFormatTests {
         #expect(dPid == pid)
     }
 
-    @Test func roundTripRefreshPane() throws {
-        let sid = SessionID()
-        let pid = PaneID()
-        let msg = ClientMessage.refreshPane(sid, pid)
-        let decoded = try encodeAndDecode(clientMessage: msg)
-        guard case .refreshPane(let dSid, let dPid) = decoded else {
-            Issue.record("Expected .refreshPane")
-            return
-        }
-        #expect(dSid == sid)
-        #expect(dPid == pid)
-    }
-
     @Test func roundTripPaneFocusEvent() throws {
         let sid = SessionID()
         let pid = PaneID()

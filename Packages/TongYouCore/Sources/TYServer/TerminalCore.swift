@@ -91,29 +91,6 @@ public final class TerminalCore: @unchecked Sendable {
         }
     }
 
-    /// Stamp a short identifier (typically the pane UUID's first 8 chars) into
-    /// the owning Screen so `[ALT]` / `[RESIZE server]` / `[MODE]` trace lines
-    /// can be attributed to a pane. Also emits a one-shot `[ENV]` trace
-    /// listing the environment variables that TUI apps (claude code, vim,
-    /// nvim, …) commonly probe to decide alt-screen behavior — compare local
-    /// vs remote `[ENV]` output to find which variable drives the split-pane
-    /// misalignment bug. Temporary — remove with the cursorTrace category.
-    public func setDebugPaneTag(_ tag: String) {
-        ptyQueue.async { [self] in
-            self.screen.debugPaneTag = tag
-        }
-        let env = ProcessInfo.processInfo.environment
-        let interestingKeys = [
-            "TERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION",
-            "COLORTERM", "LANG", "LC_ALL", "LC_TERMINAL",
-            "NO_COLOR", "FORCE_COLOR", "CI", "SSH_CONNECTION",
-        ]
-        let dumped = interestingKeys
-            .map { "\($0)=\(env[$0].map { "\"\($0)\"" } ?? "<nil>")" }
-            .joined(separator: " ")
-        DirtyTrace.emit("[ENV] pane=\(tag) \(dumped)")
-    }
-
     // MARK: - Lifecycle
 
     /// Start the PTY process with the default login shell.

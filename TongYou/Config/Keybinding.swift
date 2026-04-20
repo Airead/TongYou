@@ -195,10 +195,6 @@ struct Keybinding: Equatable {
         case showCommandPalette
         // Pass through to PTY (disables the keybinding)
         case unbind
-        // Diagnostic: ask the remote daemon to re-push a full screen snapshot
-        // for the focused pane (no PTY side-effect). Used to triage the
-        // split-pane misalignment bug. Temporary.
-        case debugRefreshPane
 
         /// Raw string used in config files.
         var rawValue: String {
@@ -260,7 +256,6 @@ struct Keybinding: Equatable {
             case .clearPaneSelection: "clear_pane_selection"
             case .showCommandPalette: "show_command_palette"
             case .unbind: "unbind"
-            case .debugRefreshPane: "debug_refresh_pane"
             }
         }
 
@@ -379,7 +374,6 @@ struct Keybinding: Equatable {
             case .toggleBroadcastInput: .toggleBroadcastInput
             case .clearPaneSelection: .clearPaneSelection
             case .showCommandPalette: .showCommandPalette
-            case .debugRefreshPane: .debugRefreshPane
             case .copy, .paste, .search, .searchNext, .searchPrevious,
                  .resetFontSize, .increaseFontSize, .decreaseFontSize,
                  .unbind:
@@ -443,7 +437,6 @@ struct Keybinding: Equatable {
             case .toggleBroadcastInput: return "Toggle broadcast input"
             case .clearPaneSelection: return "Clear pane selection"
             case .showCommandPalette: return "Show command palette"
-            case .debugRefreshPane: return "Debug: refresh pane"
             case .gotoTab, .runInPlace, .runCommand, .unbind:
                 return nil
             }
@@ -496,7 +489,6 @@ struct Keybinding: Equatable {
             case "clear_pane_selection": self = .clearPaneSelection
             case "show_command_palette": self = .showCommandPalette
             case "unbind": self = .unbind
-            case "debug_refresh_pane": self = .debugRefreshPane
             default:
                 if rawValue.hasPrefix("goto_tab:"),
                    let n = Int(rawValue.dropFirst("goto_tab:".count)),
