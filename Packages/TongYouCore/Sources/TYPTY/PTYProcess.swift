@@ -16,10 +16,14 @@ import Glibc
 /// (via a dedicated serial `writeQueue` that handles `EAGAIN` with `poll()`).
 ///
 /// Thread safety:
-/// - `start()`, `write()`, `resize()`, `stop()` are called from MainActor.
+/// - `start()`, `write()`, `resize()`, `stop()` may be called from any thread
+///   (historically MainActor, now also called from the `ServerSessionManager`
+///   actor's executor). Mutable state (`masterFD`, `childPID`,
+///   `readSource`, `processSource`) is guarded by `stateLock`; callers
+///   capture fd/pid into locals under the lock and invoke syscalls outside it.
 /// - The read source fires on the provided `readQueue`.
-/// - Writes are dispatched to `writeQueue` to avoid blocking MainActor.
-/// - Properties accessed in `deinit` are marked `nonisolated(unsafe)`.
+/// - Writes are dispatched to `writeQueue` to avoid blocking the caller.
+/// - `cleanup()` is `nonisolated` and safe to call from `deinit`.
 public final class PTYProcess {
 
     /// Callback invoked on `readQueue` when bytes arrive from the shell.
@@ -33,6 +37,11 @@ public final class PTYProcess {
     nonisolated(unsafe) private var childPID: pid_t = -1
     nonisolated(unsafe) private var readSource: DispatchSourceRead?
     nonisolated(unsafe) private var processSource: DispatchSourceProcess?
+    /// Guards all four mutable fields above. Kept short: the lock is only
+    /// held across field reads/writes; syscalls (ioctl/close/waitpid/usleep)
+    /// run outside the critical section, and the captured fd/pid values are
+    /// used locally.
+    private let stateLock = NSLock()
     private let readQueue: DispatchQueue
     private let writeQueue: DispatchQueue
 
@@ -162,16 +171,18 @@ public final class PTYProcess {
         }
 
         close(slave)
-        masterFD = master
-        childPID = pid
+        stateLock.withLock {
+            masterFD = master
+            childPID = pid
+        }
 
         let flags = fcntl(master, F_GETFL)
         if flags >= 0 {
             _ = fcntl(master, F_SETFL, flags | O_NONBLOCK)
         }
 
-        startReadSource()
-        startProcessMonitor()
+        startReadSource(fd: master)
+        startProcessMonitor(pid: pid)
     }
 
     // MARK: - Write
@@ -184,7 +195,7 @@ public final class PTYProcess {
     /// large pastes (including the bracketed-paste end sequence) are delivered
     /// in full.
     public func write(_ data: Data) {
-        let fd = masterFD
+        let fd = stateLock.withLock { masterFD }
         guard fd >= 0, !data.isEmpty else { return }
         writeQueue.async {
             data.withUnsafeBytes { rawBuf in
@@ -218,14 +229,15 @@ public final class PTYProcess {
 
     /// Update the PTY window size (sends SIGWINCH to the child).
     public func resize(columns: UInt16, rows: UInt16, pixelWidth: UInt16 = 0, pixelHeight: UInt16 = 0) {
-        guard masterFD >= 0 else { return }
+        let fd = stateLock.withLock { masterFD }
+        guard fd >= 0 else { return }
         var winSize = winsize(
             ws_row: rows,
             ws_col: columns,
             ws_xpixel: pixelWidth,
             ws_ypixel: pixelHeight
         )
-        _ = ioctl(masterFD, TIOCSWINSZ, &winSize)
+        _ = ioctl(fd, TIOCSWINSZ, &winSize)
     }
 
     // MARK: - Stop
@@ -237,19 +249,27 @@ public final class PTYProcess {
 
     /// Shared teardown used by both `stop()` and `deinit`.
     nonisolated private func cleanup() {
-        readSource?.cancel()
-        readSource = nil
-        processSource?.cancel()
-        processSource = nil
+        // Snapshot and invalidate all state in one critical section so any
+        // concurrent caller (resize/write/cwd query) racing against us sees
+        // either the full valid state or the invalidated sentinel — never
+        // a torn read. Syscalls run outside the lock to keep it brief.
+        let (readSrc, processSrc, pid, fd) = stateLock.withLock {
+            let snapshot = (readSource, processSource, childPID, masterFD)
+            readSource = nil
+            processSource = nil
+            childPID = -1
+            masterFD = -1
+            return snapshot
+        }
+
+        readSrc?.cancel()
+        processSrc?.cancel()
 
         // Drain pending writes before closing the fd so in-flight data
         // (e.g. the bracketed-paste end sequence) is not lost.
         writeQueue.sync {}
 
-        if childPID > 0 {
-            let pid = childPID
-            childPID = -1
-
+        if pid > 0 {
             kill(pid, SIGHUP)
 
             // Give the child a brief window to exit gracefully, then force-kill.
@@ -271,9 +291,8 @@ public final class PTYProcess {
             }
         }
 
-        if masterFD >= 0 {
-            close(masterFD)
-            masterFD = -1
+        if fd >= 0 {
+            close(fd)
         }
     }
 
@@ -322,17 +341,19 @@ public final class PTYProcess {
 
     /// Query the current working directory of the child process.
     public var currentWorkingDirectory: String? {
-        guard childPID > 0 else { return nil }
+        let pid = stateLock.withLock { childPID }
+        guard pid > 0 else { return nil }
         var buf = [CChar](repeating: 0, count: Int(MAXPATHLEN))
-        guard pty_get_cwd(childPID, &buf, Int32(buf.count)) == 0 else { return nil }
+        guard pty_get_cwd(pid, &buf, Int32(buf.count)) == 0 else { return nil }
         return String(decoding: buf.prefix(while: { $0 != 0 }).map { UInt8($0) }, as: UTF8.self)
     }
 
     /// Query the name of the foreground process running in this PTY.
     public var foregroundProcessName: String? {
-        guard masterFD >= 0 else { return nil }
+        let fd = stateLock.withLock { masterFD }
+        guard fd >= 0 else { return nil }
         var buf = [CChar](repeating: 0, count: 17) // MAXCOMLEN + 1
-        guard pty_get_foreground_process_name(masterFD, &buf, Int32(buf.count)) == 0 else {
+        guard pty_get_foreground_process_name(fd, &buf, Int32(buf.count)) == 0 else {
             return nil
         }
         return String(decoding: buf.prefix(while: { $0 != 0 }).map { UInt8($0) }, as: UTF8.self)
@@ -340,8 +361,7 @@ public final class PTYProcess {
 
     // MARK: - Private: Read Source
 
-    private func startReadSource() {
-        let fd = masterFD
+    private func startReadSource(fd: Int32) {
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: readQueue)
 
         // Allocate read buffer once; freed in cancel handler
@@ -383,13 +403,12 @@ public final class PTYProcess {
         }
 
         source.resume()
-        readSource = source
+        stateLock.withLock { readSource = source }
     }
 
     // MARK: - Private: Process Monitor
 
-    private func startProcessMonitor() {
-        let pid = childPID
+    private func startProcessMonitor(pid: pid_t) {
         let source = DispatchSource.makeProcessSource(
             identifier: pid,
             eventMask: .exit,
@@ -411,7 +430,7 @@ public final class PTYProcess {
         }
 
         source.resume()
-        processSource = source
+        stateLock.withLock { processSource = source }
     }
 
     // MARK: - Private: Shell & Environment
