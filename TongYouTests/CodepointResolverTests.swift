@@ -123,4 +123,32 @@ struct CodepointResolverTests {
         let resolvedName = CTFontCopyPostScriptName(font) as String
         #expect(resolvedName.contains("AppleColorEmoji"))
     }
+
+    @Test func cacheSizeStaysBoundedUnderManyInserts() {
+        let (resolver, _) = makeResolver()
+        // Insert well beyond the 512-entry cap using a wide range of CJK scalars.
+        for code in 0x4E00..<0x5400 {
+            guard let scalar = Unicode.Scalar(code) else { continue }
+            _ = resolver.resolveFont(for: GraphemeCluster(scalar), style: .regular)
+        }
+        #expect(resolver._cacheCount <= 512)
+    }
+
+    @Test func touchedEntrySurvivesEvictionPressure() {
+        let (resolver, _) = makeResolver()
+        let hotCluster = GraphemeCluster(Unicode.Scalar(0x4E00)!)
+        let hotFont = resolver.resolveFont(for: hotCluster, style: .regular)
+
+        // Fill past capacity while repeatedly touching the hot entry, so it
+        // should remain at the MRU end of the LRU and never be evicted.
+        for code in 0x4E01..<0x5200 {
+            guard let scalar = Unicode.Scalar(code) else { continue }
+            _ = resolver.resolveFont(for: GraphemeCluster(scalar), style: .regular)
+            _ = resolver.resolveFont(for: hotCluster, style: .regular)
+        }
+
+        // If the hot entry stayed cached, the same CTFont instance is returned.
+        let hotAgain = resolver.resolveFont(for: hotCluster, style: .regular)
+        #expect(hotFont === hotAgain)
+    }
 }

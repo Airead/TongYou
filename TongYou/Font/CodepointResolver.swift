@@ -6,13 +6,27 @@ final class CodepointResolver {
     private let baseFont: CTFont
     private let emojiFont: CTFont?
     private let fontSystem: FontSystem
-    private var cache: [CacheKey: CTFont] = [:]
-    private var cacheAccessOrder: [CacheKey] = []
 
     private struct CacheKey: Hashable {
         let cluster: GraphemeCluster
         let style: FontCollection.Style
     }
+
+    /// LRU entry stored in a slot pool. `prev`/`next` form a doubly-linked list
+    /// over slot indices, so touch/evict are O(1).
+    private struct Entry {
+        let key: CacheKey
+        let font: CTFont
+        var prev: Int?
+        var next: Int?
+    }
+
+    private var slots: [Entry] = []
+    private var freeSlots: [Int] = []
+    private var keyToSlot: [CacheKey: Int] = [:]
+    /// Head is the least-recently used; tail is the most-recently used.
+    private var head: Int?
+    private var tail: Int?
 
     private static let maxCacheSize = 512
 
@@ -29,9 +43,9 @@ final class CodepointResolver {
         }
 
         let key = CacheKey(cluster: cluster, style: style)
-        if let cached = cache[key] {
-            touchCache(key)
-            return cached
+        if let slot = keyToSlot[key] {
+            moveToTail(slot)
+            return slots[slot].font
         }
 
         let font = resolveThroughFallbackChain(cluster: cluster, style: style)
@@ -76,17 +90,56 @@ final class CodepointResolver {
         return fallback
     }
 
-    private func touchCache(_ key: CacheKey) {
-        cacheAccessOrder.removeAll { $0 == key }
-        cacheAccessOrder.append(key)
+    private func insertIntoCache(_ key: CacheKey, font: CTFont) {
+        if keyToSlot.count >= Self.maxCacheSize {
+            evictHead()
+        }
+        let slot = allocSlot(Entry(key: key, font: font, prev: nil, next: nil))
+        keyToSlot[key] = slot
+        appendToTail(slot)
     }
 
-    private func insertIntoCache(_ key: CacheKey, font: CTFont) {
-        if cache.count >= Self.maxCacheSize, let oldest = cacheAccessOrder.first {
-            cacheAccessOrder.removeFirst()
-            cache.removeValue(forKey: oldest)
+    private func allocSlot(_ entry: Entry) -> Int {
+        if let free = freeSlots.popLast() {
+            slots[free] = entry
+            return free
         }
-        cache[key] = font
-        cacheAccessOrder.append(key)
+        slots.append(entry)
+        return slots.count - 1
     }
+
+    private func unlinkSlot(_ slot: Int) {
+        let prev = slots[slot].prev
+        let next = slots[slot].next
+        if let p = prev { slots[p].next = next } else { head = next }
+        if let n = next { slots[n].prev = prev } else { tail = prev }
+        slots[slot].prev = nil
+        slots[slot].next = nil
+    }
+
+    private func appendToTail(_ slot: Int) {
+        slots[slot].prev = tail
+        slots[slot].next = nil
+        if let t = tail { slots[t].next = slot }
+        tail = slot
+        if head == nil { head = slot }
+    }
+
+    private func moveToTail(_ slot: Int) {
+        guard slot != tail else { return }
+        unlinkSlot(slot)
+        appendToTail(slot)
+    }
+
+    private func evictHead() {
+        guard let h = head else { return }
+        keyToSlot.removeValue(forKey: slots[h].key)
+        unlinkSlot(h)
+        freeSlots.append(h)
+    }
+
+    #if DEBUG
+    /// Internal accessor for tests to verify cache state.
+    var _cacheCount: Int { keyToSlot.count }
+    #endif
 }
