@@ -123,6 +123,14 @@ final class TerminalController: TerminalControlling {
         }
     }
 
+    /// Temporary cursorTrace passthrough: stamp the owning pane's short id
+    /// into the Screen so `[ALT]` / `[MODE]` / `[RESIZE server]` / `[ENV]`
+    /// traces can be attributed to a pane in local mode. Remove with the
+    /// cursorTrace category.
+    func setDebugPaneTag(_ tag: String) {
+        core.setDebugPaneTag(tag)
+    }
+
     /// Apply updated configuration (called from MetalView on hot reload).
     func applyConfig(_ config: Config) {
         bellMode = config.bell

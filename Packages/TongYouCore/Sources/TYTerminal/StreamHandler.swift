@@ -478,11 +478,20 @@ public struct StreamHandler {
 
     private mutating func setDECMode(_ rawParam: UInt16, value: Bool) {
         // Try mouse tracking modes first (9, 1000, 1002, 1003)
-        if modes.setMouseTracking(rawParam: rawParam, enabled: value) { return }
+        if modes.setMouseTracking(rawParam: rawParam, enabled: value) {
+            emitModeTrace(rawParam, value: value, handled: "mouseTrack")
+            return
+        }
         // Try mouse format modes (1006)
-        if modes.setMouseFormat(rawParam: rawParam, enabled: value) { return }
+        if modes.setMouseFormat(rawParam: rawParam, enabled: value) {
+            emitModeTrace(rawParam, value: value, handled: "mouseFmt")
+            return
+        }
 
-        guard let mode = TerminalModes.from(rawValue: rawParam) else { return }
+        guard let mode = TerminalModes.from(rawValue: rawParam) else {
+            emitModeTrace(rawParam, value: value, handled: "unknown")
+            return
+        }
 
         modes.set(mode, value)
 
@@ -502,6 +511,17 @@ public struct StreamHandler {
         default:
             break
         }
+        emitModeTrace(rawParam, value: value, handled: "\(mode)")
+    }
+
+    /// Temporary cursorTrace helper — remove with the cursorTrace category.
+    /// Routes through `DirtyTrace` so the server-side Log hook can tag these
+    /// as `cursorTrace` (paired with the `[MODE` prefix in SocketServer).
+    private func emitModeTrace(_ rawParam: UInt16, value: Bool, handled: String) {
+        DirtyTrace.emit(
+            "[MODE] pane=\(screen.debugPaneTag) raw=\(rawParam)"
+            + " value=\(value) handled=\(handled)"
+        )
     }
 
     // MARK: - DSR (Device Status Report)

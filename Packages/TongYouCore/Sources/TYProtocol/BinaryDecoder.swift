@@ -839,6 +839,11 @@ public struct BinaryDecoder: Sendable {
                 ))
             }
             return .createTabWithGridPanes(sessionID, specs)
+
+        case .refreshPane:
+            let sessionID = try readSessionID()
+            let paneID = try readPaneID()
+            return .refreshPane(sessionID, paneID)
         }
     }
 }

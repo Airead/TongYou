@@ -810,6 +810,26 @@ final class SessionManager {
         remoteClient?.selectTab(sessionID: SessionID(serverSessionID), tabIndex: UInt16(tabIndex))
     }
 
+    /// Diagnostic — ask the remote server to re-emit a full screen snapshot
+    /// for `paneID`. No-op in local sessions. Used to triage the split-pane
+    /// misalignment bug: if this "heals" the mis-render then the server's
+    /// Screen buffer is fine and the fault is in client-side backing.
+    /// Temporary — paired with the `debug_refresh_pane` keybinding.
+    func debugRefreshPane(_ paneID: UUID) {
+        guard sessions.indices.contains(activeSessionIndex) else { return }
+        guard let serverSessionID = sessions[activeSessionIndex].source.serverSessionID,
+              let serverPaneUUID = serverPaneUUID(for: paneID) else { return }
+        remoteClient?.refreshPane(
+            sessionID: SessionID(serverSessionID),
+            paneID: PaneID(serverPaneUUID)
+        )
+        GUILog.debug(
+            "[REFRESH] pane=\(String(paneID.uuidString.prefix(8)))"
+            + " server=\(String(serverPaneUUID.uuidString.prefix(8)))",
+            category: .cursorTrace
+        )
+    }
+
     /// Record the focused pane on the current tab (local state) and notify the server if remote.
     func notifyPaneFocused(_ paneID: UUID) {
         guard sessions.indices.contains(activeSessionIndex) else { return }
@@ -1785,7 +1805,7 @@ final class SessionManager {
              .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession,
              .renameSession, .runInPlace(_, _), .runCommand(_, _, _),
              .paneNotification, .toggleBroadcastInput, .clearPaneSelection,
-             .showCommandPalette:
+             .showCommandPalette, .debugRefreshPane:
             // Pane/remote actions are handled by TerminalWindowView.
             return false
         }
@@ -2664,6 +2684,7 @@ final class SessionManager {
             snapshot.cwd = pane?.initialWorkingDirectory
         }
         let controller = TerminalController(columns: 80, rows: 24)
+        controller.setDebugPaneTag(String(paneID.uuidString.prefix(8)))
         controller.start(snapshot: snapshot)
         localControllers[paneID] = controller
         armBroadcastDispatcher(forPane: paneID)

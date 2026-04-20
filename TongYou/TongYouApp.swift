@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import TYServer
+import TYTerminal
 
 @main
 struct TongYouApp: App {
@@ -39,6 +40,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         GUIAutomationService.shared.start()
         installFocusTraceObservers()
         installDebugMarkerMonitor()
+        installLocalDirtyTraceHook()
+    }
+
+    /// Route `DirtyTrace` messages through `GUILog` in local mode so
+    /// `[ALT]` / `[MODE]` / `[RESIZE server]` / `[ENV]` traces show up alongside
+    /// the `[RECV]` / `[DRAW]` entries we already have. In remote mode the
+    /// hook is installed by `SocketServer`; in local mode there's no socket
+    /// server, so without this call DirtyTrace messages are silently
+    /// dropped. Temporary — remove with the cursorTrace category.
+    private func installLocalDirtyTraceHook() {
+        DirtyTrace.log = { msg in
+            GUILog.debug(msg, category: .cursorTrace)
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {

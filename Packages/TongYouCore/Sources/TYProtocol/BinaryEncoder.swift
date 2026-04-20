@@ -609,6 +609,10 @@ public struct BinaryEncoder: Sendable {
                 writeOptionalStartupSnapshot(spec.snapshot)
                 writeStringMap(spec.variables)
             }
+
+        case .refreshPane(let sessionID, let paneID):
+            writeSessionID(sessionID)
+            writePaneID(paneID)
         }
     }
 }

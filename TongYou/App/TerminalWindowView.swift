@@ -1253,6 +1253,10 @@ struct TerminalWindowView: View {
             clearPaneSelection()
         case .showCommandPalette:
             openCommandPalette()
+        case .debugRefreshPane:
+            if let paneID = focusManager.focusedPaneID {
+                sessionManager.debugRefreshPane(paneID)
+            }
         }
     }
 

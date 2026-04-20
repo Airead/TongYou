@@ -241,6 +241,13 @@ public final class RemoteSessionClient: @unchecked Sendable {
         connection?.send(.focusPane(sessionID, paneID))
     }
 
+    /// Diagnostic — ask the server to re-emit a full screen snapshot for
+    /// `paneID`. No PTY side-effect; used to triage the split-pane
+    /// misalignment bug. Temporary.
+    public func refreshPane(sessionID: SessionID, paneID: PaneID) {
+        connection?.send(.refreshPane(sessionID, paneID))
+    }
+
     public func selectTab(sessionID: SessionID, tabIndex: UInt16) {
         connection?.send(.selectTab(sessionID, tabIndex: tabIndex))
     }

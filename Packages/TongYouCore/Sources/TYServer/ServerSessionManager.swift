@@ -1215,6 +1215,7 @@ public final class ServerSessionManager {
             rows: Int(config.defaultRows),
             maxScrollback: config.maxScrollback
         )
+        core.setDebugPaneTag(String(actualPaneID.uuid.uuidString.prefix(8)))
 
         wireStandardCallbacks(core, sessionID: sessionID, paneID: actualPaneID)
         coreLookup[actualPaneID] = core
