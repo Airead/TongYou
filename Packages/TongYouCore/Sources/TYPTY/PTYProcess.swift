@@ -424,8 +424,36 @@ public final class PTYProcess {
     }
 
     private static func buildEnvironment(shellPath: String, extraEnv: [(String, String)] = []) -> [String] {
-        var env = ProcessInfo.processInfo.environment
+        let env = prepareEnvironment(
+            shellPath: shellPath,
+            baseEnvironment: ProcessInfo.processInfo.environment,
+            extraEnv: extraEnv
+        )
+        return env.map { "\($0.key)=\($0.value)" }
+    }
+
+    /// Pure transform: derive the PTY child's environment from a caller-supplied
+    /// base environment. Kept separate from `buildEnvironment` so tests can
+    /// inject a controlled base dict without touching
+    /// `ProcessInfo.processInfo.environment` (see `PTYProcessTests`).
+    static func prepareEnvironment(
+        shellPath: String,
+        baseEnvironment: [String: String],
+        extraEnv: [(String, String)] = []
+    ) -> [String: String] {
+        var env = baseEnvironment
         env["TERM"] = "xterm-256color"
+        // Identify ourselves to TUI applications. If we leave the host
+        // terminal's TERM_PROGRAM / LC_TERMINAL in place, apps like claude
+        // code / nvim pick render strategies for the *host* terminal (e.g.
+        // ghostty's synchronized-output mode 2026) that we don't implement,
+        // which results in rendering corruption. Advertise TongYou
+        // explicitly and strip terminal-specific hints we don't emulate.
+        env["TERM_PROGRAM"] = "TongYou"
+        env["COLORTERM"] = "truecolor"
+        env.removeValue(forKey: "TERM_PROGRAM_VERSION")
+        env.removeValue(forKey: "LC_TERMINAL")
+        env.removeValue(forKey: "LC_TERMINAL_VERSION")
         if env["LANG"] == nil {
             env["LANG"] = "en_US.UTF-8"
         }
@@ -435,7 +463,7 @@ public final class PTYProcess {
         for (key, value) in extraEnv {
             env[key] = value
         }
-        return env.map { "\($0.key)=\($0.value)" }
+        return env
     }
 }
 
