@@ -120,11 +120,15 @@ public final class SocketServer: @unchecked Sendable {
 
         socket?.closeSocket()
 
-        flushTimer?.cancel()
-        flushTimer = nil
-
-        statsTimer?.cancel()
-        statsTimer = nil
+        // `flushTimer` and `statsTimer` are owned by `messageQueue` (see their
+        // declarations) — cancel on that queue so we don't race with
+        // `scheduleFlush()` / `startStatsTimer()` assigning new timers.
+        messageQueue.sync {
+            flushTimer?.cancel()
+            flushTimer = nil
+            statsTimer?.cancel()
+            statsTimer = nil
+        }
 
         clientsLock.lock()
         let allClients = Array(clients.values)
