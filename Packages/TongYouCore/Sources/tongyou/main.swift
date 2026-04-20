@@ -746,6 +746,18 @@ func runServer(daemonize: Bool, debug: Bool) {
     }
 
     let sessionManager = ServerSessionManager(config: config)
+
+    // Persisted sessions used to restore during `init`, but the
+    // actor-ized SSM can't call isolated methods synchronously from a
+    // nonisolated init. Load them here before wiring the server so any
+    // connected client immediately sees the restored layout.
+    let restoreSem = DispatchSemaphore(value: 0)
+    Task {
+        await sessionManager.loadPersistedSessions()
+        restoreSem.signal()
+    }
+    restoreSem.wait()
+
     let server = SocketServer(config: config, sessionManager: sessionManager, authToken: authToken)
 
     let cliDefaultLevel: Log.Level = debug ? .debug : .info

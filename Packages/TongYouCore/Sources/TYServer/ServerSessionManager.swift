@@ -155,7 +155,13 @@ struct ServerSession {
 /// Manages all server-side sessions, tabs, and panes.
 ///
 /// Each pane owns a `TerminalCore` instance that runs its PTY process.
-public final class ServerSessionManager {
+///
+/// `ServerSessionManager` is an `actor`: the Swift runtime serializes all
+/// access to its mutable state, so callers must `await` every method.
+/// This replaces the prior contract ("must only be touched from
+/// `SocketServer.messageQueue`") that was violated by PTY exit callbacks
+/// firing on the main thread, producing a Dictionary-level data race.
+public actor ServerSessionManager {
 
     private var sessions: [SessionID: ServerSession] = [:]
     private var config: ServerConfig
@@ -175,14 +181,23 @@ public final class ServerSessionManager {
 
     /// Debounced persistence: batches mutation-triggered saves so we
     /// only write to disk at most once per 0.5s per session.
-    private var saveScheduler: DebouncedSaver<SessionID>!
+    ///
+    /// Marked `nonisolated(unsafe)` so the init can install the callback
+    /// closure (which captures `self`) without Swift treating the
+    /// assignment as a post-escape isolated-property access. After init
+    /// it is only touched from actor-isolated methods, so the serial
+    /// access invariant is preserved.
+    nonisolated(unsafe) private var saveScheduler: DebouncedSaver<SessionID>!
 
-    var onScreenDirty: ((SessionID, PaneID) -> Void)?
-    var onTitleChanged: ((SessionID, PaneID, String) -> Void)?
-    var onCwdChanged: ((SessionID, PaneID, String) -> Void)?
-    var onBell: ((SessionID, PaneID) -> Void)?
-    var onClipboardSet: ((String) -> Void)?
-    var onPaneExited: ((SessionID, PaneID, Int32) -> Void)?
+    // External event callbacks. Stored `nonisolated(unsafe)` so PTY/stream
+    // threads can fire them without hopping into actor context. The contract
+    // is: set once during wiring, never mutated afterwards.
+    nonisolated(unsafe) var onScreenDirty: (@Sendable (SessionID, PaneID) -> Void)?
+    nonisolated(unsafe) var onTitleChanged: (@Sendable (SessionID, PaneID, String) -> Void)?
+    nonisolated(unsafe) var onCwdChanged: (@Sendable (SessionID, PaneID, String) -> Void)?
+    nonisolated(unsafe) var onBell: (@Sendable (SessionID, PaneID) -> Void)?
+    nonisolated(unsafe) var onClipboardSet: (@Sendable (String) -> Void)?
+    nonisolated(unsafe) var onPaneExited: (@Sendable (SessionID, PaneID, Int32) -> Void)?
 
     /// Tracks the last known cwd per pane so we only fire onCwdChanged on actual changes.
     private var lastKnownCwd: [PaneID: String] = [:]
@@ -194,21 +209,37 @@ public final class ServerSessionManager {
         } else {
             self.sessionStore = nil
         }
-        // Initialise the scheduler before restoring so that any
-        // save-triggering code paths reached during restoration find
-        // a live scheduler instead of a nil IUO.
+        // Initialise the scheduler before anything that could trigger a save.
+        // The debounced timer path fires from the utility queue and hops
+        // into actor context via an unstructured Task — fire-and-forget.
+        // We intentionally do NOT block the closure on the Task: blocking
+        // here would deadlock when `flushPendingSaves()` (itself actor
+        // isolated) triggers the flushBody on the actor's executor and
+        // then waits on a Task that needs that same actor.
+        // Synchronous flush semantics (for shutdown / tests) go through
+        // `flushPendingSaves()` instead, which calls `flushSession`
+        // directly on the actor — see that method for details.
         self.saveScheduler = DebouncedSaver<SessionID> { [weak self] id in
-            self?.flushSession(id: id)
-        }
-        if let sessionStore {
-            for persisted in sessionStore.loadAll() {
-                restoreSession(from: persisted)
+            Task { [weak self] in
+                await self?.flushSession(id: id)
             }
         }
     }
 
-    /// Legacy convenience init for tests.
-    public convenience init(
+    /// Load persisted sessions from the configured store. Call once after
+    /// `init`, before accepting client traffic. Sync persistence restore was
+    /// previously done inside `init` itself, but an `actor`'s synchronous init
+    /// cannot call isolated methods — so the restore step is now an explicit
+    /// actor method that the daemon awaits at startup.
+    public func loadPersistedSessions() {
+        guard let sessionStore else { return }
+        for persisted in sessionStore.loadAll() {
+            restoreSession(from: persisted)
+        }
+    }
+
+    /// Legacy init for tests.
+    public init(
         defaultColumns: UInt16 = 80,
         defaultRows: UInt16 = 24,
         defaultWorkingDirectory: String? = nil
@@ -890,8 +921,19 @@ public final class ServerSessionManager {
         saveScheduler.cancel(id)
     }
 
+    /// Synchronous flush of every session's state to disk. Used at
+    /// shutdown and in persistence tests. Runs inside actor isolation
+    /// (the call site `await`s this method), so we can bypass the
+    /// `DebouncedSaver` Task-hop entirely and invoke `flushSession`
+    /// directly — avoiding the deadlock where the scheduler's flushBody
+    /// would block the actor's executor on a Task that needs the actor.
     internal func flushPendingSaves() {
-        saveScheduler.flushAll()
+        // Cancel any in-flight debounced timers so they don't race us
+        // by writing the same session again after we return.
+        saveScheduler.cancelAll()
+        for id in sessions.keys {
+            flushSession(id: id)
+        }
     }
 
     private func flushSession(id: SessionID) {
@@ -1032,7 +1074,12 @@ public final class ServerSessionManager {
             self?.onClipboardSet?(text)
         }
         overlayCore.onProcessExited = { [weak self] _ in
-            self?.restoreFromInPlace(sessionID: sessionID, paneID: paneID)
+            // Hop into actor context — restoreFromInPlace mutates coreLookup
+            // and overlayStacks, which were the exact data-race victims of
+            // the pre-actor design.
+            Task { [weak self] in
+                await self?.restoreFromInPlace(sessionID: sessionID, paneID: paneID)
+            }
         }
 
         // Push original onto overlay stack and swap the active core.
@@ -1155,9 +1202,16 @@ public final class ServerSessionManager {
             self?.onScreenDirty?(sessionID, paneID)
         }
         core.onTitleChanged = { [weak self] title in
-            self?.updateFloatingPaneTitle(sessionID: sessionID, paneID: paneID, title: title)
-            self?.onTitleChanged?(sessionID, paneID, title)
-            self?.checkCwdChanged(core: core, sessionID: sessionID, paneID: paneID)
+            // `updateFloatingPaneTitle` and `checkCwdChanged` mutate actor
+            // state, so we have to hop back into the actor before running
+            // them. `onTitleChanged` stays nonisolated so the external
+            // broadcast fires promptly — the hop is only needed for the
+            // two internal mutations.
+            Task { [weak self] in
+                await self?.handleTitleChange(
+                    sessionID: sessionID, paneID: paneID, title: title, core: core
+                )
+            }
         }
         core.onBell = { [weak self] in
             self?.onBell?(sessionID, paneID)
@@ -1168,6 +1222,17 @@ public final class ServerSessionManager {
         core.onProcessExited = { [weak self] exitCode in
             self?.onPaneExited?(sessionID, paneID, exitCode)
         }
+    }
+
+    /// Actor-isolated body of the title-changed callback. Runs the two
+    /// isolated mutations (`updateFloatingPaneTitle`, `checkCwdChanged`)
+    /// under actor serialization, then fires the external callback.
+    private func handleTitleChange(
+        sessionID: SessionID, paneID: PaneID, title: String, core: TerminalCore
+    ) {
+        updateFloatingPaneTitle(sessionID: sessionID, paneID: paneID, title: title)
+        onTitleChanged?(sessionID, paneID, title)
+        checkCwdChanged(core: core, sessionID: sessionID, paneID: paneID)
     }
 
     /// Check if a pane's cwd has changed and fire onCwdChanged if so.

@@ -54,12 +54,33 @@ public final class SocketServer: @unchecked Sendable {
         label: "io.github.airead.tongyou.server.accept",
         qos: .userInitiated
     )
-    /// Serial queue for all sessionManager mutations and message handling.
-    /// Prevents data races when multiple client readQueues dispatch concurrently.
+    /// Serial queue for message handling, flush scheduling, and stats
+    /// logging. Since `sessionManager` became an `actor`, serializing
+    /// mutations on this queue is no longer necessary for SSM safety —
+    /// the actor handles that. The queue still orders SocketServer-side
+    /// work (flush state, `lastSentState`, etc.) and preserves per-client
+    /// message ordering.
     private let messageQueue = DispatchQueue(
         label: "io.github.airead.tongyou.server.message",
         qos: .userInteractive
     )
+
+    /// Bridge: spawn a Task on the cooperative pool and block the
+    /// calling thread until it completes. Used at the handful of edges
+    /// where a synchronous API (DispatchSource event handler,
+    /// ClientConnection.onMessage, shutdown hook) must invoke an
+    /// `async` function on `sessionManager` or a local `async` helper.
+    /// Safe because the Task uses the cooperative pool and the actor
+    /// has its own executor — no risk of deadlocking the blocked thread
+    /// against the Task's completion.
+    private func blockingAwait(_ work: @Sendable @escaping () async -> Void) {
+        let sem = DispatchSemaphore(value: 0)
+        Task {
+            await work()
+            sem.signal()
+        }
+        sem.wait()
+    }
 
     public var onReady: (() -> Void)?
     public var onAllSessionsClosed: (() -> Void)?
@@ -124,7 +145,9 @@ public final class SocketServer: @unchecked Sendable {
         }
         lastSentState.removeAll()
         lastCursorTrace.removeAll()
-        sessionManager.stopAllSessions()
+        blockingAwait { [sessionManager] in
+            await sessionManager.stopAllSessions()
+        }
         Log.info("Server stopped")
     }
 
@@ -137,7 +160,9 @@ public final class SocketServer: @unchecked Sendable {
             guard let self else { return }
             let oldInterval = self.config.statsInterval
             self.config = newConfig
-            self.sessionManager.updateConfig(newConfig)
+            self.blockingAwait { [sessionManager = self.sessionManager] in
+                await sessionManager.updateConfig(newConfig)
+            }
 
             // Restart stats timer if interval changed
             if oldInterval != newConfig.statsInterval {
@@ -243,12 +268,12 @@ public final class SocketServer: @unchecked Sendable {
 
     /// Broadcast a full session layout update to all attached clients.
     /// If the session no longer exists, broadcasts sessionClosed and checks auto-exit.
-    private func broadcastLayoutOrClosed(sessionID: SessionID) {
-        if let info = sessionManager.sessionInfo(for: sessionID) {
+    private func broadcastLayoutOrClosed(sessionID: SessionID) async {
+        if let info = await sessionManager.sessionInfo(for: sessionID) {
             broadcast(.layoutUpdate(info), toSession: sessionID)
         } else {
             broadcastAll(.sessionClosed(sessionID))
-            checkAutoExit()
+            await checkAutoExit()
         }
     }
 
@@ -287,8 +312,16 @@ public final class SocketServer: @unchecked Sendable {
 
                 connection.onMessage = { [weak self, weak connection] message in
                     guard let self, let connection else { return }
-                    self.messageQueue.async {
-                        self.handleClientMessage(message, from: connection)
+                    // messageQueue is still the per-client serializer;
+                    // the actual work is async so we bridge with
+                    // `blockingAwait`. This preserves the
+                    // message-ordering guarantee the old queue-only
+                    // design provided.
+                    self.messageQueue.async { [weak self, weak connection] in
+                        guard let self, let connection else { return }
+                        self.blockingAwait {
+                            await self.handleClientMessage(message, from: connection)
+                        }
                     }
                 }
 
@@ -323,11 +356,16 @@ public final class SocketServer: @unchecked Sendable {
         client.stop()
         Log.info("Client removed: \(client.id.uuidString.prefix(8)), remaining: \(clientCount)")
 
-        // Clean up client size entries on messageQueue (sessionManager is not thread-safe)
+        // Clean up client size entries. The SSM call goes through the
+        // actor; we still route via messageQueue so cleanup is serialized
+        // against concurrent client-message handling for the same pane.
         let clientID = client.id
         Log.debug("Scheduling size cleanup for disconnected client \(clientID.uuidString.prefix(8))")
         messageQueue.async { [weak self] in
-            self?.sessionManager.removeClientFromAllPanes(clientID: clientID)
+            guard let self else { return }
+            self.blockingAwait { [sessionManager = self.sessionManager] in
+                await sessionManager.removeClientFromAllPanes(clientID: clientID)
+            }
         }
     }
 
@@ -362,7 +400,7 @@ public final class SocketServer: @unchecked Sendable {
         let timer = DispatchSource.makeTimerSource(queue: messageQueue)
         timer.schedule(deadline: .now() + delay)
         timer.setEventHandler { [weak self] in
-            self?.performFlush()
+            self?.performFlushFromTimer()
         }
         timer.resume()
         flushTimer?.cancel()
@@ -374,7 +412,10 @@ public final class SocketServer: @unchecked Sendable {
         let timer = DispatchSource.makeTimerSource(queue: messageQueue)
         timer.schedule(deadline: .now() + config.statsInterval, repeating: config.statsInterval)
         timer.setEventHandler { [weak self] in
-            self?.logStats()
+            guard let self else { return }
+            self.blockingAwait {
+                await self.logStats()
+            }
         }
         timer.resume()
         statsTimer = timer
@@ -383,16 +424,15 @@ public final class SocketServer: @unchecked Sendable {
     /// Consume each dirty pane's snapshot once and send to all attached clients.
     /// After flushing, if more dirty panes arrived during the send, schedule
     /// another flush with an increased coalesce delay. Otherwise reset to idle.
-    private func performFlush() {
-        dirtyLock.lock()
-        let panes = dirtyPanes
-        dirtyPanes.removeAll(keepingCapacity: true)
-        dirtyLock.unlock()
+    private func performFlush() async {
+        let panes = dirtyLock.withLock { () -> Set<DirtyPaneKey> in
+            let current = dirtyPanes
+            dirtyPanes.removeAll(keepingCapacity: true)
+            return current
+        }
 
         guard !panes.isEmpty else {
-            dirtyLock.lock()
-            flushScheduled = false
-            dirtyLock.unlock()
+            dirtyLock.withLock { flushScheduled = false }
             consecutiveFlushCount = 0
             return
         }
@@ -408,7 +448,7 @@ public final class SocketServer: @unchecked Sendable {
             // Safety net: auto-close a sync window that has been open longer
             // than the configured timeout (handles a TUI that crashed with
             // an open BSU and never sent the matching ESU).
-            if sessionManager.expireStaleSyncedUpdate(
+            if await sessionManager.expireStaleSyncedUpdate(
                 paneID: key.paneID, timeout: syncTimeout
             ) {
                 Log.debug(
@@ -418,12 +458,12 @@ public final class SocketServer: @unchecked Sendable {
                 )
             }
 
-            if sessionManager.isSyncedUpdateActive(paneID: key.paneID) {
+            if await sessionManager.isSyncedUpdateActive(paneID: key.paneID) {
                 deferred.insert(key)
                 continue
             }
 
-            guard let snapshot = sessionManager.consumeSnapshot(
+            guard let snapshot = await sessionManager.consumeSnapshot(
                 paneID: key.paneID
             ) else { continue }
 
@@ -452,7 +492,7 @@ public final class SocketServer: @unchecked Sendable {
             }
             lastSentState[key.paneID] = SentSnapshotState(from: snapshot)
 
-            let mouseMode = sessionManager.mouseTrackingMode(paneID: key.paneID)
+            let mouseMode = await sessionManager.mouseTrackingMode(paneID: key.paneID)
 
             let message: ServerMessage
             // Use full snapshot when the screen was fully rebuilt OR when
@@ -492,18 +532,17 @@ public final class SocketServer: @unchecked Sendable {
 
         // Re-queue deferred panes so they are revisited on the next tick.
         if !deferred.isEmpty {
-            dirtyLock.lock()
-            dirtyPanes.formUnion(deferred)
-            dirtyLock.unlock()
+            dirtyLock.withLock { dirtyPanes.formUnion(deferred) }
         }
 
         // Check if more dirty panes arrived during the flush.
-        dirtyLock.lock()
-        let hasPending = !dirtyPanes.isEmpty
-        if !hasPending {
-            flushScheduled = false
+        let hasPending = dirtyLock.withLock { () -> Bool in
+            let pending = !dirtyPanes.isEmpty
+            if !pending {
+                flushScheduled = false
+            }
+            return pending
         }
-        dirtyLock.unlock()
 
         if hasPending {
             if processedCount == 0 {
@@ -521,26 +560,38 @@ public final class SocketServer: @unchecked Sendable {
         }
     }
 
+    /// Sync wrapper for timer event handlers. `performFlush` became
+    /// `async` when `sessionManager` was actor-ized; DispatchSource
+    /// event handlers are still sync-only, so we hop through
+    /// `blockingAwait`. The calling thread is messageQueue (set when
+    /// the timer was created), and it's blocked for the flush duration
+    /// to preserve the serial ordering the rest of the SocketServer
+    /// code relies on (e.g. `flushTimer` / `consecutiveFlushCount`
+    /// mutations, `lastSentState` writes).
+    private func performFlushFromTimer() {
+        blockingAwait {
+            await self.performFlush()
+        }
+    }
+
     /// Fixed-delay retry for panes that were deferred because their PTY is
     /// inside a DECSET 2026 synchronized update. Must run on `messageQueue`.
     private func scheduleSyncedUpdateRetry() {
         let timer = DispatchSource.makeTimerSource(queue: messageQueue)
         timer.schedule(deadline: .now() + Self.syncedUpdateRetryDelay)
         timer.setEventHandler { [weak self] in
-            self?.performFlush()
+            self?.performFlushFromTimer()
         }
         timer.resume()
         flushTimer?.cancel()
         flushTimer = timer
     }
 
-    private func logStats() {
-        clientsLock.lock()
-        let allClients = Array(clients.values)
+    private func logStats() async {
+        let allClients: [ClientConnection] = clientsLock.withLock { Array(clients.values) }
         let count = allClients.count
-        clientsLock.unlock()
 
-        let sessions = sessionManager.sessionCount
+        let sessions = await sessionManager.sessionCount
         let pendingInfo = allClients.map { client in
             "\(client.id.uuidString.prefix(8)):\(client.pendingScreenUpdateCount)"
         }.joined(separator: ", ")
@@ -568,7 +619,7 @@ public final class SocketServer: @unchecked Sendable {
 
     // MARK: - Private: Message Dispatch
 
-    private func handleClientMessage(_ message: ClientMessage, from client: ClientConnection) {
+    private func handleClientMessage(_ message: ClientMessage, from client: ClientConnection) async {
         Log.debug("RECV [\(client.id.uuidString.prefix(8))] \(message.debugDescription)")
         switch message {
         case .handshake:
@@ -576,153 +627,153 @@ public final class SocketServer: @unchecked Sendable {
             break
 
         case .listSessions:
-            client.send(.sessionList(sessionManager.listSessions()))
+            client.send(.sessionList(await sessionManager.listSessions()))
 
         case .createSession(let name):
-            let info = sessionManager.createSession(name: name)
+            let info = await sessionManager.createSession(name: name)
             client.attach(sessionID: info.id)
             broadcastAll(.sessionCreated(info))
 
         case .attachSession(let sessionID):
             client.attach(sessionID: sessionID)
             // Send layout so the client can rebuild tabs/panes before screen data.
-            if let info = sessionManager.sessionInfo(for: sessionID) {
+            if let info = await sessionManager.sessionInfo(for: sessionID) {
                 client.send(.layoutUpdate(info))
             }
-            sendFullSnapshots(to: client, sessionID: sessionID)
+            await sendFullSnapshots(to: client, sessionID: sessionID)
 
         case .detachSession(let sessionID):
             client.detach(sessionID: sessionID)
-            for paneID in sessionManager.allPaneIDs(sessionID: sessionID) {
-                sessionManager.removeClientFromPane(clientID: client.id, paneID: paneID)
+            for paneID in await sessionManager.allPaneIDs(sessionID: sessionID) {
+                await sessionManager.removeClientFromPane(clientID: client.id, paneID: paneID)
             }
 
         case .closeSession(let sessionID):
-            sessionManager.closeSession(id: sessionID)
+            await sessionManager.closeSession(id: sessionID)
             broadcastAll(.sessionClosed(sessionID))
-            checkAutoExit()
+            await checkAutoExit()
 
         case .renameSession(let sessionID, let name):
-            sessionManager.renameSession(id: sessionID, name: name)
-            broadcastLayoutOrClosed(sessionID: sessionID)
+            await sessionManager.renameSession(id: sessionID, name: name)
+            await broadcastLayoutOrClosed(sessionID: sessionID)
 
         case .input(_, let paneID, let bytes):
-            sessionManager.sendInput(paneID: paneID, data: bytes)
+            await sessionManager.sendInput(paneID: paneID, data: bytes)
 
         case .paste(_, let paneID, let bytes):
-            sessionManager.sendPaste(paneID: paneID, data: bytes)
+            await sessionManager.sendPaste(paneID: paneID, data: bytes)
 
         case .mouseEvent(_, let paneID, let event):
-            sessionManager.handleMouseEvent(paneID: paneID, event: event)
+            await sessionManager.handleMouseEvent(paneID: paneID, event: event)
 
         case .resize(_, let paneID, let cols, let rows):
-            sessionManager.registerClientSize(
+            await sessionManager.registerClientSize(
                 clientID: client.id, paneID: paneID, cols: cols, rows: rows
             )
 
         case .scrollViewport(_, let paneID, let delta):
-            sessionManager.scrollViewport(paneID: paneID, delta: delta)
+            await sessionManager.scrollViewport(paneID: paneID, delta: delta)
 
         case .extractSelection(_, let paneID, let selection):
-            if let text = sessionManager.extractText(paneID: paneID, selection: selection),
+            if let text = await sessionManager.extractText(paneID: paneID, selection: selection),
                !text.isEmpty {
                 client.send(.clipboardSet(text))
             }
 
         case .createTab(let sessionID, let profileID, let snapshot, let variables):
-            if sessionManager.createTab(
+            if await sessionManager.createTab(
                 sessionID: sessionID,
                 profileID: profileID,
                 snapshot: snapshot,
                 variables: variables
             ) != nil {
-                broadcastLayoutOrClosed(sessionID: sessionID)
+                await broadcastLayoutOrClosed(sessionID: sessionID)
             }
 
         case .closeTab(let sessionID, let tabID):
-            sessionManager.closeTab(sessionID: sessionID, tabID: tabID)
-            broadcastLayoutOrClosed(sessionID: sessionID)
+            await sessionManager.closeTab(sessionID: sessionID, tabID: tabID)
+            await broadcastLayoutOrClosed(sessionID: sessionID)
 
         case .splitPane(let sessionID, let paneID, let direction, let profileID, let snapshot, let variables):
-            if sessionManager.splitPane(
+            if await sessionManager.splitPane(
                 sessionID: sessionID, paneID: paneID, direction: direction,
                 profileID: profileID,
                 snapshot: snapshot,
                 variables: variables
             ) != nil {
-                broadcastLayoutOrClosed(sessionID: sessionID)
+                await broadcastLayoutOrClosed(sessionID: sessionID)
             }
 
         case .closePane(let sessionID, let paneID):
-            sessionManager.closePane(sessionID: sessionID, paneID: paneID)
-            broadcastLayoutOrClosed(sessionID: sessionID)
+            await sessionManager.closePane(sessionID: sessionID, paneID: paneID)
+            await broadcastLayoutOrClosed(sessionID: sessionID)
 
         case .focusPane(let sessionID, let paneID):
-            sessionManager.focusPane(sessionID: sessionID, paneID: paneID)
+            await sessionManager.focusPane(sessionID: sessionID, paneID: paneID)
 
         case .paneFocusEvent(_, let paneID, let focused):
-            sessionManager.reportPaneFocus(paneID: paneID, focused: focused)
+            await sessionManager.reportPaneFocus(paneID: paneID, focused: focused)
 
         case .selectTab(let sessionID, let tabIndex):
-            sessionManager.selectTab(sessionID: sessionID, tabIndex: Int(tabIndex))
+            await sessionManager.selectTab(sessionID: sessionID, tabIndex: Int(tabIndex))
 
         case .setSplitRatio(let sessionID, let paneID, let ratio):
-            if sessionManager.setSplitRatio(
+            if await sessionManager.setSplitRatio(
                 sessionID: sessionID, paneID: paneID, ratio: ratio
             ) {
-                broadcastLayoutOrClosed(sessionID: sessionID)
+                await broadcastLayoutOrClosed(sessionID: sessionID)
             }
 
         case .createFloatingPane(let sessionID, let tabID, let profileID, let snapshot, let variables, let frameHint):
-            if sessionManager.createFloatingPane(
+            if await sessionManager.createFloatingPane(
                 sessionID: sessionID, tabID: tabID,
                 profileID: profileID,
                 snapshot: snapshot,
                 variables: variables,
                 frameHint: frameHint
             ) != nil {
-                broadcastLayoutOrClosed(sessionID: sessionID)
+                await broadcastLayoutOrClosed(sessionID: sessionID)
             }
 
         case .closeFloatingPane(let sessionID, let paneID):
-            sessionManager.closeFloatingPane(sessionID: sessionID, paneID: paneID)
-            broadcastLayoutOrClosed(sessionID: sessionID)
+            await sessionManager.closeFloatingPane(sessionID: sessionID, paneID: paneID)
+            await broadcastLayoutOrClosed(sessionID: sessionID)
 
         case .updateFloatingPaneFrame(let sessionID, let paneID, let x, let y, let width, let height):
             // Store the frame on the server but don't broadcast — the sending client
             // already has the correct frame locally, and other clients will receive
             // the updated position on the next structural layout change.
             // Broadcasting here would serialize the full SessionInfo on every drag pixel.
-            sessionManager.updateFloatingPaneFrame(
+            await sessionManager.updateFloatingPaneFrame(
                 sessionID: sessionID, paneID: paneID,
                 x: x, y: y, width: width, height: height
             )
 
         case .bringFloatingPaneToFront(let sessionID, let paneID):
-            sessionManager.bringFloatingPaneToFront(sessionID: sessionID, paneID: paneID)
-            broadcastLayoutOrClosed(sessionID: sessionID)
+            await sessionManager.bringFloatingPaneToFront(sessionID: sessionID, paneID: paneID)
+            await broadcastLayoutOrClosed(sessionID: sessionID)
 
         case .toggleFloatingPanePin(let sessionID, let paneID):
-            sessionManager.toggleFloatingPanePin(sessionID: sessionID, paneID: paneID)
-            broadcastLayoutOrClosed(sessionID: sessionID)
+            await sessionManager.toggleFloatingPanePin(sessionID: sessionID, paneID: paneID)
+            await broadcastLayoutOrClosed(sessionID: sessionID)
 
         case .runInPlace(let sessionID, let paneID, let command, let arguments):
-            sessionManager.runInPlace(
+            await sessionManager.runInPlace(
                 sessionID: sessionID, paneID: paneID,
                 command: command, arguments: arguments
             )
 
         case .runRemoteCommand(_, let paneID, let command, let arguments):
-            sessionManager.runRemoteCommand(
+            await sessionManager.runRemoteCommand(
                 paneID: paneID, command: command, arguments: arguments
             )
 
         case .restartFloatingPaneCommand(let sessionID, let paneID, let command, let arguments):
-            if sessionManager.restartFloatingPaneCommand(
+            if await sessionManager.restartFloatingPaneCommand(
                 sessionID: sessionID, paneID: paneID,
                 command: command, arguments: arguments
             ) {
-                sendFullSnapshot(to: client, sessionID: sessionID, paneID: paneID)
+                await sendFullSnapshot(to: client, sessionID: sessionID, paneID: paneID)
             }
 
         case .rerunPane(let sessionID, let paneID):
@@ -730,54 +781,56 @@ public final class SocketServer: @unchecked Sendable {
             // start a fresh one with the same snapshot, keep the PaneID.
             // Send an immediate fresh snapshot so the client's zombie-pane
             // contents are replaced without waiting for the first draw.
-            sessionManager.rerunPane(sessionID: sessionID, paneID: paneID)
-            sendFullSnapshot(to: client, sessionID: sessionID, paneID: paneID)
+            await sessionManager.rerunPane(sessionID: sessionID, paneID: paneID)
+            await sendFullSnapshot(to: client, sessionID: sessionID, paneID: paneID)
 
         case .movePane(let sessionID, let sourcePaneID, let targetPaneID, let side):
-            if sessionManager.movePane(
+            if await sessionManager.movePane(
                 sessionID: sessionID,
                 sourcePaneID: sourcePaneID,
                 targetPaneID: targetPaneID,
                 side: side
             ) {
-                broadcastLayoutOrClosed(sessionID: sessionID)
+                await broadcastLayoutOrClosed(sessionID: sessionID)
             }
 
         case .changeStrategy(let sessionID, let paneID, let kind):
-            if sessionManager.changeStrategy(
+            if await sessionManager.changeStrategy(
                 sessionID: sessionID,
                 paneID: paneID,
                 kind: kind
             ) {
-                broadcastLayoutOrClosed(sessionID: sessionID)
+                await broadcastLayoutOrClosed(sessionID: sessionID)
             }
 
         case .createTabWithGridPanes(let sessionID, let specs):
-            if sessionManager.createTabWithGridPanes(
+            if await sessionManager.createTabWithGridPanes(
                 sessionID: sessionID,
                 specs: specs
             ) != nil {
-                broadcastLayoutOrClosed(sessionID: sessionID)
+                await broadcastLayoutOrClosed(sessionID: sessionID)
             }
 
         }
     }
 
-    private func sendFullSnapshot(to client: ClientConnection, sessionID: SessionID, paneID: PaneID) {
-        if let snapshot = sessionManager.snapshot(paneID: paneID) {
-            let mouseMode = sessionManager.mouseTrackingMode(paneID: paneID)
+    private func sendFullSnapshot(to client: ClientConnection, sessionID: SessionID, paneID: PaneID) async {
+        if let snapshot = await sessionManager.snapshot(paneID: paneID) {
+            let mouseMode = await sessionManager.mouseTrackingMode(paneID: paneID)
             client.send(.screenFull(sessionID, paneID, snapshot, mouseTrackingMode: mouseMode))
         }
     }
 
-    private func sendFullSnapshots(to client: ClientConnection, sessionID: SessionID) {
-        for paneID in sessionManager.allPaneIDs(sessionID: sessionID) {
-            sendFullSnapshot(to: client, sessionID: sessionID, paneID: paneID)
+    private func sendFullSnapshots(to client: ClientConnection, sessionID: SessionID) async {
+        for paneID in await sessionManager.allPaneIDs(sessionID: sessionID) {
+            await sendFullSnapshot(to: client, sessionID: sessionID, paneID: paneID)
         }
     }
 
-    private func checkAutoExit() {
-        if config.autoExitOnNoSessions && !sessionManager.hasSessions {
+    private func checkAutoExit() async {
+        guard config.autoExitOnNoSessions else { return }
+        let hasSessions = await sessionManager.hasSessions
+        if !hasSessions {
             onAllSessionsClosed?()
         }
     }

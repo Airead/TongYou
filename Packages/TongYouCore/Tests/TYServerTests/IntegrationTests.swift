@@ -8,7 +8,7 @@ import TYTerminal
 struct IntegrationTests {
 
     @Test("Full flow: start server, connect client, create session, send input, receive screen update")
-    func fullFlow() throws {
+    func fullFlow() async throws {
         let socketPath = NSTemporaryDirectory() + "ty-test-\(UUID().uuidString).sock"
         defer { try? FileManager.default.removeItem(atPath: socketPath) }
 
@@ -28,7 +28,7 @@ struct IntegrationTests {
         }
 
         try server.start()
-        Thread.sleep(forTimeInterval: 0.1)
+        try? await Task.sleep(nanoseconds: 100_000_000)
 
         #expect(readyFired.withLock({ $0 }) == true)
 
@@ -63,20 +63,21 @@ struct IntegrationTests {
 
         // The client was auto-attached, so it should start receiving screen updates.
         // Wait for shell to produce some output.
-        Thread.sleep(forTimeInterval: 0.5)
+        try? await Task.sleep(nanoseconds: 500_000_000)
 
         // Send input
-        guard case .leaf(let paneID) = sessionManager.sessionInfo(for: sessionID)?.tabs[0].layout else {
+        let sessionInfoForLeaf = await sessionManager.sessionInfo(for: sessionID)
+        guard case .leaf(let paneID) = sessionInfoForLeaf?.tabs[0].layout else {
             Issue.record("Expected leaf layout")
             return
         }
         try clientSocket.send(ClientMessage.input(sessionID, paneID, Array("echo test123\n".utf8)))
 
         // Wait for PTY processing
-        Thread.sleep(forTimeInterval: 0.5)
+        try? await Task.sleep(nanoseconds: 500_000_000)
 
         // Verify the session manager has content
-        let snapshot = sessionManager.snapshot(paneID: paneID)
+        let snapshot = await sessionManager.snapshot(paneID: paneID)
         #expect(snapshot != nil)
 
         // Clean up
@@ -84,7 +85,7 @@ struct IntegrationTests {
     }
 
     @Test("Client disconnect does not affect sessions")
-    func clientDisconnectPreservesSession() throws {
+    func clientDisconnectPreservesSession() async throws {
         let socketPath = NSTemporaryDirectory() + "ty-test-\(UUID().uuidString).sock"
         defer { try? FileManager.default.removeItem(atPath: socketPath) }
 
@@ -93,7 +94,7 @@ struct IntegrationTests {
         let server = SocketServer(config: config, sessionManager: sessionManager)
 
         try server.start()
-        Thread.sleep(forTimeInterval: 0.1)
+        try? await Task.sleep(nanoseconds: 100_000_000)
 
         // Connect first client and create a session
         let client1 = try TYSocket.connect(path: socketPath)
@@ -107,11 +108,13 @@ struct IntegrationTests {
 
         // Disconnect client 1
         client1.closeSocket()
-        Thread.sleep(forTimeInterval: 0.2)
+        try? await Task.sleep(nanoseconds: 200_000_000)
 
         // Session should still exist
-        #expect(sessionManager.hasSessions == true)
-        #expect(sessionManager.sessionInfo(for: info.id) != nil)
+        let hasSessions = await sessionManager.hasSessions
+        #expect(hasSessions == true)
+        let sessionInfo = await sessionManager.sessionInfo(for: info.id)
+        #expect(sessionInfo != nil)
 
         // Connect second client and list sessions
         let client2 = try TYSocket.connect(path: socketPath)
@@ -126,12 +129,12 @@ struct IntegrationTests {
         }
 
         // Clean up
-        sessionManager.closeSession(id: info.id)
+        await sessionManager.closeSession(id: info.id)
         server.stop()
     }
 
     @Test("Multiple clients attach to same session")
-    func multipleClientsAttach() throws {
+    func multipleClientsAttach() async throws {
         let socketPath = NSTemporaryDirectory() + "ty-test-\(UUID().uuidString).sock"
         defer { try? FileManager.default.removeItem(atPath: socketPath) }
 
@@ -140,7 +143,7 @@ struct IntegrationTests {
         let server = SocketServer(config: config, sessionManager: sessionManager)
 
         try server.start()
-        Thread.sleep(forTimeInterval: 0.1)
+        try? await Task.sleep(nanoseconds: 100_000_000)
 
         // Client 1 creates a session
         let client1 = try TYSocket.connect(path: socketPath)
@@ -179,7 +182,7 @@ struct IntegrationTests {
         #expect(server.clientCount == 2)
 
         // Clean up
-        sessionManager.closeSession(id: info.id)
+        await sessionManager.closeSession(id: info.id)
         server.stop()
     }
 
