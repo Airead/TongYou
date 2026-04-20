@@ -24,8 +24,10 @@ public final class RemoteSessionClient: @unchecked Sendable {
 
     /// Sink for `[RECV]` cursorTrace messages. The GUI wires this to `GUILog`
     /// so client-side receive logs land in the same file as renderer logs.
+    /// The server `PaneID` is passed separately so the GUI can translate it
+    /// into the client-side local pane UUID for correlation with `[DRAW]` logs.
     /// Temporary — remove with the cursorTrace category.
-    public var cursorTraceHandler: ((String) -> Void)?
+    public var cursorTraceHandler: ((String, PaneID) -> Void)?
 
     // MARK: - Callbacks (dispatched to main queue)
 
@@ -393,8 +395,9 @@ public final class RemoteSessionClient: @unchecked Sendable {
         guard let handler = cursorTraceHandler else { return }
         let paneShort = paneID.uuid.uuidString.prefix(8)
         handler(
-            "[RECV] pane=\(paneShort) kind=\(kind) dims=\(cols)x\(rows)"
-            + " cursor=(\(cursorRow),\(cursorCol)) vis=\(cursorVisible)"
+            "[RECV] server=\(paneShort) kind=\(kind) dims=\(cols)x\(rows)"
+            + " cursor=(\(cursorRow),\(cursorCol)) vis=\(cursorVisible)",
+            paneID
         )
     }
 

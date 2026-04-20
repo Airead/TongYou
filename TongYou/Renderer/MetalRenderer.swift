@@ -672,9 +672,17 @@ final class MetalRenderer {
             row: state.row,
             col: state.col
         )
+        let cellW = Int(fontSystem.cellSize.width)
+        let cellH = Int(fontSystem.cellSize.height)
+        let cursorPxX = cellW * state.col
+        let cursorPxY = cellH * state.row
+        let padLeft = Int(padding.left)
+        let padTop = Int(padding.top)
         GUILog.debug(
             "[DRAW] pane=\(paneTag) viewport=\(state.cols)x\(state.rows)"
             + " cursor=(\(state.row),\(state.col)) vis=\(state.visible)"
+            + " cellSize=\(cellW)x\(cellH) padding=(\(padLeft),\(padTop))"
+            + " cursorPx=(\(padLeft + cursorPxX),\(padTop + cursorPxY))"
             + " cellsAround=\(cellsAround)",
             category: .cursorTrace
         )

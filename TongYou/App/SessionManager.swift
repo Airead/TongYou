@@ -1802,9 +1802,16 @@ final class SessionManager {
         let client = RemoteSessionClient(connectionManager: connectionManager)
 
         // Route [RECV] cursorTrace messages into GUILog so they land in the
-        // same file as renderer logs. Temporary — remove with cursorTrace.
-        client.cursorTraceHandler = { msg in
-            GUILog.debug(msg, category: .cursorTrace)
+        // same file as renderer logs. Prepend the local pane UUID so logs
+        // align with client-side [DRAW] entries. The handler runs on the
+        // network read thread; hop to main before reading serverToLocalPaneID
+        // (which is mutated from main). Temporary — remove with cursorTrace.
+        client.cursorTraceHandler = { [weak self] msg, serverPaneID in
+            DispatchQueue.main.async {
+                let localShort = self?.serverToLocalPaneID[serverPaneID.uuid]
+                    .map { String($0.uuidString.prefix(8)) } ?? "?"
+                GUILog.debug("local=\(localShort) \(msg)", category: .cursorTrace)
+            }
         }
         ScreenReplica.resizeTraceHandler = { msg in
             GUILog.debug(msg, category: .cursorTrace)
@@ -2433,6 +2440,15 @@ final class SessionManager {
             remoteControllers[pane.id] = controller
             armBroadcastDispatcher(forPane: pane.id)
             serverToLocalPaneID[serverPaneID.uuid] = pane.id
+            // Temporary cursorTrace rosetta: emit once per binding so the user
+            // can correlate server-side [SEND] / [RECV] (keyed by server
+            // PaneID) with client-side [DRAW] (keyed by local UUID). Remove
+            // with the cursorTrace category.
+            GUILog.debug(
+                "[MAP] local=\(pane.id.uuidString.prefix(8))"
+                + " server=\(serverPaneID.uuid.uuidString.prefix(8))",
+                category: .cursorTrace
+            )
             remotePaneProfileIDs[pane.id] = resolvedProfileID
             if let closeOnExit {
                 remotePaneCloseOnExit[pane.id] = closeOnExit
