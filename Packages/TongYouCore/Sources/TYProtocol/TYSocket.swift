@@ -36,17 +36,34 @@ public enum TYSocketError: Error, Sendable {
 ///
 /// Provides frame-level send/receive over a Unix domain socket.
 /// Use `listen(path:)` on the server side and `connect(path:)` on the client side.
+///
+/// Thread safety:
+/// - `closeSocket()` may race with `accept()` / `send` / `recv` /
+///   `peerCredentials` on different threads (e.g. a shutdown on the main
+///   queue while `acceptLoop()` blocks in `accept()`). `_fileDescriptor`
+///   is guarded by `fdLock`; each method captures the fd into a local
+///   under the lock and runs the syscall outside it, so close races
+///   deterministically produce `EBADF` rather than a torn read.
 public final class TYSocket: @unchecked Sendable {
+    /// Backing storage for the fd. Always accessed under `fdLock`.
+    private nonisolated(unsafe) var _fileDescriptor: Int32
+    private let fdLock = NSLock()
+
     /// The underlying file descriptor, for integration with DispatchSource.
-    public private(set) var fileDescriptor: Int32
+    /// Returns the current fd, or `-1` if the socket has been closed.
+    public var fileDescriptor: Int32 {
+        fdLock.withLock { _fileDescriptor }
+    }
 
     private init(fileDescriptor: Int32) {
-        self.fileDescriptor = fileDescriptor
+        self._fileDescriptor = fileDescriptor
     }
 
     deinit {
-        if fileDescriptor >= 0 {
-            _ = sysClose(fileDescriptor)
+        // Safe to read without the lock: refcount has reached zero, so no
+        // other thread holds a reference to `self`.
+        if _fileDescriptor >= 0 {
+            _ = sysClose(_fileDescriptor)
         }
     }
 
@@ -88,7 +105,8 @@ public final class TYSocket: @unchecked Sendable {
 
     /// Accept a new client connection from a listening socket (blocking).
     public func accept() throws -> TYSocket {
-        let clientFD = sysAccept(fileDescriptor, nil, nil)
+        let fd = fdLock.withLock { _fileDescriptor }
+        let clientFD = sysAccept(fd, nil, nil)
         guard clientFD >= 0 else {
             throw TYSocketError.acceptFailed(errno: errno)
         }
@@ -166,9 +184,10 @@ public final class TYSocket: @unchecked Sendable {
     /// Return the effective UID and GID of the connected peer.
     /// Only valid on accepted client sockets (Unix domain).
     public func peerCredentials() throws -> (uid: uid_t, gid: gid_t) {
+        let fd = fdLock.withLock { _fileDescriptor }
         var uid: uid_t = 0
         var gid: gid_t = 0
-        guard getpeereid(fileDescriptor, &uid, &gid) == 0 else {
+        guard getpeereid(fd, &uid, &gid) == 0 else {
             throw TYSocketError.peerCredentialsFailed(errno: errno)
         }
         return (uid, gid)
@@ -176,19 +195,28 @@ public final class TYSocket: @unchecked Sendable {
 
     /// Close the socket. Safe to call multiple times.
     public func closeSocket() {
-        guard fileDescriptor >= 0 else { return }
-        _ = sysClose(fileDescriptor)
-        fileDescriptor = -1
+        // Atomically swap out the fd so concurrent readers either see a
+        // valid fd or `-1` — never a torn value. `sysClose` runs outside
+        // the lock to keep the critical section minimal.
+        let oldFD = fdLock.withLock { () -> Int32 in
+            let fd = _fileDescriptor
+            if fd >= 0 { _fileDescriptor = -1 }
+            return fd
+        }
+        if oldFD >= 0 {
+            _ = sysClose(oldFD)
+        }
     }
 
     // MARK: - Internal Helpers
 
     private func sendAll(_ data: [UInt8]) throws {
+        let fd = fdLock.withLock { _fileDescriptor }
         var totalSent = 0
         while totalSent < data.count {
             let sent = data.withUnsafeBufferPointer { buf in
                 sysSend(
-                    fileDescriptor,
+                    fd,
                     buf.baseAddress! + totalSent,
                     data.count - totalSent,
                     0
@@ -204,12 +232,13 @@ public final class TYSocket: @unchecked Sendable {
     }
 
     private func recvAll(count: Int) throws -> [UInt8] {
+        let fd = fdLock.withLock { _fileDescriptor }
         var buffer = [UInt8](repeating: 0, count: count)
         var totalRead = 0
         while totalRead < count {
             let n = buffer.withUnsafeMutableBufferPointer { buf in
                 sysRecv(
-                    fileDescriptor,
+                    fd,
                     buf.baseAddress! + totalRead,
                     count - totalRead,
                     0
