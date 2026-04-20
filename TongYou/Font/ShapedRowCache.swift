@@ -41,12 +41,11 @@ final class ShapedRowCache {
 
     /// Look up a cached shaping result for the given row of cells.
     func get(cells: ArraySlice<Cell>) -> CachedShapedRow? {
-        let hash = Self.hashCells(cells)
+        let (hash, digest) = Self.computeKeys(cells)
         guard let slot = hashToSlot[hash] else {
             misses += 1
             return nil
         }
-        let digest = Self.digestCells(cells)
         guard slots[slot].digest == digest else {
             misses += 1
             return nil
@@ -58,8 +57,7 @@ final class ShapedRowCache {
 
     /// Store a shaping result for the given row of cells.
     func set(cells: ArraySlice<Cell>, value: CachedShapedRow) {
-        let hash = Self.hashCells(cells)
-        let digest = Self.digestCells(cells)
+        let (hash, digest) = Self.computeKeys(cells)
         if let existing = hashToSlot[hash] {
             if slots[existing].digest == digest {
                 slots[existing].row = value
@@ -90,29 +88,31 @@ final class ShapedRowCache {
 
     // MARK: - Private
 
-    private static func hashCells(_ cells: ArraySlice<Cell>) -> Int {
+    /// Compute primary hash (Dict key) and secondary digest (collision verifier)
+    /// in a single pass over the row cells.
+    private static func computeKeys(_ cells: ArraySlice<Cell>) -> (hash: Int, digest: Int) {
         var hasher = Hasher()
-        for cell in cells {
-            hasher.combine(cell.content)
-            hasher.combine(cell.attributes.flags.rawValue)
-            hasher.combine(cell.attributes.fgColor.raw)
-            hasher.combine(cell.attributes.bgColor.raw)
-            hasher.combine(cell.width.rawValue)
-        }
-        return hasher.finalize()
-    }
-
-    /// Secondary fast digest for verifying hash hits without storing the full cell array.
-    private static func digestCells(_ cells: ArraySlice<Cell>) -> Int {
         var digest = 0
         for cell in cells {
-            digest ^= cell.content.hashValue
-            digest = digest &* 31 &+ Int(cell.attributes.flags.rawValue)
-            digest = digest &* 31 &+ Int(cell.attributes.fgColor.raw)
-            digest = digest &* 31 &+ Int(cell.attributes.bgColor.raw)
-            digest = digest &* 31 &+ Int(cell.width.rawValue)
+            let contentHash = cell.content.hashValue
+            let flags = cell.attributes.flags.rawValue
+            let fg = cell.attributes.fgColor.raw
+            let bg = cell.attributes.bgColor.raw
+            let width = cell.width.rawValue
+
+            hasher.combine(contentHash)
+            hasher.combine(flags)
+            hasher.combine(fg)
+            hasher.combine(bg)
+            hasher.combine(width)
+
+            digest ^= contentHash
+            digest = digest &* 31 &+ Int(flags)
+            digest = digest &* 31 &+ Int(fg)
+            digest = digest &* 31 &+ Int(bg)
+            digest = digest &* 31 &+ Int(width)
         }
-        return digest
+        return (hasher.finalize(), digest)
     }
 
     private func allocSlot(_ entry: Entry) -> Int {
