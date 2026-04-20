@@ -477,6 +477,29 @@ struct ServerSessionManagerTests {
         manager.closeSession(id: session.id)
     }
 
+    @Test("sendPaste does not crash with valid pane")
+    func sendPaste() {
+        let manager = ServerSessionManager()
+        let session = manager.createSession(name: "Paste Test")
+        guard case .leaf(let paneID) = session.tabs[0].layout else {
+            Issue.record("Expected leaf layout")
+            return
+        }
+
+        Thread.sleep(forTimeInterval: 0.2)
+        // Shell spawned by the session has bracketed-paste disabled by
+        // default, so this exercises the `\n` → `\r` path of PasteEncoder.
+        manager.sendPaste(paneID: paneID, data: Array("line1\nline2\nline3".utf8))
+
+        manager.closeSession(id: session.id)
+    }
+
+    @Test("sendPaste on unknown pane is a no-op")
+    func sendPasteUnknownPane() {
+        let manager = ServerSessionManager()
+        manager.sendPaste(paneID: PaneID(), data: Array("hello".utf8))
+    }
+
     @Test("resizePane does not crash")
     func resizePane() {
         let manager = ServerSessionManager()

@@ -495,6 +495,11 @@ public struct BinaryEncoder: Sendable {
             writePaneID(paneID)
             writeSelection(selection)
 
+        case .paste(let sessionID, let paneID, let bytes):
+            writeSessionID(sessionID)
+            writePaneID(paneID)
+            writeBytes(bytes)
+
         case .mouseEvent(let sessionID, let paneID, let event):
             writeSessionID(sessionID)
             writePaneID(paneID)

@@ -288,6 +288,25 @@ struct WireFormatTests {
         #expect(dBytes == bytes)
     }
 
+    @Test func roundTripPaste() throws {
+        let sid = SessionID()
+        let pid = PaneID()
+        // Payload large enough to exercise the length-prefixed byte path —
+        // representative of the vim paste bug (multi-KB multi-line text).
+        var bytes = [UInt8](repeating: 0x61, count: 32 * 1024)
+        bytes[100] = 0x0A   // a real \n so the test data looks like paste
+        bytes[200] = 0x0A
+        let msg = ClientMessage.paste(sid, pid, bytes)
+        let decoded = try encodeAndDecode(clientMessage: msg)
+        guard case .paste(let dSid, let dPid, let dBytes) = decoded else {
+            Issue.record("Expected .paste")
+            return
+        }
+        #expect(dSid == sid)
+        #expect(dPid == pid)
+        #expect(dBytes == bytes)
+    }
+
     @Test func roundTripResize() throws {
         let sid = SessionID()
         let pid = PaneID()

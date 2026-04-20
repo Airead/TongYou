@@ -596,6 +596,17 @@ public final class ServerSessionManager {
         coreLookup[paneID]?.write(data)
     }
 
+    /// Write a paste payload to a pane, applying bracketed-paste wrapping
+    /// (mode 2004) or `\n` → `\r` conversion based on the pane's current
+    /// terminal modes. Remote clients do not know those modes, so the
+    /// server performs the wrapping here to mirror the local paste path
+    /// in `TerminalController.handlePaste`.
+    public func sendPaste(paneID: PaneID, data: [UInt8]) {
+        guard let core = coreLookup[paneID] else { return }
+        let wrapped = PasteEncoder.wrap(data, bracketed: core.bracketedPasteMode)
+        core.write(wrapped)
+    }
+
     /// Forward a mouse event to the terminal core for encoding and PTY delivery.
     public func handleMouseEvent(paneID: PaneID, event: MouseEncoder.Event) {
         coreLookup[paneID]?.handleMouseEvent(event)

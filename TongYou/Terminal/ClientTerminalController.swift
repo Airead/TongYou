@@ -349,7 +349,12 @@ final class ClientTerminalController: TerminalControlling {
         }
 
         scrollToBottomIfNeeded()
-        remoteClient.sendInput(
+        // Send raw bytes as a paste: the server knows the pane's current
+        // bracketed-paste mode and applies `ESC[200~`/`ESC[201~` wrapping
+        // or `\n`→`\r` conversion there. Sending via `.input` instead
+        // skips that step and causes vim to treat every `\n` as Enter,
+        // triggering autoindent/textwidth auto-wrap mid-paste.
+        remoteClient.sendPaste(
             sessionID: sessionID,
             paneID: paneID,
             data: bytes

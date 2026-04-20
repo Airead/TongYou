@@ -458,6 +458,9 @@ public final class SocketServer: @unchecked Sendable {
         case .input(_, let paneID, let bytes):
             sessionManager.sendInput(paneID: paneID, data: bytes)
 
+        case .paste(_, let paneID, let bytes):
+            sessionManager.sendPaste(paneID: paneID, data: bytes)
+
         case .mouseEvent(_, let paneID, let event):
             sessionManager.handleMouseEvent(paneID: paneID, event: event)
 

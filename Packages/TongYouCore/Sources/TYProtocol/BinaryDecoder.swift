@@ -692,6 +692,12 @@ public struct BinaryDecoder: Sendable {
             let event = try readMouseEvent()
             return .mouseEvent(sessionID, paneID, event)
 
+        case .paste:
+            let sessionID = try readSessionID()
+            let paneID = try readPaneID()
+            let bytes = try readBytes()
+            return .paste(sessionID, paneID, bytes)
+
         case .createTab:
             let sessionID = try readSessionID()
             let profileID = try readOptionalString()

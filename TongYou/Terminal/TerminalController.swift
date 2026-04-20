@@ -537,22 +537,8 @@ final class TerminalController: TerminalControlling {
             bytes[i] = 0x20
         }
 
-        let bracketed = core.bracketedPasteMode
-        var data = Data()
-
-        if bracketed {
-            data.append(contentsOf: [0x1B, 0x5B, 0x32, 0x30, 0x30, 0x7E]) // ESC[200~
-            data.append(contentsOf: bytes)
-            data.append(contentsOf: [0x1B, 0x5B, 0x32, 0x30, 0x31, 0x7E]) // ESC[201~
-        } else {
-            // Non-bracketed: replace \n with \r
-            for i in bytes.indices where bytes[i] == 0x0A {
-                bytes[i] = 0x0D
-            }
-            data.append(contentsOf: bytes)
-        }
-
-        writeToPTY(data)
+        let wrapped = PasteEncoder.wrap(bytes, bracketed: core.bracketedPasteMode)
+        writeToPTY(Data(wrapped))
     }
 
     // MARK: - Private: Screen Dirty Handling

@@ -146,6 +146,13 @@ public final class RemoteSessionClient: @unchecked Sendable {
         connection?.send(.input(sessionID, paneID, data))
     }
 
+    /// Send a paste payload to a pane. The server applies bracketed-paste
+    /// wrapping (mode 2004) or `\n` → `\r` conversion based on the pane's
+    /// current terminal modes — the client does not replicate that state.
+    public func sendPaste(sessionID: SessionID, paneID: PaneID, data: [UInt8]) {
+        connection?.send(.paste(sessionID, paneID, data))
+    }
+
     /// Resize a pane on the server.
     public func resizePane(sessionID: SessionID, paneID: PaneID, cols: UInt16, rows: UInt16) {
         connection?.send(.resize(sessionID, paneID, cols: cols, rows: rows))

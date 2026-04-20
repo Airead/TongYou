@@ -53,6 +53,10 @@ public enum ClientMessageType: UInt16, Sendable {
     case scrollViewport  = 0x0212
     case extractSelection = 0x0213
     case mouseEvent      = 0x0214
+    /// Paste text into a pane. The server wraps with bracketed-paste
+    /// markers or converts newlines based on the pane's current terminal
+    /// modes — the client does not know those modes.
+    case paste           = 0x0215
 
     // Tab/Pane operations
     case createTab       = 0x0220
@@ -204,6 +208,11 @@ public enum ClientMessage: Sendable {
     case extractSelection(SessionID, PaneID, Selection)
     /// Mouse event forwarded to the server for encoding and PTY delivery.
     case mouseEvent(SessionID, PaneID, MouseEncoder.Event)
+    /// Paste raw text bytes into a pane. Unlike `.input`, the server is
+    /// responsible for applying bracketed-paste wrapping (mode 2004) or
+    /// `\n` → `\r` conversion, because only the server knows the pane's
+    /// current terminal modes.
+    case paste(SessionID, PaneID, [UInt8])
 
     // Tab/Pane operations
     /// Create a new tab. If `profileID` and `snapshot` are nil the server
@@ -295,6 +304,10 @@ public enum ClientMessage: Sendable {
             return "extractSelection(session=\(sid), pane=\(pid), [\(s.line):\(s.col)..\(e.line):\(e.col)])"
         case .mouseEvent(let sid, let pid, let event):
             return "mouseEvent(session=\(sid), pane=\(pid), action=\(event.action), col=\(event.col), row=\(event.row))"
+        case .paste(let sid, let pid, let bytes):
+            let preview = bytes.prefix(32).map { String(format: "%02x", $0) }.joined(separator: " ")
+            let suffix = bytes.count > 32 ? "... (len=\(bytes.count))" : ""
+            return "paste(session=\(sid), pane=\(pid), data=[\(preview)\(suffix)])"
         case .createTab(let sid, let profileID, let snapshot, let variables):
             return "createTab(session=\(sid), profile=\(profileID ?? "nil"), hasSnapshot=\(snapshot != nil), vars=\(variables.count))"
         case .closeTab(let sid, let tid):
@@ -351,6 +364,7 @@ public enum ClientMessage: Sendable {
         case .scrollViewport: return .scrollViewport
         case .extractSelection: return .extractSelection
         case .mouseEvent:     return .mouseEvent
+        case .paste:          return .paste
         case .createTab:      return .createTab
         case .closeTab:       return .closeTab
         case .splitPane:      return .splitPane
