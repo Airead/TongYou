@@ -1803,6 +1803,15 @@ final class SessionManager {
 
         let client = RemoteSessionClient(connectionManager: connectionManager)
 
+        // Route [RECV] cursorTrace messages into GUILog so they land in the
+        // same file as renderer logs. Temporary — remove with cursorTrace.
+        client.cursorTraceHandler = { msg in
+            GUILog.debug(msg, category: .cursorTrace)
+        }
+        ScreenReplica.resizeTraceHandler = { msg in
+            GUILog.debug(msg, category: .cursorTrace)
+        }
+
         client.onSessionList = { [weak self] infos in
             self?.handleRemoteSessionList(infos)
         }

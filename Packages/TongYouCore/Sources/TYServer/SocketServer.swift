@@ -32,6 +32,10 @@ public final class SocketServer: @unchecked Sendable {
     /// while new output arrives at the bottom).
     private var lastSentState: [PaneID: SentSnapshotState] = [:]
 
+    /// Last cursor/geometry stamped into a `[SEND]` cursorTrace log per pane.
+    /// Temporary — remove with the cursorTrace category.
+    private var lastCursorTrace: [PaneID: (row: Int, col: Int, cols: Int, rows: Int, vis: Bool)] = [:]
+
     /// One-shot timer for the next coalesced flush. Managed on `messageQueue`.
     private var flushTimer: DispatchSourceTimer?
     /// Number of consecutive flush cycles without an idle gap.
@@ -60,7 +64,15 @@ public final class SocketServer: @unchecked Sendable {
         self.sessionManager = sessionManager
         self.authToken = authToken
         wireSessionManagerCallbacks()
-        DirtyTrace.log = { Log.debug($0) }
+        DirtyTrace.log = { msg in
+            // [RESIZE] messages belong to the cursorTrace investigation;
+            // the rest are dirty-region traces. Both hooks are temporary.
+            if msg.hasPrefix("[RESIZE") {
+                Log.debug(msg, category: .cursorTrace)
+            } else {
+                Log.debug(msg)
+            }
+        }
     }
 
     public func start() throws {
@@ -106,6 +118,7 @@ public final class SocketServer: @unchecked Sendable {
             client.stop()
         }
         lastSentState.removeAll()
+        lastCursorTrace.removeAll()
         sessionManager.stopAllSessions()
         Log.info("Server stopped")
     }
@@ -137,6 +150,69 @@ public final class SocketServer: @unchecked Sendable {
     }
 
     // MARK: - Broadcast Helpers
+
+    /// Emit a `[SEND]` cursorTrace log iff the cursor position, pane size,
+    /// or cursor visibility changed since the last log for this pane.
+    /// Temporary — remove with the cursorTrace category.
+    private func logCursorTraceSend(paneID: PaneID, paneShort: Substring, snapshot: ScreenSnapshot) {
+        let state = (
+            row: snapshot.cursorRow,
+            col: snapshot.cursorCol,
+            cols: snapshot.columns,
+            rows: snapshot.rows,
+            vis: snapshot.cursorVisible
+        )
+        if let last = lastCursorTrace[paneID], last == state { return }
+        lastCursorTrace[paneID] = state
+
+        let cellsAround = sampleCursorRowCells(snapshot: snapshot)
+        Log.debug(
+            "[SEND] pane=\(paneShort) dims=\(state.cols)x\(state.rows)"
+            + " cursor=(\(state.row),\(state.col)) vis=\(state.vis)"
+            + " cellsAround=\(cellsAround)",
+            category: .cursorTrace
+        )
+    }
+
+    /// Sample up to ±5 cells around the cursor column on the cursor row.
+    /// For partial snapshots, falls back to `[partial]` when the cursor row
+    /// isn't in `partialRows` (i.e. didn't change this flush).
+    private func sampleCursorRowCells(snapshot: ScreenSnapshot) -> String {
+        let row = snapshot.cursorRow
+        let col = snapshot.cursorCol
+        guard row >= 0, row < snapshot.rows, snapshot.columns > 0 else { return "[]" }
+        let startCol = max(0, col - 5)
+        let endCol = min(snapshot.columns - 1, col + 5)
+        guard startCol <= endCol else { return "[]" }
+
+        let rowCells: [Cell]
+        if !snapshot.isPartial {
+            let rowBase = row * snapshot.columns
+            guard rowBase + endCol < snapshot.cells.count else { return "[?]" }
+            rowCells = Array(snapshot.cells[rowBase..<(rowBase + snapshot.columns)])
+        } else if let pair = snapshot.partialRows.first(where: { $0.row == row }) {
+            rowCells = pair.cells
+        } else {
+            return "[partial]"
+        }
+        guard endCol < rowCells.count else { return "[?]" }
+
+        var parts: [String] = []
+        parts.reserveCapacity(endCol - startCol + 1)
+        for c in startCol...endCol {
+            let cell = rowCells[c]
+            let prefix = c == col ? "▮" : ""
+            let scalar = cell.content.firstScalar
+            let ch: String
+            if let s = scalar, s.value >= 0x20, s.value != 0x7F {
+                ch = String(s)
+            } else {
+                ch = "·"
+            }
+            parts.append(prefix + ch)
+        }
+        return "[" + parts.joined(separator: ",") + "]"
+    }
 
     /// Run an action on each client attached to a session.
     private func forEachAttachedClient(
@@ -377,6 +453,8 @@ public final class SocketServer: @unchecked Sendable {
                 let diff = ScreenDiff(from: snapshot, mouseTrackingMode: mouseMode)
                 message = .screenDiff(key.sessionID, key.paneID, diff)
             }
+
+            logCursorTraceSend(paneID: key.paneID, paneShort: paneShort, snapshot: snapshot)
 
             forEachAttachedClient(session: key.sessionID) { $0.send(message) }
         }
@@ -673,6 +751,7 @@ public final class SocketServer: @unchecked Sendable {
             guard let self else { return }
             self.messageQueue.async { [weak self] in
                 self?.lastSentState.removeValue(forKey: paneID)
+                self?.lastCursorTrace.removeValue(forKey: paneID)
             }
             self.broadcast(
                 .paneExited(sessionID, paneID, exitCode: exitCode),

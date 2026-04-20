@@ -86,7 +86,13 @@ final class MetalView: NSView {
     private var lastRenderedContentGeneration: UInt64 = .max
 
     /// The pane ID this MetalView belongs to (set by TerminalPaneContainerView).
-    var paneID: UUID?
+    var paneID: UUID? {
+        didSet {
+            // Propagate to renderer for cursorTrace logging. Remove alongside
+            // the cursorTrace category when the bug is fixed.
+            renderer?.paneID = paneID
+        }
+    }
 
     /// Blue notification ring overlay (sublayer of the CAMetalLayer).
     private let notificationRingLayer = CAShapeLayer()
@@ -872,6 +878,10 @@ final class MetalView: NSView {
             let shared = SharedAtlasProvider.shared
             renderer = MetalRenderer(device: device, fontSystem: fs, config: config,
                                      glyphAtlas: shared.glyphAtlas, emojiAtlas: shared.emojiAtlas)
+            // Late-bind paneID for cursorTrace logs: the view may have been
+            // assigned a paneID before the renderer existed. Temporary — remove
+            // with the cursorTrace category.
+            renderer?.paneID = paneID
 
             configObserverToken = configLoader?.addConfigChangeObserver {
                 [weak self] _ in

@@ -15,6 +15,9 @@ enum GUILog {
         case config
         case input
         case general
+        /// Temporary: investigating remote-mode split-pane cursor misalignment.
+        /// Remove along with its call sites once the bug is fixed.
+        case cursorTrace
     }
 
     enum Level: Int, Comparable, Sendable {

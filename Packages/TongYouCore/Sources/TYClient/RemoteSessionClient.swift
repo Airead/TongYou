@@ -17,6 +17,16 @@ public final class RemoteSessionClient: @unchecked Sendable {
     private var replicas: [PaneID: ScreenReplica] = [:]
     private let replicaLock = NSLock()
 
+    /// Last cursor/geometry stamped into a `[RECV]` cursorTrace log per pane.
+    /// Temporary — remove with the cursorTrace category.
+    private var lastCursorTrace: [PaneID: (row: Int, col: Int, cols: Int, rows: Int, vis: Bool)] = [:]
+    private let cursorTraceLock = NSLock()
+
+    /// Sink for `[RECV]` cursorTrace messages. The GUI wires this to `GUILog`
+    /// so client-side receive logs land in the same file as renderer logs.
+    /// Temporary — remove with the cursorTrace category.
+    public var cursorTraceHandler: ((String) -> Void)?
+
     // MARK: - Callbacks (dispatched to main queue)
 
     /// Called when the session list is received from the server.
@@ -101,6 +111,9 @@ public final class RemoteSessionClient: @unchecked Sendable {
         replicaLock.lock()
         replicas.removeAll()
         replicaLock.unlock()
+        cursorTraceLock.lock()
+        lastCursorTrace.removeAll()
+        cursorTraceLock.unlock()
     }
 
     public var isConnected: Bool {
@@ -351,6 +364,38 @@ public final class RemoteSessionClient: @unchecked Sendable {
         replicaLock.lock()
         replicas.removeValue(forKey: paneID)
         replicaLock.unlock()
+        cursorTraceLock.lock()
+        lastCursorTrace.removeValue(forKey: paneID)
+        cursorTraceLock.unlock()
+    }
+
+    /// Emit a `[RECV]` cursorTrace log iff the cursor position, pane size,
+    /// or cursor visibility changed since the last log for this pane.
+    /// Temporary — remove with the cursorTrace category.
+    private func logCursorTraceRecv(
+        paneID: PaneID,
+        kind: String,
+        cols: Int,
+        rows: Int,
+        cursorRow: Int,
+        cursorCol: Int,
+        cursorVisible: Bool
+    ) {
+        let state = (row: cursorRow, col: cursorCol, cols: cols, rows: rows, vis: cursorVisible)
+        cursorTraceLock.lock()
+        if let last = lastCursorTrace[paneID], last == state {
+            cursorTraceLock.unlock()
+            return
+        }
+        lastCursorTrace[paneID] = state
+        cursorTraceLock.unlock()
+
+        guard let handler = cursorTraceHandler else { return }
+        let paneShort = paneID.uuid.uuidString.prefix(8)
+        handler(
+            "[RECV] pane=\(paneShort) kind=\(kind) dims=\(cols)x\(rows)"
+            + " cursor=(\(cursorRow),\(cursorCol)) vis=\(cursorVisible)"
+        )
     }
 
     // MARK: - Private: Message Dispatch
@@ -379,6 +424,15 @@ public final class RemoteSessionClient: @unchecked Sendable {
         case .screenFull(let sessionID, let paneID, let snapshot, let mouseTrackingMode):
             let rep = replica(for: paneID)
             rep.applyFullSnapshot(snapshot, mouseTrackingMode: mouseTrackingMode)
+            logCursorTraceRecv(
+                paneID: paneID,
+                kind: "full",
+                cols: snapshot.columns,
+                rows: snapshot.rows,
+                cursorRow: snapshot.cursorRow,
+                cursorCol: snapshot.cursorCol,
+                cursorVisible: snapshot.cursorVisible
+            )
             DispatchQueue.main.async { [weak self] in
                 self?.onScreenUpdated?(sessionID, paneID)
             }
@@ -386,6 +440,15 @@ public final class RemoteSessionClient: @unchecked Sendable {
         case .screenDiff(let sessionID, let paneID, let diff):
             let rep = replica(for: paneID)
             rep.applyDiff(diff)
+            logCursorTraceRecv(
+                paneID: paneID,
+                kind: "diff",
+                cols: Int(diff.columns),
+                rows: rep.viewportInfo().rows,
+                cursorRow: Int(diff.cursorRow),
+                cursorCol: Int(diff.cursorCol),
+                cursorVisible: diff.cursorVisible
+            )
             DispatchQueue.main.async { [weak self] in
                 self?.onScreenUpdated?(sessionID, paneID)
             }

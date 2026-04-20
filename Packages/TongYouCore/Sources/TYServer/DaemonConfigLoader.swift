@@ -14,6 +14,10 @@ import TYConfig
 /// - `daemon-max-pending-screen-updates` — per-client queue limit (Int, > 0)
 /// - `daemon-stats-interval` — stats logging interval in seconds (Float, ≥ 0; 0 disables)
 /// - `daemon-auto-exit-on-no-sessions` — exit when last session closes (Bool)
+/// - `daemon-debug-log-level` — file log level: off/debug/info/warning/error (empty = CLI default).
+///   File path: `~/.local/share/TongYou/logs/daemon-YYYY-MM-DD.log`.
+/// - `daemon-debug-log-categories` — comma-separated category whitelist
+///   from {`server`, `session`, `client`, `cursorTrace`} (empty = all).
 public final class DaemonConfigLoader: @unchecked Sendable {
 
     /// Called on the main queue when configuration changes after a hot reload.
@@ -185,6 +189,28 @@ public final class DaemonConfigLoader: @unchecked Sendable {
                 config.autoExitOnNoSessions = v
             }
 
+        case "daemon-debug-log-level":
+            if value.isEmpty {
+                config.debugLogLevel = ServerConfig.defaultDebugLogLevel
+            } else {
+                let v = value.lowercased()
+                guard ["off", "debug", "info", "warning", "warn", "error"].contains(v) else {
+                    throw ConfigError.invalidValue(key: key, value: value)
+                }
+                config.debugLogLevel = v == "warn" ? "warning" : v
+            }
+
+        case "daemon-debug-log-categories":
+            if value.isEmpty {
+                config.debugLogCategories = ServerConfig.defaultDebugLogCategories
+            } else {
+                config.debugLogCategories = Set(
+                    value.split(separator: ",")
+                        .map { $0.trimmingCharacters(in: .whitespaces) }
+                        .filter { !$0.isEmpty }
+                )
+            }
+
         default:
             // Non-daemon keys are silently ignored.
             break
@@ -272,6 +298,13 @@ public final class DaemonConfigLoader: @unchecked Sendable {
         }
         if old.autoExitOnNoSessions != new.autoExitOnNoSessions {
             changes.append("daemon-auto-exit-on-no-sessions=\(new.autoExitOnNoSessions)")
+        }
+        if old.debugLogLevel != new.debugLogLevel {
+            changes.append("daemon-debug-log-level=\(new.debugLogLevel.isEmpty ? "<unset>" : new.debugLogLevel)")
+        }
+        if old.debugLogCategories != new.debugLogCategories {
+            let list = new.debugLogCategories.sorted().joined(separator: ",")
+            changes.append("daemon-debug-log-categories=\(list.isEmpty ? "<all>" : list)")
         }
         if !changes.isEmpty {
             Log.info("[daemon-config] reloaded: \(changes.joined(separator: ", "))")

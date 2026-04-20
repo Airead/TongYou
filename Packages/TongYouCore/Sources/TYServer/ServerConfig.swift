@@ -35,6 +35,14 @@ public struct ServerConfig: Sendable, Equatable {
     /// If nil, sessions are not persisted to disk.
     public var persistenceDirectory: String?
 
+    /// Daemon debug log level (from `daemon-debug-log-level`).
+    /// Values: "" (inherit CLI default), "off" (disable), "debug", "info", "warning", "error".
+    public var debugLogLevel: String
+
+    /// Daemon debug log categories whitelist (from `daemon-debug-log-categories`).
+    /// Empty set means "all categories".
+    public var debugLogCategories: Set<String>
+
     // MARK: - Default Values
 
     public static let defaultAutoExitOnNoSessions: Bool = false
@@ -43,6 +51,8 @@ public struct ServerConfig: Sendable, Equatable {
     public static let defaultMaxCoalesceDelay: TimeInterval = 0.200
     public static let defaultMaxPendingScreenUpdates: Int = 3
     public static let defaultStatsInterval: TimeInterval = 30.0
+    public static let defaultDebugLogLevel: String = ""
+    public static let defaultDebugLogCategories: Set<String> = []
 
     public init(
         socketPath: String? = nil,
@@ -55,7 +65,9 @@ public struct ServerConfig: Sendable, Equatable {
         defaultWorkingDirectory: String? = nil,
         maxPendingScreenUpdates: Int = defaultMaxPendingScreenUpdates,
         statsInterval: TimeInterval = defaultStatsInterval,
-        persistenceDirectory: String? = nil
+        persistenceDirectory: String? = nil,
+        debugLogLevel: String = defaultDebugLogLevel,
+        debugLogCategories: Set<String> = defaultDebugLogCategories
     ) {
         self.socketPath = socketPath ?? Self.defaultSocketPath()
         self.autoExitOnNoSessions = autoExitOnNoSessions
@@ -68,6 +80,8 @@ public struct ServerConfig: Sendable, Equatable {
         self.maxPendingScreenUpdates = maxPendingScreenUpdates
         self.statsInterval = statsInterval
         self.persistenceDirectory = persistenceDirectory
+        self.debugLogLevel = debugLogLevel
+        self.debugLogCategories = debugLogCategories
     }
 
     public static func defaultSocketPath() -> String {

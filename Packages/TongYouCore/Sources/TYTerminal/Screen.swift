@@ -1151,6 +1151,12 @@ public final class Screen {
         let oldCols = columns
         let oldRows = rows
 
+        // Temporary cursorTrace: report server-side resize. Remove along with
+        // the cursorTrace category when the split-pane misalignment bug is fixed.
+        DirtyTrace.emit(
+            "[RESIZE server] cols=\(oldCols)->\(newCols) rows=\(oldRows)->\(newRows)"
+        )
+
         // Reflow main screen (scrollback + active) when columns change.
         if newCols != oldCols {
             reflowResize(newCols: newCols, newRows: newRows)

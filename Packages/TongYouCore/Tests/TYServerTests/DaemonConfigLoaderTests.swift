@@ -153,6 +153,66 @@ struct DaemonConfigLoaderTests {
         #expect(config.autoExitOnNoSessions == true)
     }
 
+    // MARK: - Debug Log Config
+
+    @Test func loadsDebugLogLevel() throws {
+        let url = try writeTempConfig("daemon-debug-log-level = debug")
+        let loader = DaemonConfigLoader()
+        loader.load(from: [url])
+        #expect(loader.config.debugLogLevel == "debug")
+    }
+
+    @Test func acceptsWarnAsWarning() throws {
+        let url = try writeTempConfig("daemon-debug-log-level = warn")
+        let loader = DaemonConfigLoader()
+        loader.load(from: [url])
+        #expect(loader.config.debugLogLevel == "warning")
+    }
+
+    @Test func acceptsOffLevel() throws {
+        let url = try writeTempConfig("daemon-debug-log-level = off")
+        let loader = DaemonConfigLoader()
+        loader.load(from: [url])
+        #expect(loader.config.debugLogLevel == "off")
+    }
+
+    @Test func invalidDebugLogLevelIgnored() throws {
+        let url = try writeTempConfig("daemon-debug-log-level = verbose")
+        let loader = DaemonConfigLoader()
+        loader.load(from: [url])
+        // Invalid value rejected, default remains.
+        #expect(loader.config.debugLogLevel == ServerConfig.defaultDebugLogLevel)
+    }
+
+    @Test func emptyDebugLogLevelResetsToDefault() throws {
+        let content = """
+        daemon-debug-log-level = debug
+        daemon-debug-log-level =
+        """
+        let url = try writeTempConfig(content)
+        let loader = DaemonConfigLoader()
+        loader.load(from: [url])
+        #expect(loader.config.debugLogLevel == ServerConfig.defaultDebugLogLevel)
+    }
+
+    @Test func loadsDebugLogCategories() throws {
+        let url = try writeTempConfig("daemon-debug-log-categories = server, cursorTrace")
+        let loader = DaemonConfigLoader()
+        loader.load(from: [url])
+        #expect(loader.config.debugLogCategories == ["server", "cursorTrace"])
+    }
+
+    @Test func emptyDebugLogCategoriesResetsToDefault() throws {
+        let content = """
+        daemon-debug-log-categories = server
+        daemon-debug-log-categories =
+        """
+        let url = try writeTempConfig(content)
+        let loader = DaemonConfigLoader()
+        loader.load(from: [url])
+        #expect(loader.config.debugLogCategories == ServerConfig.defaultDebugLogCategories)
+    }
+
     // MARK: - Helpers
 
     private func writeTempConfig(_ content: String) throws -> URL {

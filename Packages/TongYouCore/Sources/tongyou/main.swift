@@ -685,9 +685,34 @@ func connectToServer() -> TYDConnection {
 
 // MARK: - Daemon Commands
 
+/// Apply `daemon-debug-log-level` and `daemon-debug-log-categories` to the
+/// file logger. Empty-level means "inherit the CLI-driven default"; "off"
+/// disables file logging entirely.
+func applyDaemonLogConfig(_ config: ServerConfig, cliDefault: Log.Level) {
+    let categories: Set<Log.Category>?
+    if config.debugLogCategories.isEmpty {
+        categories = nil
+    } else {
+        categories = Set(config.debugLogCategories.compactMap { Log.Category(rawValue: $0) })
+    }
+
+    let raw = config.debugLogLevel
+    if raw.isEmpty {
+        Log.updateFileLogging(level: cliDefault, categories: categories)
+    } else if raw == "off" {
+        Log.updateFileLogging(level: nil, categories: nil)
+    } else if let level = Log.Level(configValue: raw) {
+        Log.updateFileLogging(level: level, categories: categories)
+    } else {
+        // Parsing already rejected invalid values in DaemonConfigLoader; fall
+        // back to the CLI default just to be safe.
+        Log.updateFileLogging(level: cliDefault, categories: categories)
+    }
+}
+
 func runServer(daemonize: Bool, debug: Bool) {
     // Configure logging before anything else.
-    Log.configure(useSyslog: daemonize, minLevel: debug ? .debug : .info)
+    Log.configure(daemonize: daemonize, minLevel: debug ? .debug : .info)
 
     if let existingPID = DaemonLifecycle.checkExistingProcess() {
         fputs("tongyou: server already running (pid \(existingPID))\n", stderr)
@@ -703,6 +728,7 @@ func runServer(daemonize: Bool, debug: Bool) {
     configLoader.load()
 
     let config = configLoader.config
+    applyDaemonLogConfig(config, cliDefault: debug ? .debug : .info)
     Log.info("Config loaded: scrollback=\(config.maxScrollback), coalesce=\(config.minCoalesceDelay)...\(config.maxCoalesceDelay)s")
 
     let lifecycle = DaemonLifecycle()
@@ -719,8 +745,10 @@ func runServer(daemonize: Bool, debug: Bool) {
     let sessionManager = ServerSessionManager(config: config)
     let server = SocketServer(config: config, sessionManager: sessionManager, authToken: authToken)
 
+    let cliDefaultLevel: Log.Level = debug ? .debug : .info
     configLoader.onConfigChanged = { [weak server] newConfig in
         server?.updateConfig(newConfig)
+        applyDaemonLogConfig(newConfig, cliDefault: cliDefaultLevel)
     }
 
     lifecycle.onShutdown = {

@@ -58,6 +58,15 @@ final class MetalRenderer {
 
     private(set) var currentSnapshot: ScreenSnapshot?
 
+    /// Pane identifier, used only to tag `cursorTrace` debug logs so logs
+    /// from multiple panes can be correlated. Nil on renderers not bound
+    /// to a pane (e.g. tests). Remove alongside the cursorTrace call sites.
+    var paneID: UUID?
+
+    /// Last cursor/geometry state stamped into a `[DRAW]` cursorTrace log.
+    /// Prevents per-frame spam — we only log when something meaningful changed.
+    private var lastLoggedCursorState: (row: Int, col: Int, cols: Int, rows: Int, visible: Bool)?
+
     /// Backing store for the full grid, merged from partial snapshots.
     private var backingCells: [Cell] = []
     private var backingColumns: Int = 0
@@ -632,6 +641,75 @@ final class MetalRenderer {
                 frameStateDirtyRegions[i].merge(snapshot.dirtyRegion)
             }
         }
+
+        logCursorTraceIfChanged(snapshot: snapshot)
+    }
+
+    /// Emit a `[DRAW]` cursorTrace log iff the cursor position / visibility /
+    /// pane geometry changed since the last log. Temporary — remove with the
+    /// `cursorTrace` category when the split-pane misalignment bug is fixed.
+    private func logCursorTraceIfChanged(snapshot: ScreenSnapshot) {
+        let state = (
+            row: snapshot.cursorRow,
+            col: snapshot.cursorCol,
+            cols: snapshot.columns,
+            rows: snapshot.rows,
+            visible: snapshot.cursorVisible
+        )
+        if let last = lastLoggedCursorState,
+           last.row == state.row,
+           last.col == state.col,
+           last.cols == state.cols,
+           last.rows == state.rows,
+           last.visible == state.visible {
+            return
+        }
+        lastLoggedCursorState = state
+
+        let paneTag = paneID.map { String($0.uuidString.prefix(8)) } ?? "-"
+        let cellsAround = sampleCellsAroundCursor(
+            snapshot: snapshot,
+            row: state.row,
+            col: state.col
+        )
+        GUILog.debug(
+            "[DRAW] pane=\(paneTag) viewport=\(state.cols)x\(state.rows)"
+            + " cursor=(\(state.row),\(state.col)) vis=\(state.visible)"
+            + " cellsAround=\(cellsAround)",
+            category: .cursorTrace
+        )
+    }
+
+    /// Sample up to ±5 cells around the cursor column on the cursor row for
+    /// cursorTrace logging. Returns a compact string like `"[·,a,b,▮x,c,d]"`.
+    /// Reads from `backingCells` (post-merge) rather than snapshot.cells so
+    /// partial snapshots still get an accurate view.
+    private func sampleCellsAroundCursor(
+        snapshot: ScreenSnapshot,
+        row: Int,
+        col: Int
+    ) -> String {
+        guard row >= 0, row < backingRows, backingColumns > 0 else { return "[]" }
+        let startCol = max(0, col - 5)
+        let endCol = min(backingColumns - 1, col + 5)
+        guard startCol <= endCol else { return "[]" }
+        let rowBase = row * backingColumns
+        guard rowBase + endCol < backingCells.count else { return "[?]" }
+        var parts: [String] = []
+        parts.reserveCapacity(endCol - startCol + 1)
+        for c in startCol...endCol {
+            let cell = backingCells[rowBase + c]
+            let prefix = c == col ? "▮" : ""
+            let scalar = cell.content.firstScalar
+            let ch: String
+            if let s = scalar, s.value >= 0x20, s.value != 0x7F {
+                ch = String(s)
+            } else {
+                ch = "·"
+            }
+            parts.append(prefix + ch)
+        }
+        return "[" + parts.joined(separator: ",") + "]"
     }
 
     // MARK: - Render

@@ -9,6 +9,12 @@ import TYTerminal
 /// Provides `ScreenSnapshot` for rendering by MetalView.
 public final class ScreenReplica: @unchecked Sendable {
 
+    /// Sink for `[RESIZE client]` cursorTrace messages. The GUI wires this
+    /// to `GUILog`. Process-global — every replica shares one handler.
+    /// Temporary — remove with the cursorTrace category.
+    nonisolated(unsafe) public static var resizeTraceHandler: ((String) -> Void)?
+
+
     private var cells: [Cell]
     public private(set) var columns: Int
     public private(set) var rows: Int
@@ -77,6 +83,11 @@ public final class ScreenReplica: @unchecked Sendable {
     public func applyFullSnapshot(_ snapshot: ScreenSnapshot, mouseTrackingMode: UInt8 = 0) {
         lock.lock()
         defer { lock.unlock() }
+        if columns != snapshot.columns || rows != snapshot.rows {
+            Self.resizeTraceHandler?(
+                "[RESIZE client] full cols=\(columns)->\(snapshot.columns) rows=\(rows)->\(snapshot.rows)"
+            )
+        }
         columns = snapshot.columns
         rows = snapshot.rows
         cells = snapshot.cells
@@ -103,6 +114,9 @@ public final class ScreenReplica: @unchecked Sendable {
         if cols != columns || maxDirtyRow > rows {
             let newRows = max(rows, maxDirtyRow)
             if cols != columns || newRows != rows {
+                Self.resizeTraceHandler?(
+                    "[RESIZE client] diff cols=\(columns)->\(cols) rows=\(rows)->\(newRows)"
+                )
                 columns = cols
                 rows = newRows
                 cells = [Cell](repeating: Cell.empty, count: columns * rows)
