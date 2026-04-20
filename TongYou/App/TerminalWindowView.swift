@@ -690,6 +690,7 @@ struct TerminalWindowView: View {
                     focusManager: focusManager,
                     focusColor: paneFocusColor,
                     configLoader: configLoader,
+                    toastPresenter: toastPresenter,
                     controllerForPane: { paneID in
                         sessionManager.activeController(for: paneID)
                     },
@@ -741,7 +742,8 @@ struct TerminalWindowView: View {
                     sessionManager.exitedFloatingPanes[paneID] != nil
                 },
                 paneSelectionManager: paneSelectionManager,
-                tabID: activeTab.id
+                tabID: activeTab.id,
+                toastPresenter: toastPresenter
             )
         }
     }
@@ -768,6 +770,7 @@ struct TerminalWindowView: View {
             initialWorkingDirectory: pane.initialWorkingDirectory,
             configLoader: configLoader,
             externalController: sessionManager.activeController(for: pane.id),
+            toastPresenter: toastPresenter,
             onTabAction: handleTabAction,
             onTitleChanged: updateTabTitle,
             onFocused: { focusManager.focusPane(id: pane.id) },

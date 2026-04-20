@@ -127,6 +127,7 @@ struct PaneSplitView: View {
     let focusManager: FocusManager
     let focusColor: Color
     let configLoader: ConfigLoader
+    let toastPresenter: ToastPresenter?
     /// Returns a pre-built controller for remote panes, or nil for local panes.
     let controllerForPane: (UUID) -> (any TerminalControlling)?
     let onTabAction: (TabAction) -> Void
@@ -153,6 +154,7 @@ struct PaneSplitView: View {
                 focusManager: focusManager,
                 focusColor: focusColor,
                 configLoader: configLoader,
+                toastPresenter: toastPresenter,
                 controllerForPane: controllerForPane,
                 onTabAction: onTabAction,
                 onTitleChanged: onTitleChanged,
@@ -175,6 +177,7 @@ struct PaneSplitView: View {
             initialWorkingDirectory: pane.initialWorkingDirectory,
             configLoader: configLoader,
             externalController: controllerForPane(pane.id),
+            toastPresenter: toastPresenter,
             onTabAction: onTabAction,
             onTitleChanged: onTitleChanged,
             onFocused: {
@@ -248,6 +251,7 @@ private struct ContainerView: View {
     let focusManager: FocusManager
     let focusColor: Color
     let configLoader: ConfigLoader
+    let toastPresenter: ToastPresenter?
     let controllerForPane: (UUID) -> (any TerminalControlling)?
     let onTabAction: (TabAction) -> Void
     let onTitleChanged: (String) -> Void
@@ -428,6 +432,7 @@ private struct ContainerView: View {
             focusManager: focusManager,
             focusColor: focusColor,
             configLoader: configLoader,
+            toastPresenter: toastPresenter,
             controllerForPane: controllerForPane,
             onTabAction: onTabAction,
             onTitleChanged: onTitleChanged,

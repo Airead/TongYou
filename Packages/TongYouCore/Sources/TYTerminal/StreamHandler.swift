@@ -34,6 +34,8 @@ public struct StreamHandler {
     public var onPaneNotification: ((String, String) -> Void)?
     /// Callback: focus event reporting (DECSET 1004) toggled on/off.
     public var onFocusReportingChanged: ((Bool) -> Void)?
+    /// Callback: unsupported DECSET/DECRST mode received.
+    public var onUnsupportedMode: ((UInt16) -> Void)?
 
     public init(screen: Screen) {
         self.screen = screen
@@ -492,7 +494,11 @@ public struct StreamHandler {
         // Try mouse format modes (1006)
         if modes.setMouseFormat(rawParam: rawParam, enabled: value) { return }
 
-        guard let mode = TerminalModes.from(rawValue: rawParam) else { return }
+        guard let mode = TerminalModes.from(rawValue: rawParam) else {
+            print("[DEBUG] Unsupported mode received: \(rawParam)")
+            onUnsupportedMode?(rawParam)
+            return
+        }
 
         modes.set(mode, value)
 

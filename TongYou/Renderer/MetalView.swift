@@ -34,6 +34,15 @@ final class MetalView: NSView {
     /// Profile id for this pane. Drives live-field resolution on top of the
     /// global Config. Set by `TerminalPaneContainerView`.
     var profileID: String?
+    /// Toast presenter for showing transient notifications.
+    /// Injected by `TerminalPaneContainerView`.
+    var toastPresenter: ToastPresenter? {
+        didSet {
+            if let tc = terminalController as? TerminalController {
+                tc.toastPresenter = toastPresenter
+            }
+        }
+    }
 
     /// Observer tokens so we can unsubscribe from ConfigLoader on teardown.
     private var configObserverToken: UUID?
@@ -1210,7 +1219,8 @@ final class MetalView: NSView {
             let tc = TerminalController(
                 columns: Int(grid.columns),
                 rows: Int(grid.rows),
-                config: config
+                config: config,
+                toastPresenter: toastPresenter
             )
             tc.start(workingDirectory: initialWorkingDirectory)
             controller = tc

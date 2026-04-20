@@ -22,6 +22,7 @@ struct FloatingPaneOverlay: View {
     let isProcessExited: (UUID) -> Bool
     let paneSelectionManager: PaneSelectionManager
     let tabID: UUID
+    let toastPresenter: ToastPresenter?
 
     private var visiblePanes: [FloatingPane] {
         floatingPanes
@@ -57,7 +58,8 @@ struct FloatingPaneOverlay: View {
                         onUserInteraction: onUserInteraction,
                         isProcessExited: isProcessExited,
                         paneSelectionManager: paneSelectionManager,
-                        tabID: tabID
+                        tabID: tabID,
+                        toastPresenter: toastPresenter
                     )
                 }
             }

@@ -61,6 +61,12 @@ final class TerminalController: TerminalControlling {
     /// Current bell mode from configuration.
     private var bellMode: BellMode = .audible
 
+    /// Toast presenter for showing transient notifications.
+    var toastPresenter: ToastPresenter?
+    /// Debounce work item for unsupported mode toasts (runs on main).
+    private var unsupportedModeDebounceWork: DispatchWorkItem?
+    private static let unsupportedModeDebounceInterval: TimeInterval = 0.5
+
     /// Called on the main thread when the child process exits with an exit code.
     var onProcessExited: ((Int32) -> Void)?
 
@@ -77,7 +83,7 @@ final class TerminalController: TerminalControlling {
 
     private var optionAsAlt: Bool
 
-    init(columns: Int, rows: Int, config: Config = .default) {
+    init(columns: Int, rows: Int, config: Config = .default, toastPresenter: ToastPresenter? = nil) {
         self.core = TerminalCore(
             columns: columns,
             rows: rows,
@@ -86,6 +92,7 @@ final class TerminalController: TerminalControlling {
         )
         self.bellMode = config.bell
         self.optionAsAlt = config.optionAsAlt
+        self.toastPresenter = toastPresenter
 
         wireCallbacks()
     }
@@ -121,6 +128,32 @@ final class TerminalController: TerminalControlling {
                 self?.onPaneNotification?(title, body)
             }
         }
+        core.onUnsupportedMode = { [weak self] mode in
+            let appName = self?.runningCommand ?? "shell"
+            GUILog.warning("Unsupported terminal mode: \(mode) from \"\(appName)\"", category: .session)
+            DispatchQueue.main.async { [weak self] in
+                self?.showUnsupportedModeToast(mode)
+            }
+        }
+    }
+
+    private func showUnsupportedModeToast(_ mode: UInt16) {
+        print("[DEBUG] showUnsupportedModeToast called with mode: \(mode), toastPresenter: \(toastPresenter != nil ? "set" : "nil")")
+        unsupportedModeDebounceWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else {
+                print("[DEBUG] self was nil in debounce work item")
+                return
+            }
+            guard let presenter = self.toastPresenter else {
+                print("[DEBUG] toastPresenter is nil")
+                return
+            }
+            print("[DEBUG] Showing toast for mode: \(mode)")
+            presenter.show("Unsupported terminal mode: \(mode)")
+        }
+        unsupportedModeDebounceWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.unsupportedModeDebounceInterval, execute: work)
     }
 
     /// Apply updated configuration (called from MetalView on hot reload).

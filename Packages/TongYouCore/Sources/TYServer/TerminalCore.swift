@@ -52,6 +52,8 @@ public final class TerminalCore: @unchecked Sendable {
     public var onRunningCommandChanged: ((String?) -> Void)?
     /// Called when a pane notification sequence is received (OSC 9 / 777 / 1337).
     public var onPaneNotification: ((String, String) -> Void)?
+    /// Called when an unsupported DECSET/DECRST mode is received.
+    public var onUnsupportedMode: ((UInt16) -> Void)?
 
     // MARK: - Init
 
@@ -180,6 +182,10 @@ public final class TerminalCore: @unchecked Sendable {
         }
         streamHandler.onPaneNotification = { [weak self] title, body in
             self?.onPaneNotification?(title, body)
+        }
+        streamHandler.onUnsupportedMode = { [weak self] mode in
+            Log.warning("Unsupported terminal mode: \(mode)", category: .session)
+            self?.onUnsupportedMode?(mode)
         }
 
         try launcher(process)

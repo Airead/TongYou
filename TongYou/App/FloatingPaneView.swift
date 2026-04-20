@@ -22,6 +22,7 @@ struct FloatingPaneView: View {
     let isProcessExited: (UUID) -> Bool
     let paneSelectionManager: PaneSelectionManager
     let tabID: UUID
+    let toastPresenter: ToastPresenter?
 
     private static let titleBarHeight: CGFloat = 24
     private static let resizeHandleSize: CGFloat = 6
@@ -112,6 +113,7 @@ struct FloatingPaneView: View {
             initialWorkingDirectory: floatingPane.pane.initialWorkingDirectory,
             configLoader: configLoader,
             externalController: controllerForPane(floatingPane.pane.id),
+            toastPresenter: toastPresenter,
             onTabAction: onTabAction,
             onTitleChanged: onTitleChanged,
             onFocused: { bringToFrontAndFocus() },
@@ -119,7 +121,8 @@ struct FloatingPaneView: View {
             onToggleSelection: {
                 paneSelectionManager.togglePane(floatingPane.pane.id, inTab: tabID)
             },
-            isProcessExited: { isProcessExited(floatingPane.pane.id) }
+            isProcessExited: { isProcessExited(floatingPane.pane.id) },
+            onSearchBarToggled: nil
         )
         .id(floatingPane.pane.id)
         .modifier(PaneSelectionBorder(

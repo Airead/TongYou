@@ -13,6 +13,8 @@ struct TerminalPaneContainerView: NSViewRepresentable {
     let configLoader: ConfigLoader
     /// External controller for remote sessions. Nil for local sessions.
     let externalController: (any TerminalControlling)?
+    /// Toast presenter for showing transient notifications.
+    let toastPresenter: ToastPresenter?
     let onTabAction: (TabAction) -> Void
     let onTitleChanged: (String) -> Void
     let onFocused: () -> Void
@@ -38,6 +40,7 @@ struct TerminalPaneContainerView: NSViewRepresentable {
             existing.onToggleSelection = onToggleSelection
             existing.isProcessExited = isProcessExited
             existing.onSearchBarToggled = onSearchBarToggled
+            existing.toastPresenter = toastPresenter
             return existing
         }
         let view = MetalView()
@@ -46,6 +49,7 @@ struct TerminalPaneContainerView: NSViewRepresentable {
         view.configLoader = configLoader
         view.initialWorkingDirectory = initialWorkingDirectory
         view.externalController = externalController
+        view.toastPresenter = toastPresenter
         view.onTabAction = onTabAction
         view.onTitleChanged = onTitleChanged
         view.onFocused = onFocused
@@ -68,6 +72,7 @@ struct TerminalPaneContainerView: NSViewRepresentable {
         nsView.onToggleSelection = onToggleSelection
         nsView.isProcessExited = isProcessExited
         nsView.onSearchBarToggled = onSearchBarToggled
+        nsView.toastPresenter = toastPresenter
         if nsView.externalController !== externalController {
             nsView.externalController = externalController
             if let external = externalController {

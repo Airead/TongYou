@@ -175,6 +175,30 @@ struct TerminalCoreTests {
         #expect(core.expireStaleSyncedUpdate(timeout: 0.2) == false)
         #expect(core.isSyncedUpdateActive == false)
     }
+
+    // MARK: - Unsupported Mode
+
+    @Test("onUnsupportedMode callback fires for unsupported DECSET mode")
+    func unsupportedModeCallback() {
+        let core = TerminalCore(columns: 80, rows: 24)
+        var capturedModes: [UInt16] = []
+        core.onUnsupportedMode = { mode in
+            capturedModes.append(mode)
+        }
+        core.feedBytesForTesting(Array("\u{1B}[?1005h".utf8))
+        #expect(capturedModes == [1005])
+    }
+
+    @Test("onUnsupportedMode callback does not fire for supported mode")
+    func supportedModeDoesNotTriggerCallback() {
+        let core = TerminalCore(columns: 80, rows: 24)
+        var capturedModes: [UInt16] = []
+        core.onUnsupportedMode = { mode in
+            capturedModes.append(mode)
+        }
+        core.feedBytesForTesting(Array("\u{1B}[?1004h".utf8))
+        #expect(capturedModes.isEmpty)
+    }
 }
 
 /// Simple thread-safe wrapper for test assertions.
