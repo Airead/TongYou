@@ -613,6 +613,11 @@ public struct BinaryEncoder: Sendable {
         case .refreshPane(let sessionID, let paneID):
             writeSessionID(sessionID)
             writePaneID(paneID)
+
+        case .paneFocusEvent(let sessionID, let paneID, let focused):
+            writeSessionID(sessionID)
+            writePaneID(paneID)
+            writeBool(focused)
         }
     }
 }

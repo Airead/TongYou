@@ -64,6 +64,11 @@ public enum ClientMessageType: UInt16, Sendable {
     case splitPane       = 0x0222
     case closePane       = 0x0223
     case focusPane       = 0x0224
+    /// Report a focus in/out event for the given pane. Pairs with DECSET
+    /// 1004: the daemon only writes `CSI I` / `CSI O` to the PTY when the
+    /// running app has subscribed to focus events. Distinct from
+    /// `focusPane` which tracks "which pane is focused" for layout state.
+    case paneFocusEvent  = 0x0235
 
     case selectTab       = 0x022A
     case setSplitRatio   = 0x022F
@@ -283,6 +288,11 @@ public enum ClientMessage: Sendable {
     /// Diagnostic: ask the server to re-emit a full screen snapshot for
     /// `paneID` right away. Temporary — paired with `ClientMessageType.refreshPane`.
     case refreshPane(SessionID, PaneID)
+    /// Report a focus in/out transition for `paneID`. The server writes
+    /// `CSI I` / `CSI O` to the PTY only if the running app has enabled
+    /// DECSET 1004; otherwise it is a silent no-op. Separate from
+    /// `focusPane`, which merely records the focused-pane state in layout.
+    case paneFocusEvent(SessionID, PaneID, focused: Bool)
 
     /// Human-readable summary for debug logging. Long payloads are truncated.
     public var debugDescription: String {
@@ -358,6 +368,8 @@ public enum ClientMessage: Sendable {
             return "changeStrategy(session=\(sid), pane=\(pid), kind=\(kind.rawValue))"
         case .refreshPane(let sid, let pid):
             return "refreshPane(session=\(sid), pane=\(pid))"
+        case .paneFocusEvent(let sid, let pid, let focused):
+            return "paneFocusEvent(session=\(sid), pane=\(pid), focused=\(focused))"
         }
     }
 
@@ -397,6 +409,7 @@ public enum ClientMessage: Sendable {
         case .changeStrategy:                return .changeStrategy
         case .createTabWithGridPanes:        return .createTabWithGridPanes
         case .refreshPane:                   return .refreshPane
+        case .paneFocusEvent:                return .paneFocusEvent
         }
     }
 }

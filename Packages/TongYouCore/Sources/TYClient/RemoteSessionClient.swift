@@ -241,6 +241,13 @@ public final class RemoteSessionClient: @unchecked Sendable {
         connection?.send(.focusPane(sessionID, paneID))
     }
 
+    /// Report a focus in/out transition for `paneID`. The server forwards
+    /// this to the backing PTY only if the running app has enabled DECSET
+    /// 1004 focus events.
+    public func reportPaneFocus(sessionID: SessionID, paneID: PaneID, focused: Bool) {
+        connection?.send(.paneFocusEvent(sessionID, paneID, focused: focused))
+    }
+
     /// Diagnostic — ask the server to re-emit a full screen snapshot for
     /// `paneID`. No PTY side-effect; used to triage the split-pane
     /// misalignment bug. Temporary.

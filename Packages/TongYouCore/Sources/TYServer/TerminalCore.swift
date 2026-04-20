@@ -20,6 +20,10 @@ public final class TerminalCore: @unchecked Sendable {
     nonisolated(unsafe) private var streamHandler: StreamHandler
     nonisolated(unsafe) private var screenDirty = false
 
+    /// Whether the application has subscribed to focus events via DECSET 1004.
+    /// Confined to ptyQueue.
+    nonisolated(unsafe) private var focusReportingEnabled = false
+
     /// Title for dedup — confined to ptyQueue.
     nonisolated(unsafe) private var windowTitle: String = ""
 
@@ -79,6 +83,12 @@ public final class TerminalCore: @unchecked Sendable {
         )
         self.screen = screen
         self.streamHandler = StreamHandler(screen: screen)
+
+        // Wire screen-state callbacks that don't depend on a running PTY so
+        // they remain active in headless usage (tests, pre-start bootstrap).
+        streamHandler.onFocusReportingChanged = { [weak self] enabled in
+            self?.focusReportingEnabled = enabled
+        }
     }
 
     /// Stamp a short identifier (typically the pane UUID's first 8 chars) into
@@ -216,6 +226,40 @@ public final class TerminalCore: @unchecked Sendable {
 
     public func write(_ bytes: [UInt8]) {
         write(Data(bytes))
+    }
+
+    /// Report a focus change to the PTY if the application has subscribed
+    /// via DECSET 1004. Writes `CSI I` (focus in) or `CSI O` (focus out).
+    /// No-op when mode 1004 is not enabled.
+    public func reportFocus(_ focused: Bool) {
+        ptyQueue.async { [weak self] in
+            guard let self, self.focusReportingEnabled else { return }
+            let sequence: [UInt8] = focused
+                ? [0x1B, 0x5B, 0x49]  // ESC [ I
+                : [0x1B, 0x5B, 0x4F]  // ESC [ O
+            self.ptyProcess?.write(Data(sequence))
+        }
+    }
+
+    /// Test-only accessor for focus reporting state. Exposed via `@testable`
+    /// so tests can verify DECSET 1004 toggles land on the core without
+    /// launching a real PTY loopback.
+    internal var isFocusReportingEnabledForTesting: Bool {
+        ptyQueue.sync { focusReportingEnabled }
+    }
+
+    /// Test-only byte feed that drives the same `processBytes` path used
+    /// by the real PTY read callback, so tests can exercise state
+    /// transitions without standing up a PTY subprocess.
+    internal func feedBytesForTesting(_ bytes: [UInt8]) {
+        ptyQueue.sync {
+            bytes.withUnsafeBufferPointer { ptr in
+                self.vtParser.feed(ptr) { action in
+                    self.streamHandler.handle(action)
+                }
+            }
+            self.streamHandler.flush()
+        }
     }
 
     /// Encode a mouse event using the terminal's current tracking mode/format and write to PTY.

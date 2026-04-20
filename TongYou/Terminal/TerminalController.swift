@@ -273,6 +273,13 @@ final class TerminalController: TerminalControlling {
         writeToPTY(data)
     }
 
+    /// Report a focus in/out transition to the PTY. The underlying
+    /// `TerminalCore` only writes `CSI I` / `CSI O` when the running app
+    /// has enabled DECSET 1004; otherwise this is a no-op.
+    func reportFocus(_ focused: Bool) {
+        core.reportFocus(focused)
+    }
+
     private func dispatchUserInput(_ data: Data) {
         if let dispatcher = onUserInputDispatched {
             dispatcher(data)

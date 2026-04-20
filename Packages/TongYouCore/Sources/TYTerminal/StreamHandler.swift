@@ -32,6 +32,8 @@ public struct StreamHandler {
     public var onRunningCommandChanged: ((String?) -> Void)?
     /// Callback: pane notification triggered by OSC 9 / 777 / 1337 (title, body).
     public var onPaneNotification: ((String, String) -> Void)?
+    /// Callback: focus event reporting (DECSET 1004) toggled on/off.
+    public var onFocusReportingChanged: ((Bool) -> Void)?
 
     public init(screen: Screen) {
         self.screen = screen
@@ -508,6 +510,8 @@ public struct StreamHandler {
                 screen.switchToMainScreen()
                 restoreCursor()
             }
+        case .focusEvents:
+            onFocusReportingChanged?(value)
         default:
             break
         }

@@ -835,7 +835,8 @@ final class SessionManager {
         guard sessions.indices.contains(activeSessionIndex) else { return }
         let tabIndex = sessions[activeSessionIndex].activeTabIndex
         guard sessions[activeSessionIndex].tabs.indices.contains(tabIndex) else { return }
-        guard sessions[activeSessionIndex].tabs[tabIndex].focusedPaneID != paneID else { return }
+        let previousPaneID = sessions[activeSessionIndex].tabs[tabIndex].focusedPaneID
+        guard previousPaneID != paneID else { return }
         sessions[activeSessionIndex].tabs[tabIndex].focusedPaneID = paneID
 
         if let serverSessionID = sessions[activeSessionIndex].source.serverSessionID,
@@ -846,9 +847,46 @@ final class SessionManager {
             )
         }
 
+        if let previousPaneID {
+            dispatchFocusEvent(paneID: previousPaneID, focused: false)
+        }
+        dispatchFocusEvent(paneID: paneID, focused: true)
+
         if sessions[activeSessionIndex].source == .local {
             scheduleLocalSaveIfNeeded(sessionID: sessions[activeSessionIndex].id)
         }
+    }
+
+    /// Dispatch a DECSET 1004 focus event for the currently focused pane
+    /// (if any) when the host app / window active state changes. Drives
+    /// vim's `FocusGained` / `FocusLost` autocommands and similar TUI
+    /// focus reporting.
+    func reportWindowActiveChanged(_ active: Bool) {
+        guard sessions.indices.contains(activeSessionIndex) else { return }
+        let tabIndex = sessions[activeSessionIndex].activeTabIndex
+        guard sessions[activeSessionIndex].tabs.indices.contains(tabIndex),
+              let paneID = sessions[activeSessionIndex].tabs[tabIndex].focusedPaneID
+        else { return }
+        dispatchFocusEvent(paneID: paneID, focused: active)
+    }
+
+    /// Deliver a focus in/out event to the PTY backing `paneID`. Routes
+    /// through the local `TerminalController` for local sessions and the
+    /// remote RPC for remote sessions. The receiver is responsible for
+    /// gating on DECSET 1004 — here we send unconditionally.
+    private func dispatchFocusEvent(paneID: UUID, focused: Bool) {
+        guard sessions.indices.contains(activeSessionIndex) else { return }
+        let session = sessions[activeSessionIndex]
+        if let serverSessionID = session.source.serverSessionID,
+           let serverPaneUUID = serverPaneUUID(for: paneID) {
+            remoteClient?.reportPaneFocus(
+                sessionID: SessionID(serverSessionID),
+                paneID: PaneID(serverPaneUUID),
+                focused: focused
+            )
+            return
+        }
+        localControllers[paneID]?.reportFocus(focused)
     }
 
     /// Cmd+9 always goes to the last tab (browser/terminal convention).

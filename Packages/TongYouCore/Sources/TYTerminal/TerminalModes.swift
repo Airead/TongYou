@@ -29,6 +29,9 @@ public struct TerminalModes: Equatable, Sendable {
         case autowrap = 7
         /// Cursor visible (DECTCEM). On = visible.
         case cursorVisible = 25
+        /// Focus event reporting (mode 1004). When enabled, the terminal
+        /// writes `CSI I` / `CSI O` to the PTY on focus in / focus out.
+        case focusEvents = 1004
         /// Alternate screen buffer + save cursor + clear (mode 1049).
         case altScreen = 1049
         /// Bracketed paste mode (mode 2004).
@@ -119,6 +122,7 @@ public struct TerminalModes: Equatable, Sendable {
         case .cursorVisible:  return 1 << 2
         case .altScreen:      return 1 << 3
         case .bracketedPaste: return 1 << 4
+        case .focusEvents:    return 1 << 5
         }
     }
 

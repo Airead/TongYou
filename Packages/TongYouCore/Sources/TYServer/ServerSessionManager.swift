@@ -415,6 +415,14 @@ public final class ServerSessionManager {
         saveSession(id: sessionID)
     }
 
+    /// Forward a focus in/out transition to the PTY backing `paneID`. The
+    /// underlying `TerminalCore` only writes `CSI I` / `CSI O` when the
+    /// running app has subscribed via DECSET 1004; otherwise this is a
+    /// no-op. Unlike `focusPane`, it does not mutate layout state.
+    public func reportPaneFocus(paneID: PaneID, focused: Bool) {
+        coreLookup[paneID]?.reportFocus(focused)
+    }
+
     // MARK: - Pane Operations
 
     @discardableResult

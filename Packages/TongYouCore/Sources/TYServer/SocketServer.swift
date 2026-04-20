@@ -606,6 +606,9 @@ public final class SocketServer: @unchecked Sendable {
         case .focusPane(let sessionID, let paneID):
             sessionManager.focusPane(sessionID: sessionID, paneID: paneID)
 
+        case .paneFocusEvent(_, let paneID, let focused):
+            sessionManager.reportPaneFocus(paneID: paneID, focused: focused)
+
         case .selectTab(let sessionID, let tabIndex):
             sessionManager.selectTab(sessionID: sessionID, tabIndex: Int(tabIndex))
 

@@ -98,3 +98,35 @@ struct StreamHandlerACSTests {
         #expect(screen.cell(at: 1, row: 0).content.firstScalar == Unicode.Scalar(0x2500)) // q restored ACS -> ─
     }
 }
+
+@Suite("StreamHandler focus reporting (mode 1004) tests", .serialized)
+struct StreamHandlerFocusReportingTests {
+
+    /// Drive a sequence of bytes through the handler, recording every
+    /// `onFocusReportingChanged` notification in order.
+    private func run(_ s: String) -> [Bool] {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var events: [Bool] = []
+        handler.onFocusReportingChanged = { events.append($0) }
+        var parser = VTParser()
+        let bytes = Array(s.utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        return events
+    }
+
+    @Test func focusReportingInitiallyOff() {
+        let screen = Screen(columns: 10, rows: 2)
+        let handler = StreamHandler(screen: screen)
+        #expect(handler.modes.isSet(.focusEvents) == false)
+    }
+
+    @Test func focusReportingModeToggles() {
+        #expect(run("\u{1B}[?1004h") == [true])
+        #expect(run("\u{1B}[?1004l") == [false])
+        #expect(run("\u{1B}[?1004h\u{1B}[?1004l") == [true, false])
+    }
+}

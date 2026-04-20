@@ -421,6 +421,22 @@ struct WireFormatTests {
         #expect(dPid == pid)
     }
 
+    @Test func roundTripPaneFocusEvent() throws {
+        let sid = SessionID()
+        let pid = PaneID()
+        for focused in [true, false] {
+            let msg = ClientMessage.paneFocusEvent(sid, pid, focused: focused)
+            let decoded = try encodeAndDecode(clientMessage: msg)
+            guard case .paneFocusEvent(let dSid, let dPid, let dFocused) = decoded else {
+                Issue.record("Expected .paneFocusEvent, got \(decoded)")
+                return
+            }
+            #expect(dSid == sid)
+            #expect(dPid == pid)
+            #expect(dFocused == focused)
+        }
+    }
+
     @Test func roundTripScrollViewport() throws {
         let sid = SessionID()
         let pid = PaneID()

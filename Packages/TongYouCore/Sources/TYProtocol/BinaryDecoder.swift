@@ -844,6 +844,12 @@ public struct BinaryDecoder: Sendable {
             let sessionID = try readSessionID()
             let paneID = try readPaneID()
             return .refreshPane(sessionID, paneID)
+
+        case .paneFocusEvent:
+            let sessionID = try readSessionID()
+            let paneID = try readPaneID()
+            let focused = try readBool()
+            return .paneFocusEvent(sessionID, paneID, focused: focused)
         }
     }
 }
