@@ -98,6 +98,7 @@ protocol TerminalControlling: AnyObject {
     var onProcessExited: ((Int32) -> Void)? { get set }
     var onTitleChanged: ((String) -> Void)? { get set }
     var onPaneNotification: ((String, String) -> Void)? { get set }
+    var onDynamicColorChanged: ((Int, RGBColor) -> Void)? { get set }
 }
 
 /// Control characters unsafe to paste — could trigger shell signals or control sequences.

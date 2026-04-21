@@ -77,6 +77,8 @@ final class TerminalController: TerminalControlling {
     var onTitleChanged: ((String) -> Void)?
     /// Called on the main thread when a pane notification sequence is received (OSC 9 / 777 / 1337).
     nonisolated(unsafe) var onPaneNotification: ((String, String) -> Void)?
+    /// Called on the main thread when a dynamic color changes via OSC 10/11.
+    nonisolated(unsafe) var onDynamicColorChanged: ((Int, RGBColor) -> Void)?
 
     private(set) var isSuspended: Bool = false
 
@@ -147,11 +149,8 @@ final class TerminalController: TerminalControlling {
             }
         }
         core.onDynamicColorChanged = { [weak self] oscNum, color in
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                // TODO: Propagate dynamic color change to renderer
-                GUILog.info("Dynamic color changed OSC \(oscNum) to \(color.xtermRGBString)", category: .session)
-            }
+            guard let self else { return }
+            self.onDynamicColorChanged?(oscNum, color)
         }
         core.onUnhandledSequence = { [weak self] message in
             let appName = self?.runningCommand ?? "shell"

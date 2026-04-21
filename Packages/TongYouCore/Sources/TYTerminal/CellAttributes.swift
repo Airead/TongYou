@@ -120,8 +120,8 @@ public struct ColorPalette: Sendable {
     public private(set) var entries: [SIMD4<UInt8>]
 
     /// Default fg/bg colors used when PackedColor is `.default`.
-    public let defaultFg: SIMD4<UInt8>
-    public let defaultBg: SIMD4<UInt8>
+    public var defaultFg: SIMD4<UInt8>
+    public var defaultBg: SIMD4<UInt8>
 
     /// Cursor colors. When nil, cursor uses inverted fg/bg.
     public let cursorColor: SIMD4<UInt8>?
@@ -193,6 +193,19 @@ public struct ColorPalette: Sendable {
     public mutating func applyOverrides(_ overrides: [Int: RGBColor]) {
         for (index, color) in overrides where (0...255).contains(index) {
             entries[index] = SIMD4<UInt8>(color.r, color.g, color.b, 255)
+        }
+    }
+
+    /// Update default foreground and/or background colors (OSC 10/11 dynamic colors).
+    public mutating func updateDynamicColors(
+        foreground: SIMD4<UInt8>? = nil,
+        background: SIMD4<UInt8>? = nil
+    ) {
+        if let fg = foreground {
+            self.defaultFg = fg
+        }
+        if let bg = background {
+            self.defaultBg = bg
         }
     }
 

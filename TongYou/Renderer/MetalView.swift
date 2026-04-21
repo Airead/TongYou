@@ -963,6 +963,17 @@ final class MetalView: NSView {
             guard let self, let paneID = self.paneID else { return }
             self.onTabAction?(.paneNotification(paneID, title, body))
         }
+        controller.onDynamicColorChanged = { [weak self] oscNum, color in
+            guard let self else { return }
+            switch oscNum {
+            case 10:
+                self.renderer?.updateDynamicColors(foreground: color, background: nil)
+            case 11:
+                self.renderer?.updateDynamicColors(foreground: nil, background: color)
+            default:
+                break
+            }
+        }
     }
 
     private func applyConfigChange(_ config: Config) {
