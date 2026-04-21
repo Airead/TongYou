@@ -89,7 +89,8 @@ public struct StreamHandler {
         case .dcsHook, .dcsPut, .dcsUnhook:
             onUnhandledSequence?("DCS sequence (not implemented)")
         case .apcStart, .apcPut, .apcEnd:
-            onUnhandledSequence?("APC sequence (not implemented)")
+            // APC sequences are silently ignored per design.
+            break
         }
     }
 
