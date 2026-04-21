@@ -479,11 +479,13 @@ public struct BinaryEncoder: Sendable {
             writePaneID(paneID)
             writeBytes(bytes)
 
-        case .resize(let sessionID, let paneID, let cols, let rows):
+        case .resize(let sessionID, let paneID, let cols, let rows, let pixelWidth, let pixelHeight):
             writeSessionID(sessionID)
             writePaneID(paneID)
             writeUInt16(cols)
             writeUInt16(rows)
+            writeUInt16(pixelWidth)
+            writeUInt16(pixelHeight)
 
         case .scrollViewport(let sessionID, let paneID, let delta):
             writeSessionID(sessionID)

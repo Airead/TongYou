@@ -910,10 +910,12 @@ final class MetalView: NSView {
 
     private func configureController(_ controller: any TerminalControlling) {
         if let grid = renderer?.gridSize, grid.columns > 0, grid.rows > 0 {
+            let cellWidth = fontSystem?.cellSize.width ?? 0
+            let cellHeight = fontSystem?.cellSize.height ?? 0
             controller.resize(
                 columns: Int(grid.columns),
                 rows: Int(grid.rows),
-                cellWidth: 0, cellHeight: 0
+                cellWidth: cellWidth, cellHeight: cellHeight
             )
         }
         controller.applyConfig(effectiveConfig)

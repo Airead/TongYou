@@ -661,9 +661,10 @@ public final class SocketServer: @unchecked Sendable {
         case .mouseEvent(_, let paneID, let event):
             await sessionManager.handleMouseEvent(paneID: paneID, event: event)
 
-        case .resize(_, let paneID, let cols, let rows):
+        case .resize(_, let paneID, let cols, let rows, let pixelWidth, let pixelHeight):
             await sessionManager.registerClientSize(
-                clientID: client.id, paneID: paneID, cols: cols, rows: rows
+                clientID: client.id, paneID: paneID, cols: cols, rows: rows,
+                pixelWidth: pixelWidth, pixelHeight: pixelHeight
             )
 
         case .scrollViewport(_, let paneID, let delta):

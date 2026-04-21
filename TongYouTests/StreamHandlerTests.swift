@@ -637,4 +637,23 @@ import TYTerminal
         #expect(snapshot.lineFlags[0].lineHeight == .normal)
         #expect(snapshot.lineFlags[0].lineWidth == .double)
     }
+
+    // MARK: - Window Pixel Size Report (CSI 14 t)
+
+    @Test func windowPixelSizeReport() {
+        var response: Data?
+        _ = feedSequences(["\u{1B}[14t"]) {
+            $0.onWriteBack = { response = $0 }
+            $0.onWindowPixelSizeRequest = { (width: 1920, height: 1080) }
+        }
+        #expect(response == Data("\u{1B}[4;1080;1920t".utf8))
+    }
+
+    @Test func windowPixelSizeReportNoProvider() {
+        var response: Data?
+        _ = feedSequences(["\u{1B}[14t"]) {
+            $0.onWriteBack = { response = $0 }
+        }
+        #expect(response == Data("\u{1B}[4;0;0t".utf8))
+    }
 }

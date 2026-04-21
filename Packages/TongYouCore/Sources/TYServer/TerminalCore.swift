@@ -47,6 +47,10 @@ public final class TerminalCore: @unchecked Sendable {
     /// Title for dedup — confined to ptyQueue.
     nonisolated(unsafe) private var windowTitle: String = ""
 
+    /// Text area pixel size for CSI 14 t responses — confined to ptyQueue.
+    nonisolated(unsafe) private var pixelWidth: UInt32 = 0
+    nonisolated(unsafe) private var pixelHeight: UInt32 = 0
+
     private var ptyProcess: PTYProcess?
 
     private let ptyQueue: DispatchQueue
@@ -114,6 +118,10 @@ public final class TerminalCore: @unchecked Sendable {
         streamHandler.onUnhandledSequence = { [weak self] message in
             Log.warning("Unhandled sequence: \(message)", category: .session)
             self?.onUnhandledSequence?(message)
+        }
+        streamHandler.onWindowPixelSizeRequest = { [weak self] in
+            guard let self else { return (width: 0, height: 0) }
+            return (width: self.pixelWidth, height: self.pixelHeight)
         }
     }
 
@@ -306,6 +314,8 @@ public final class TerminalCore: @unchecked Sendable {
 
         ptyQueue.async { [weak self] in
             guard let self else { return }
+            self.pixelWidth = UInt32(pixelWidth)
+            self.pixelHeight = UInt32(pixelHeight)
             guard self.screen.columns != cols || self.screen.rows != rows else { return }
             self.screen.resize(columns: cols, rows: rows)
             self.markScreenDirty()

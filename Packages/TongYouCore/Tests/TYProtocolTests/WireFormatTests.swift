@@ -310,9 +310,9 @@ struct WireFormatTests {
     @Test func roundTripResize() throws {
         let sid = SessionID()
         let pid = PaneID()
-        let msg = ClientMessage.resize(sid, pid, cols: 120, rows: 40)
+        let msg = ClientMessage.resize(sid, pid, cols: 120, rows: 40, pixelWidth: 1920, pixelHeight: 1080)
         let decoded = try encodeAndDecode(clientMessage: msg)
-        guard case .resize(let dSid, let dPid, let cols, let rows) = decoded else {
+        guard case .resize(let dSid, let dPid, let cols, let rows, let pixelWidth, let pixelHeight) = decoded else {
             Issue.record("Expected .resize")
             return
         }
@@ -320,6 +320,8 @@ struct WireFormatTests {
         #expect(dPid == pid)
         #expect(cols == 120)
         #expect(rows == 40)
+        #expect(pixelWidth == 1920)
+        #expect(pixelHeight == 1080)
     }
 
     @Test func roundTripCreateTab() throws {

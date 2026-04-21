@@ -672,7 +672,9 @@ public struct BinaryDecoder: Sendable {
             let paneID = try readPaneID()
             let cols = try readUInt16()
             let rows = try readUInt16()
-            return .resize(sessionID, paneID, cols: cols, rows: rows)
+            let pixelWidth = try readUInt16()
+            let pixelHeight = try readUInt16()
+            return .resize(sessionID, paneID, cols: cols, rows: rows, pixelWidth: pixelWidth, pixelHeight: pixelHeight)
 
         case .scrollViewport:
             let sessionID = try readSessionID()

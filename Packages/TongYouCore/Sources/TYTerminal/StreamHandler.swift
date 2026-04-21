@@ -25,6 +25,8 @@ public struct StreamHandler {
 
     /// Callback: PTY write-back for device status reports.
     public var onWriteBack: ((Data) -> Void)?
+    /// Callback: text area pixel size query for CSI 14 t.
+    public var onWindowPixelSizeRequest: (() -> (width: UInt32, height: UInt32))?
     /// Callback: window title changed.
     public var onTitleChanged: ((String) -> Void)?
     /// Callback: BEL (0x07) received.
@@ -632,6 +634,11 @@ public struct StreamHandler {
     private mutating func handleWindowManipulation(_ params: CSIParams) {
         guard params.count >= 1 else { return }
         switch params[0] {
+        case 14: // Report text area size in pixels
+            let size = onWindowPixelSizeRequest?() ?? (width: 0, height: 0)
+            let response = "\u{1B}[4;\(size.height);\(size.width)t"
+            onWriteBack?(Data(response.utf8))
+
         case 21: // Report window title: respond with OSC l <title> ST
             let response = "\u{1B}]l\(currentTitle)\u{1B}\\"
             onWriteBack?(Data(response.utf8))
