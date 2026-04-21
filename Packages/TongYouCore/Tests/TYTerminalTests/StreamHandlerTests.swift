@@ -273,6 +273,182 @@ struct StreamHandlerUnhandledSequenceTests {
         #expect(handler.modes.isSet(.keypadApplication) == false)
     }
 
+    @Test func saveAndRestoreModesWithQuestionU() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var parser = VTParser()
+
+        // Enable focus events and reverse video
+        let setBytes = Array("\u{1B}[?1004h\u{1B}[?5h".utf8)
+        setBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(handler.modes.isSet(.focusEvents) == true)
+        #expect(screen.reverseVideo == true)
+
+        // Save modes
+        let saveBytes = Array("\u{1B}[?s".utf8)
+        saveBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+
+        // Disable focus events and reverse video
+        let resetBytes = Array("\u{1B}[?1004l\u{1B}[?5l".utf8)
+        resetBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(handler.modes.isSet(.focusEvents) == false)
+        #expect(screen.reverseVideo == false)
+
+        // Restore modes via CSI ? u
+        let restoreBytes = Array("\u{1B}[?u".utf8)
+        restoreBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(handler.modes.isSet(.focusEvents) == true)
+        #expect(screen.reverseVideo == true)
+    }
+
+    @Test func saveAndRestoreModesWithQuestionR() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var parser = VTParser()
+
+        // Enable origin mode
+        let setBytes = Array("\u{1B}[?6h".utf8)
+        setBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(handler.modes.isSet(.originMode) == true)
+        #expect(screen.originMode == true)
+
+        // Save modes
+        let saveBytes = Array("\u{1B}[?s".utf8)
+        saveBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+
+        // Disable origin mode
+        let resetBytes = Array("\u{1B}[?6l".utf8)
+        resetBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(handler.modes.isSet(.originMode) == false)
+        #expect(screen.originMode == false)
+
+        // Restore modes via CSI ? r
+        let restoreBytes = Array("\u{1B}[?r".utf8)
+        restoreBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(handler.modes.isSet(.originMode) == true)
+        #expect(screen.originMode == true)
+    }
+
+    @Test func restoreModesWithoutSaveIsNoOp() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var parser = VTParser()
+
+        // Change a mode without saving
+        let setBytes = Array("\u{1B}[?5h".utf8)
+        setBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(screen.reverseVideo == true)
+
+        // Restore without prior save should not crash or change state
+        let restoreBytes = Array("\u{1B}[?u".utf8)
+        restoreBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(screen.reverseVideo == true)
+    }
+
+    @Test func saveRestoreModesAltScreen() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var parser = VTParser()
+
+        // Write to main screen and save modes
+        let mainBytes = Array("MAIN".utf8)
+        mainBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(screen.cell(at: 0, row: 0).codepoint == "M")
+
+        // Save modes
+        let saveBytes = Array("\u{1B}[?s".utf8)
+        saveBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+
+        // Enter alt screen (not saved state)
+        let altBytes = Array("\u{1B}[?1049hALT".utf8)
+        altBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(screen.cell(at: 0, row: 0).codepoint == "A")
+
+        // Restore modes (should switch back to main screen since saved state has altScreen=false)
+        let restoreBytes = Array("\u{1B}[?u".utf8)
+        restoreBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(handler.modes.isSet(.altScreen) == false)
+        #expect(screen.cell(at: 0, row: 0).codepoint == "M")
+    }
+
+    @Test func risClearsSavedModes() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var parser = VTParser()
+
+        // Enable and save a mode
+        let setBytes = Array("\u{1B}[?5h\u{1B}[?s".utf8)
+        setBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+
+        // Full reset
+        let risBytes = Array("\u{1B}c".utf8)
+        risBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+
+        // Change mode after reset
+        let resetBytes = Array("\u{1B}[?5l".utf8)
+        resetBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(screen.reverseVideo == false)
+
+        // Restore after RIS should be no-op because saved modes were cleared
+        let restoreBytes = Array("\u{1B}[?u".utf8)
+        restoreBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(screen.reverseVideo == false)
+    }
+
     @Test func osc1UpdatesTitleSameAsOsc0() {
         // OSC 1 (icon name) is treated the same as OSC 0/2 (window title).
         let screen = Screen(columns: 10, rows: 2)

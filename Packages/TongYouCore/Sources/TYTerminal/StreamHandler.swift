@@ -12,6 +12,7 @@ public struct StreamHandler {
     public private(set) var modes = TerminalModes()
     private var currentAttributes = CellAttributes.default
     private var savedCursor: SavedCursorState?
+    private var savedModes: TerminalModes?
     public let hyperlinkRegistry = HyperlinkRegistry()
     private var currentHyperlinkId: UInt16 = 0
     private var lastPrintedScalar: Unicode.Scalar?
@@ -204,9 +205,9 @@ public struct StreamHandler {
             screen.scrollDown(count: Int(params.param(0, default: 1)))
 
         // --- Scroll Region / Modes ---
-        case 0x72: // 'r' - DECSTBM (Set Top and Bottom Margins) or restore modes
+        case 0x72: // 'r' - DECSTBM (Set Top and Bottom Margins) or DECRM (Restore Modes)
             if hasQuestion {
-                onUnhandledSequence?("CSI ? r (restore modes) not implemented")
+                restoreModes()
             } else {
                 let top = Int(params.param(0, default: 1)) - 1
                 let bottom = Int(params.param(1, default: UInt16(screen.rows))) - 1
@@ -293,18 +294,18 @@ public struct StreamHandler {
             }
 
         // --- Save / Restore Cursor ---
-        case 0x73: // 's' - SCOSC (Save Cursor)
+        case 0x73: // 's' - SCOSC (Save Cursor) or DECSM (Save Modes)
             if !hasQuestion {
                 saveCursor()
             } else {
-                onUnhandledSequence?("CSI ? s (save modes) not implemented")
+                saveModes()
             }
 
-        case 0x75: // 'u' - SCORC (Restore Cursor)
+        case 0x75: // 'u' - SCORC (Restore Cursor) or DECRM (Restore Modes)
             if !hasQuestion {
                 restoreCursor()
             } else {
-                onUnhandledSequence?("CSI ? u (restore modes) not implemented")
+                restoreModes()
             }
 
         // --- Repeat ---
@@ -380,6 +381,7 @@ public struct StreamHandler {
             currentAttributes = .default
             modes.reset()
             savedCursor = nil
+            savedModes = nil
             currentHyperlinkId = 0
             hyperlinkRegistry.clear()
 
@@ -797,6 +799,43 @@ public struct StreamHandler {
         screen.charsetState = saved.charsetState
         screen.setOriginMode(saved.originMode)
         screen.setPendingWrap(saved.pendingWrap)
+    }
+
+    // MARK: - Mode Save / Restore
+
+    private mutating func saveModes() {
+        savedModes = modes
+    }
+
+    private mutating func restoreModes() {
+        guard let saved = savedModes else { return }
+        let current = modes
+
+        // DEC modes — only trigger side effects for changed modes
+        let decModes: [TerminalModes.Mode] = [
+            .cursorKeys, .columnMode, .smoothScroll, .reverseVideo,
+            .originMode, .autowrap, .cursorVisible, .focusEvents,
+            .altScreen, .bracketedPaste, .syncedUpdate, .keypadApplication
+        ]
+        for mode in decModes {
+            let savedValue = saved.isSet(mode)
+            if savedValue != current.isSet(mode) {
+                setDECMode(mode.rawValue, value: savedValue)
+            }
+        }
+
+        // ANSI modes
+        let ansiModes: [TerminalModes.ANSIMode] = [.insert, .newline]
+        for mode in ansiModes {
+            let savedValue = saved.isSet(mode)
+            if savedValue != current.isSet(mode) {
+                setANSIMode(mode.rawValue, value: savedValue)
+            }
+        }
+
+        // Mouse tracking and format have no side effects; copy directly
+        modes.mouseTracking = saved.mouseTracking
+        modes.mouseFormat = saved.mouseFormat
     }
 
     // MARK: - Private

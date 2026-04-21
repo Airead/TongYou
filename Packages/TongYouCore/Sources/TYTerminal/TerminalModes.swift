@@ -10,9 +10,9 @@ public struct TerminalModes: Equatable, Sendable {
     private var ansiFlags: UInt8 = 0
 
     /// Mouse tracking mode (mutually exclusive).
-    public private(set) var mouseTracking: MouseTrackingMode = .none
+    public var mouseTracking: MouseTrackingMode = .none
     /// Mouse encoding format.
-    public private(set) var mouseFormat: MouseFormat = .x10
+    public var mouseFormat: MouseFormat = .x10
 
     public init() {
         var f: UInt32 = 0
