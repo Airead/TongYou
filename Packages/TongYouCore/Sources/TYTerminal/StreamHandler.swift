@@ -34,8 +34,6 @@ public struct StreamHandler {
     public var onPaneNotification: ((String, String) -> Void)?
     /// Callback: focus event reporting (DECSET 1004) toggled on/off.
     public var onFocusReportingChanged: ((Bool) -> Void)?
-    /// Callback: unsupported DECSET/DECRST mode received.
-    public var onUnsupportedMode: ((UInt16) -> Void)?
     /// Callback: unhandled control sequence or mode received (for debugging/telemetry).
     public var onUnhandledSequence: ((String) -> Void)?
 
@@ -554,7 +552,6 @@ public struct StreamHandler {
 
         guard let mode = TerminalModes.from(rawValue: rawParam) else {
             onUnhandledSequence?("DECSET/DECRST mode \(rawParam) not implemented")
-            onUnsupportedMode?(rawParam)
             return
         }
 

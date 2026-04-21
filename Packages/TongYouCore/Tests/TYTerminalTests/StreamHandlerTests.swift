@@ -178,16 +178,16 @@ struct StreamHandlerFocusReportingTests {
     }
 }
 
-@Suite("StreamHandler unsupported mode tests", .serialized)
-struct StreamHandlerUnsupportedModeTests {
+@Suite("StreamHandler unhandled sequence tests", .serialized)
+struct StreamHandlerUnhandledSequenceTests {
 
     /// Drive a sequence of bytes through the handler, recording every
-    /// `onUnsupportedMode` notification in order.
-    private func run(_ s: String) -> [UInt16] {
+    /// `onUnhandledSequence` notification in order.
+    private func run(_ s: String) -> [String] {
         let screen = Screen(columns: 10, rows: 2)
         var handler = StreamHandler(screen: screen)
-        var events: [UInt16] = []
-        handler.onUnsupportedMode = { events.append($0) }
+        var events: [String] = []
+        handler.onUnhandledSequence = { events.append($0) }
         var parser = VTParser()
         let bytes = Array(s.utf8)
         bytes.withUnsafeBufferPointer { ptr in
@@ -199,7 +199,7 @@ struct StreamHandlerUnsupportedModeTests {
 
     @Test func unsupportedModeTriggersCallback() {
         // Mode 1005 (UTF-8 mouse) is not supported
-        #expect(run("\u{1B}[?1005h") == [1005])
+        #expect(run("\u{1B}[?1005h") == ["DECSET/DECRST mode 1005 not implemented"])
     }
 
     @Test func supportedModeDoesNotTriggerCallback() {
@@ -208,7 +208,7 @@ struct StreamHandlerUnsupportedModeTests {
     }
 
     @Test func multipleUnsupportedModesAreReported() {
-        #expect(run("\u{1B}[?1005h\u{1B}[?1006h\u{1B}[?1007h") == [1005, 1007])
+        #expect(run("\u{1B}[?1005h\u{1B}[?1006h\u{1B}[?1007h") == ["DECSET/DECRST mode 1005 not implemented", "DECSET/DECRST mode 1007 not implemented"])
         // 1006 is supported (mouse format), so only 1005 and 1007 are reported
     }
 }

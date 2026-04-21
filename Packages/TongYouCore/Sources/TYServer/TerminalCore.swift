@@ -72,8 +72,8 @@ public final class TerminalCore: @unchecked Sendable {
     public var onRunningCommandChanged: ((String?) -> Void)?
     /// Called when a pane notification sequence is received (OSC 9 / 777 / 1337).
     public var onPaneNotification: ((String, String) -> Void)?
-    /// Called when an unsupported DECSET/DECRST mode is received.
-    public var onUnsupportedMode: ((UInt16) -> Void)?
+    /// Called when an unhandled control sequence is received.
+    public var onUnhandledSequence: ((String) -> Void)?
 
     // MARK: - Init
 
@@ -111,9 +111,9 @@ public final class TerminalCore: @unchecked Sendable {
         streamHandler.onFocusReportingChanged = { [weak self] enabled in
             self?.focusReportingEnabled = enabled
         }
-        streamHandler.onUnsupportedMode = { [weak self] mode in
-            Log.warning("Unsupported terminal mode: \(mode)", category: .session)
-            self?.onUnsupportedMode?(mode)
+        streamHandler.onUnhandledSequence = { [weak self] message in
+            Log.warning("Unhandled sequence: \(message)", category: .session)
+            self?.onUnhandledSequence?(message)
         }
     }
 

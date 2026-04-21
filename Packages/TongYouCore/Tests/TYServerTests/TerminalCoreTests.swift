@@ -176,28 +176,28 @@ struct TerminalCoreTests {
         #expect(core.isSyncedUpdateActive == false)
     }
 
-    // MARK: - Unsupported Mode
+    // MARK: - Unhandled Sequence
 
-    @Test("onUnsupportedMode callback fires for unsupported DECSET mode")
-    func unsupportedModeCallback() {
+    @Test("onUnhandledSequence callback fires for unsupported DECSET mode")
+    func unhandledSequenceCallback() {
         let core = TerminalCore(columns: 80, rows: 24)
-        var capturedModes: [UInt16] = []
-        core.onUnsupportedMode = { mode in
-            capturedModes.append(mode)
+        var capturedMessages: [String] = []
+        core.onUnhandledSequence = { message in
+            capturedMessages.append(message)
         }
         core.feedBytesForTesting(Array("\u{1B}[?1005h".utf8))
-        #expect(capturedModes == [1005])
+        #expect(capturedMessages == ["DECSET/DECRST mode 1005 not implemented"])
     }
 
-    @Test("onUnsupportedMode callback does not fire for supported mode")
+    @Test("onUnhandledSequence callback does not fire for supported mode")
     func supportedModeDoesNotTriggerCallback() {
         let core = TerminalCore(columns: 80, rows: 24)
-        var capturedModes: [UInt16] = []
-        core.onUnsupportedMode = { mode in
-            capturedModes.append(mode)
+        var capturedMessages: [String] = []
+        core.onUnhandledSequence = { message in
+            capturedMessages.append(message)
         }
         core.feedBytesForTesting(Array("\u{1B}[?1004h".utf8))
-        #expect(capturedModes.isEmpty)
+        #expect(capturedMessages.isEmpty)
     }
 }
 

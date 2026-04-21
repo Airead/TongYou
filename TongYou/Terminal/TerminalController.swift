@@ -128,17 +128,18 @@ final class TerminalController: TerminalControlling {
                 self?.onPaneNotification?(title, body)
             }
         }
-        core.onUnsupportedMode = { [weak self] mode in
+        core.onUnhandledSequence = { [weak self] message in
             let appName = self?.runningCommand ?? "shell"
-            GUILog.warning("Unsupported terminal mode: \(mode) from \"\(appName)\"", category: .session)
+            GUILog.warning("Unhandled sequence: \(message) from \"\(appName)\"", category: .session)
             DispatchQueue.main.async { [weak self] in
-                self?.showUnsupportedModeToast(mode)
+                self?.showUnhandledSequenceToast(message)
             }
         }
     }
 
-    private func showUnsupportedModeToast(_ mode: UInt16) {
-        print("[DEBUG] showUnsupportedModeToast called with mode: \(mode), toastPresenter: \(toastPresenter != nil ? "set" : "nil")")
+    @MainActor
+    private func showUnhandledSequenceToast(_ message: String) {
+        print("[DEBUG] showUnhandledSequenceToast called with message: \(message), toastPresenter: \(toastPresenter != nil ? "set" : "nil")")
         unsupportedModeDebounceWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else {
@@ -149,8 +150,8 @@ final class TerminalController: TerminalControlling {
                 print("[DEBUG] toastPresenter is nil")
                 return
             }
-            print("[DEBUG] Showing toast for mode: \(mode)")
-            presenter.show("Unsupported terminal mode: \(mode)")
+            print("[DEBUG] Showing toast for message: \(message)")
+            presenter.show("Unhandled: \(message)")
         }
         unsupportedModeDebounceWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.unsupportedModeDebounceInterval, execute: work)
