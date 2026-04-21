@@ -318,7 +318,9 @@ public struct StreamHandler {
                     onUnhandledSequence?("CSI SP q DECSCUSR style \(style) not implemented")
                 }
             } else {
-                onUnhandledSequence?("CSI q without SP (not DECSCUSR) not implemented")
+                // CSI Ps q without SP is DECLL (Load LEDs), a VT100-era
+                // sequence for keyboard indicators.  Silently ignored.
+                break
             }
 
         // --- DECRQM (Request Mode) ---
