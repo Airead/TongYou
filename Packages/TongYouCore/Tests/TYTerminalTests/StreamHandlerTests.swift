@@ -228,6 +228,34 @@ struct StreamHandlerSyncedUpdateTests {
         #expect(String(bytes: writtenReset, encoding: .ascii) == "\u{1B}[?2031;2$y")
     }
 
+    @Test func decrqm2031DSR996ReportsDark() {
+        var handler = StreamHandler(screen: Screen(columns: 10, rows: 2))
+        var response: Data?
+        handler.onWriteBack = { response = $0 }
+        handler.onColorSchemeQuery = { true }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}[?996n".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(String(data: response!, encoding: .ascii) == "\u{1B}[?997;1n")
+    }
+
+    @Test func decrqm2031DSR996ReportsLight() {
+        var handler = StreamHandler(screen: Screen(columns: 10, rows: 2))
+        var response: Data?
+        handler.onWriteBack = { response = $0 }
+        handler.onColorSchemeQuery = { false }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}[?996n".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(String(data: response!, encoding: .ascii) == "\u{1B}[?997;2n")
+    }
+
     @Test func decrqm2031DSR997ReportsDark() {
         var handler = StreamHandler(screen: Screen(columns: 10, rows: 2))
         var response: Data?

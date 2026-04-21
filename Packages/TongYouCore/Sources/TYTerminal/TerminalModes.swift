@@ -77,7 +77,7 @@ public struct TerminalModes: Equatable, Sendable {
         case graphemeClustering = 2027
         /// Color scheme reporting (mode 2031). When enabled the terminal
         /// reports color scheme changes (dark/light) to the application
-        /// via DECDSR 997, and responds to DECRQM queries.
+        /// via DECDSR 996/997, and responds to DECRQM queries.
         case colorSchemeReporting = 2031
         /// Keypad application mode (DECKPAM, ESC =). On = application sequences.
         case keypadApplication = 9999

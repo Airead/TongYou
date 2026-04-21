@@ -42,7 +42,7 @@ public struct StreamHandler {
     /// Callback: color scheme reporting (DECSET 2031) toggled on/off.
     public var onColorSchemeReportingChanged: ((Bool) -> Void)?
     /// Callback: query current system color scheme (dark = true, light = false).
-    /// Used by DECRQM 2031 and DSR 997 responses.
+    /// Used by DECRQM 2031 and DSR 996/997 responses.
     public var onColorSchemeQuery: (() -> Bool)?
     /// Callback: current working directory changed (OSC 7 file://URL).
     public var onWorkingDirectoryChanged: ((String) -> Void)?
@@ -826,7 +826,7 @@ public struct StreamHandler {
             onWriteBack?(Data(response.utf8))
         case 5: // Status report — report OK
             onWriteBack?(Data("\u{1B}[0n".utf8))
-        case 997: // Color scheme query (DECDSR 997)
+        case 996, 997: // Color scheme query (DECDSR 996/997)
             let isDark = onColorSchemeQuery?() ?? false
             let ps = isDark ? 1 : 2
             onWriteBack?(Data("\u{1B}[?997;\(ps)n".utf8))

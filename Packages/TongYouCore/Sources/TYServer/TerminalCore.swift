@@ -83,7 +83,7 @@ public final class TerminalCore: @unchecked Sendable {
     /// Called when an unhandled control sequence is received.
     public var onUnhandledSequence: ((String) -> Void)?
     /// Called to query the current system color scheme (dark = true, light = false).
-    /// Used by DSR 997 and mode 2031 immediate-report on enable.
+    /// Used by DSR 996/997 and mode 2031 immediate-report on enable.
     public var onColorSchemeQuery: (() -> Bool)?
 
     // MARK: - Init
