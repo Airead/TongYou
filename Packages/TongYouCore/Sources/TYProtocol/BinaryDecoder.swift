@@ -326,13 +326,15 @@ public struct BinaryDecoder: Sendable {
         let button: MouseEncoder.Button? = hasButton ? MouseEncoder.Button(rawValue: buttonRaw) : nil
         let col = Int(try readUInt16())
         let row = Int(try readUInt16())
+        let x = Int(try readUInt16())
+        let y = Int(try readUInt16())
         let modBits = try readUInt8()
         let modifiers = MouseEncoder.Modifiers(
             shift: modBits & 1 != 0,
             option: modBits & 2 != 0,
             control: modBits & 4 != 0
         )
-        return MouseEncoder.Event(action: action, button: button, col: col, row: row, modifiers: modifiers)
+        return MouseEncoder.Event(action: action, button: button, col: col, row: row, x: x, y: y, modifiers: modifiers)
     }
 
     // MARK: - Startup Snapshot

@@ -196,7 +196,7 @@ public struct BinaryEncoder: Sendable {
         }
     }
 
-    /// Write a `MouseEncoder.Event` (8 bytes: action 1B + hasButton 1B + button 1B + col 2B + row 2B + modifiers 1B).
+    /// Write a `MouseEncoder.Event` (16 bytes: action 1B + hasButton 1B + button 1B + col 2B + row 2B + x 2B + y 2B + modifiers 1B + padding 4B).
     public mutating func writeMouseEvent(_ event: MouseEncoder.Event) {
         let actionByte: UInt8 = switch event.action {
         case .press: 0
@@ -208,6 +208,8 @@ public struct BinaryEncoder: Sendable {
         writeUInt8(event.button?.rawValue ?? 0)
         writeUInt16(UInt16(clamping: event.col))
         writeUInt16(UInt16(clamping: event.row))
+        writeUInt16(UInt16(clamping: event.x))
+        writeUInt16(UInt16(clamping: event.y))
         var modBits: UInt8 = 0
         if event.modifiers.shift   { modBits |= 1 }
         if event.modifiers.option  { modBits |= 2 }

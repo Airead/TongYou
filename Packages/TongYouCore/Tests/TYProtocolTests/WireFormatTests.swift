@@ -598,6 +598,31 @@ struct WireFormatTests {
         #expect(dEvent.button == nil)
         #expect(dEvent.col == 42)
         #expect(dEvent.row == 13)
+        #expect(dEvent.x == 0)
+        #expect(dEvent.y == 0)
+    }
+
+    @Test func roundTripMouseEventWithPixelCoordinates() throws {
+        let sid = SessionID()
+        let pid = PaneID()
+        let event = MouseEncoder.Event(
+            action: .press, button: .left, col: 10, row: 5,
+            x: 150, y: 300,
+            modifiers: MouseEncoder.Modifiers(shift: true, option: false, control: true)
+        )
+        let msg = ClientMessage.mouseEvent(sid, pid, event)
+        let decoded = try encodeAndDecode(clientMessage: msg)
+        guard case .mouseEvent(_, _, let dEvent) = decoded else {
+            Issue.record("Expected .mouseEvent")
+            return
+        }
+        #expect(dEvent.col == 10)
+        #expect(dEvent.row == 5)
+        #expect(dEvent.x == 150)
+        #expect(dEvent.y == 300)
+        #expect(dEvent.modifiers.shift == true)
+        #expect(dEvent.modifiers.option == false)
+        #expect(dEvent.modifiers.control == true)
     }
 
     @Test func roundTripScreenFullWithMouseTrackingMode() throws {

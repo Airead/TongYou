@@ -94,6 +94,8 @@ public struct TerminalModes: Equatable, Sendable {
         case x10 = 0
         /// SGR format (DECSET 1006): ESC[<btn;x;y;M/m. No coordinate limit.
         case sgr = 6
+        /// SGR pixel format (DECSET 1016): same as SGR but coordinates are pixels.
+        case sgrPixels = 16
     }
 
     // MARK: - Access
@@ -137,6 +139,9 @@ public struct TerminalModes: Equatable, Sendable {
         switch rawParam {
         case 1006:
             mouseFormat = enabled ? .sgr : .x10
+            return true
+        case 1016:
+            mouseFormat = enabled ? .sgrPixels : .x10
             return true
         default:
             return false

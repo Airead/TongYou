@@ -205,4 +205,38 @@ struct MouseEncoderTests {
         // left=0 + shift=4 + motion=32 → code=36
         #expect(result == Data("\u{1B}[<36;6;4M".utf8))
     }
+
+    // MARK: - SGR Pixel Format
+
+    @Test func sgrPixelsLeftPress() {
+        let event = MouseEncoder.Event(
+            action: .press, button: .left, col: 10, row: 20, x: 150, y: 300
+        )
+        let result = MouseEncoder.encode(event: event, trackingMode: .normal, format: .sgrPixels)
+        // ESC[<0;150;300M
+        #expect(result == Data("\u{1B}[<0;150;300M".utf8))
+    }
+
+    @Test func sgrPixelsLeftRelease() {
+        let event = MouseEncoder.Event(
+            action: .release, button: .left, col: 10, row: 20, x: 150, y: 300
+        )
+        let result = MouseEncoder.encode(event: event, trackingMode: .normal, format: .sgrPixels)
+        // ESC[<0;150;300m (lowercase 'm' for release)
+        #expect(result == Data("\u{1B}[<0;150;300m".utf8))
+    }
+
+    @Test func sgrPixelsUsesPixelCoordinatesNotCell() {
+        // Same cell, different pixels
+        let event1 = MouseEncoder.Event(
+            action: .press, button: .left, col: 5, row: 10, x: 80, y: 160
+        )
+        let event2 = MouseEncoder.Event(
+            action: .press, button: .left, col: 5, row: 10, x: 95, y: 175
+        )
+        let result1 = MouseEncoder.encode(event: event1, trackingMode: .normal, format: .sgrPixels)
+        let result2 = MouseEncoder.encode(event: event2, trackingMode: .normal, format: .sgrPixels)
+        #expect(result1 == Data("\u{1B}[<0;80;160M".utf8))
+        #expect(result2 == Data("\u{1B}[<0;95;175M".utf8))
+    }
 }

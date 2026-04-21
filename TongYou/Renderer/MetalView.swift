@@ -801,6 +801,7 @@ final class MetalView: NSView {
         button: MouseEncoder.Button?
     ) {
         let (col, row) = gridPosition(for: nsEvent)
+        let pixelPos = pixelPosition(for: nsEvent)
         let mods = MouseEncoder.Modifiers(
             shift: nsEvent.modifierFlags.contains(.shift),
             option: nsEvent.modifierFlags.contains(.option),
@@ -808,9 +809,19 @@ final class MetalView: NSView {
         )
         let mouseEvent = MouseEncoder.Event(
             action: action, button: button,
-            col: col, row: row, modifiers: mods
+            col: col, row: row,
+            x: pixelPos.x, y: pixelPos.y,
+            modifiers: mods
         )
         terminalController?.handleMouseEvent(mouseEvent)
+    }
+
+    private func pixelPosition(for event: NSEvent) -> (x: Int, y: Int) {
+        let viewPos = convert(event.locationInWindow, from: nil)
+        let scale = displayScale
+        let pixelX = Int(viewPos.x * scale)
+        let pixelY = Int((bounds.height - viewPos.y) * scale)
+        return (pixelX, pixelY)
     }
 
     // MARK: - View Lifecycle

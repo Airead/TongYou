@@ -43,13 +43,17 @@ public struct MouseEncoder: Sendable {
         public var button: Button?
         public var col: Int         // 0-based grid column
         public var row: Int         // 0-based grid row
+        public var x: Int           // pixel X coordinate
+        public var y: Int           // pixel Y coordinate
         public var modifiers: Modifiers = Modifiers()
 
-        public init(action: Action, button: Button?, col: Int, row: Int, modifiers: Modifiers = Modifiers()) {
+        public init(action: Action, button: Button?, col: Int, row: Int, x: Int = 0, y: Int = 0, modifiers: Modifiers = Modifiers()) {
             self.action = action
             self.button = button
             self.col = col
             self.row = row
+            self.x = x
+            self.y = y
             self.modifiers = modifiers
         }
     }
@@ -70,7 +74,12 @@ public struct MouseEncoder: Sendable {
             return encodeX10(buttonCode: buttonCode, col: event.col, row: event.row)
         case .sgr:
             return encodeSGR(
-                buttonCode: buttonCode, col: event.col, row: event.row,
+                buttonCode: buttonCode, x: event.col + 1, y: event.row + 1,
+                isRelease: event.action == .release
+            )
+        case .sgrPixels:
+            return encodeSGR(
+                buttonCode: buttonCode, x: event.x, y: event.y,
                 isRelease: event.action == .release
             )
         }
@@ -110,7 +119,7 @@ public struct MouseEncoder: Sendable {
         var code: UInt8
 
         if let button = event.button {
-            if event.action == .release && format != .sgr {
+            if event.action == .release && format != .sgr && format != .sgrPixels {
                 // Legacy formats encode all releases as button 3
                 code = 3
             } else {
@@ -150,11 +159,11 @@ public struct MouseEncoder: Sendable {
     // MARK: - SGR Format
 
     private static func encodeSGR(
-        buttonCode: UInt8, col: Int, row: Int, isRelease: Bool
+        buttonCode: UInt8, x: Int, y: Int, isRelease: Bool
     ) -> Data {
-        // ESC[<btn;col;rowM (press) or ESC[<btn;col;rowm (release)
+        // ESC[<btn;x;yM (press) or ESC[<btn;x;ym (release)
         let final: UInt8 = isRelease ? 0x6D : 0x4D  // 'm' or 'M'
-        let str = "\u{1B}[<\(buttonCode);\(col + 1);\(row + 1)"
+        let str = "\u{1B}[<\(buttonCode);\(x);\(y)"
         var data = Data(str.utf8)
         data.append(final)
         return data

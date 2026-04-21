@@ -770,6 +770,8 @@ public struct StreamHandler {
         switch mode {
         case 1004:
             state = modes.isSet(.focusEvents) ? 1 : 2
+        case 1016:
+            state = modes.mouseFormat == .sgrPixels ? 1 : 2
         case 2026:
             state = screen.syncedUpdateActive ? 1 : 2
         default:
