@@ -318,6 +318,55 @@ struct StreamHandlerUnhandledSequenceTests {
     }
 }
 
+@Suite("StreamHandler DA1 tests", .serialized)
+struct StreamHandlerDA1Tests {
+
+    @Test func da1RespondsWithVT220Capabilities() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var responses: [String] = []
+        handler.onWriteBack = { responses.append(String(data: $0, encoding: .utf8)!) }
+        var parser = VTParser()
+        // CSI ? 0 c (primary DA request)
+        let bytes = Array("\u{1B}[?0c".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(responses == ["\u{1B}[?62;1;2;4;7;8;9;12;18;21;23;24;42c"])
+    }
+}
+
+@Suite("StreamHandler DECALN tests", .serialized)
+struct StreamHandlerDECALNTests {
+
+    @Test func decalnFillsScreenWithEAndMovesCursorHome() {
+        let screen = Screen(columns: 5, rows: 3)
+        // Write some content first
+        screen.write(GraphemeCluster(Character("A")), attributes: .default)
+        screen.setCursorPos(row: 1, col: 2)
+        var handler = StreamHandler(screen: screen)
+        var parser = VTParser()
+        // ESC # 8 (DECALN)
+        let bytes = Array("\u{1B}#8".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        // All cells should be 'E'
+        for row in 0..<screen.rows {
+            for col in 0..<screen.columns {
+                #expect(screen.cell(at: col, row: row).codepoint == "E")
+            }
+        }
+        // Cursor should be at home position
+        #expect(screen.cursorRow == 0)
+        #expect(screen.cursorCol == 0)
+        // Dirty region should be full rebuild
+        #expect(screen.consumeDirtyRegion().fullRebuild == true)
+    }
+}
+
 @Suite("StreamHandler DEC mode tests", .serialized)
 struct StreamHandlerDECModeTests {
 

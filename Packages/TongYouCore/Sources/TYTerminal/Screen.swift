@@ -940,6 +940,20 @@ public final class Screen {
         }
     }
 
+    /// DECALN (Screen Alignment Pattern): fill the entire screen with character 'E'
+    /// using default attributes, and move the cursor to home position (0, 0).
+    public func fillWithE() {
+        let eCell = Cell(codepoint: "E", attributes: .default, width: .normal)
+        for i in 0..<cells.count {
+            cells[i] = eCell
+        }
+        rowBase = 0
+        lineFlags = [LineFlags](repeating: LineFlags(), count: rows)
+        cursorRow = 0
+        cursorCol = 0
+        dirtyRegion.markFull()
+    }
+
     /// Erase in line (EL). Mode: 0=right, 1=left, 2=all.
     public func eraseLine(mode: Int, attributes: CellAttributes = .default) {
         let blank = Cell(codepoint: " ", attributes: attributes, width: .normal)

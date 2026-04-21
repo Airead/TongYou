@@ -256,6 +256,29 @@ public struct StreamHandler {
         case 0x6E: // 'n' - DSR
             handleDSR(params)
 
+        case 0x63: // 'c' - DA1 (Send Device Attributes)
+            if hasQuestion {
+                // CSI ? 0 c - respond with VT220 capabilities
+                // Format: CSI ? 62 ; Ps1 ; Ps2 ... c
+                // 62 = VT220
+                // 1 = 132 columns
+                // 2 = printer port
+                // 4 = selective erase
+                // 7 = DRCS
+                // 8 = user-defined keys
+                // 9 = national replacement character sets
+                // 12 = SCS
+                // 18 = windowing capability
+                // 21 = horizontal scrolling
+                // 23 = Greek extended charset
+                // 24 = Turkish extended charset
+                // 42 = Latin-2 character set support
+                let response = "\u{1B}[?62;1;2;4;7;8;9;12;18;21;23;24;42c"
+                onWriteBack?(Data(response.utf8))
+            } else {
+                onUnhandledSequence?("CSI c (primary DA without ?) not implemented")
+            }
+
         // --- Save / Restore Cursor ---
         case 0x73: // 's' - SCOSC (Save Cursor)
             if !hasQuestion {
@@ -401,6 +424,8 @@ public struct StreamHandler {
             screen.setLineSize(height: .normal, width: .normal)
         case 0x36: // '6' — DECDWL (double-width)
             screen.setLineSize(height: .normal, width: .double)
+        case 0x38: // '8' — DECALN (Screen Alignment Pattern)
+            screen.fillWithE()
         default:
             onUnhandledSequence?("ESC # \(String(Unicode.Scalar(final))) (line size) not implemented")
         }

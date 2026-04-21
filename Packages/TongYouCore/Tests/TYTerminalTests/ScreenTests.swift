@@ -5,6 +5,30 @@ import Testing
 @Suite("Screen tests", .serialized)
 struct ScreenTests {
 
+    @Test func fillWithEFillsScreenAndResetsCursor() {
+        let screen = Screen(columns: 5, rows: 3)
+        screen.write(GraphemeCluster(Character("A")), attributes: .default)
+        screen.setCursorPos(row: 1, col: 2)
+        screen.consumeDirtyRegion() // clear initial full rebuild
+
+        screen.fillWithE()
+
+        // All cells should be 'E' with default attributes
+        for row in 0..<screen.rows {
+            for col in 0..<screen.columns {
+                let cell = screen.cell(at: col, row: row)
+                #expect(cell.codepoint == "E")
+                #expect(cell.attributes == .default)
+                #expect(cell.width == .normal)
+            }
+        }
+        // Cursor should be at home position
+        #expect(screen.cursorRow == 0)
+        #expect(screen.cursorCol == 0)
+        // Dirty region should be full rebuild
+        #expect(screen.consumeDirtyRegion().fullRebuild == true)
+    }
+
     @Test func initializesWithCorrectDimensions() {
         let screen = Screen(columns: 80, rows: 24)
         #expect(screen.columns == 80)
