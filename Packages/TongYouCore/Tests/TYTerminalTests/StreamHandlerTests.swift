@@ -597,6 +597,41 @@ struct StreamHandlerUnhandledSequenceTests {
         #expect(screen.reverseVideo == false)
     }
 
+    @Test func saveRestoreModesColorSchemeReporting() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var parser = VTParser()
+        var colorSchemeEvents: [Bool] = []
+        handler.onColorSchemeReportingChanged = { colorSchemeEvents.append($0) }
+
+        // Enable mode 2031 and save modes
+        let setBytes = Array("\u{1B}[?2031h\u{1B}[?s".utf8)
+        setBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(handler.modes.isSet(.colorSchemeReporting) == true)
+        #expect(colorSchemeEvents == [true])
+
+        // Disable mode 2031
+        let resetBytes = Array("\u{1B}[?2031l".utf8)
+        resetBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(handler.modes.isSet(.colorSchemeReporting) == false)
+        #expect(colorSchemeEvents == [true, false])
+
+        // Restore modes (should re-enable mode 2031)
+        let restoreBytes = Array("\u{1B}[?u".utf8)
+        restoreBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(handler.modes.isSet(.colorSchemeReporting) == true)
+        #expect(colorSchemeEvents == [true, false, true])
+    }
+
     @Test func osc1UpdatesTitleSameAsOsc0() {
         // OSC 1 (icon name) is treated the same as OSC 0/2 (window title).
         let screen = Screen(columns: 10, rows: 2)

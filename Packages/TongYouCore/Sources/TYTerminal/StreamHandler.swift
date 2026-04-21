@@ -872,7 +872,7 @@ public struct StreamHandler {
             .cursorKeys, .columnMode, .smoothScroll, .reverseVideo,
             .originMode, .autowrap, .cursorVisible, .focusEvents,
             .altScreen, .bracketedPaste, .syncedUpdate, .graphemeClustering,
-            .keypadApplication
+            .colorSchemeReporting, .keypadApplication
         ]
         for mode in decModes {
             let savedValue = saved.isSet(mode)
