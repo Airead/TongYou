@@ -6,6 +6,8 @@
 /// Reference: Ghostty `src/terminal/modes.zig`.
 public struct TerminalModes: Equatable, Sendable {
     private var flags: UInt32
+    /// ANSI mode flags (separate from DEC private mode flags).
+    private var ansiFlags: UInt8 = 0
 
     /// Mouse tracking mode (mutually exclusive).
     public private(set) var mouseTracking: MouseTrackingMode = .none
@@ -20,7 +22,20 @@ public struct TerminalModes: Equatable, Sendable {
         self.flags = f
     }
 
-    // MARK: - Mode Definitions
+    // MARK: - ANSI Mode Definitions
+
+    /// ANSI modes (CSI h / CSI l without `?`).
+    /// These use a separate bitfield from DEC private modes.
+    public enum ANSIMode: UInt16, Sendable {
+        /// Insert/Replace Mode (IRM). Set = insert mode, Reset = replace mode.
+        /// In insert mode, writing a character shifts existing content right.
+        case insert = 4
+        /// Line Feed/New Line Mode (LNM). Set = LF acts as CRLF, Reset = LF only.
+        /// When set, LF, VT, FF move cursor to first column after moving down.
+        case newline = 20
+    }
+
+    // MARK: - DEC Private Mode Definitions
 
     public enum Mode: UInt16, Sendable {
         /// Application cursor keys (DECCKM). Off = normal, On = application.
@@ -124,13 +139,35 @@ public struct TerminalModes: Equatable, Sendable {
         }
     }
 
+    // MARK: - ANSI Mode Access
+
+    public func isSet(_ mode: ANSIMode) -> Bool {
+        ansiFlags & Self.ansiBit(mode) != 0
+    }
+
+    public mutating func set(_ mode: ANSIMode, _ value: Bool) {
+        if value {
+            ansiFlags |= Self.ansiBit(mode)
+        } else {
+            ansiFlags &= ~Self.ansiBit(mode)
+        }
+    }
+
     public mutating func reset() {
         self = TerminalModes()
     }
 
     // MARK: - Private
 
-    /// Map mode enum to a bit position. Uses a fixed mapping to avoid
+    /// Map ANSI mode enum to a bit position.
+    private static func ansiBit(_ mode: ANSIMode) -> UInt8 {
+        switch mode {
+        case .insert:  return 1 << 0
+        case .newline: return 1 << 1
+        }
+    }
+
+    /// Map DEC private mode enum to a bit position. Uses a fixed mapping to avoid
     /// depending on rawValue (which can be large numbers like 2004).
     private static func bit(_ mode: Mode) -> UInt32 {
         switch mode {
@@ -152,5 +189,10 @@ public struct TerminalModes: Equatable, Sendable {
     /// Convert a raw DECSET/DECRST parameter number to a Mode, if supported.
     public static func from(rawValue: UInt16) -> Mode? {
         Mode(rawValue: rawValue)
+    }
+
+    /// Convert a raw ANSI SM/RM parameter number to an ANSIMode, if supported.
+    public static func ansiFrom(rawValue: UInt16) -> ANSIMode? {
+        ANSIMode(rawValue: rawValue)
     }
 }

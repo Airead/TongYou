@@ -325,6 +325,10 @@ public final class Screen {
     public private(set) var cursorVisible: Bool = true
     public private(set) var cursorShape: CursorShape = .block
 
+    /// IRM (Insert/Replace Mode): when true, writing a character inserts it
+    /// at the cursor position, shifting existing content right.
+    public private(set) var insertMode: Bool = false
+
     /// When true, the next printable character (or certain cursor movements)
     /// must trigger a wrap-to-next-line before proceeding.  Set when a
     /// single-width character is written in the last column with DECAWM on.
@@ -651,6 +655,12 @@ public final class Screen {
         dirtyRegion.markLine(cursorRow)
         let col = cursorCol
         let base = rowStart(cursorRow)
+
+        // IRM (Insert Mode): shift existing content right before writing
+        if insertMode {
+            insertForIRM(at: col, row: cursorRow, width: w)
+        }
+
         let idx = base + col
 
         // Clean up any wide char pair that the new write would overwrite
@@ -923,6 +933,45 @@ public final class Screen {
     /// Set the pending wrap flag (used by DECRC restore cursor).
     public func setPendingWrap(_ value: Bool) {
         pendingWrap = value
+    }
+
+    /// Set insert/replace mode (IRM).
+    public func setInsertMode(_ value: Bool) {
+        insertMode = value
+    }
+
+    /// Insert space for IRM mode: shift characters at and after the given
+    /// position right by the specified width (1 or 2 for wide chars).
+    private func insertForIRM(at col: Int, row: Int, width: Int) {
+        let base = rowStart(row)
+        let available = columns - col - width
+        guard available >= 0 else { return }
+
+        // Calculate source and destination ranges
+        let srcStart = base + col
+        let dstStart = base + col + width
+
+        // Move cells right, working backwards to avoid overwriting
+        if available > 0 {
+            for offset in stride(from: available - 1, through: 0, by: -1) {
+                cells[dstStart + offset] = cells[srcStart + offset]
+            }
+        }
+
+        // Clear the vacated cells
+        for i in 0..<width {
+            cells[srcStart + i] = .empty
+        }
+
+        // Repair any wide char that may have been split at the right edge
+        let lastCol = columns - 1
+        if cells[base + lastCol].width == .continuation {
+            // A wide char was split - clear both halves
+            cells[base + lastCol] = .empty
+            if lastCol > 0 {
+                cells[base + lastCol - 1] = .empty
+            }
+        }
     }
 
     /// Set the line height and width attributes for the current cursor row (DECDHL/DECDWL).

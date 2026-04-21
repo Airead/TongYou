@@ -74,6 +74,8 @@ public struct StreamHandler {
                     handleESCLineSize(final: final)
                 case 0x28, 0x29: // '(', ')'
                     handleESCCharset(final: final, intermediate: intermediates.0)
+                case 0x25: // '%'
+                    handleESCCharsetSelect(final: final)
                 default:
                     onUnhandledSequence?("ESC \(String(Unicode.Scalar(intermediates.0)))\(String(Unicode.Scalar(final))) not implemented")
                 }
@@ -127,7 +129,13 @@ public struct StreamHandler {
         case 0x07: onBell?()
         case 0x08: screen.backspace()
         case 0x09: screen.tab()
-        case 0x0A, 0x0B, 0x0C: screen.lineFeed() // LF, VT, FF
+        case 0x0A, 0x0B, 0x0C: // LF, VT, FF
+            // LNM mode: when enabled, LF acts as CRLF (newline)
+            if modes.isSet(.newline) {
+                screen.newline()
+            } else {
+                screen.lineFeed()
+            }
         case 0x0D: screen.carriageReturn()
         case 0x0E: screen.charsetState.invokeGL(.g1) // SO - Shift Out
         case 0x0F: screen.charsetState.invokeGL(.g0) // SI - Shift In
@@ -240,7 +248,9 @@ public struct StreamHandler {
                     setDECMode(params[i], value: true)
                 }
             } else {
-                onUnhandledSequence?("CSI h (SM Set Mode without ?) not implemented")
+                for i in 0..<params.count {
+                    setANSIMode(params[i], value: true)
+                }
             }
 
         case 0x6C: // 'l' - RM (Reset Mode)
@@ -249,7 +259,9 @@ public struct StreamHandler {
                     setDECMode(params[i], value: false)
                 }
             } else {
-                onUnhandledSequence?("CSI l (RM Reset Mode without ?) not implemented")
+                for i in 0..<params.count {
+                    setANSIMode(params[i], value: false)
+                }
             }
 
         // --- Device Status Report ---
@@ -408,6 +420,21 @@ public struct StreamHandler {
         }
 
         screen.charsetState.configure(slot: slot, set: set)
+    }
+
+    private func handleESCCharsetSelect(final: UInt8) {
+        // ESC %@ — Select default character set (ISO 2022 / Latin-1)
+        // ESC %G — Select UTF-8 character set
+        // The terminal is always UTF-8; these sequences are accepted
+        // silently so vttest encoding-switch tests pass.
+        switch final {
+        case 0x40: // '@'
+            break // default charset — no-op, we stay in UTF-8
+        case 0x47: // 'G'
+            break // UTF-8 — already the default
+        default:
+            onUnhandledSequence?("ESC %\(String(Unicode.Scalar(final))) (charset select) not implemented")
+        }
     }
 
     private func handleESCLineSize(final: UInt8) {
@@ -637,6 +664,25 @@ public struct StreamHandler {
 
         default:
             onUnhandledSequence?("CSI t \(params[0]) (window manipulation) not implemented")
+        }
+    }
+
+    // MARK: - ANSI Mode Set/Reset
+
+    private mutating func setANSIMode(_ rawParam: UInt16, value: Bool) {
+        guard let mode = TerminalModes.ansiFrom(rawValue: rawParam) else {
+            onUnhandledSequence?("ANSI SM/RM mode \(rawParam) not implemented")
+            return
+        }
+        modes.set(mode, value)
+
+        // Side effects
+        switch mode {
+        case .insert:
+            screen.setInsertMode(value)
+        case .newline:
+            // LNM is read directly in handleExecute; no side effect needed here.
+            break
         }
     }
 

@@ -528,4 +528,91 @@ struct ScreenTests {
         screen.setPendingWrap(false)
         #expect(screen.pendingWrap == false)
     }
+
+    // MARK: - Insert Mode (IRM)
+
+    @Test func insertModeInitiallyDisabled() {
+        let screen = Screen(columns: 10, rows: 3)
+        #expect(screen.insertMode == false)
+    }
+
+    @Test func setInsertModeUpdatesState() {
+        let screen = Screen(columns: 10, rows: 3)
+        screen.setInsertMode(true)
+        #expect(screen.insertMode == true)
+        screen.setInsertMode(false)
+        #expect(screen.insertMode == false)
+    }
+
+    @Test func insertModeShiftsCharactersRight() {
+        let screen = Screen(columns: 10, rows: 3)
+        screen.setInsertMode(true)
+
+        // Write "ABC"
+        screen.write(GraphemeCluster("A"), attributes: .default)
+        screen.write(GraphemeCluster("B"), attributes: .default)
+        screen.write(GraphemeCluster("C"), attributes: .default)
+
+        // Move cursor back to column 1 and insert "X"
+        screen.setCursorCol(1)
+        screen.write(GraphemeCluster("X"), attributes: .default)
+
+        // Result should be "AXBC"
+        #expect(screen.cell(at: 0, row: 0).codepoint == "A")
+        #expect(screen.cell(at: 1, row: 0).codepoint == "X")
+        #expect(screen.cell(at: 2, row: 0).codepoint == "B")
+        #expect(screen.cell(at: 3, row: 0).codepoint == "C")
+        #expect(screen.cursorCol == 2)
+    }
+
+    @Test func insertModeShiftsAtEndOfLine() {
+        let screen = Screen(columns: 5, rows: 3)
+        screen.setInsertMode(true)
+
+        // Write "AB" at positions 0 and 1
+        screen.write(GraphemeCluster("A"), attributes: .default)
+        screen.write(GraphemeCluster("B"), attributes: .default)
+
+        // Move to end of line and insert "X"
+        screen.setCursorCol(4)
+        screen.write(GraphemeCluster("X"), attributes: .default)
+
+        // X should go at position 4, previous content shifts left (truncated)
+        #expect(screen.cell(at: 4, row: 0).codepoint == "X")
+    }
+
+    @Test func insertModeWithWideCharacter() {
+        let screen = Screen(columns: 10, rows: 3)
+        screen.setInsertMode(true)
+
+        // Write "A" then emoji
+        screen.write(GraphemeCluster("A"), attributes: .default)
+        screen.setCursorCol(0)
+
+        // Insert wide character (emoji)
+        screen.write(GraphemeCluster("😀"), attributes: .default)
+
+        // Emoji takes 2 cells, A should be shifted to position 2
+        #expect(screen.cell(at: 0, row: 0).codepoint == "😀")
+        #expect(screen.cell(at: 0, row: 0).width == .wide)
+        #expect(screen.cell(at: 1, row: 0).width == .continuation)
+        #expect(screen.cell(at: 2, row: 0).codepoint == "A")
+    }
+
+    @Test func insertModeDisabledWritesNormally() {
+        let screen = Screen(columns: 10, rows: 3)
+        screen.setInsertMode(false) // explicitly disable
+
+        // Write "AB"
+        screen.write(GraphemeCluster("A"), attributes: .default)
+        screen.write(GraphemeCluster("B"), attributes: .default)
+
+        // Move cursor back to column 0 and write "X"
+        screen.setCursorCol(0)
+        screen.write(GraphemeCluster("X"), attributes: .default)
+
+        // X should overwrite A, not shift it
+        #expect(screen.cell(at: 0, row: 0).codepoint == "X")
+        #expect(screen.cell(at: 1, row: 0).codepoint == "B")
+    }
 }

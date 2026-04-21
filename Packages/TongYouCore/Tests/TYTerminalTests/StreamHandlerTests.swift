@@ -482,3 +482,174 @@ struct StreamHandlerDECModeTests {
         #expect(screen.consumeDirtyRegion().fullRebuild == true)
     }
 }
+
+@Suite("StreamHandler ANSI mode tests", .serialized)
+struct StreamHandlerANSIModeTests {
+
+    /// Drive a sequence of bytes through the handler and return the screen.
+    private func drive(_ s: String, columns: Int = 10, rows: Int = 5) -> Screen {
+        let screen = Screen(columns: columns, rows: rows)
+        var handler = StreamHandler(screen: screen)
+        var parser = VTParser()
+        let bytes = Array(s.utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        return screen
+    }
+
+    // MARK: - IRM (Insert/Replace Mode, mode 4)
+
+    @Test func irmInitiallyDisabled() {
+        let screen = drive("")
+        #expect(screen.insertMode == false)
+    }
+
+    @Test func rmMode4DisablesInsertMode() {
+        let screen = drive("\u{1B}[4h\u{1B}[4l")
+        #expect(screen.insertMode == false)
+    }
+
+    @Test func irmInsertsCharactersAtCursor() {
+        // Write "ABC", move cursor back to column 1, enable IRM, write "X"
+        // Result should be "AXBC" instead of "AXC"
+        let screen = drive("ABC\u{1B}[D\u{1B}[D\u{1B}[4hX")
+        #expect(screen.cell(at: 0, row: 0).codepoint == "A")
+        #expect(screen.cell(at: 1, row: 0).codepoint == "X")
+        #expect(screen.cell(at: 2, row: 0).codepoint == "B")
+        #expect(screen.cell(at: 3, row: 0).codepoint == "C")
+    }
+
+    @Test func irmInsertShiftsContentRight() {
+        // Fill a line, enable IRM, insert in the middle
+        let screen = drive("HELLO\u{1B}[3G\u{1B}[4hX", columns: 10, rows: 3)
+        // Cursor at column 3 (0-indexed: 2), insert 'X'
+        // Result: "HEXLLO" (H E X L L O) — all chars after col 2 shift right
+        #expect(screen.cell(at: 0, row: 0).codepoint == "H")
+        #expect(screen.cell(at: 1, row: 0).codepoint == "E")
+        #expect(screen.cell(at: 2, row: 0).codepoint == "X")
+        #expect(screen.cell(at: 3, row: 0).codepoint == "L")
+        #expect(screen.cell(at: 4, row: 0).codepoint == "L")
+        #expect(screen.cell(at: 5, row: 0).codepoint == "O")
+    }
+
+    @Test func rmMode4RestoresReplaceMode() {
+        // Enable IRM, then disable it, then write
+        let screen = drive("AB\u{1B}[4h\u{1B}[4lC")
+        #expect(screen.cell(at: 0, row: 0).codepoint == "A")
+        #expect(screen.cell(at: 1, row: 0).codepoint == "B")
+        #expect(screen.cell(at: 2, row: 0).codepoint == "C")
+    }
+
+    // MARK: - LNM (Line Feed/New Line Mode, mode 20)
+
+    @Test func lnmInitiallyDisabled() {
+        let screen = drive("")
+        // When LNM is disabled, LF should only move down, not to column 0
+        // This is the default state
+        let screen2 = drive("AB\u{1B}[H\nC")
+        #expect(screen2.cursorCol == 1) // LF only, no CR
+        #expect(screen2.cursorRow == 1)
+    }
+
+    @Test func smMode20EnablesLNM() {
+        let screen = Screen(columns: 10, rows: 5)
+        var handler = StreamHandler(screen: screen)
+        var parser = VTParser()
+
+        // Enable LNM
+        let setBytes = Array("\u{1B}[20h".utf8)
+        setBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+
+        #expect(handler.modes.isSet(.newline) == true)
+    }
+
+    @Test func lnmMakesLFActAsNewline() {
+        // With LNM enabled, LF should act as CRLF
+        let screen = drive("AB\u{1B}[H\u{1B}[20h\nC")
+        // After LF with LNM: should be at column 0, row 1
+        #expect(screen.cell(at: 0, row: 1).codepoint == "C")
+        #expect(screen.cursorCol == 1)
+        #expect(screen.cursorRow == 1)
+    }
+
+    @Test func rmMode20DisablesLNM() {
+        let screen = Screen(columns: 10, rows: 5)
+        var handler = StreamHandler(screen: screen)
+        var parser = VTParser()
+
+        // Enable then disable LNM
+        let setBytes = Array("\u{1B}[20h\u{1B}[20l".utf8)
+        setBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+
+        #expect(handler.modes.isSet(.newline) == false)
+    }
+
+    @Test func vtAndFFRespectLNM() {
+        // VT (0x0B) and FF (0x0C) should also respect LNM mode
+        let screen = drive("\u{1B}[20hA\u{0B}B", columns: 10, rows: 3)
+        // VT with LNM should act as newline
+        #expect(screen.cell(at: 0, row: 1).codepoint == "B")
+    }
+
+    // MARK: - Unrecognized ANSI modes
+
+    @Test func unsupportedANSIModeTriggersCallback() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var unhandled: [String] = []
+        handler.onUnhandledSequence = { unhandled.append($0) }
+        var parser = VTParser()
+
+        // Mode 1 is cursor keys (DEC mode with ?), but without ? it's ANSI
+        // Mode 3 is not a standard ANSI mode
+        let bytes = Array("\u{1B}[3h".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+
+        #expect(unhandled == ["ANSI SM/RM mode 3 not implemented"])
+    }
+}
+
+@Suite("StreamHandler ESC charset select tests", .serialized)
+struct StreamHandlerESCCharsetSelectTests {
+
+    /// Drive bytes and collect unhandled sequences.
+    private func run(_ s: String) -> [String] {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var events: [String] = []
+        handler.onUnhandledSequence = { events.append($0) }
+        var parser = VTParser()
+        let bytes = Array(s.utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        return events
+    }
+
+    @Test func escPercentAtIsAcceptedSilently() {
+        // ESC % @ — Select default character set
+        #expect(run("\u{1B}%@").isEmpty)
+    }
+
+    @Test func escPercentGIsAcceptedSilently() {
+        // ESC % G — Select UTF-8 character set
+        #expect(run("\u{1B}%G").isEmpty)
+    }
+
+    @Test func escPercentUnknownIsReported() {
+        // ESC % X — Unknown charset
+        #expect(run("\u{1B}%X") == ["ESC %X (charset select) not implemented"])
+    }
+}
