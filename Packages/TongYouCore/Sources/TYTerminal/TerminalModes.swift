@@ -14,6 +14,10 @@ public struct TerminalModes: Equatable, Sendable {
     /// Mouse encoding format.
     public var mouseFormat: MouseFormat = .x10
 
+    /// xterm modifyOtherKeys level (XTMODKEYS, CSI > 4 ; Pv m).
+    /// 0 = disabled, 1 = old xterm behavior, 2 = all keys with modifiers.
+    public var modifyOtherKeys: UInt8 = 0
+
     public init() {
         var f: UInt32 = 0
         // Defaults: cursor visible, autowrap on

@@ -591,4 +591,54 @@ struct KeyEncoderTests {
         )
         #expect(result == Data([0x61]))
     }
+
+    // MARK: - modifyOtherKeys (XTMODKEYS)
+
+    private let modifyOpts = KeyEncoder.Options(appCursorMode: false, optionAsAlt: true, modifyOtherKeys: 1)
+
+    @Test func modifyOtherKeys_ctrlA() {
+        // Ctrl+A → CSI 97;5u  (a=97, mod=1+4=5)
+        let result = KeyEncoder.encode(
+            input(keyCode: 0, characters: "\u{01}", charactersIgnoringModifiers: "a", control: true),
+            options: modifyOpts
+        )
+        #expect(result == Data([0x1B, 0x5B, 0x39, 0x37, 0x3B, 0x35, 0x75]))
+    }
+
+    @Test func modifyOtherKeys_altB() {
+        // Alt+B → CSI 98;3u  (b=98, mod=1+2=3)
+        let result = KeyEncoder.encode(
+            input(keyCode: 0, characters: "∫", charactersIgnoringModifiers: "b", option: true),
+            options: modifyOpts
+        )
+        #expect(result == Data([0x1B, 0x5B, 0x39, 0x38, 0x3B, 0x33, 0x75]))
+    }
+
+    @Test func modifyOtherKeys_shiftCtrlC() {
+        // Shift+Ctrl+C → CSI 99;6u  (c=99, mod=1+1+4=6)
+        let result = KeyEncoder.encode(
+            input(keyCode: 0, characters: "\u{03}", charactersIgnoringModifiers: "c", shift: true, control: true),
+            options: modifyOpts
+        )
+        #expect(result == Data([0x1B, 0x5B, 0x39, 0x39, 0x3B, 0x36, 0x75]))
+    }
+
+    @Test func modifyOtherKeys_plainCharUnaffected() {
+        // Plain 'a' without modifiers → still UTF-8
+        let result = KeyEncoder.encode(
+            input(keyCode: 0, characters: "a"),
+            options: modifyOpts
+        )
+        #expect(result == Data([0x61]))
+    }
+
+    @Test func modifyOtherKeys_disabledFallsBackToCtrl() {
+        // With modifyOtherKeys=0, Ctrl+A is control code 0x01
+        let disabledOpts = KeyEncoder.Options(appCursorMode: false, optionAsAlt: true, modifyOtherKeys: 0)
+        let result = KeyEncoder.encode(
+            input(keyCode: 0, characters: "\u{01}", charactersIgnoringModifiers: "a", control: true),
+            options: disabledOpts
+        )
+        #expect(result == Data([0x01]))
+    }
 }

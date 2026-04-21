@@ -129,8 +129,21 @@ struct TerminalCoreTests {
     func queryModes() {
         let core = TerminalCore(columns: 80, rows: 24)
         #expect(core.appCursorMode == false)
+        #expect(core.modifyOtherKeys == 0)
         #expect(core.bracketedPasteMode == false)
         #expect(core.mouseTrackingMode == .none)
+    }
+
+    @Test("XTMODKEYS toggles modifyOtherKeys on core")
+    func xtmodkeysToggles() {
+        let core = TerminalCore(columns: 80, rows: 24)
+        #expect(core.modifyOtherKeys == 0)
+        core.feedBytesForTesting(Array("\u{1B}[>4;1m".utf8))
+        #expect(core.modifyOtherKeys == 1)
+        core.feedBytesForTesting(Array("\u{1B}[>4;2m".utf8))
+        #expect(core.modifyOtherKeys == 2)
+        core.feedBytesForTesting(Array("\u{1B}[>4;0m".utf8))
+        #expect(core.modifyOtherKeys == 0)
     }
 
     @Test("Focus reporting flag is off by default")

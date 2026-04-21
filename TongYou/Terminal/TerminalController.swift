@@ -272,7 +272,8 @@ final class TerminalController: TerminalControlling {
         let options = KeyEncoder.Options(
             appCursorMode: core.appCursorMode,
             optionAsAlt: optionAsAlt,
-            keypadApplication: core.appKeypadMode
+            keypadApplication: core.appKeypadMode,
+            modifyOtherKeys: core.modifyOtherKeys
         )
         guard let data = KeyEncoder.encode(input, options: options) else { return }
         dispatchUserInput(data)
@@ -291,7 +292,8 @@ final class TerminalController: TerminalControlling {
         let options = KeyEncoder.Options(
             appCursorMode: core.appCursorMode,
             optionAsAlt: optionAsAlt,
-            keypadApplication: core.appKeypadMode
+            keypadApplication: core.appKeypadMode,
+            modifyOtherKeys: core.modifyOtherKeys
         )
         guard let data = KeyEncoder.encode(input, options: options) else { return }
         writeToPTY(data)

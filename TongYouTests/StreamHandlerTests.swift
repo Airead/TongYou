@@ -585,12 +585,19 @@ import TYTerminal
         #expect(!cell.attributes.flags.contains(.bold))
     }
 
-    @Test func xtmodkeysResetDoesNotAffectAttrs() {
-        // CSI > 4 ; 0 m should not reset current attributes.
-        // Set bold first, then send XTMODKEYS reset, then print.
-        let screen = process("\u{1B}[1m\u{1B}[>4;0mA")
-        let cell = screen.cell(at: 0, row: 0)
-        #expect(cell.attributes.flags.contains(.bold))
+    @Test func xtmodkeysSetsModifyOtherKeys() {
+        let (_, handler) = processWithHandler("\u{1B}[>4;1m")
+        #expect(handler.modes.modifyOtherKeys == 1)
+    }
+
+    @Test func xtmodkeysResetsModifyOtherKeys() {
+        let (_, handler) = processWithHandler("\u{1B}[>4;2m\u{1B}[>4;0m")
+        #expect(handler.modes.modifyOtherKeys == 0)
+    }
+
+    @Test func xtmodkeysResetAllWithoutParams() {
+        let (_, handler) = processWithHandler("\u{1B}[>4;2m\u{1B}[>m")
+        #expect(handler.modes.modifyOtherKeys == 0)
     }
 
     // MARK: - DECDHL / DECDWL (ESC # sequences)

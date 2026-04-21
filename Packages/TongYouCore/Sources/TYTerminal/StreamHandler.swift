@@ -236,9 +236,8 @@ public struct StreamHandler {
 
         // --- SGR ---
         case 0x6D: // 'm' - SGR (Select Graphic Rendition)
-            // CSI > 4 ; 1 m is XTMODKEYS (xterm modifyOtherKeys), not SGR.
             if hasGreater {
-                onUnhandledSequence?("CSI > m (XTMODKEYS) not implemented")
+                handleXTMODKEYS(params)
                 break
             }
             SGRParser.parse(params, into: &currentAttributes)
@@ -667,6 +666,28 @@ public struct StreamHandler {
 
         default:
             onUnhandledSequence?("CSI t \(params[0]) (window manipulation) not implemented")
+        }
+    }
+
+    // MARK: - XTMODKEYS
+
+    /// Handle `CSI > Pp ; Pv m` (xterm key modifier options).
+    /// Only `Pp = 4` (modifyOtherKeys) is currently supported.
+    private mutating func handleXTMODKEYS(_ params: CSIParams) {
+        if params.count == 0 {
+            // No parameters: reset all XTMODKEYS resources.
+            modes.modifyOtherKeys = 0
+            return
+        }
+
+        let resource = params[0]
+        let value = params.count >= 2 ? params[1] : 0
+
+        switch resource {
+        case 4:
+            modes.modifyOtherKeys = UInt8(clamping: value)
+        default:
+            onUnhandledSequence?("XTMODKEYS resource \(resource) not implemented")
         }
     }
 

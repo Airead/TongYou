@@ -82,7 +82,8 @@ final class ClientTerminalController: TerminalControlling {
         let input = KeyEncoder.KeyInput(event: event)
         let options = KeyEncoder.Options(
             appCursorMode: false,
-            optionAsAlt: optionAsAlt
+            optionAsAlt: optionAsAlt,
+            modifyOtherKeys: 0
         )
         guard let data = KeyEncoder.encode(input, options: options) else { return }
         dispatchUserInput(data)
@@ -96,7 +97,8 @@ final class ClientTerminalController: TerminalControlling {
     func sendKey(_ input: KeyEncoder.KeyInput) {
         let options = KeyEncoder.Options(
             appCursorMode: false,
-            optionAsAlt: optionAsAlt
+            optionAsAlt: optionAsAlt,
+            modifyOtherKeys: 0
         )
         guard let data = KeyEncoder.encode(input, options: options) else { return }
         forwardInput(data)
