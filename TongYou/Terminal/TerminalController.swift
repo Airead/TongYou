@@ -271,7 +271,8 @@ final class TerminalController: TerminalControlling {
         let input = KeyEncoder.KeyInput(event: event)
         let options = KeyEncoder.Options(
             appCursorMode: core.appCursorMode,
-            optionAsAlt: optionAsAlt
+            optionAsAlt: optionAsAlt,
+            keypadApplication: core.appKeypadMode
         )
         guard let data = KeyEncoder.encode(input, options: options) else { return }
         dispatchUserInput(data)
@@ -289,7 +290,8 @@ final class TerminalController: TerminalControlling {
     func sendKey(_ input: KeyEncoder.KeyInput) {
         let options = KeyEncoder.Options(
             appCursorMode: core.appCursorMode,
-            optionAsAlt: optionAsAlt
+            optionAsAlt: optionAsAlt,
+            keypadApplication: core.appKeypadMode
         )
         guard let data = KeyEncoder.encode(input, options: options) else { return }
         writeToPTY(data)

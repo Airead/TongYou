@@ -384,6 +384,10 @@ public final class TerminalCore: @unchecked Sendable {
         ptyQueue.sync { streamHandler.modes.isSet(.cursorKeys) }
     }
 
+    public var appKeypadMode: Bool {
+        ptyQueue.sync { streamHandler.modes.isSet(.keypadApplication) }
+    }
+
     public var bracketedPasteMode: Bool {
         ptyQueue.sync { streamHandler.modes.isSet(.bracketedPaste) }
     }

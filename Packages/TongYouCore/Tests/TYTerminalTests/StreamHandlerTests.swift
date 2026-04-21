@@ -211,4 +211,96 @@ struct StreamHandlerUnhandledSequenceTests {
         #expect(run("\u{1B}[?1005h\u{1B}[?1006h\u{1B}[?1007h") == ["DECSET/DECRST mode 1005 not implemented", "DECSET/DECRST mode 1007 not implemented"])
         // 1006 is supported (mouse format), so only 1005 and 1007 are reported
     }
+
+    @Test func cursorKeysAndBracketedPasteModesDoNotLog() {
+        // These are passive modes (consumers read the bitfield directly).
+        // They should not produce unhandled sequence callbacks.
+        #expect(run("\u{1B}[?1h").isEmpty)   // cursorKeys
+        #expect(run("\u{1B}[?1l").isEmpty)   // cursorKeys reset
+        #expect(run("\u{1B}[?2004h").isEmpty) // bracketedPaste
+        #expect(run("\u{1B}[?2004l").isEmpty) // bracketedPaste reset
+    }
+
+    @Test func escBackslashIsSilentlyIgnored() {
+        // ESC \ is the 7-bit form of ST (String Terminator). After a string
+        // sequence exits, the parser dispatches ESC \ as a normal ESC sequence.
+        // StreamHandler should silently ignore it.
+        #expect(run("\u{1B}\\").isEmpty)
+    }
+
+    @Test func escEqualsSetsKeypadApplicationMode() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var parser = VTParser()
+        let bytes = Array("\u{1B}=".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(handler.modes.isSet(.keypadApplication) == true)
+    }
+
+    @Test func escGreaterResetsKeypadApplicationMode() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        // First set the mode via ESC =
+        var parser = VTParser()
+        let setBytes = Array("\u{1B}=".utf8)
+        setBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(handler.modes.isSet(.keypadApplication) == true)
+        // Then reset via ESC >
+        let resetBytes = Array("\u{1B}>".utf8)
+        resetBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(handler.modes.isSet(.keypadApplication) == false)
+    }
+
+    @Test func osc1UpdatesTitleSameAsOsc0() {
+        // OSC 1 (icon name) is treated the same as OSC 0/2 (window title).
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var titles: [String] = []
+        handler.onTitleChanged = { titles.append($0) }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]1;my-icon\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(titles == ["my-icon"])
+        #expect(handler.currentTitle == "my-icon")
+    }
+
+    @Test func osc7ParsesFileURL() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var dirs: [String] = []
+        handler.onWorkingDirectoryChanged = { dirs.append($0) }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]7;file://myhost/Users/alice/projects\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(dirs == ["/Users/alice/projects"])
+    }
+
+    @Test func osc7IgnoresNonFileURL() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var dirs: [String] = []
+        handler.onWorkingDirectoryChanged = { dirs.append($0) }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]7;http://example.com\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(dirs.isEmpty)
+    }
 }

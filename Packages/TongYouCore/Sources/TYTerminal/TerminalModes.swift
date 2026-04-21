@@ -41,6 +41,8 @@ public struct TerminalModes: Equatable, Sendable {
         /// delivery to the client until the app ends the update or the
         /// safety timeout elapses.
         case syncedUpdate = 2026
+        /// Keypad application mode (DECKPAM, ESC =). On = application sequences.
+        case keypadApplication = 9999
     }
 
     /// Mouse tracking modes — mutually exclusive (setting one clears others).
@@ -129,6 +131,7 @@ public struct TerminalModes: Equatable, Sendable {
         case .bracketedPaste: return 1 << 4
         case .focusEvents:    return 1 << 5
         case .syncedUpdate:   return 1 << 6
+        case .keypadApplication: return 1 << 7
         }
     }
 

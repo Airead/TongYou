@@ -46,10 +46,12 @@ public struct KeyEncoder: Sendable {
     public struct Options: Sendable {
         public let appCursorMode: Bool
         public let optionAsAlt: Bool
+        public let keypadApplication: Bool
 
-        public init(appCursorMode: Bool, optionAsAlt: Bool) {
+        public init(appCursorMode: Bool, optionAsAlt: Bool, keypadApplication: Bool = false) {
             self.appCursorMode = appCursorMode
             self.optionAsAlt = optionAsAlt
+            self.keypadApplication = keypadApplication
         }
     }
 

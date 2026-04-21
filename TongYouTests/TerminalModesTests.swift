@@ -33,7 +33,8 @@ import TYTerminal
         #expect(TerminalModes.from(rawValue: 1) == .cursorKeys)
         #expect(TerminalModes.from(rawValue: 25) == .cursorVisible)
         #expect(TerminalModes.from(rawValue: 1049) == .altScreen)
-        #expect(TerminalModes.from(rawValue: 9999) == nil)
+        #expect(TerminalModes.from(rawValue: 9999) == .keypadApplication)
+        #expect(TerminalModes.from(rawValue: 12345) == nil)
     }
 
     // MARK: - Mouse Tracking Modes

@@ -34,6 +34,8 @@ public struct StreamHandler {
     public var onPaneNotification: ((String, String) -> Void)?
     /// Callback: focus event reporting (DECSET 1004) toggled on/off.
     public var onFocusReportingChanged: ((Bool) -> Void)?
+    /// Callback: current working directory changed (OSC 7 file://URL).
+    public var onWorkingDirectoryChanged: ((String) -> Void)?
     /// Callback: unhandled control sequence or mode received (for debugging/telemetry).
     public var onUnhandledSequence: ((String) -> Void)?
 
@@ -341,6 +343,18 @@ public struct StreamHandler {
             modes.reset()
             savedCursor = nil
 
+        case 0x5C: // '\' - ST (String Terminator, 7-bit form ESC \)
+            // Parser dispatches ESC \ as a normal ESC sequence after exiting
+            // string state; we silently ignore it here because the string
+            // content has already been handled.
+            break
+
+        case 0x3D: // '=' - DECKPAM (Keypad Application Mode)
+            modes.set(.keypadApplication, true)
+
+        case 0x3E: // '>' - DECKPNM (Keypad Numeric Mode)
+            modes.set(.keypadApplication, false)
+
         default:
             let finalChar = String(Unicode.Scalar(final))
             onUnhandledSequence?("ESC \(finalChar) not implemented")
@@ -400,12 +414,14 @@ public struct StreamHandler {
         let stringData = data[(separatorIdx + 1)...]
 
         switch oscNum {
-        case 0, 2: // Set window title
+        case 0, 1, 2: // Set window title (0=both, 1=icon, 2=window)
             if let raw = String(bytes: stringData, encoding: .utf8) {
                 let title = Self.sanitizeTitle(raw)
                 currentTitle = title
                 onTitleChanged?(title)
             }
+        case 7:
+            handleOSC7(stringData)
         case 52:
             handleOSC52(stringData)
         case 7727:
@@ -431,6 +447,21 @@ public struct StreamHandler {
             if scalars.count >= maxTitleLength { break }
         }
         return String(scalars)
+    }
+
+    // MARK: - OSC 7 (Current Working Directory)
+
+    /// Handle OSC 7 `file://hostname/path` sequences.
+    private func handleOSC7(_ data: ArraySlice<UInt8>) {
+        guard let str = String(bytes: data, encoding: .utf8), !str.isEmpty else { return }
+        // Parse file://hostname/path — strip the scheme and hostname
+        guard str.hasPrefix("file://") else { return }
+        let afterScheme = str.dropFirst("file://".count)
+        // Skip hostname (up to next '/')
+        guard let pathStart = afterScheme.firstIndex(of: "/") else { return }
+        let path = String(afterScheme[pathStart...])
+        guard !path.isEmpty else { return }
+        onWorkingDirectoryChanged?(path)
     }
 
     // MARK: - OSC 52 (Clipboard)
@@ -559,6 +590,9 @@ public struct StreamHandler {
 
         // Side effects
         switch mode {
+        case .cursorKeys, .bracketedPaste:
+            // Passive modes: consumers read the bitfield directly.
+            break
         case .cursorVisible:
             screen.setCursorVisible(value)
         case .altScreen:
