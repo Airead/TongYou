@@ -322,4 +322,210 @@ struct ScreenTests {
         screen.fullReset()
         #expect(screen.originMode == false)
     }
+
+    // MARK: - Delayed Wrap (DECAWM)
+
+    @Test func pendingWrapDefaultsFalse() {
+        let screen = Screen(columns: 5, rows: 3)
+        #expect(screen.pendingWrap == false)
+    }
+
+    @Test func delayedWrapSetsPendingWrapAtLastColumn() {
+        let screen = Screen(columns: 5, rows: 3)
+        screen.setCursorPos(row: 0, col: 4)
+
+        // Write a single-width character at the last column
+        screen.write(GraphemeCluster("A"), attributes: .default)
+
+        // Cursor should stay at last column, pendingWrap should be true
+        #expect(screen.cursorCol == 4)
+        #expect(screen.pendingWrap == true)
+        #expect(screen.cell(at: 4, row: 0).codepoint == "A")
+    }
+
+    @Test func delayedWrapResolvesOnNextWrite() {
+        let screen = Screen(columns: 5, rows: 3)
+        screen.setCursorPos(row: 0, col: 4)
+
+        // Write at last column to trigger delayed wrap
+        screen.write(GraphemeCluster("A"), attributes: .default)
+        #expect(screen.pendingWrap == true)
+
+        // Next write should resolve the wrap first
+        screen.write(GraphemeCluster("B"), attributes: .default)
+
+        // Should be at start of next line
+        #expect(screen.cursorRow == 1)
+        #expect(screen.cursorCol == 1)
+        #expect(screen.pendingWrap == false)
+        #expect(screen.cell(at: 0, row: 1).codepoint == "B")
+    }
+
+    @Test func delayedWrapClearedOnCarriageReturn() {
+        let screen = Screen(columns: 5, rows: 3)
+        screen.setCursorPos(row: 0, col: 4)
+
+        // Write at last column to trigger delayed wrap
+        screen.write(GraphemeCluster("A"), attributes: .default)
+        #expect(screen.pendingWrap == true)
+
+        // CR should clear pendingWrap and move to column 0 (no wrap executed)
+        screen.carriageReturn()
+
+        #expect(screen.cursorRow == 0)
+        #expect(screen.cursorCol == 0)
+        #expect(screen.pendingWrap == false)
+    }
+
+    @Test func delayedWrapClearedOnLineFeed() {
+        let screen = Screen(columns: 5, rows: 3)
+        screen.setCursorPos(row: 0, col: 4)
+
+        // Write at last column to trigger delayed wrap
+        screen.write(GraphemeCluster("A"), attributes: .default)
+        #expect(screen.pendingWrap == true)
+
+        // LF should clear pendingWrap and move down one row (no wrap executed)
+        screen.lineFeed()
+
+        #expect(screen.cursorRow == 1)
+        #expect(screen.cursorCol == 4)
+        #expect(screen.pendingWrap == false)
+    }
+
+    @Test func delayedWrapClearedOnCursorForward() {
+        let screen = Screen(columns: 5, rows: 3)
+        screen.setCursorPos(row: 0, col: 4)
+
+        // Write at last column to trigger delayed wrap
+        screen.write(GraphemeCluster("A"), attributes: .default)
+        #expect(screen.pendingWrap == true)
+
+        // cursorForward should clear pendingWrap (no wrap executed, cursor stays at last col)
+        screen.cursorForward(1)
+
+        #expect(screen.cursorRow == 0)
+        #expect(screen.cursorCol == 4)
+        #expect(screen.pendingWrap == false)
+    }
+
+    @Test func delayedWrapClearedOnCursorBackward() {
+        let screen = Screen(columns: 5, rows: 3)
+        screen.setCursorPos(row: 0, col: 4)
+
+        // Write at last column to trigger delayed wrap
+        screen.write(GraphemeCluster("A"), attributes: .default)
+        #expect(screen.pendingWrap == true)
+
+        // cursorBackward should clear pendingWrap (no wrap executed)
+        screen.cursorBackward(1)
+
+        #expect(screen.cursorRow == 0)
+        #expect(screen.cursorCol == 3)
+        #expect(screen.pendingWrap == false)
+    }
+
+    @Test func delayedWrapClearedOnSetCursorPos() {
+        let screen = Screen(columns: 5, rows: 3)
+        screen.setCursorPos(row: 0, col: 4)
+
+        // Write at last column to trigger delayed wrap
+        screen.write(GraphemeCluster("A"), attributes: .default)
+        #expect(screen.pendingWrap == true)
+
+        // setCursorPos should clear pendingWrap (no wrap executed)
+        screen.setCursorPos(row: 2, col: 2)
+
+        #expect(screen.cursorRow == 2)
+        #expect(screen.cursorCol == 2)
+        #expect(screen.pendingWrap == false)
+    }
+
+    @Test func delayedWrapSetsWrappedFlagOnResolve() {
+        let screen = Screen(columns: 5, rows: 3)
+        screen.setCursorPos(row: 0, col: 4)
+
+        // Write at last column
+        screen.write(GraphemeCluster("A"), attributes: .default)
+        #expect(screen.pendingWrap == true)
+
+        // Row should not be marked wrapped yet
+        let beforeFlags = screen.snapshot().lineFlags[0]
+        #expect(beforeFlags.wrapped == false)
+
+        // Next write should set wrapped flag
+        screen.write(GraphemeCluster("B"), attributes: .default)
+
+        let afterFlags = screen.snapshot().lineFlags[0]
+        #expect(afterFlags.wrapped == true)
+    }
+
+    @Test func fullResetClearsPendingWrap() {
+        let screen = Screen(columns: 5, rows: 3)
+        screen.setCursorPos(row: 0, col: 4)
+
+        screen.write(GraphemeCluster("A"), attributes: .default)
+        #expect(screen.pendingWrap == true)
+
+        screen.fullReset()
+        #expect(screen.pendingWrap == false)
+    }
+
+    @Test func fillWithEClearsPendingWrap() {
+        let screen = Screen(columns: 5, rows: 3)
+        screen.setCursorPos(row: 0, col: 4)
+
+        screen.write(GraphemeCluster("A"), attributes: .default)
+        #expect(screen.pendingWrap == true)
+
+        screen.fillWithE()
+        #expect(screen.pendingWrap == false)
+    }
+
+    @Test func wideCharAtLastColumnDoesNotSetPendingWrap() {
+        let screen = Screen(columns: 5, rows: 3)
+        screen.setCursorPos(row: 0, col: 4)
+
+        // Write a wide character at the last column - it should wrap immediately
+        screen.write(GraphemeCluster(Character("🇨🇳")), attributes: .default)
+
+        // Should have wrapped, not set pendingWrap
+        #expect(screen.cursorRow == 1)
+        #expect(screen.cursorCol == 2)
+        #expect(screen.pendingWrap == false)
+    }
+
+    @Test func writeASCIIBatchHandlesDelayedWrap() {
+        let screen = Screen(columns: 5, rows: 3)
+        screen.setCursorPos(row: 0, col: 3)
+
+        // Write "AB" - A goes to col 3, B goes to col 4 and sets pendingWrap
+        var buffer = PrintBatchBuffer()
+        buffer[0] = 0x41 // 'A'
+        buffer[1] = 0x42 // 'B'
+        screen.writeASCIIBatch(buffer, count: 2, attributes: .default)
+
+        #expect(screen.cursorCol == 4)
+        #expect(screen.pendingWrap == true)
+        #expect(screen.cell(at: 3, row: 0).codepoint == "A")
+        #expect(screen.cell(at: 4, row: 0).codepoint == "B")
+
+        // Next batch write should resolve the wrap
+        var buffer2 = PrintBatchBuffer()
+        buffer2[0] = 0x43 // 'C'
+        screen.writeASCIIBatch(buffer2, count: 1, attributes: .default)
+
+        #expect(screen.cursorRow == 1)
+        #expect(screen.cursorCol == 1)
+        #expect(screen.pendingWrap == false)
+        #expect(screen.cell(at: 0, row: 1).codepoint == "C")
+    }
+
+    @Test func setPendingWrapUpdatesState() {
+        let screen = Screen(columns: 5, rows: 3)
+        screen.setPendingWrap(true)
+        #expect(screen.pendingWrap == true)
+        screen.setPendingWrap(false)
+        #expect(screen.pendingWrap == false)
+    }
 }

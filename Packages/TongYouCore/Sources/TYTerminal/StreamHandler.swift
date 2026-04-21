@@ -738,7 +738,8 @@ public struct StreamHandler {
             row: screen.cursorRow,
             attributes: currentAttributes,
             charsetState: screen.charsetState,
-            originMode: screen.originMode
+            originMode: screen.originMode,
+            pendingWrap: screen.pendingWrap
         )
     }
 
@@ -748,6 +749,7 @@ public struct StreamHandler {
         currentAttributes = saved.attributes
         screen.charsetState = saved.charsetState
         screen.setOriginMode(saved.originMode)
+        screen.setPendingWrap(saved.pendingWrap)
     }
 
     // MARK: - Private

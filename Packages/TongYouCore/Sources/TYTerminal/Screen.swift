@@ -144,13 +144,15 @@ public struct SavedCursorState: Sendable {
     public let attributes: CellAttributes
     public let charsetState: CharsetState
     public let originMode: Bool
+    public let pendingWrap: Bool
 
-    public init(col: Int, row: Int, attributes: CellAttributes, charsetState: CharsetState = CharsetState(), originMode: Bool = false) {
+    public init(col: Int, row: Int, attributes: CellAttributes, charsetState: CharsetState = CharsetState(), originMode: Bool = false, pendingWrap: Bool = false) {
         self.col = col
         self.row = row
         self.attributes = attributes
         self.charsetState = charsetState
         self.originMode = originMode
+        self.pendingWrap = pendingWrap
     }
 }
 
@@ -322,6 +324,11 @@ public final class Screen {
     public private(set) var cursorRow: Int = 0
     public private(set) var cursorVisible: Bool = true
     public private(set) var cursorShape: CursorShape = .block
+
+    /// When true, the next printable character (or certain cursor movements)
+    /// must trigger a wrap-to-next-line before proceeding.  Set when a
+    /// single-width character is written in the last column with DECAWM on.
+    public private(set) var pendingWrap: Bool = false
 
     /// DECSCNM: global reverse video (swap fg/bg for all cells).
     public private(set) var reverseVideo: Bool = false
@@ -622,10 +629,13 @@ public final class Screen {
     private func writeCluster(_ cluster: GraphemeCluster, attributes: CellAttributes) {
         let w = Int(cluster.terminalWidth)
 
-        if cursorCol >= columns {
+        // If a delayed wrap is pending from the previous character, execute it now.
+        if pendingWrap {
+            dirtyRegion.markLine(cursorRow) // Mark old row dirty to clear cursor background
             setLineFlagForRow(cursorRow, LineFlags(wrapped: true))
             cursorCol = 0
             advanceRow()
+            pendingWrap = false
         }
 
         // Wide char doesn't fit on current line: leave spacer, wrap
@@ -661,6 +671,9 @@ public final class Screen {
             cells[contIdx].attributes = attributes
             cells[contIdx].width = .continuation
             cursorCol = col + 2
+        } else if col == columns - 1 {
+            // Single-width char written in the last column — defer the wrap.
+            pendingWrap = true
         } else {
             cursorCol = col + 1
         }
@@ -685,32 +698,45 @@ public final class Screen {
 
         var i = 0
         while i < count {
-            // Handle wrap from previous write
-            if cursorCol >= columns {
+            // Handle pending delayed wrap from previous write
+            if pendingWrap {
+                dirtyRegion.markLine(cursorRow) // Mark old row dirty to clear cursor background
                 setLineFlagForRow(cursorRow, LineFlags(wrapped: true))
                 cursorCol = 0
                 advanceRow()
+                pendingWrap = false
             }
 
             dirtyRegion.markLine(cursorRow)
             let base = rowStart(cursorRow)
+            let startCol = cursorCol
 
             // Write as many characters as fit on the current line
             let remaining = columns - cursorCol
             let batchEnd = min(i + remaining, count)
+            let writeCount = batchEnd - i
 
-            while i < batchEnd {
-                let idx = base + cursorCol
+            for offset in 0..<writeCount {
+                let col = startCol + offset
+                let idx = base + col
                 // Clean up wide char pair if overwriting
                 if cells[idx].width != .normal {
-                    cleanUpWideCharAt(col: cursorCol, row: cursorRow)
+                    cleanUpWideCharAt(col: col, row: cursorRow)
                 }
-                let mapped = needsMapping ? charsetState.map(buffer[i]) : Unicode.Scalar(buffer[i])
+                let mapped = needsMapping ? charsetState.map(buffer[i + offset]) : Unicode.Scalar(buffer[i + offset])
                 cells[idx].codepoint = mapped
                 cells[idx].attributes = attributes
                 cells[idx].width = .normal
-                cursorCol += 1
-                i += 1
+            }
+
+            i += writeCount
+            cursorCol = startCol + writeCount
+
+            // If we filled exactly to the end of the line (cursorCol == columns),
+            // apply delayed wrap: stay at last column and set pendingWrap.
+            if cursorCol >= columns {
+                cursorCol = columns - 1
+                pendingWrap = true
             }
         }
     }
@@ -759,6 +785,7 @@ public final class Screen {
 
     /// Line feed: move cursor down one row (scroll if at bottom of scroll region).
     public func lineFeed() {
+        clearPendingWrap()
         dirtyRegion.markLine(cursorRow)
         advanceRow()
         dirtyRegion.markLine(cursorRow)
@@ -766,17 +793,20 @@ public final class Screen {
 
     /// Carriage return: move cursor to column 0.
     public func carriageReturn() {
+        clearPendingWrap()
         cursorCol = 0
     }
 
     /// Newline: carriage return + line feed.
     public func newline() {
+        clearPendingWrap()
         carriageReturn()
         lineFeed()
     }
 
     /// Backspace: move cursor left by one (stops at column 0).
     public func backspace() {
+        clearPendingWrap()
         let oldCol = cursorCol
         if cursorCol > 0 {
             cursorCol -= 1
@@ -786,24 +816,45 @@ public final class Screen {
 
     /// Tab: advance cursor to next tab stop (every 8 columns).
     public func tab() {
+        clearPendingWrap()
         let nextStop = ((cursorCol / tabWidth) + 1) * tabWidth
         cursorCol = min(nextStop, columns - 1)
     }
 
     // MARK: - Cursor Movement
 
+    /// Resolve a pending delayed wrap by performing the actual wrap before
+    /// the next printable character. Used by write operations.
+    private func resolvePendingWrap() {
+        guard pendingWrap else { return }
+        setLineFlagForRow(cursorRow, LineFlags(wrapped: true))
+        cursorCol = 0
+        advanceRow()
+        pendingWrap = false
+    }
+
+    /// Clear the pending wrap flag without performing the wrap.
+    /// Used by cursor movement operations (CR, LF, CUF, CUB, etc.)
+    /// per VT100 spec: cursor movement cancels the pending wrap state.
+    private func clearPendingWrap() {
+        pendingWrap = false
+    }
+
     /// Move cursor up by `n` rows, clamping at scroll top.
     public func cursorUp(_ n: Int) {
+        clearPendingWrap()
         moveCursorRow(to: max(scrollTop, cursorRow - max(1, n)))
     }
 
     /// Move cursor down by `n` rows, clamping at scroll bottom.
     public func cursorDown(_ n: Int) {
+        clearPendingWrap()
         moveCursorRow(to: min(scrollBottom, cursorRow + max(1, n)))
     }
 
     /// Move cursor forward (right) by `n` columns, clamping at last column.
     public func cursorForward(_ n: Int) {
+        clearPendingWrap()
         let oldCol = cursorCol
         cursorCol = min(columns - 1, cursorCol + max(1, n))
         if cursorCol != oldCol { dirtyRegion.markLine(cursorRow) }
@@ -811,6 +862,7 @@ public final class Screen {
 
     /// Move cursor backward (left) by `n` columns, clamping at column 0.
     public func cursorBackward(_ n: Int) {
+        clearPendingWrap()
         let oldCol = cursorCol
         cursorCol = max(0, cursorCol - max(1, n))
         if cursorCol != oldCol { dirtyRegion.markLine(cursorRow) }
@@ -820,6 +872,7 @@ public final class Screen {
     /// When originMode is active, `row` is relative to `scrollTop` and
     /// clamped inside the scroll region.
     public func setCursorPos(row: Int, col: Int) {
+        clearPendingWrap()
         let effectiveRow: Int
         if originMode {
             effectiveRow = max(scrollTop, min(scrollBottom, scrollTop + row))
@@ -834,11 +887,13 @@ public final class Screen {
 
     /// Set cursor row (0-based), clamping to screen bounds.
     public func setCursorRow(_ row: Int) {
+        clearPendingWrap()
         moveCursorRow(to: clampRow(row))
     }
 
     /// Set cursor column (0-based), clamping to screen bounds.
     public func setCursorCol(_ col: Int) {
+        clearPendingWrap()
         let oldCol = cursorCol
         cursorCol = clampCol(col)
         if cursorCol != oldCol { dirtyRegion.markLine(cursorRow) }
@@ -863,6 +918,11 @@ public final class Screen {
     /// Set origin mode (DECOM).
     public func setOriginMode(_ value: Bool) {
         originMode = value
+    }
+
+    /// Set the pending wrap flag (used by DECRC restore cursor).
+    public func setPendingWrap(_ value: Bool) {
+        pendingWrap = value
     }
 
     /// Set the line height and width attributes for the current cursor row (DECDHL/DECDWL).
@@ -951,6 +1011,7 @@ public final class Screen {
         lineFlags = [LineFlags](repeating: LineFlags(), count: rows)
         cursorRow = 0
         cursorCol = 0
+        pendingWrap = false
         dirtyRegion.markFull()
     }
 
@@ -1050,6 +1111,7 @@ public final class Screen {
 
     /// Reverse index (ESC M): move cursor up one row, scrolling down if at top of region.
     public func reverseIndex() {
+        clearPendingWrap()
         if cursorRow == scrollTop {
             scrollRegionDown()
         } else if cursorRow > 0 {
@@ -1157,6 +1219,7 @@ public final class Screen {
 
     /// Forward tabulation: advance cursor to the Nth next tab stop.
     public func forwardTab(count: Int = 1) {
+        clearPendingWrap()
         for _ in 0..<max(1, count) {
             tab()
         }
@@ -1164,6 +1227,7 @@ public final class Screen {
 
     /// Backward tabulation: move cursor to the Nth previous tab stop.
     public func backwardTab(count: Int = 1) {
+        clearPendingWrap()
         for _ in 0..<max(1, count) {
             if cursorCol == 0 { break }
             // Move to previous tab stop
@@ -1260,6 +1324,7 @@ public final class Screen {
         scrollBottom = rows - 1
         reverseVideo = false
         originMode = false
+        pendingWrap = false
         altCells = nil
         altLineFlags = nil
         altCursorCol = 0
