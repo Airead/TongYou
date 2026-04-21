@@ -497,7 +497,7 @@ struct StreamHandlerUnhandledSequenceTests {
 @Suite("StreamHandler DA1 tests", .serialized)
 struct StreamHandlerDA1Tests {
 
-    @Test func da1RespondsWithVT220Capabilities() {
+    @Test func da1RespondsWithVT500Capabilities() {
         let screen = Screen(columns: 10, rows: 2)
         var handler = StreamHandler(screen: screen)
         var responses: [String] = []
@@ -509,7 +509,22 @@ struct StreamHandlerDA1Tests {
             parser.feed(ptr) { action in handler.handle(action) }
         }
         handler.flush()
-        #expect(responses == ["\u{1B}[?62;1;2;4;7;8;9;12;18;21;23;24;42c"])
+        #expect(responses == ["\u{1B}[?65;1;9;12;18;22c"])
+    }
+
+    @Test func da1WithoutQuestionMarkResponds() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var responses: [String] = []
+        handler.onWriteBack = { responses.append(String(data: $0, encoding: .utf8)!) }
+        var parser = VTParser()
+        // CSI 0 c (primary DA request without ?)
+        let bytes = Array("\u{1B}[0c".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(responses == ["\u{1B}[?65;1;9;12;18;22c"])
     }
 }
 
