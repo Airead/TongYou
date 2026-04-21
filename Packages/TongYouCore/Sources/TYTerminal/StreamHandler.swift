@@ -102,6 +102,12 @@ public struct StreamHandler {
     }
 
     private mutating func appendScalarToCluster(_ scalar: Unicode.Scalar) {
+        if !modes.isSet(.graphemeClustering) {
+            // Mode 2027 off: each scalar is an independent cell.
+            screen.write(GraphemeCluster(scalar), attributes: currentAttributes)
+            return
+        }
+
         if pendingString.isEmpty {
             pendingString = String(scalar)
             return
@@ -121,8 +127,15 @@ public struct StreamHandler {
 
     private mutating func flushPendingCluster() {
         guard !pendingString.isEmpty else { return }
-        let cluster = GraphemeCluster(scalars: Array(pendingString.unicodeScalars))
-        screen.write(cluster, attributes: currentAttributes)
+        if modes.isSet(.graphemeClustering) {
+            let cluster = GraphemeCluster(scalars: Array(pendingString.unicodeScalars))
+            screen.write(cluster, attributes: currentAttributes)
+        } else {
+            // Mode 2027 off: write each scalar independently.
+            for scalar in pendingString.unicodeScalars {
+                screen.write(GraphemeCluster(scalar), attributes: currentAttributes)
+            }
+        }
         pendingString = ""
     }
 
@@ -725,7 +738,7 @@ public struct StreamHandler {
 
         // Side effects
         switch mode {
-        case .cursorKeys, .bracketedPaste, .columnMode, .smoothScroll:
+        case .cursorKeys, .bracketedPaste, .columnMode, .smoothScroll, .graphemeClustering:
             // Passive modes: recognized and stored, but either have no side
             // effects in this method (consumers read the bitfield directly)
             // or their full implementation is deferred.
@@ -760,8 +773,9 @@ public struct StreamHandler {
 
     // MARK: - DECRQM (Request Mode)
 
-    /// Respond to a DECRQM query. Supports modes 1004 (focus events)
-    /// and 2026 (synchronized output). Response format:
+    /// Respond to a DECRQM query. Supports modes 1004 (focus events),
+    /// 2026 (synchronized output), and 2027 (grapheme clustering).
+    /// Response format:
     /// `CSI ? <mode> ; <state> $ y` where state is 1 (set) or 2 (reset).
     private mutating func handleDECRQM(_ params: CSIParams) {
         guard params.count >= 1 else { return }
@@ -776,6 +790,8 @@ public struct StreamHandler {
             state = modes.isSet(.bracketedPaste) ? 1 : 2
         case 2026:
             state = screen.syncedUpdateActive ? 1 : 2
+        case 2027:
+            state = modes.isSet(.graphemeClustering) ? 1 : 2
         default:
             onUnhandledSequence?("DECRQM query for mode \(mode) not implemented")
             return
@@ -842,7 +858,8 @@ public struct StreamHandler {
         let decModes: [TerminalModes.Mode] = [
             .cursorKeys, .columnMode, .smoothScroll, .reverseVideo,
             .originMode, .autowrap, .cursorVisible, .focusEvents,
-            .altScreen, .bracketedPaste, .syncedUpdate, .keypadApplication
+            .altScreen, .bracketedPaste, .syncedUpdate, .graphemeClustering,
+            .keypadApplication
         ]
         for mode in decModes {
             let savedValue = saved.isSet(mode)

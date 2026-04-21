@@ -20,9 +20,10 @@ public struct TerminalModes: Equatable, Sendable {
 
     public init() {
         var f: UInt32 = 0
-        // Defaults: cursor visible, autowrap on
+        // Defaults: cursor visible, autowrap on, grapheme clustering on
         f |= Self.bit(.cursorVisible)
         f |= Self.bit(.autowrap)
+        f |= Self.bit(.graphemeClustering)
         self.flags = f
     }
 
@@ -70,6 +71,10 @@ public struct TerminalModes: Equatable, Sendable {
         /// delivery to the client until the app ends the update or the
         /// safety timeout elapses.
         case syncedUpdate = 2026
+        /// Grapheme clustering mode (mode 2027). When enabled the terminal
+        /// treats Unicode grapheme clusters as single display units for
+        /// cursor movement and width calculation.
+        case graphemeClustering = 2027
         /// Keypad application mode (DECKPAM, ESC =). On = application sequences.
         case keypadApplication = 9999
     }
@@ -190,8 +195,9 @@ public struct TerminalModes: Equatable, Sendable {
         case .keypadApplication: return 1 << 7
         case .columnMode:     return 1 << 8
         case .smoothScroll:   return 1 << 9
-        case .reverseVideo:   return 1 << 10
-        case .originMode:     return 1 << 11
+        case .reverseVideo:      return 1 << 10
+        case .originMode:        return 1 << 11
+        case .graphemeClustering: return 1 << 12
         }
     }
 

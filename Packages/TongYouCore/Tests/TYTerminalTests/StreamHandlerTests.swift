@@ -68,6 +68,30 @@ struct StreamHandlerGraphemeClusterTests {
         #expect(screen.cell(at: 4, row: 0).codepoint == "o")
         #expect(screen.cursorCol == 5)
     }
+
+    @Test func mode2027OffWritesScalarsIndependently() {
+        // Turn off grapheme clustering: ZWJ sequence should be written
+        // as independent scalars.
+        let screen = processVTScreen("\u{1B}[?2027l👨‍👩‍👧‍👦", columns: 10, rows: 2)
+        // Each scalar is a separate cell (width 1 or 2 depending on the scalar).
+        // The first scalar (👨) is wide, so it occupies cell 0 (wide) and cell 1 (continuation).
+        // Then the ZWJ scalar occupies cell 2.
+        #expect(screen.cell(at: 0, row: 0).width == .wide)
+        #expect(screen.cell(at: 0, row: 0).content.scalarCount == 1)
+        #expect(screen.cell(at: 2, row: 0).content.scalarCount == 1)
+        #expect(screen.cell(at: 2, row: 0).content.firstScalar?.value == 0x200D) // ZWJ
+    }
+
+    @Test func mode2027OffThenOnRestoresClustering() {
+        let seq = "\u{1B}[?2027l👋🏻\u{1B}[?2027h👋🏻"
+        let screen = processVTScreen(seq, columns: 10, rows: 2)
+        // First emoji (mode off): scalars written independently.
+        #expect(screen.cell(at: 0, row: 0).content.scalarCount == 1)
+        #expect(screen.cell(at: 2, row: 0).content.scalarCount == 1)
+        // Second emoji (mode on): combined into one cluster.
+        #expect(screen.cell(at: 4, row: 0).content.scalarCount == 2)
+        #expect(screen.cell(at: 4, row: 0).width == .wide)
+    }
 }
 
 @Suite("StreamHandler ACS tests", .serialized)
@@ -174,6 +198,20 @@ struct StreamHandlerSyncedUpdateTests {
         // After DECRST 2004 it is reset (2).
         let (_, writtenReset) = drive("\u{1B}[?2004h\u{1B}[?2004l\u{1B}[?2004$p")
         #expect(String(bytes: writtenReset, encoding: .ascii) == "\u{1B}[?2004;2$y")
+    }
+
+    @Test func decrqm2027ReportsState() {
+        // Default is set (1) — grapheme clustering is on by default in TongYou.
+        let (_, writtenDefault) = drive("\u{1B}[?2027$p")
+        #expect(String(bytes: writtenDefault, encoding: .ascii) == "\u{1B}[?2027;1$y")
+
+        // After DECRST 2027 it is reset (2).
+        let (_, writtenReset) = drive("\u{1B}[?2027l\u{1B}[?2027$p")
+        #expect(String(bytes: writtenReset, encoding: .ascii) == "\u{1B}[?2027;2$y")
+
+        // After DECSET 2027 it is set (1) again.
+        let (_, writtenSet) = drive("\u{1B}[?2027l\u{1B}[?2027h\u{1B}[?2027$p")
+        #expect(String(bytes: writtenSet, encoding: .ascii) == "\u{1B}[?2027;1$y")
     }
 
     @Test func decrqmUnrelatedModeIsSilentlyDropped() {
