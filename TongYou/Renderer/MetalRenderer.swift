@@ -1443,6 +1443,12 @@ final class MetalRenderer {
         let rowBase = row * backingColumns
         let snapCols = min(cols, backingColumns)
 
+        // Line size scaling for DECDHL/DECDWL
+        let lineFlags = row < snapshot.lineFlags.count ? snapshot.lineFlags[row] : LineFlags()
+        let hScale: Float = lineFlags.lineWidth == .double ? 2.0 : 1.0
+        let vScale: Float = lineFlags.lineHeight != .normal ? 2.0 : 1.0
+        let cellHeight = Float(fontSystem.cellSize.height)
+
         let cached = shapeRow(row: row, shaper: shaper)
 
         for (run, glyphs) in cached.textRuns {
@@ -1454,16 +1460,36 @@ final class MetalRenderer {
                 ), glyphInfo.width > 0 && glyphInfo.height > 0 else { continue }
 
                 let glyphCol = run.startCol + glyph.cellIndex
+                var glyphSize = SIMD2<UInt32>(glyphInfo.width, glyphInfo.height)
+                var bearings = SIMD2<Int16>(glyphInfo.bearingX, glyphInfo.bearingY)
+                var offset = SIMD2<Int16>(0, 0)
+
+                if hScale != 1.0 || vScale != 1.0 {
+                    glyphSize.x = UInt32(Float(glyphInfo.width) * hScale)
+                    glyphSize.y = UInt32(Float(glyphInfo.height) * vScale)
+                    bearings.x = Int16(Float(glyphInfo.bearingX) * hScale)
+                    bearings.y = Int16(Float(glyphInfo.bearingY) * vScale)
+
+                    // For double-height lines, offset to show top or bottom half
+                    if lineFlags.lineHeight == .doubleTop {
+                        // Shift glyph down so top half is visible in this cell
+                        offset.y = Int16(cellHeight)
+                    } else if lineFlags.lineHeight == .doubleBottom {
+                        // Shift glyph up so bottom half is visible in this cell
+                        offset.y = -Int16(cellHeight)
+                    }
+                }
+
                 rowInstances.text.append(CellTextInstance(
                     glyphPos: SIMD2<UInt32>(glyphInfo.atlasX, glyphInfo.atlasY),
-                    glyphSize: SIMD2<UInt32>(glyphInfo.width, glyphInfo.height),
-                    bearings: SIMD2<Int16>(glyphInfo.bearingX, glyphInfo.bearingY),
+                    glyphSize: glyphSize,
+                    bearings: bearings,
                     gridPos: SIMD2<UInt16>(UInt16(glyphCol), UInt16(row)),
                     color: colorState.foreground(
                         attrs: run.cells[glyph.cellIndex].attributes,
                         row: row, col: glyphCol, absLine: absLine
                     ),
-                    offset: SIMD2<Int16>(0, 0)
+                    offset: offset
                 ))
             }
         }
@@ -1475,6 +1501,7 @@ final class MetalRenderer {
             ), emojiInfo.width > 0 && emojiInfo.height > 0 {
                 var glyphSize = SIMD2<UInt32>(emojiInfo.width, emojiInfo.height)
                 var bearings = SIMD2<Int16>(emojiInfo.bearingX, emojiInfo.bearingY)
+                var offset = SIMD2<Int16>(0, 0)
 
                 var targetCells: Int = 1
                 if width == .wide {
@@ -1486,13 +1513,25 @@ final class MetalRenderer {
                     }
                 }
 
-                if targetCells > 1 {
-                    let targetWidth = cellWidth * Float(targetCells)
-                    let scale = targetWidth / Float(emojiInfo.width)
-                    glyphSize.x = UInt32(targetWidth)
-                    glyphSize.y = scaled(emojiInfo.height, by: scale)
-                    bearings.x = scaled(bearings.x, by: scale)
-                    bearings.y = scaled(bearings.y, by: scale)
+                // Apply line size scaling on top of wide-char scaling
+                let baseScale = Float(targetCells)
+                let finalHScale = baseScale * hScale
+                let finalVScale = vScale
+
+                if finalHScale != 1.0 || finalVScale != 1.0 {
+                    let targetWidth = cellWidth * finalHScale
+                    let hScaleFactor = targetWidth / Float(emojiInfo.width)
+                    let vScaleFactor = finalVScale
+                    glyphSize.x = UInt32(Float(emojiInfo.width) * hScaleFactor)
+                    glyphSize.y = UInt32(Float(emojiInfo.height) * vScaleFactor)
+                    bearings.x = Int16(Float(emojiInfo.bearingX) * hScaleFactor)
+                    bearings.y = Int16(Float(emojiInfo.bearingY) * vScaleFactor)
+
+                    if lineFlags.lineHeight == .doubleTop {
+                        offset.y = Int16(cellHeight)
+                    } else if lineFlags.lineHeight == .doubleBottom {
+                        offset.y = -Int16(cellHeight)
+                    }
                 }
 
                 rowInstances.emoji.append(CellTextInstance(
@@ -1506,8 +1545,8 @@ final class MetalRenderer {
         }
 
         // Box-drawing characters: decompose into rectangular segments
-        let cw = fontSystem.cellSize.width
-        let ch = fontSystem.cellSize.height
+        let cw = UInt32(CGFloat(fontSystem.cellSize.width) * CGFloat(hScale))
+        let ch = UInt32(CGFloat(fontSystem.cellSize.height) * CGFloat(vScale))
         for col in 0..<snapCols {
             let cell = backingCells[rowBase + col]
             guard let scalar = cell.content.firstScalar,
