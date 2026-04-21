@@ -967,9 +967,11 @@ final class MetalView: NSView {
             guard let self else { return }
             switch oscNum {
             case 10:
-                self.renderer?.updateDynamicColors(foreground: color, background: nil)
+                self.renderer?.updateDynamicColors(foreground: color, background: nil, cursor: nil)
             case 11:
-                self.renderer?.updateDynamicColors(foreground: nil, background: color)
+                self.renderer?.updateDynamicColors(foreground: nil, background: color, cursor: nil)
+            case 12:
+                self.renderer?.updateDynamicColors(foreground: nil, background: nil, cursor: color)
             default:
                 break
             }

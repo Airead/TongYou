@@ -538,7 +538,7 @@ final class MetalRenderer {
     /// Update default foreground/background colors from OSC 10/11 sequences.
     /// Does not affect the config snapshot; these colors apply until the next
     /// full config reload (e.g. hot reload) which rebuilds the palette from Config.
-    func updateDynamicColors(foreground: RGBColor?, background: RGBColor?) {
+    func updateDynamicColors(foreground: RGBColor? = nil, background: RGBColor? = nil, cursor: RGBColor? = nil) {
         var didChange = false
         if let fg = foreground {
             let simd = SIMD4<UInt8>(fg.r, fg.g, fg.b, 255)
@@ -554,6 +554,11 @@ final class MetalRenderer {
                 Double(bg.b) / 255.0,
                 1.0
             )
+            didChange = true
+        }
+        if let c = cursor {
+            let simd = SIMD4<UInt8>(c.r, c.g, c.b, 255)
+            colorPalette.updateDynamicColors(cursor: simd)
             didChange = true
         }
         guard didChange else { return }

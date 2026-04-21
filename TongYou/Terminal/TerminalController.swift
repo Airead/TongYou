@@ -144,6 +144,8 @@ final class TerminalController: TerminalControlling {
                 return self.config.foreground
             case 11:
                 return self.config.background
+            case 12:
+                return self.config.cursorColor
             default:
                 return nil
             }

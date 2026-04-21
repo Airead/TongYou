@@ -512,6 +512,8 @@ public struct StreamHandler {
             handleOSC10(stringData)
         case 11:
             handleOSC11(stringData)
+        case 12:
+            handleOSC12(stringData)
         case 1337:
             handleOSC1337(stringData)
         default:
@@ -647,7 +649,13 @@ public struct StreamHandler {
         handleOSCDynamicColor(oscNumber: 11, data: data)
     }
 
-    /// Shared handler for OSC 10/11/17/19 dynamic colors.
+    // MARK: - OSC 12 (Cursor Color)
+
+    private func handleOSC12(_ data: ArraySlice<UInt8>) {
+        handleOSCDynamicColor(oscNumber: 12, data: data)
+    }
+
+    /// Shared handler for OSC 10/11/12/17/19 dynamic colors.
     /// - Parameter oscNumber: The OSC number (10=foreground, 11=background, etc.)
     /// - Parameter data: The payload after the semicolon.
     private func handleOSCDynamicColor(oscNumber: Int, data: ArraySlice<UInt8>) {

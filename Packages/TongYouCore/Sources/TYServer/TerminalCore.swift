@@ -58,6 +58,7 @@ public final class TerminalCore: @unchecked Sendable {
     /// Dynamic colors set via OSC 10/11. Confined to ptyQueue.
     nonisolated(unsafe) private var dynamicForegroundColor: RGBColor?
     nonisolated(unsafe) private var dynamicBackgroundColor: RGBColor?
+    nonisolated(unsafe) private var dynamicCursorColor: RGBColor?
 
     private var ptyProcess: PTYProcess?
 
@@ -161,6 +162,8 @@ public final class TerminalCore: @unchecked Sendable {
                 return self.dynamicForegroundColor ?? self.onDefaultColorQuery?(10)
             case 11:
                 return self.dynamicBackgroundColor ?? self.onDefaultColorQuery?(11)
+            case 12:
+                return self.dynamicCursorColor ?? self.onDefaultColorQuery?(12)
             default:
                 return nil
             }
@@ -172,6 +175,8 @@ public final class TerminalCore: @unchecked Sendable {
                 self.dynamicForegroundColor = color
             case 11:
                 self.dynamicBackgroundColor = color
+            case 12:
+                self.dynamicCursorColor = color
             default:
                 return
             }
