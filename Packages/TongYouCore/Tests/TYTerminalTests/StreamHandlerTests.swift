@@ -138,10 +138,18 @@ struct StreamHandlerSyncedUpdateTests {
         #expect(reply == "\u{1B}[?2026;1$y")
     }
 
+    @Test func decrqm1004ReportsState() {
+        // Default is reset (2).
+        let (_, writtenDefault) = drive("\u{1B}[?1004$p")
+        #expect(String(bytes: writtenDefault, encoding: .ascii) == "\u{1B}[?1004;2$y")
+
+        // After DECSET it is set (1).
+        let (_, writtenSet) = drive("\u{1B}[?1004h\u{1B}[?1004$p")
+        #expect(String(bytes: writtenSet, encoding: .ascii) == "\u{1B}[?1004;1$y")
+    }
+
     @Test func decrqmUnrelatedModeIsSilentlyDropped() {
-        // Phase 2 deliberately answers only mode 2026 — others should not
-        // trigger any write-back.
-        let (_, written) = drive("\u{1B}[?1004$p")
+        let (_, written) = drive("\u{1B}[?9999$p")
         #expect(written.isEmpty)
     }
 }

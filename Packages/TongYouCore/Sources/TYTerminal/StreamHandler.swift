@@ -760,19 +760,23 @@ public struct StreamHandler {
 
     // MARK: - DECRQM (Request Mode)
 
-    /// Respond to a DECRQM query. Only mode 2026 (synchronized output) is
-    /// answered — Phase 2 deliberately skips a generic DECRQM framework to
-    /// avoid scope creep. Response: `CSI ? 2026 ; <state> $ y` where state
-    /// is 1 (set) or 2 (reset).
-    private func handleDECRQM(_ params: CSIParams) {
+    /// Respond to a DECRQM query. Supports modes 1004 (focus events)
+    /// and 2026 (synchronized output). Response format:
+    /// `CSI ? <mode> ; <state> $ y` where state is 1 (set) or 2 (reset).
+    private mutating func handleDECRQM(_ params: CSIParams) {
         guard params.count >= 1 else { return }
         let mode = params[0]
-        guard mode == 2026 else {
+        let state: Int?
+        switch mode {
+        case 1004:
+            state = modes.isSet(.focusEvents) ? 1 : 2
+        case 2026:
+            state = screen.syncedUpdateActive ? 1 : 2
+        default:
             onUnhandledSequence?("DECRQM query for mode \(mode) not implemented")
             return
         }
-        let state: Int = screen.syncedUpdateActive ? 1 : 2
-        let response = "\u{1B}[?2026;\(state)$y"
+        let response = "\u{1B}[?\(mode);\(state!)$y"
         onWriteBack?(Data(response.utf8))
     }
 
