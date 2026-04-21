@@ -247,7 +247,7 @@ final class TerminalController: TerminalControlling {
             _contentGeneration &+= 1
             // Refresh URL detection only while Command key is held and content changed.
             if commandKeyHeld, _contentGeneration != lastURLGeneration {
-                detectedURLs = URLDetector.detect(in: snapshot)
+                detectedURLs = URLDetector.detect(in: snapshot, hyperlinkRegistry: core.hyperlinkRegistry)
                 lastURLGeneration = _contentGeneration
             }
             return snapshot
@@ -423,7 +423,7 @@ final class TerminalController: TerminalControlling {
         commandKeyHeld = held
         if held {
             let snapshot = core.forceSnapshot()
-            detectedURLs = URLDetector.detect(in: snapshot)
+            detectedURLs = URLDetector.detect(in: snapshot, hyperlinkRegistry: core.hyperlinkRegistry)
             lastURLGeneration = _contentGeneration
         } else {
             detectedURLs = []

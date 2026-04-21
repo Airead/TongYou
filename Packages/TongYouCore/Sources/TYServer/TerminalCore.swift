@@ -400,6 +400,11 @@ public final class TerminalCore: @unchecked Sendable {
         ptyQueue.sync { streamHandler.modes.mouseFormat }
     }
 
+    /// The hyperlink registry for OSC 8 support. Thread-safe access via ptyQueue.
+    public var hyperlinkRegistry: HyperlinkRegistry {
+        ptyQueue.sync { streamHandler.hyperlinkRegistry }
+    }
+
     /// Number of scrollback lines above the visible screen.
     public var scrollbackCount: Int {
         ptyQueue.sync { screen.scrollbackCount }

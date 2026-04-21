@@ -12,6 +12,8 @@ public struct StreamHandler {
     public private(set) var modes = TerminalModes()
     private var currentAttributes = CellAttributes.default
     private var savedCursor: SavedCursorState?
+    public let hyperlinkRegistry = HyperlinkRegistry()
+    private var currentHyperlinkId: UInt16 = 0
     private var lastPrintedScalar: Unicode.Scalar?
     private var pendingString: String = ""
 
@@ -342,6 +344,8 @@ public struct StreamHandler {
             currentAttributes = .default
             modes.reset()
             savedCursor = nil
+            currentHyperlinkId = 0
+            hyperlinkRegistry.clear()
 
         case 0x5C: // '\' - ST (String Terminator, 7-bit form ESC \)
             // Parser dispatches ESC \ as a normal ESC sequence after exiting
@@ -422,6 +426,8 @@ public struct StreamHandler {
             }
         case 7:
             handleOSC7(stringData)
+        case 8:
+            handleOSC8(stringData)
         case 52:
             handleOSC52(stringData)
         case 7727:
@@ -515,6 +521,42 @@ public struct StreamHandler {
         let title = String(parts[1])
         let body = parts.count >= 3 ? String(parts[2]) : title
         onPaneNotification?(title, body)
+    }
+
+    // MARK: - OSC 8 (Hyperlinks)
+
+    /// Handle OSC 8 hyperlink sequences.
+    /// Format: `\033]8;params;URL\033\\`
+    /// - `params`: semicolon-separated key=value pairs, e.g. `id=abc`
+    /// - `URL`: the hyperlink target (empty string means close hyperlink)
+    private mutating func handleOSC8(_ data: ArraySlice<UInt8>) {
+        guard let str = String(bytes: data, encoding: .utf8) else { return }
+
+        // Split "params;url" at the first semicolon
+        let parts = str.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2 else { return }
+
+        let params = String(parts[0])
+        let url = String(parts[1])
+
+        if url.isEmpty {
+            // Close hyperlink
+            currentHyperlinkId = 0
+        } else {
+            // Parse optional id=... parameter
+            var explicitId: String?
+            for param in params.split(separator: ":", omittingEmptySubsequences: false) {
+                let trimmed = param.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("id=") {
+                    explicitId = String(trimmed.dropFirst(3))
+                    break
+                }
+            }
+            currentHyperlinkId = hyperlinkRegistry.register(url: url, explicitId: explicitId)
+        }
+
+        // Update current attributes with the hyperlink ID
+        currentAttributes.hyperlinkId = currentHyperlinkId
     }
 
     // MARK: - OSC 1337 (iTerm2 Notification)

@@ -58,13 +58,21 @@ public struct CellAttributes: Equatable, Sendable {
     public var flags: StyleFlags = []
     public var fgColor: PackedColor = .default
     public var bgColor: PackedColor = .default
+    /// Hyperlink ID for OSC 8 support. 0 means no hyperlink.
+    public var hyperlinkId: UInt16 = 0
 
     public static let `default` = CellAttributes()
 
-    public init(flags: StyleFlags = [], fgColor: PackedColor = .default, bgColor: PackedColor = .default) {
+    public init(
+        flags: StyleFlags = [],
+        fgColor: PackedColor = .default,
+        bgColor: PackedColor = .default,
+        hyperlinkId: UInt16 = 0
+    ) {
         self.flags = flags
         self.fgColor = fgColor
         self.bgColor = bgColor
+        self.hyperlinkId = hyperlinkId
     }
 
     public mutating func reset() {
