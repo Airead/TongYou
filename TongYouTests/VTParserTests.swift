@@ -226,6 +226,19 @@ import TYTerminal
         }
     }
 
+    @Test func escSequenceDECDHL() {
+        // ESC # 3 (DECDHL top half)
+        let actions = parse([0x1B, 0x23, 0x33])
+        #expect(actions.count == 1)
+        if case .escDispatch(let final, let imCount, let im) = actions[0] {
+            #expect(final == 0x33) // '3'
+            #expect(imCount == 1)
+            #expect(im.0 == 0x23) // '#'
+        } else {
+            Issue.record("Expected .escDispatch, got \(actions[0])")
+        }
+    }
+
     // MARK: - OSC Sequences
 
     @Test func oscWindowTitle() {

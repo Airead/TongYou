@@ -701,4 +701,47 @@ import TYTerminal
         screen.eraseLine(mode: 0)
         #expect(!screen.isLineWrapped(absoluteLine: 0))
     }
+
+    // MARK: - DECDHL / DECDWL Line Size
+
+    @Test func setLineSizeDECDHLTop() {
+        let screen = Screen(columns: 80, rows: 24)
+        screen.setLineSize(height: .doubleTop, width: .double)
+        let snapshot = screen.snapshot()
+        #expect(snapshot.lineFlags[0].lineHeight == .doubleTop)
+        #expect(snapshot.lineFlags[0].lineWidth == .double)
+    }
+
+    @Test func setLineSizeDECDHLBottom() {
+        let screen = Screen(columns: 80, rows: 24)
+        screen.setCursorPos(row: 5, col: 0)
+        screen.setLineSize(height: .doubleBottom, width: .double)
+        let snapshot = screen.snapshot()
+        #expect(snapshot.lineFlags[5].lineHeight == .doubleBottom)
+        #expect(snapshot.lineFlags[5].lineWidth == .double)
+    }
+
+    @Test func setLineSizeNormal() {
+        let screen = Screen(columns: 80, rows: 24)
+        screen.setLineSize(height: .normal, width: .normal)
+        let snapshot = screen.snapshot()
+        #expect(snapshot.lineFlags[0].lineHeight == .normal)
+        #expect(snapshot.lineFlags[0].lineWidth == .normal)
+    }
+
+    @Test func setLineSizeDECDWL() {
+        let screen = Screen(columns: 80, rows: 24)
+        screen.setCursorPos(row: 3, col: 0)
+        screen.setLineSize(height: .normal, width: .double)
+        let snapshot = screen.snapshot()
+        #expect(snapshot.lineFlags[3].lineHeight == .normal)
+        #expect(snapshot.lineFlags[3].lineWidth == .double)
+    }
+
+    @Test func setLineSizeMarksRowDirty() {
+        let screen = Screen(columns: 80, rows: 24)
+        screen.setLineSize(height: .doubleTop, width: .double)
+        let region = screen.consumeDirtyRegion()
+        #expect(region.isDirty(row: 0))
+    }
 }

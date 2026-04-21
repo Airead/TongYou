@@ -65,7 +65,14 @@ public struct StreamHandler {
             if imCount == 0 {
                 handleESC(final: final)
             } else if imCount == 1 {
-                handleESCCharset(final: final, intermediate: intermediates.0)
+                switch intermediates.0 {
+                case 0x23: // '#'
+                    handleESCLineSize(final: final)
+                case 0x28, 0x29: // '(', ')'
+                    handleESCCharset(final: final, intermediate: intermediates.0)
+                default:
+                    break
+                }
             }
 
         case .oscDispatch(let data):
@@ -330,6 +337,25 @@ public struct StreamHandler {
         }
 
         screen.charsetState.configure(slot: slot, set: set)
+    }
+
+    private func handleESCLineSize(final: UInt8) {
+        // ESC # 3 — DECDHL top half
+        // ESC # 4 — DECDHL bottom half
+        // ESC # 5 — DECSWL (single-width single-height)
+        // ESC # 6 — DECDWL (double-width single-height)
+        switch final {
+        case 0x33: // '3' — DECDHL top half
+            screen.setLineSize(height: .doubleTop, width: .double)
+        case 0x34: // '4' — DECDHL bottom half
+            screen.setLineSize(height: .doubleBottom, width: .double)
+        case 0x35: // '5' — DECSWL (normal)
+            screen.setLineSize(height: .normal, width: .normal)
+        case 0x36: // '6' — DECDWL (double-width)
+            screen.setLineSize(height: .normal, width: .double)
+        default:
+            break
+        }
     }
 
     // MARK: - OSC Dispatch

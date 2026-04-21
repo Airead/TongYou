@@ -152,13 +152,34 @@ public struct SavedCursorState: Sendable {
     }
 }
 
-/// Per-row metadata for soft-wrap tracking.
+/// Line height attribute for DECDHL (Double-Height Double-Width Line).
+public enum LineHeight: UInt8, Equatable, Sendable {
+    case normal = 0
+    case doubleTop = 1
+    case doubleBottom = 2
+}
+
+/// Line width attribute for DECDWL (Double-Width Line).
+public enum LineWidth: UInt8, Equatable, Sendable {
+    case normal = 0
+    case double = 1
+}
+
+/// Per-row metadata for soft-wrap tracking and line size attributes.
 public struct LineFlags: Equatable, Sendable {
     /// True when this row's content continues on the next row (soft wrap).
     public var wrapped: Bool = false
+    
+    /// Line height attribute (DECDHL: ESC # 3/4).
+    public var lineHeight: LineHeight = .normal
+    
+    /// Line width attribute (DECDWL: ESC # 6, normal: ESC # 5).
+    public var lineWidth: LineWidth = .normal
 
-    public init(wrapped: Bool = false) {
+    public init(wrapped: Bool = false, lineHeight: LineHeight = .normal, lineWidth: LineWidth = .normal) {
         self.wrapped = wrapped
+        self.lineHeight = lineHeight
+        self.lineWidth = lineWidth
     }
 }
 
@@ -187,6 +208,8 @@ public struct ScreenSnapshot: Sendable {
     public let dirtyRows: [Int]
     /// Only dirty rows copied for incremental updates.
     public let partialRows: [(row: Int, cells: [Cell])]
+    /// Per-row flags including line height/width attributes.
+    public let lineFlags: [LineFlags]
 
     public init(
         cells: [Cell],
@@ -202,7 +225,8 @@ public struct ScreenSnapshot: Sendable {
         dirtyRegion: DirtyRegion,
         isPartial: Bool = false,
         dirtyRows: [Int] = [],
-        partialRows: [(row: Int, cells: [Cell])] = []
+        partialRows: [(row: Int, cells: [Cell])] = [],
+        lineFlags: [LineFlags] = []
     ) {
         self.cells = cells
         self.columns = columns
@@ -218,6 +242,7 @@ public struct ScreenSnapshot: Sendable {
         self.isPartial = isPartial
         self.dirtyRows = dirtyRows
         self.partialRows = partialRows
+        self.lineFlags = lineFlags
     }
 
     public func cell(at col: Int, row: Int) -> Cell {
@@ -487,6 +512,7 @@ public final class Screen {
                 }
                 partialRows.append((row: row, cells: rowCells))
             }
+            let partialLineFlags = dirty.map { lineFlagForRow($0) }
             return ScreenSnapshot(
                 cells: [],
                 columns: columns,
@@ -501,7 +527,8 @@ public final class Screen {
                 dirtyRegion: region,
                 isPartial: true,
                 dirtyRows: dirty,
-                partialRows: partialRows
+                partialRows: partialRows,
+                lineFlags: partialLineFlags
             )
         }
 
@@ -511,6 +538,7 @@ public final class Screen {
         } else {
             viewCells = buildViewportCells()
         }
+        let linearFlags = buildLinearLineFlags()
         return ScreenSnapshot(
             cells: viewCells,
             columns: columns,
@@ -522,7 +550,8 @@ public final class Screen {
             selection: selection,
             scrollbackCount: scrollbackCount,
             viewportOffset: viewportOffset,
-            dirtyRegion: region
+            dirtyRegion: region,
+            lineFlags: linearFlags
         )
     }
 
@@ -797,6 +826,19 @@ public final class Screen {
 
     public func setCursorShape(_ shape: CursorShape) {
         cursorShape = shape
+        dirtyRegion.markLine(cursorRow)
+    }
+
+    /// Set the line height and width attributes for the current cursor row (DECDHL/DECDWL).
+    /// ESC # 3 — double-height top half
+    /// ESC # 4 — double-height bottom half
+    /// ESC # 5 — normal
+    /// ESC # 6 — double-width
+    public func setLineSize(height: LineHeight, width: LineWidth) {
+        var flags = lineFlagForRow(cursorRow)
+        flags.lineHeight = height
+        flags.lineWidth = width
+        setLineFlagForRow(cursorRow, flags)
         dirtyRegion.markLine(cursorRow)
     }
 

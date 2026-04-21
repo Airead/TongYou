@@ -592,4 +592,42 @@ import TYTerminal
         let cell = screen.cell(at: 0, row: 0)
         #expect(cell.attributes.flags.contains(.bold))
     }
+
+    // MARK: - DECDHL / DECDWL (ESC # sequences)
+
+    @Test func decdhlTopHalf() {
+        // ESC # 3 — double-height top half
+        let screen = process("\u{1B}#3")
+        let snapshot = screen.snapshot()
+        #expect(snapshot.lineFlags.count > 0)
+        #expect(snapshot.lineFlags[0].lineHeight == .doubleTop)
+        #expect(snapshot.lineFlags[0].lineWidth == .double)
+    }
+
+    @Test func decdhlBottomHalf() {
+        // ESC # 4 — double-height bottom half
+        let screen = process("\u{1B}#4")
+        let snapshot = screen.snapshot()
+        #expect(snapshot.lineFlags.count > 0)
+        #expect(snapshot.lineFlags[0].lineHeight == .doubleBottom)
+        #expect(snapshot.lineFlags[0].lineWidth == .double)
+    }
+
+    @Test func decswlNormal() {
+        // ESC # 5 — single-width single-height
+        let screen = process("\u{1B}#5")
+        let snapshot = screen.snapshot()
+        #expect(snapshot.lineFlags.count > 0)
+        #expect(snapshot.lineFlags[0].lineHeight == .normal)
+        #expect(snapshot.lineFlags[0].lineWidth == .normal)
+    }
+
+    @Test func decdwlDoubleWidth() {
+        // ESC # 6 — double-width single-height
+        let screen = process("\u{1B}#6")
+        let snapshot = screen.snapshot()
+        #expect(snapshot.lineFlags.count > 0)
+        #expect(snapshot.lineFlags[0].lineHeight == .normal)
+        #expect(snapshot.lineFlags[0].lineWidth == .double)
+    }
 }
