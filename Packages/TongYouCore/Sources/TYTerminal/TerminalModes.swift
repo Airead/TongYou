@@ -25,6 +25,16 @@ public struct TerminalModes: Equatable, Sendable {
     public enum Mode: UInt16, Sendable {
         /// Application cursor keys (DECCKM). Off = normal, On = application.
         case cursorKeys = 1
+        /// Column mode (DECCOLM). Set = 132 columns, Reset = 80 columns.
+        case columnMode = 3
+        /// Scrolling mode (DECSCLM). Set = smooth scroll, Reset = jump scroll.
+        /// No-op on modern GPU-accelerated terminals (always instant).
+        case smoothScroll = 4
+        /// Screen mode (DECSCNM). Set = reverse video, Reset = normal.
+        case reverseVideo = 5
+        /// Origin mode (DECOM). Set = cursor positioning relative to scroll
+        /// margins, Reset = absolute (top-left of screen).
+        case originMode = 6
         /// Auto-wrap mode (DECAWM). On = wrap at right margin.
         case autowrap = 7
         /// Cursor visible (DECTCEM). On = visible.
@@ -132,6 +142,10 @@ public struct TerminalModes: Equatable, Sendable {
         case .focusEvents:    return 1 << 5
         case .syncedUpdate:   return 1 << 6
         case .keypadApplication: return 1 << 7
+        case .columnMode:     return 1 << 8
+        case .smoothScroll:   return 1 << 9
+        case .reverseVideo:   return 1 << 10
+        case .originMode:     return 1 << 11
         }
     }
 

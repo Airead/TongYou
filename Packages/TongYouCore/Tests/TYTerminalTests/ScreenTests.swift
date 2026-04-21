@@ -182,4 +182,120 @@ struct ScreenTests {
         screen.fullReset()
         #expect(screen.syncedUpdateActive == false)
     }
+
+    // MARK: - Reverse Video (DECSCNM)
+
+    @Test func reverseVideoDefaultsOff() {
+        let screen = Screen(columns: 10, rows: 2)
+        #expect(screen.reverseVideo == false)
+    }
+
+    @Test func reverseVideoSetAndReset() {
+        let screen = Screen(columns: 10, rows: 2)
+        screen.setReverseVideo(true)
+        #expect(screen.reverseVideo == true)
+        screen.setReverseVideo(false)
+        #expect(screen.reverseVideo == false)
+    }
+
+    @Test func reverseVideoMarkedFullOnChange() {
+        let screen = Screen(columns: 10, rows: 2)
+        screen.consumeDirtyRegion() // clear initial full rebuild
+        screen.setReverseVideo(true)
+        #expect(screen.consumeDirtyRegion().fullRebuild == true)
+    }
+
+    @Test func fullResetClearsReverseVideo() {
+        let screen = Screen(columns: 10, rows: 2)
+        screen.setReverseVideo(true)
+        screen.fullReset()
+        #expect(screen.reverseVideo == false)
+    }
+
+    // MARK: - Origin Mode (DECOM)
+
+    @Test func originModeDefaultsOff() {
+        let screen = Screen(columns: 10, rows: 5)
+        #expect(screen.originMode == false)
+    }
+
+    @Test func originModeSetAndReset() {
+        let screen = Screen(columns: 10, rows: 5)
+        screen.setOriginMode(true)
+        #expect(screen.originMode == true)
+        screen.setOriginMode(false)
+        #expect(screen.originMode == false)
+    }
+
+    @Test func setCursorPosWithOriginMode() {
+        let screen = Screen(columns: 10, rows: 5)
+        screen.setScrollRegion(top: 1, bottom: 3)
+        screen.setOriginMode(true)
+
+        // row 0 in origin mode means scrollTop (1)
+        screen.setCursorPos(row: 0, col: 0)
+        #expect(screen.cursorRow == 1)
+
+        // row 2 means scrollTop + 2 = 3
+        screen.setCursorPos(row: 2, col: 5)
+        #expect(screen.cursorRow == 3)
+        #expect(screen.cursorCol == 5)
+
+        // row beyond scrollBottom is clamped
+        screen.setCursorPos(row: 10, col: 0)
+        #expect(screen.cursorRow == 3)
+    }
+
+    @Test func setCursorPosWithoutOriginMode() {
+        let screen = Screen(columns: 10, rows: 5)
+        screen.setScrollRegion(top: 1, bottom: 3)
+        screen.setOriginMode(false)
+
+        // row 0 means absolute top (0)
+        screen.setCursorPos(row: 0, col: 0)
+        #expect(screen.cursorRow == 0)
+
+        // row 4 means absolute row 4
+        screen.setCursorPos(row: 4, col: 5)
+        #expect(screen.cursorRow == 4)
+    }
+
+    @Test func setScrollRegionResetsCursorToScrollTopInOriginMode() {
+        let screen = Screen(columns: 10, rows: 5)
+        screen.setCursorPos(row: 4, col: 5)
+        screen.setOriginMode(true)
+        screen.setScrollRegion(top: 2, bottom: 4)
+        #expect(screen.cursorRow == 2)
+        #expect(screen.cursorCol == 0)
+    }
+
+    @Test func setScrollRegionResetsCursorToTopWhenOriginModeOff() {
+        let screen = Screen(columns: 10, rows: 5)
+        screen.setCursorPos(row: 4, col: 5)
+        screen.setOriginMode(false)
+        screen.setScrollRegion(top: 2, bottom: 4)
+        #expect(screen.cursorRow == 0)
+        #expect(screen.cursorCol == 0)
+    }
+
+    @Test func advanceRowRespectsOriginModeBottom() {
+        let screen = Screen(columns: 10, rows: 5)
+        screen.setScrollRegion(top: 1, bottom: 3)
+        screen.setOriginMode(true)
+        screen.setCursorPos(row: 2, col: 0) // absolute row 3
+
+        // Trigger advanceRow by writing a character that wraps
+        for _ in 0..<10 {
+            screen.write(Unicode.Scalar("A"), attributes: .default)
+        }
+        // After filling the line, advanceRow should scroll, not move past scrollBottom
+        #expect(screen.cursorRow == 3)
+    }
+
+    @Test func fullResetClearsOriginMode() {
+        let screen = Screen(columns: 10, rows: 5)
+        screen.setOriginMode(true)
+        screen.fullReset()
+        #expect(screen.originMode == false)
+    }
 }

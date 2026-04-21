@@ -143,12 +143,14 @@ public struct SavedCursorState: Sendable {
     public let row: Int
     public let attributes: CellAttributes
     public let charsetState: CharsetState
+    public let originMode: Bool
 
-    public init(col: Int, row: Int, attributes: CellAttributes, charsetState: CharsetState = CharsetState()) {
+    public init(col: Int, row: Int, attributes: CellAttributes, charsetState: CharsetState = CharsetState(), originMode: Bool = false) {
         self.col = col
         self.row = row
         self.attributes = attributes
         self.charsetState = charsetState
+        self.originMode = originMode
     }
 }
 
@@ -210,6 +212,8 @@ public struct ScreenSnapshot: Sendable {
     public let partialRows: [(row: Int, cells: [Cell])]
     /// Per-row flags including line height/width attributes.
     public let lineFlags: [LineFlags]
+    /// DECSCNM: global reverse video (swap fg/bg for all cells).
+    public let reverseVideo: Bool
 
     public init(
         cells: [Cell],
@@ -226,7 +230,8 @@ public struct ScreenSnapshot: Sendable {
         isPartial: Bool = false,
         dirtyRows: [Int] = [],
         partialRows: [(row: Int, cells: [Cell])] = [],
-        lineFlags: [LineFlags] = []
+        lineFlags: [LineFlags] = [],
+        reverseVideo: Bool = false
     ) {
         self.cells = cells
         self.columns = columns
@@ -243,6 +248,7 @@ public struct ScreenSnapshot: Sendable {
         self.dirtyRows = dirtyRows
         self.partialRows = partialRows
         self.lineFlags = lineFlags
+        self.reverseVideo = reverseVideo
     }
 
     public func cell(at col: Int, row: Int) -> Cell {
@@ -317,6 +323,13 @@ public final class Screen {
     public private(set) var cursorVisible: Bool = true
     public private(set) var cursorShape: CursorShape = .block
 
+    /// DECSCNM: global reverse video (swap fg/bg for all cells).
+    public private(set) var reverseVideo: Bool = false
+
+    /// DECOM: origin mode. When true, cursor positioning is relative to
+    /// scroll margins and clamped inside them.
+    public private(set) var originMode: Bool = false
+
     /// Scroll region bounds (inclusive). Default: full screen.
     public private(set) var scrollTop: Int = 0
     public private(set) var scrollBottom: Int = 0
@@ -346,6 +359,8 @@ public final class Screen {
     private var altRowBase: Int = 0
     private var altLineFlags: [LineFlags]?
     private var altCharsetState: CharsetState?
+    private var altReverseVideo: Bool = false
+    private var altOriginMode: Bool = false
 
     // MARK: - Charset State
 
@@ -528,7 +543,8 @@ public final class Screen {
                 isPartial: true,
                 dirtyRows: dirty,
                 partialRows: partialRows,
-                lineFlags: partialLineFlags
+                lineFlags: partialLineFlags,
+                reverseVideo: reverseVideo
             )
         }
 
@@ -551,7 +567,8 @@ public final class Screen {
             scrollbackCount: scrollbackCount,
             viewportOffset: viewportOffset,
             dirtyRegion: region,
-            lineFlags: linearFlags
+            lineFlags: linearFlags,
+            reverseVideo: reverseVideo
         )
     }
 
@@ -799,9 +816,17 @@ public final class Screen {
         if cursorCol != oldCol { dirtyRegion.markLine(cursorRow) }
     }
 
-    /// Set cursor to absolute position (0-based row, col).
+    /// Set cursor position (0-based row, col).
+    /// When originMode is active, `row` is relative to `scrollTop` and
+    /// clamped inside the scroll region.
     public func setCursorPos(row: Int, col: Int) {
-        moveCursorRow(to: clampRow(row))
+        let effectiveRow: Int
+        if originMode {
+            effectiveRow = max(scrollTop, min(scrollBottom, scrollTop + row))
+        } else {
+            effectiveRow = clampRow(row)
+        }
+        moveCursorRow(to: effectiveRow)
         let oldCol = cursorCol
         cursorCol = clampCol(col)
         if cursorCol != oldCol { dirtyRegion.markLine(cursorRow) }
@@ -827,6 +852,17 @@ public final class Screen {
     public func setCursorShape(_ shape: CursorShape) {
         cursorShape = shape
         dirtyRegion.markLine(cursorRow)
+    }
+
+    /// Set global reverse video (DECSCNM).
+    public func setReverseVideo(_ value: Bool) {
+        reverseVideo = value
+        dirtyRegion.markFull()
+    }
+
+    /// Set origin mode (DECOM).
+    public func setOriginMode(_ value: Bool) {
+        originMode = value
     }
 
     /// Set the line height and width attributes for the current cursor row (DECDHL/DECDWL).
@@ -991,8 +1027,9 @@ public final class Screen {
         let b = max(t, min(bottom, rows - 1))
         scrollTop = t
         scrollBottom = b
-        // DECSTBM resets cursor to home position
-        cursorRow = 0
+        // DECSTBM resets cursor to home position (relative to scroll region
+        // when origin mode is active).
+        cursorRow = originMode ? scrollTop : 0
         cursorCol = 0
         dirtyRegion.markFull()
     }
@@ -1132,11 +1169,15 @@ public final class Screen {
         altCursorCol = cursorCol
         altCursorRow = cursorRow
         altCharsetState = charsetState
+        altReverseVideo = reverseVideo
+        altOriginMode = originMode
         cells = [Cell](repeating: .empty, count: columns * rows)
         lineFlags = [LineFlags](repeating: LineFlags(), count: rows)
         rowBase = 0
         cursorCol = 0
         cursorRow = 0
+        reverseVideo = false
+        originMode = false
         dirtyRegion.markFull()
     }
 
@@ -1157,6 +1198,8 @@ public final class Screen {
             charsetState = savedCharset
             altCharsetState = nil
         }
+        reverseVideo = altReverseVideo
+        originMode = altOriginMode
         dirtyRegion.markFull()
     }
 
@@ -1201,12 +1244,16 @@ public final class Screen {
         cursorShape = .block
         scrollTop = 0
         scrollBottom = rows - 1
+        reverseVideo = false
+        originMode = false
         altCells = nil
         altLineFlags = nil
         altCursorCol = 0
         altCursorRow = 0
         altRowBase = 0
         altCharsetState = nil
+        altReverseVideo = false
+        altOriginMode = false
         charsetState = CharsetState()
         resetScrollback(deallocate: false)
         syncedUpdateActive = false
@@ -1827,9 +1874,10 @@ public final class Screen {
 
     /// Move cursor down one row, scrolling if at the bottom of scroll region.
     private func advanceRow() {
+        let bottomLimit = originMode ? scrollBottom : (rows - 1)
         if cursorRow == scrollBottom {
             scrollRegionUp()
-        } else if cursorRow < rows - 1 {
+        } else if cursorRow < bottomLimit {
             cursorRow += 1
         }
     }

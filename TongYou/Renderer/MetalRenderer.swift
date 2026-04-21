@@ -1249,12 +1249,17 @@ final class MetalRenderer {
         let cursorCol: Int
         /// Per-line search match ranges for visible lines.
         let searchLineMap: SearchLineMap
+        /// DECSCNM: global reverse video (swap fg/bg for all cells).
+        let reverseVideo: Bool
 
         /// Dark text color for cells with search highlight background.
         private static let searchTextColor = SIMD4<UInt8>(20, 20, 20, 255)
 
         func foreground(attrs: CellAttributes, row: Int, col: Int, absLine: Int) -> SIMD4<UInt8> {
             var (fg, bg) = palette.resolveDisplay(attrs)
+            if reverseVideo {
+                swap(&fg, &bg)
+            }
             if let b = selBounds, Selection.contains(ordered: b, line: absLine, col: col) {
                 if let selFg = palette.selectionFg {
                     fg = selFg
@@ -1285,7 +1290,8 @@ final class MetalRenderer {
             cursorShape: snapshot.cursorShape,
             cursorRow: snapshot.cursorRow,
             cursorCol: snapshot.cursorCol,
-            searchLineMap: searchLineMap
+            searchLineMap: searchLineMap,
+            reverseVideo: snapshot.reverseVideo
         )
     }
 

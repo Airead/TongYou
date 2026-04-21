@@ -590,9 +590,15 @@ public struct StreamHandler {
 
         // Side effects
         switch mode {
-        case .cursorKeys, .bracketedPaste:
-            // Passive modes: consumers read the bitfield directly.
+        case .cursorKeys, .bracketedPaste, .columnMode, .smoothScroll:
+            // Passive modes: recognized and stored, but either have no side
+            // effects in this method (consumers read the bitfield directly)
+            // or their full implementation is deferred.
             break
+        case .reverseVideo:
+            screen.setReverseVideo(value)
+        case .originMode:
+            screen.setOriginMode(value)
         case .cursorVisible:
             screen.setCursorVisible(value)
         case .altScreen:
@@ -641,7 +647,12 @@ public struct StreamHandler {
         guard params.count >= 1 else { return }
         switch params[0] {
         case 6: // Report cursor position
-            let row = screen.cursorRow + 1
+            let row: Int
+            if modes.isSet(.originMode) {
+                row = screen.cursorRow - screen.scrollTop + 1
+            } else {
+                row = screen.cursorRow + 1
+            }
             let col = screen.cursorCol + 1
             let response = "\u{1B}[\(row);\(col)R"
             onWriteBack?(Data(response.utf8))
@@ -659,7 +670,8 @@ public struct StreamHandler {
             col: screen.cursorCol,
             row: screen.cursorRow,
             attributes: currentAttributes,
-            charsetState: screen.charsetState
+            charsetState: screen.charsetState,
+            originMode: screen.originMode
         )
     }
 
@@ -668,6 +680,7 @@ public struct StreamHandler {
         screen.setCursorPos(row: saved.row, col: saved.col)
         currentAttributes = saved.attributes
         screen.charsetState = saved.charsetState
+        screen.setOriginMode(saved.originMode)
     }
 
     // MARK: - Private

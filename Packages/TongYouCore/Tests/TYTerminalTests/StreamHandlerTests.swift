@@ -221,6 +221,19 @@ struct StreamHandlerUnhandledSequenceTests {
         #expect(run("\u{1B}[?2004l").isEmpty) // bracketedPaste reset
     }
 
+    @Test func vttestModesThreeToSixDoNotLog() {
+        // DECCOLM (3), DECSCLM (4), DECSCNM (5), DECOM (6) are recognized
+        // but currently have no side effects in StreamHandler.
+        #expect(run("\u{1B}[?3h").isEmpty)  // DECCOLM
+        #expect(run("\u{1B}[?3l").isEmpty)  // DECCOLM reset
+        #expect(run("\u{1B}[?4h").isEmpty)  // DECSCLM
+        #expect(run("\u{1B}[?4l").isEmpty)  // DECSCLM reset
+        #expect(run("\u{1B}[?5h").isEmpty)  // DECSCNM
+        #expect(run("\u{1B}[?5l").isEmpty)  // DECSCNM reset
+        #expect(run("\u{1B}[?6h").isEmpty)  // DECOM
+        #expect(run("\u{1B}[?6l").isEmpty)  // DECOM reset
+    }
+
     @Test func escBackslashIsSilentlyIgnored() {
         // ESC \ is the 7-bit form of ST (String Terminator). After a string
         // sequence exits, the parser dispatches ESC \ as a normal ESC sequence.
@@ -302,5 +315,121 @@ struct StreamHandlerUnhandledSequenceTests {
         }
         handler.flush()
         #expect(dirs.isEmpty)
+    }
+}
+
+@Suite("StreamHandler DEC mode tests", .serialized)
+struct StreamHandlerDECModeTests {
+
+    @Test func dsrReportsAbsolutePositionWhenOriginModeOff() {
+        let screen = Screen(columns: 10, rows: 5)
+        screen.setCursorPos(row: 3, col: 4)
+        var handler = StreamHandler(screen: screen)
+        var responses: [String] = []
+        handler.onWriteBack = { responses.append(String(data: $0, encoding: .utf8)!) }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}[6n".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(responses == ["\u{1B}[4;5R"])
+    }
+
+    @Test func dsrReportsRelativePositionWhenOriginModeOn() {
+        let screen = Screen(columns: 10, rows: 5)
+        screen.setScrollRegion(top: 1, bottom: 3)
+        var handler = StreamHandler(screen: screen)
+        var responses: [String] = []
+        handler.onWriteBack = { responses.append(String(data: $0, encoding: .utf8)!) }
+        var parser = VTParser()
+
+        // Enable origin mode via VT sequence so handler.modes stays in sync
+        let setOrigin = Array("\u{1B}[?6h".utf8)
+        setOrigin.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+
+        // Move cursor to relative row 1 (absolute row 2)
+        let cupBytes = Array("\u{1B}[2;5H".utf8)
+        cupBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+
+        let dsrBytes = Array("\u{1B}[6n".utf8)
+        dsrBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        // Relative to scrollTop (1): absolute row 2 -> 2 - 1 + 1 = 2
+        #expect(responses == ["\u{1B}[2;5R"])
+    }
+
+    @Test func saveAndRestoreCursorPreservesOriginMode() {
+        let screen = Screen(columns: 10, rows: 5)
+        screen.setScrollRegion(top: 1, bottom: 3)
+        var handler = StreamHandler(screen: screen)
+        var parser = VTParser()
+
+        // Enable origin mode via VT sequence
+        let setOrigin = Array("\u{1B}[?6h".utf8)
+        setOrigin.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+
+        // Move cursor to relative row 1, col 2 (absolute row 2)
+        let cupBytes = Array("\u{1B}[2;3H".utf8)
+        cupBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+
+        // DECSC (save cursor)
+        let saveBytes = Array("\u{1B}7".utf8)
+        saveBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+
+        // Disable origin mode and move cursor elsewhere
+        let resetOrigin = Array("\u{1B}[?6l".utf8)
+        resetOrigin.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        let moveBytes = Array("\u{1B}[5;5H".utf8)
+        moveBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+
+        // DECRC (restore cursor)
+        let restoreBytes = Array("\u{1B}8".utf8)
+        restoreBytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+
+        // Cursor should restore to absolute row 2, col 2
+        #expect(screen.cursorRow == 2)
+        #expect(screen.cursorCol == 2)
+        // Origin mode should be restored to true
+        #expect(screen.originMode == true)
+    }
+
+    @Test func reverseVideoTriggersFullRedraw() {
+        let screen = Screen(columns: 10, rows: 2)
+        screen.consumeDirtyRegion() // clear initial full rebuild
+        var handler = StreamHandler(screen: screen)
+        var parser = VTParser()
+        let bytes = Array("\u{1B}[?5h".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(screen.reverseVideo == true)
+        #expect(screen.consumeDirtyRegion().fullRebuild == true)
     }
 }
