@@ -1085,6 +1085,9 @@ final class MetalRenderer {
                 for col in 0..<snapCols {
                     let attrs = backingCells[rowBase + col].attributes
                     var (fg, bg) = palette.resolveDisplay(attrs)
+                    if snapshot?.reverseVideo == true {
+                        swap(&fg, &bg)
+                    }
 
                     if let b = selBounds, Selection.contains(ordered: b, line: absLine, col: col) {
                         if palette.selectionBg != nil {
@@ -1114,8 +1117,9 @@ final class MetalRenderer {
                     )
                     idx += 1
                 }
+                let reversedDefaultBg = snapshot?.reverseVideo == true ? palette.defaultFg : defaultBg
                 for col in snapCols..<cols {
-                    var bg = defaultBg
+                    var bg = reversedDefaultBg
                     if let b = selBounds, Selection.contains(ordered: b, line: absLine, col: col) {
                         bg = selBgColor
                     }
@@ -1126,8 +1130,9 @@ final class MetalRenderer {
                     idx += 1
                 }
             } else {
+                let reversedDefaultBg = snapshot?.reverseVideo == true ? palette.defaultFg : defaultBg
                 for col in 0..<cols {
-                    var bg = defaultBg
+                    var bg = reversedDefaultBg
                     if let b = selBounds, Selection.contains(ordered: b, line: absLine, col: col) {
                         bg = selBgColor
                     }
@@ -1166,14 +1171,20 @@ final class MetalRenderer {
                     let cell = backingCells[row * backingColumns + col]
                     let flags = cell.attributes.flags
                     if flags.contains(.underline) {
-                        let fg = colorPalette.resolveDisplay(cell.attributes).fg
+                        var (fg, bg) = colorPalette.resolveDisplay(cell.attributes)
+                        if snapshot?.reverseVideo == true {
+                            swap(&fg, &bg)
+                        }
                         underlineInstances.append(CellBgInstance(
                             gridPos: SIMD2<UInt16>(UInt16(col), UInt16(row)),
                             color: fg
                         ))
                     }
                     if flags.contains(.strikethrough) {
-                        let fg = colorPalette.resolveDisplay(cell.attributes).fg
+                        var (fg, bg) = colorPalette.resolveDisplay(cell.attributes)
+                        if snapshot?.reverseVideo == true {
+                            swap(&fg, &bg)
+                        }
                         strikethroughInstances.append(CellBgInstance(
                             gridPos: SIMD2<UInt16>(UInt16(col), UInt16(row)),
                             color: fg
@@ -1189,12 +1200,13 @@ final class MetalRenderer {
             let clampedStart = min(url.startCol, maxCol)
             let clampedEnd = min(url.endCol, maxCol)
             if clampedEnd >= clampedStart {
-                let fg: SIMD4<UInt8>
+                var (fg, bg) = (colorPalette.defaultFg, colorPalette.defaultBg)
                 if url.row < backingRows, clampedStart < backingColumns {
                     let attrs = backingCells[url.row * backingColumns + clampedStart].attributes
-                    fg = colorPalette.resolveDisplay(attrs).fg
-                } else {
-                    fg = colorPalette.defaultFg
+                    (fg, bg) = colorPalette.resolveDisplay(attrs)
+                }
+                if snapshot?.reverseVideo == true {
+                    swap(&fg, &bg)
                 }
                 let row = UInt16(clamping: url.row)
                 for i in clampedStart...clampedEnd {
