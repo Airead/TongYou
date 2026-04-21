@@ -102,6 +102,31 @@ public struct CSIParams: Sendable {
         intermediateCount = 0
         finalByte = 0
     }
+
+    // MARK: - Description helpers for debugging
+
+    /// Human-readable description of the intermediate bytes.
+    public var intermediatesDescription: String {
+        guard intermediateCount > 0 else { return "" }
+        var s = ""
+        for i in 0..<intermediateCount {
+            s.append(String(Unicode.Scalar(intermediate(i))))
+        }
+        return s
+    }
+
+    /// Human-readable description of the parameter values.
+    public var paramsDescription: String {
+        guard count > 0 else { return "" }
+        var s = ""
+        for i in 0..<count {
+            if i > 0 {
+                s.append(isColon(at: i - 1) ? ":" : ";")
+            }
+            s.append(String(self[i]))
+        }
+        return s
+    }
 }
 
 // MARK: - VT Action

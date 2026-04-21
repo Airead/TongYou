@@ -36,6 +36,8 @@ public struct StreamHandler {
     public var onFocusReportingChanged: ((Bool) -> Void)?
     /// Callback: unsupported DECSET/DECRST mode received.
     public var onUnsupportedMode: ((UInt16) -> Void)?
+    /// Callback: unhandled control sequence or mode received (for debugging/telemetry).
+    public var onUnhandledSequence: ((String) -> Void)?
 
     public init(screen: Screen) {
         self.screen = screen
@@ -71,16 +73,19 @@ public struct StreamHandler {
                 case 0x28, 0x29: // '(', ')'
                     handleESCCharset(final: final, intermediate: intermediates.0)
                 default:
-                    break
+                    onUnhandledSequence?("ESC \(String(Unicode.Scalar(intermediates.0)))\(String(Unicode.Scalar(final))) not implemented")
                 }
+            } else {
+                onUnhandledSequence?("ESC with \(imCount) intermediates not implemented")
             }
 
         case .oscDispatch(let data):
             handleOSC(data)
 
-        case .dcsHook, .dcsPut, .dcsUnhook,
-             .apcStart, .apcPut, .apcEnd:
-            break
+        case .dcsHook, .dcsPut, .dcsUnhook:
+            onUnhandledSequence?("DCS sequence (not implemented)")
+        case .apcStart, .apcPut, .apcEnd:
+            onUnhandledSequence?("APC sequence (not implemented)")
         }
     }
 
@@ -124,7 +129,8 @@ public struct StreamHandler {
         case 0x0D: screen.carriageReturn()
         case 0x0E: screen.charsetState.invokeGL(.g1) // SO - Shift Out
         case 0x0F: screen.charsetState.invokeGL(.g0) // SI - Shift In
-        default: break
+        default:
+            onUnhandledSequence?("C0 control character 0x\(String(byte, radix: 16, uppercase: true)) (not implemented)")
         }
     }
 
@@ -189,7 +195,7 @@ public struct StreamHandler {
         // --- Scroll Region / Modes ---
         case 0x72: // 'r' - DECSTBM (Set Top and Bottom Margins) or restore modes
             if hasQuestion {
-                // Restore modes — not implemented in P3
+                onUnhandledSequence?("CSI ? r (restore modes) not implemented")
             } else {
                 let top = Int(params.param(0, default: 1)) - 1
                 let bottom = Int(params.param(1, default: UInt16(screen.rows))) - 1
@@ -219,7 +225,10 @@ public struct StreamHandler {
         // --- SGR ---
         case 0x6D: // 'm' - SGR (Select Graphic Rendition)
             // CSI > 4 ; 1 m is XTMODKEYS (xterm modifyOtherKeys), not SGR.
-            guard !hasGreater else { break }
+            if hasGreater {
+                onUnhandledSequence?("CSI > m (XTMODKEYS) not implemented")
+                break
+            }
             SGRParser.parse(params, into: &currentAttributes)
 
         // --- Modes ---
@@ -228,6 +237,8 @@ public struct StreamHandler {
                 for i in 0..<params.count {
                     setDECMode(params[i], value: true)
                 }
+            } else {
+                onUnhandledSequence?("CSI h (SM Set Mode without ?) not implemented")
             }
 
         case 0x6C: // 'l' - RM (Reset Mode)
@@ -235,6 +246,8 @@ public struct StreamHandler {
                 for i in 0..<params.count {
                     setDECMode(params[i], value: false)
                 }
+            } else {
+                onUnhandledSequence?("CSI l (RM Reset Mode without ?) not implemented")
             }
 
         // --- Device Status Report ---
@@ -245,11 +258,15 @@ public struct StreamHandler {
         case 0x73: // 's' - SCOSC (Save Cursor)
             if !hasQuestion {
                 saveCursor()
+            } else {
+                onUnhandledSequence?("CSI ? s (save modes) not implemented")
             }
 
         case 0x75: // 'u' - SCORC (Restore Cursor)
             if !hasQuestion {
                 restoreCursor()
+            } else {
+                onUnhandledSequence?("CSI ? u (restore modes) not implemented")
             }
 
         // --- Repeat ---
@@ -270,8 +287,11 @@ public struct StreamHandler {
                 case 2: screen.setCursorShape(.block) // steady block
                 case 3, 4: screen.setCursorShape(.underline)
                 case 5, 6: screen.setCursorShape(.bar)
-                default: break
+                default:
+                    onUnhandledSequence?("CSI SP q DECSCUSR style \(style) not implemented")
                 }
+            } else {
+                onUnhandledSequence?("CSI q without SP (not DECSCUSR) not implemented")
             }
 
         // --- DECRQM (Request Mode) ---
@@ -280,6 +300,8 @@ public struct StreamHandler {
             // present; plain 'p' sequences are unused by us and silently dropped.
             if hasQuestion && params.hasIntermediate(0x24) {
                 handleDECRQM(params)
+            } else {
+                onUnhandledSequence?("CSI p (not DECRQM) not implemented")
             }
 
         // --- Window Manipulation ---
@@ -287,7 +309,12 @@ public struct StreamHandler {
             handleWindowManipulation(params)
 
         default:
-            break
+            let finalChar = String(Unicode.Scalar(final))
+            let intermediates = params.intermediatesDescription
+            let paramsDesc = params.paramsDescription
+            onUnhandledSequence?(
+                "CSI \(intermediates)\(paramsDesc)\(finalChar) not implemented"
+            )
         }
     }
 
@@ -317,7 +344,8 @@ public struct StreamHandler {
             savedCursor = nil
 
         default:
-            break
+            let finalChar = String(Unicode.Scalar(final))
+            onUnhandledSequence?("ESC \(finalChar) not implemented")
         }
     }
 
@@ -326,14 +354,18 @@ public struct StreamHandler {
         switch intermediate {
         case 0x28: slot = .g0 // '('
         case 0x29: slot = .g1 // ')'
-        default: return
+        default:
+            onUnhandledSequence?("ESC \(String(Unicode.Scalar(intermediate)))\(String(Unicode.Scalar(final))) (charset select) not implemented")
+            return
         }
 
         let set: ACSCharsetMapper.Set
         switch final {
         case 0x30: set = .decSpecial // '0'
         case 0x42: set = .ascii      // 'B'
-        default: return
+        default:
+            onUnhandledSequence?("ESC \(String(Unicode.Scalar(intermediate)))\(String(Unicode.Scalar(final))) (charset set) not implemented")
+            return
         }
 
         screen.charsetState.configure(slot: slot, set: set)
@@ -354,7 +386,7 @@ public struct StreamHandler {
         case 0x36: // '6' — DECDWL (double-width)
             screen.setLineSize(height: .normal, width: .double)
         default:
-            break
+            onUnhandledSequence?("ESC # \(String(Unicode.Scalar(final))) (line size) not implemented")
         }
     }
 
@@ -387,7 +419,7 @@ public struct StreamHandler {
         case 1337:
             handleOSC1337(stringData)
         default:
-            break
+            onUnhandledSequence?("OSC \(oscNum) not implemented")
         }
     }
 
@@ -508,7 +540,7 @@ public struct StreamHandler {
             }
 
         default:
-            break
+            onUnhandledSequence?("CSI t \(params[0]) (window manipulation) not implemented")
         }
     }
 
@@ -521,7 +553,7 @@ public struct StreamHandler {
         if modes.setMouseFormat(rawParam: rawParam, enabled: value) { return }
 
         guard let mode = TerminalModes.from(rawValue: rawParam) else {
-            print("[DEBUG] Unsupported mode received: \(rawParam)")
+            onUnhandledSequence?("DECSET/DECRST mode \(rawParam) not implemented")
             onUnsupportedMode?(rawParam)
             return
         }
@@ -550,7 +582,7 @@ public struct StreamHandler {
                 screen.endSyncedUpdate()
             }
         default:
-            break
+            onUnhandledSequence?("DEC mode \(mode) side effects not implemented")
         }
     }
 
@@ -563,7 +595,10 @@ public struct StreamHandler {
     private func handleDECRQM(_ params: CSIParams) {
         guard params.count >= 1 else { return }
         let mode = params[0]
-        guard mode == 2026 else { return }
+        guard mode == 2026 else {
+            onUnhandledSequence?("DECRQM query for mode \(mode) not implemented")
+            return
+        }
         let state: Int = screen.syncedUpdateActive ? 1 : 2
         let response = "\u{1B}[?2026;\(state)$y"
         onWriteBack?(Data(response.utf8))
@@ -582,7 +617,7 @@ public struct StreamHandler {
         case 5: // Status report — report OK
             onWriteBack?(Data("\u{1B}[0n".utf8))
         default:
-            break
+            onUnhandledSequence?("DSR \(params[0]) not implemented")
         }
     }
 
