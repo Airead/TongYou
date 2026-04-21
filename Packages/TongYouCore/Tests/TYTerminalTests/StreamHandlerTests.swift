@@ -703,6 +703,87 @@ struct StreamHandlerUnhandledSequenceTests {
         handler.flush()
         #expect(dirs.isEmpty)
     }
+
+    @Test func osc10QueryRespondsWithForegroundColor() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var responses: [String] = []
+        handler.onWriteBack = { responses.append(String(data: $0, encoding: .utf8)!) }
+        handler.onDynamicColorQuery = { oscNum in
+            #expect(oscNum == 10)
+            return RGBColor(r: 0xDC, g: 0xDC, b: 0xDC)
+        }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]10;?\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(responses == ["\u{1B}]10;rgb:DCDC/DCDC/DCDC\u{07}"])
+    }
+
+    @Test func osc11QueryRespondsWithBackgroundColor() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var responses: [String] = []
+        handler.onWriteBack = { responses.append(String(data: $0, encoding: .utf8)!) }
+        handler.onDynamicColorQuery = { oscNum in
+            #expect(oscNum == 11)
+            return RGBColor(r: 0x1E, g: 0x1E, b: 0x26)
+        }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]11;?\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(responses == ["\u{1B}]11;rgb:1E1E/1E1E/2626\u{07}"])
+    }
+
+    @Test func osc10SetColorWithHex() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var colors: [(Int, RGBColor)] = []
+        handler.onDynamicColorSet = { colors.append(($0, $1)) }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]10;#ff0000\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(colors.count == 1)
+        #expect(colors[0].0 == 10)
+        #expect(colors[0].1 == RGBColor(r: 0xFF, g: 0x00, b: 0x00))
+    }
+
+    @Test func osc10QueryWithoutHandlerIsSilent() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var responses: [String] = []
+        handler.onWriteBack = { responses.append(String(data: $0, encoding: .utf8)!) }
+        // No onDynamicColorQuery set
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]10;?\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(responses.isEmpty)
+    }
+
+    @Test func osc10SetInvalidColorIsIgnored() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var colors: [(Int, RGBColor)] = []
+        handler.onDynamicColorSet = { colors.append(($0, $1)) }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]10;not-a-color\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(colors.isEmpty)
+    }
 }
 
 @Suite("StreamHandler DA1 tests", .serialized)

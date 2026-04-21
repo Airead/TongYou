@@ -46,6 +46,13 @@ public struct StreamHandler {
     public var onColorSchemeQuery: (() -> Bool)?
     /// Callback: current working directory changed (OSC 7 file://URL).
     public var onWorkingDirectoryChanged: ((String) -> Void)?
+    /// Callback: query dynamic color for OSC 10/11/17/19 etc.
+    /// Parameter is the OSC number (10 = foreground, 11 = background, etc.).
+    /// Return nil if the color is not available.
+    public var onDynamicColorQuery: ((Int) -> RGBColor?)?
+    /// Callback: dynamic color changed by OSC 10/11/17/19 etc.
+    /// Parameters are (OSC number, new color).
+    public var onDynamicColorSet: ((Int, RGBColor) -> Void)?
     /// Callback: unhandled control sequence or mode received (for debugging/telemetry).
     public var onUnhandledSequence: ((String) -> Void)?
 
@@ -501,6 +508,10 @@ public struct StreamHandler {
             handleOSC9(stringData)
         case 777:
             handleOSC777(stringData)
+        case 10:
+            handleOSC10(stringData)
+        case 11:
+            handleOSC11(stringData)
         case 1337:
             handleOSC1337(stringData)
         default:
@@ -622,6 +633,103 @@ public struct StreamHandler {
 
         // Update current attributes with the hyperlink ID
         currentAttributes.hyperlinkId = currentHyperlinkId
+    }
+
+    // MARK: - OSC 10 (Foreground Color)
+
+    private func handleOSC10(_ data: ArraySlice<UInt8>) {
+        handleOSCDynamicColor(oscNumber: 10, data: data)
+    }
+
+    // MARK: - OSC 11 (Background Color)
+
+    private func handleOSC11(_ data: ArraySlice<UInt8>) {
+        handleOSCDynamicColor(oscNumber: 11, data: data)
+    }
+
+    /// Shared handler for OSC 10/11/17/19 dynamic colors.
+    /// - Parameter oscNumber: The OSC number (10=foreground, 11=background, etc.)
+    /// - Parameter data: The payload after the semicolon.
+    private func handleOSCDynamicColor(oscNumber: Int, data: ArraySlice<UInt8>) {
+        guard let str = String(bytes: data, encoding: .utf8), !str.isEmpty else { return }
+
+        // Query: "?"
+        if str == "?" {
+            guard let color = onDynamicColorQuery?(oscNumber) else { return }
+            let response = "\u{1B}]\(oscNumber);\(color.xtermRGBString)\u{07}"
+            onWriteBack?(Data(response.utf8))
+            return
+        }
+
+        // Set: try to parse the color spec.
+        if let color = parseXtermColor(str) {
+            onDynamicColorSet?(oscNumber, color)
+        }
+    }
+
+    /// Parse an xterm color specification into RGBColor.
+    /// Supports:
+    /// - `rgb:RRRR/GGGG/BBBB` (X11 format, 1-4 hex digits per component)
+    /// - `#RRGGBB` or `#RGB` (hex)
+    private func parseXtermColor(_ spec: String) -> RGBColor? {
+        let trimmed = spec.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // X11 rgb:RRRR/GGGG/BBBB format
+        if trimmed.hasPrefix("rgb:") {
+            let rest = trimmed.dropFirst("rgb:".count)
+            let parts = rest.split(separator: "/", omittingEmptySubsequences: false)
+            guard parts.count == 3 else { return nil }
+            guard let r = parseHexComponent(String(parts[0])),
+                  let g = parseHexComponent(String(parts[1])),
+                  let b = parseHexComponent(String(parts[2]))
+            else { return nil }
+            return RGBColor(r: r, g: g, b: b)
+        }
+
+        // #RRGGBB or #RGB format
+        if trimmed.hasPrefix("#") {
+            let hex = trimmed.dropFirst()
+            if hex.count == 6 {
+                guard let r = UInt8(hex.prefix(2), radix: 16),
+                      let g = UInt8(hex.dropFirst(2).prefix(2), radix: 16),
+                      let b = UInt8(hex.dropFirst(4).prefix(2), radix: 16)
+                else { return nil }
+                return RGBColor(r: r, g: g, b: b)
+            } else if hex.count == 3 {
+                guard let r4 = UInt8(hex.prefix(1), radix: 16),
+                      let g4 = UInt8(hex.dropFirst(1).prefix(1), radix: 16),
+                      let b4 = UInt8(hex.dropFirst(2).prefix(1), radix: 16)
+                else { return nil }
+                let r = (r4 << 4) | r4
+                let g = (g4 << 4) | g4
+                let b = (b4 << 4) | b4
+                return RGBColor(r: r, g: g, b: b)
+            }
+        }
+
+        return nil
+    }
+
+    /// Parse a hex component string of 1-4 digits, scaling to 8-bit.
+    private func parseHexComponent(_ s: String) -> UInt8? {
+        guard let value = UInt16(s, radix: 16) else { return nil }
+        let digitCount = s.count
+        switch digitCount {
+        case 1:
+            // 4-bit -> 8-bit: replicate
+            let v = UInt8(value)
+            return (v << 4) | v
+        case 2:
+            return UInt8(value)
+        case 3:
+            // 12-bit -> 8-bit: shift right 4
+            return UInt8(value >> 4)
+        case 4:
+            // 16-bit -> 8-bit: shift right 8
+            return UInt8(value >> 8)
+        default:
+            return nil
+        }
     }
 
     // MARK: - OSC 1337 (iTerm2 Notification)

@@ -17,6 +17,9 @@ final class TerminalController: TerminalControlling {
 
     private let core: TerminalCore
 
+    /// Current configuration snapshot (updated on hot reload).
+    private var config: Config
+
     // Set on ptyQueue (via core callback), read on main — atomic flag avoids per-read snapshot copies.
     nonisolated(unsafe) private var screenDirty = false
 
@@ -90,6 +93,7 @@ final class TerminalController: TerminalControlling {
             maxScrollback: config.scrollbackLimit,
             tabWidth: config.tabWidth
         )
+        self.config = config
         self.bellMode = config.bell
         self.optionAsAlt = config.optionAsAlt
         self.toastPresenter = toastPresenter
@@ -131,6 +135,24 @@ final class TerminalController: TerminalControlling {
         core.onColorSchemeQuery = {
             NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         }
+        core.onDefaultColorQuery = { [weak self] oscNum in
+            guard let self else { return nil }
+            switch oscNum {
+            case 10:
+                return self.config.foreground
+            case 11:
+                return self.config.background
+            default:
+                return nil
+            }
+        }
+        core.onDynamicColorChanged = { [weak self] oscNum, color in
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                // TODO: Propagate dynamic color change to renderer
+                GUILog.info("Dynamic color changed OSC \(oscNum) to \(color.xtermRGBString)", category: .session)
+            }
+        }
         core.onUnhandledSequence = { [weak self] message in
             let appName = self?.runningCommand ?? "shell"
             GUILog.warning("Unhandled sequence: \(message) from \"\(appName)\"", category: .session)
@@ -162,6 +184,7 @@ final class TerminalController: TerminalControlling {
 
     /// Apply updated configuration (called from MetalView on hot reload).
     func applyConfig(_ config: Config) {
+        self.config = config
         bellMode = config.bell
         optionAsAlt = config.optionAsAlt
         // scrollbackLimit and tabWidth are set at Screen init and not changed at runtime

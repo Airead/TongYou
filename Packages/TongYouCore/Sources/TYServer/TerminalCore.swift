@@ -55,6 +55,10 @@ public final class TerminalCore: @unchecked Sendable {
     nonisolated(unsafe) private var pixelWidth: UInt32 = 0
     nonisolated(unsafe) private var pixelHeight: UInt32 = 0
 
+    /// Dynamic colors set via OSC 10/11. Confined to ptyQueue.
+    nonisolated(unsafe) private var dynamicForegroundColor: RGBColor?
+    nonisolated(unsafe) private var dynamicBackgroundColor: RGBColor?
+
     private var ptyProcess: PTYProcess?
 
     private let ptyQueue: DispatchQueue
@@ -85,6 +89,13 @@ public final class TerminalCore: @unchecked Sendable {
     /// Called to query the current system color scheme (dark = true, light = false).
     /// Used by DSR 996/997 and mode 2031 immediate-report on enable.
     public var onColorSchemeQuery: (() -> Bool)?
+    /// Called when a dynamic color changes via OSC 10/11.
+    /// Parameters: (OSC number, new color).
+    public var onDynamicColorChanged: ((Int, RGBColor) -> Void)?
+    /// Called to query the current default foreground/background color.
+    /// Used by OSC 10/11 queries when no dynamic color has been set.
+    /// Parameter: OSC number (10 = foreground, 11 = background).
+    public var onDefaultColorQuery: ((Int) -> RGBColor?)?
 
     // MARK: - Init
 
@@ -142,6 +153,29 @@ public final class TerminalCore: @unchecked Sendable {
         streamHandler.onWindowPixelSizeRequest = { [weak self] in
             guard let self else { return (width: 0, height: 0) }
             return (width: self.pixelWidth, height: self.pixelHeight)
+        }
+        streamHandler.onDynamicColorQuery = { [weak self] oscNum in
+            guard let self else { return nil }
+            switch oscNum {
+            case 10:
+                return self.dynamicForegroundColor ?? self.onDefaultColorQuery?(10)
+            case 11:
+                return self.dynamicBackgroundColor ?? self.onDefaultColorQuery?(11)
+            default:
+                return nil
+            }
+        }
+        streamHandler.onDynamicColorSet = { [weak self] oscNum, color in
+            guard let self else { return }
+            switch oscNum {
+            case 10:
+                self.dynamicForegroundColor = color
+            case 11:
+                self.dynamicBackgroundColor = color
+            default:
+                return
+            }
+            self.onDynamicColorChanged?(oscNum, color)
         }
     }
 

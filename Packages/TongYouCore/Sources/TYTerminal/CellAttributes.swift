@@ -101,6 +101,14 @@ public struct RGBColor: Equatable, Sendable {
         self.g = g
         self.b = b
     }
+
+    /// X11 rgb:RRRR/GGGG/BBBB format string (16-bit per component).
+    public var xtermRGBString: String {
+        let rh = String(format: "%04X", (UInt16(r) << 8) | UInt16(r))
+        let gh = String(format: "%04X", (UInt16(g) << 8) | UInt16(g))
+        let bh = String(format: "%04X", (UInt16(b) << 8) | UInt16(b))
+        return "rgb:\(rh)/\(gh)/\(bh)"
+    }
 }
 
 /// Standard xterm-256color palette.
