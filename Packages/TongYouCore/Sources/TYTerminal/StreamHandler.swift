@@ -39,6 +39,11 @@ public struct StreamHandler {
     public var onPaneNotification: ((String, String) -> Void)?
     /// Callback: focus event reporting (DECSET 1004) toggled on/off.
     public var onFocusReportingChanged: ((Bool) -> Void)?
+    /// Callback: color scheme reporting (DECSET 2031) toggled on/off.
+    public var onColorSchemeReportingChanged: ((Bool) -> Void)?
+    /// Callback: query current system color scheme (dark = true, light = false).
+    /// Used by DECRQM 2031 and DSR 997 responses.
+    public var onColorSchemeQuery: (() -> Bool)?
     /// Callback: current working directory changed (OSC 7 file://URL).
     public var onWorkingDirectoryChanged: ((String) -> Void)?
     /// Callback: unhandled control sequence or mode received (for debugging/telemetry).
@@ -760,6 +765,8 @@ public struct StreamHandler {
             }
         case .focusEvents:
             onFocusReportingChanged?(value)
+        case .colorSchemeReporting:
+            onColorSchemeReportingChanged?(value)
         case .syncedUpdate:
             if value {
                 screen.beginSyncedUpdate()
@@ -792,6 +799,8 @@ public struct StreamHandler {
             state = screen.syncedUpdateActive ? 1 : 2
         case 2027:
             state = modes.isSet(.graphemeClustering) ? 1 : 2
+        case 2031:
+            state = modes.isSet(.colorSchemeReporting) ? 1 : 2
         default:
             onUnhandledSequence?("DECRQM query for mode \(mode) not implemented")
             return
@@ -817,6 +826,10 @@ public struct StreamHandler {
             onWriteBack?(Data(response.utf8))
         case 5: // Status report — report OK
             onWriteBack?(Data("\u{1B}[0n".utf8))
+        case 997: // Color scheme query (DECDSR 997)
+            let isDark = onColorSchemeQuery?() ?? false
+            let ps = isDark ? 1 : 2
+            onWriteBack?(Data("\u{1B}[?997;\(ps)n".utf8))
         default:
             onUnhandledSequence?("DSR \(params[0]) not implemented")
         }

@@ -170,6 +170,32 @@ struct TerminalCoreTests {
         #expect(core.isFocusReportingEnabledForTesting == false)
     }
 
+    // MARK: - Color Scheme Reporting (DECSET 2031)
+
+    @Test("Color scheme reporting flag is off by default")
+    func colorSchemeReportingInitiallyOff() {
+        let core = TerminalCore(columns: 80, rows: 24)
+        #expect(core.isColorSchemeReportingEnabledForTesting == false)
+    }
+
+    @Test("DECSET 2031 toggles color scheme reporting flag on core")
+    func colorSchemeReportingModeToggles() {
+        let core = TerminalCore(columns: 80, rows: 24)
+        core.feedBytesForTesting(Array("\u{1B}[?2031h".utf8))
+        #expect(core.isColorSchemeReportingEnabledForTesting == true)
+        core.feedBytesForTesting(Array("\u{1B}[?2031l".utf8))
+        #expect(core.isColorSchemeReportingEnabledForTesting == false)
+    }
+
+    @Test("reportColorScheme is a no-op when PTY not started")
+    func reportColorSchemeNoCrashWhenNotStarted() {
+        let core = TerminalCore(columns: 80, rows: 24)
+        core.reportColorScheme(true)
+        core.reportColorScheme(false)
+        // Must not crash; flag remains off since no app subscribed.
+        #expect(core.isColorSchemeReportingEnabledForTesting == false)
+    }
+
     // MARK: - Synchronized Update (DECSET 2026)
 
     @Test("DECSET 2026 toggles isSyncedUpdateActive on the core")

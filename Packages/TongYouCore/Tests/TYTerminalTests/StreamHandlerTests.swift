@@ -214,6 +214,48 @@ struct StreamHandlerSyncedUpdateTests {
         #expect(String(bytes: writtenSet, encoding: .ascii) == "\u{1B}[?2027;1$y")
     }
 
+    @Test func decrqm2031ReportsState() {
+        // Default is reset (2).
+        let (_, writtenDefault) = drive("\u{1B}[?2031$p")
+        #expect(String(bytes: writtenDefault, encoding: .ascii) == "\u{1B}[?2031;2$y")
+
+        // After DECSET 2031 it is set (1).
+        let (_, writtenSet) = drive("\u{1B}[?2031h\u{1B}[?2031$p")
+        #expect(String(bytes: writtenSet, encoding: .ascii) == "\u{1B}[?2031;1$y")
+
+        // After DECRST 2031 it is reset (2).
+        let (_, writtenReset) = drive("\u{1B}[?2031h\u{1B}[?2031l\u{1B}[?2031$p")
+        #expect(String(bytes: writtenReset, encoding: .ascii) == "\u{1B}[?2031;2$y")
+    }
+
+    @Test func decrqm2031DSR997ReportsDark() {
+        var handler = StreamHandler(screen: Screen(columns: 10, rows: 2))
+        var response: Data?
+        handler.onWriteBack = { response = $0 }
+        handler.onColorSchemeQuery = { true }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}[?997n".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(String(data: response!, encoding: .ascii) == "\u{1B}[?997;1n")
+    }
+
+    @Test func decrqm2031DSR997ReportsLight() {
+        var handler = StreamHandler(screen: Screen(columns: 10, rows: 2))
+        var response: Data?
+        handler.onWriteBack = { response = $0 }
+        handler.onColorSchemeQuery = { false }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}[?997n".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(String(data: response!, encoding: .ascii) == "\u{1B}[?997;2n")
+    }
+
     @Test func decrqmUnrelatedModeIsSilentlyDropped() {
         let (_, written) = drive("\u{1B}[?9999$p")
         #expect(written.isEmpty)
@@ -249,6 +291,38 @@ struct StreamHandlerFocusReportingTests {
         #expect(run("\u{1B}[?1004h") == [true])
         #expect(run("\u{1B}[?1004l") == [false])
         #expect(run("\u{1B}[?1004h\u{1B}[?1004l") == [true, false])
+    }
+}
+
+@Suite("StreamHandler color scheme reporting (mode 2031) tests", .serialized)
+struct StreamHandlerColorSchemeReportingTests {
+
+    /// Drive a sequence of bytes through the handler, recording every
+    /// `onColorSchemeReportingChanged` notification in order.
+    private func run(_ s: String) -> [Bool] {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var events: [Bool] = []
+        handler.onColorSchemeReportingChanged = { events.append($0) }
+        var parser = VTParser()
+        let bytes = Array(s.utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        return events
+    }
+
+    @Test func colorSchemeReportingInitiallyOff() {
+        let screen = Screen(columns: 10, rows: 2)
+        let handler = StreamHandler(screen: screen)
+        #expect(handler.modes.isSet(.colorSchemeReporting) == false)
+    }
+
+    @Test func colorSchemeReportingModeToggles() {
+        #expect(run("\u{1B}[?2031h") == [true])
+        #expect(run("\u{1B}[?2031l") == [false])
+        #expect(run("\u{1B}[?2031h\u{1B}[?2031l") == [true, false])
     }
 }
 

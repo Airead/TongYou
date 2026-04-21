@@ -852,6 +852,14 @@ final class MetalView: NSView {
         }
     }
 
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        if let tc = terminalController as? TerminalController {
+            tc.reportColorScheme(isDark)
+        }
+    }
+
     private func observeWindowActivation() {
         let nc = NotificationCenter.default
         nc.addObserver(self, selector: #selector(windowDidBecomeKey),

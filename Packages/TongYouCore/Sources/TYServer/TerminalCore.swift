@@ -44,6 +44,10 @@ public final class TerminalCore: @unchecked Sendable {
     /// Confined to ptyQueue.
     nonisolated(unsafe) private var focusReportingEnabled = false
 
+    /// Whether the application has subscribed to color scheme reporting via DECSET 2031.
+    /// Confined to ptyQueue.
+    nonisolated(unsafe) private var colorSchemeReportingEnabled = false
+
     /// Title for dedup — confined to ptyQueue.
     nonisolated(unsafe) private var windowTitle: String = ""
 
@@ -78,6 +82,9 @@ public final class TerminalCore: @unchecked Sendable {
     public var onPaneNotification: ((String, String) -> Void)?
     /// Called when an unhandled control sequence is received.
     public var onUnhandledSequence: ((String) -> Void)?
+    /// Called to query the current system color scheme (dark = true, light = false).
+    /// Used by DSR 997 and mode 2031 immediate-report on enable.
+    public var onColorSchemeQuery: (() -> Bool)?
 
     // MARK: - Init
 
@@ -114,6 +121,19 @@ public final class TerminalCore: @unchecked Sendable {
         // they remain active in headless usage (tests, pre-start bootstrap).
         streamHandler.onFocusReportingChanged = { [weak self] enabled in
             self?.focusReportingEnabled = enabled
+        }
+        streamHandler.onColorSchemeReportingChanged = { [weak self] enabled in
+            guard let self else { return }
+            self.colorSchemeReportingEnabled = enabled
+            // When mode 2031 is enabled, immediately report the current color scheme.
+            if enabled, let isDark = self.onColorSchemeQuery?() {
+                let ps = isDark ? 1 : 2
+                let sequence = "\u{1B}[?997;\(ps)n"
+                self.ptyProcess?.write(Data(sequence.utf8))
+            }
+        }
+        streamHandler.onColorSchemeQuery = { [weak self] in
+            self?.onColorSchemeQuery?() ?? false
         }
         streamHandler.onUnhandledSequence = { [weak self] message in
             Log.warning("Unhandled sequence: \(message)", category: .session)
@@ -257,6 +277,23 @@ public final class TerminalCore: @unchecked Sendable {
     /// launching a real PTY loopback.
     internal var isFocusReportingEnabledForTesting: Bool {
         ptyQueue.sync { focusReportingEnabled }
+    }
+
+    /// Report a color scheme change to the PTY if the application has subscribed
+    /// via DECSET 2031. Writes `CSI ? 997 ; Ps n` where Ps=1 for dark, Ps=2 for light.
+    /// No-op when mode 2031 is not enabled.
+    public func reportColorScheme(_ isDark: Bool) {
+        ptyQueue.async { [weak self] in
+            guard let self, self.colorSchemeReportingEnabled else { return }
+            let ps = isDark ? 1 : 2
+            let sequence = "\u{1B}[?997;\(ps)n"
+            self.ptyProcess?.write(Data(sequence.utf8))
+        }
+    }
+
+    /// Test-only accessor for color scheme reporting state.
+    internal var isColorSchemeReportingEnabledForTesting: Bool {
+        ptyQueue.sync { colorSchemeReportingEnabled }
     }
 
     // MARK: - Synchronized Update (DECSET 2026)

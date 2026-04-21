@@ -128,6 +128,9 @@ final class TerminalController: TerminalControlling {
                 self?.onPaneNotification?(title, body)
             }
         }
+        core.onColorSchemeQuery = {
+            NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        }
         core.onUnhandledSequence = { [weak self] message in
             let appName = self?.runningCommand ?? "shell"
             GUILog.warning("Unhandled sequence: \(message) from \"\(appName)\"", category: .session)
@@ -308,6 +311,13 @@ final class TerminalController: TerminalControlling {
     /// has enabled DECSET 1004; otherwise this is a no-op.
     func reportFocus(_ focused: Bool) {
         core.reportFocus(focused)
+    }
+
+    /// Report the current system color scheme (dark/light) to the PTY.
+    /// The underlying `TerminalCore` only writes `CSI ? 997 ; Ps n` when
+    /// the running app has enabled DECSET 2031; otherwise this is a no-op.
+    func reportColorScheme(_ isDark: Bool) {
+        core.reportColorScheme(isDark)
     }
 
     private func dispatchUserInput(_ data: Data) {
