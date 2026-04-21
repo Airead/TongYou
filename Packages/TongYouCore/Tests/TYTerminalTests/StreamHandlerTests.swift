@@ -162,6 +162,20 @@ struct StreamHandlerSyncedUpdateTests {
         #expect(String(bytes: writtenReset, encoding: .ascii) == "\u{1B}[?1016;2$y")
     }
 
+    @Test func decrqm2004ReportsState() {
+        // Default is reset (2).
+        let (_, writtenDefault) = drive("\u{1B}[?2004$p")
+        #expect(String(bytes: writtenDefault, encoding: .ascii) == "\u{1B}[?2004;2$y")
+
+        // After DECSET 2004 it is set (1).
+        let (_, writtenSet) = drive("\u{1B}[?2004h\u{1B}[?2004$p")
+        #expect(String(bytes: writtenSet, encoding: .ascii) == "\u{1B}[?2004;1$y")
+
+        // After DECRST 2004 it is reset (2).
+        let (_, writtenReset) = drive("\u{1B}[?2004h\u{1B}[?2004l\u{1B}[?2004$p")
+        #expect(String(bytes: writtenReset, encoding: .ascii) == "\u{1B}[?2004;2$y")
+    }
+
     @Test func decrqmUnrelatedModeIsSilentlyDropped() {
         let (_, written) = drive("\u{1B}[?9999$p")
         #expect(written.isEmpty)
