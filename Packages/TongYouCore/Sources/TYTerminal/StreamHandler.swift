@@ -968,6 +968,12 @@ public struct StreamHandler {
         // Try mouse format modes (1006)
         if modes.setMouseFormat(rawParam: rawParam, enabled: value) { return }
 
+        // Silently ignore legacy mouse encoding modes (1005, 1015)
+        // that we do not support; SGR (1006) is the modern standard.
+        if rawParam == 1005 || rawParam == 1015 {
+            return
+        }
+
         guard let mode = TerminalModes.from(rawValue: rawParam) else {
             onUnhandledSequence?("DECSET/DECRST mode \(rawParam) not implemented")
             return

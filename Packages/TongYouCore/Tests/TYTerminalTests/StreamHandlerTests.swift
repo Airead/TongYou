@@ -390,8 +390,8 @@ struct StreamHandlerUnhandledSequenceTests {
     }
 
     @Test func unsupportedModeTriggersCallback() {
-        // Mode 1005 (UTF-8 mouse) is not supported
-        #expect(run("\u{1B}[?1005h") == ["DECSET/DECRST mode 1005 not implemented"])
+        // Mode 1007 (alternate scroll) is not supported
+        #expect(run("\u{1B}[?1007h") == ["DECSET/DECRST mode 1007 not implemented"])
     }
 
     @Test func supportedModeDoesNotTriggerCallback() {
@@ -400,8 +400,8 @@ struct StreamHandlerUnhandledSequenceTests {
     }
 
     @Test func multipleUnsupportedModesAreReported() {
-        #expect(run("\u{1B}[?1005h\u{1B}[?1006h\u{1B}[?1007h") == ["DECSET/DECRST mode 1005 not implemented", "DECSET/DECRST mode 1007 not implemented"])
-        // 1006 is supported (mouse format), so only 1005 and 1007 are reported
+        #expect(run("\u{1B}[?1001h\u{1B}[?1006h\u{1B}[?1007h") == ["DECSET/DECRST mode 1001 not implemented", "DECSET/DECRST mode 1007 not implemented"])
+        // 1006 is supported (mouse format), so only 1001 and 1007 are reported
     }
 
     @Test func cursorKeysAndBracketedPasteModesDoNotLog() {

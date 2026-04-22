@@ -252,8 +252,8 @@ struct TerminalCoreTests {
         core.onUnhandledSequence = { message in
             capturedMessages.append(message)
         }
-        core.feedBytesForTesting(Array("\u{1B}[?1005h".utf8))
-        #expect(capturedMessages == ["DECSET/DECRST mode 1005 not implemented"])
+        core.feedBytesForTesting(Array("\u{1B}[?1007h".utf8))
+        #expect(capturedMessages == ["DECSET/DECRST mode 1007 not implemented"])
     }
 
     @Test("onUnhandledSequence callback does not fire for supported mode")
