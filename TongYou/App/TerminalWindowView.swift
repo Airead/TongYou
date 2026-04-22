@@ -1420,7 +1420,7 @@ struct TerminalWindowView: View {
             guard let sessionID = UUID(uuidString: entry.identifier),
                   let session = sessionManager.sessions.first(where: { $0.id == sessionID })
             else { return nil }
-            var candidate = Self.sessionPaletteCandidate(for: session)
+            let candidate = Self.sessionPaletteCandidate(for: session)
             return PaletteCandidate(
                 id: candidate.id,
                 primaryText: candidate.primaryText,
