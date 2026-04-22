@@ -983,7 +983,7 @@ public struct StreamHandler {
 
         // Side effects
         switch mode {
-        case .cursorKeys, .bracketedPaste, .columnMode, .smoothScroll, .graphemeClustering:
+        case .cursorKeys, .bracketedPaste, .columnMode, .smoothScroll, .graphemeClustering, .textAreaSizeReporting:
             // Passive modes: recognized and stored, but either have no side
             // effects in this method (consumers read the bitfield directly)
             // or their full implementation is deferred.
@@ -1049,6 +1049,8 @@ public struct StreamHandler {
             state = modes.isSet(.graphemeClustering) ? 1 : 2
         case 2031:
             state = modes.isSet(.colorSchemeReporting) ? 1 : 2
+        case 2048:
+            state = modes.isSet(.textAreaSizeReporting) ? 1 : 2
         default:
             onUnhandledSequence?("DECRQM query for mode \(mode) not implemented")
             return
@@ -1120,7 +1122,7 @@ public struct StreamHandler {
             .cursorKeys, .columnMode, .smoothScroll, .reverseVideo,
             .originMode, .autowrap, .cursorVisible, .focusEvents,
             .altScreen, .bracketedPaste, .syncedUpdate, .graphemeClustering,
-            .colorSchemeReporting, .blinkingCursor, .keypadApplication
+            .colorSchemeReporting, .textAreaSizeReporting, .blinkingCursor, .keypadApplication
         ]
         for mode in decModes {
             let savedValue = saved.isSet(mode)

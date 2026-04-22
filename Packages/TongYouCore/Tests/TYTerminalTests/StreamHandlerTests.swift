@@ -228,6 +228,20 @@ struct StreamHandlerSyncedUpdateTests {
         #expect(String(bytes: writtenReset, encoding: .ascii) == "\u{1B}[?2031;2$y")
     }
 
+    @Test func decrqm2048ReportsState() {
+        // Default is reset (2).
+        let (_, writtenDefault) = drive("\u{1B}[?2048$p")
+        #expect(String(bytes: writtenDefault, encoding: .ascii) == "\u{1B}[?2048;2$y")
+
+        // After DECSET 2048 it is set (1).
+        let (_, writtenSet) = drive("\u{1B}[?2048h\u{1B}[?2048$p")
+        #expect(String(bytes: writtenSet, encoding: .ascii) == "\u{1B}[?2048;1$y")
+
+        // After DECRST 2048 it is reset (2).
+        let (_, writtenReset) = drive("\u{1B}[?2048h\u{1B}[?2048l\u{1B}[?2048$p")
+        #expect(String(bytes: writtenReset, encoding: .ascii) == "\u{1B}[?2048;2$y")
+    }
+
     @Test func decrqm2031DSR996ReportsDark() {
         var handler = StreamHandler(screen: Screen(columns: 10, rows: 2))
         var response: Data?
@@ -411,6 +425,8 @@ struct StreamHandlerUnhandledSequenceTests {
         #expect(run("\u{1B}[?1l").isEmpty)   // cursorKeys reset
         #expect(run("\u{1B}[?2004h").isEmpty) // bracketedPaste
         #expect(run("\u{1B}[?2004l").isEmpty) // bracketedPaste reset
+        #expect(run("\u{1B}[?2048h").isEmpty) // textAreaSizeReporting
+        #expect(run("\u{1B}[?2048l").isEmpty) // textAreaSizeReporting reset
     }
 
     @Test func vttestModesThreeToSixDoNotLog() {
