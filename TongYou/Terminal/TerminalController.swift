@@ -166,6 +166,10 @@ final class TerminalController: TerminalControlling {
             guard let self else { return }
             self.onPaletteColorChanged?(index, color)
         }
+        core.onPaletteColorQuery = { [weak self] index in
+            guard let self else { return nil }
+            return self.config.palette[index]
+        }
         core.onPointerShapeChanged = { [weak self] shape in
             guard let self else { return }
             self.pointerShape = shape

@@ -105,6 +105,10 @@ public final class TerminalCore: @unchecked Sendable {
     /// Called when a palette color changes via OSC 4.
     /// Parameters: (palette index, new color).
     public var onPaletteColorChanged: ((Int, RGBColor) -> Void)?
+    /// Called to query the current palette color for OSC 4 queries.
+    /// Used when no override has been set via OSC 4.
+    /// Parameter: palette index (0-255).
+    public var onPaletteColorQuery: ((Int) -> RGBColor?)?
 
     // MARK: - Init
 
@@ -195,7 +199,7 @@ public final class TerminalCore: @unchecked Sendable {
         }
         streamHandler.onPaletteColorQuery = { [weak self] index in
             guard let self else { return nil }
-            return self.paletteOverrides[index]
+            return self.paletteOverrides[index] ?? self.onPaletteColorQuery?(index)
         }
         streamHandler.onPaletteColorSet = { [weak self] index, color in
             guard let self else { return }
