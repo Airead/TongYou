@@ -414,6 +414,11 @@ public final class TerminalCore: @unchecked Sendable {
         ptyQueue.sync { colorSchemeReportingEnabled }
     }
 
+    /// Test-only accessor for cursor blinking state (DECSET 12).
+    internal var isCursorBlinkingEnabledForTesting: Bool {
+        ptyQueue.sync { cursorBlinkingEnabled }
+    }
+
     // MARK: - Synchronized Update (DECSET 2026)
 
     /// Whether this pane currently has an open BSU..ESU window. Checked by

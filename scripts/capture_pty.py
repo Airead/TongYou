@@ -134,12 +134,14 @@ def annotate_csi(seq_str: str) -> str:
     prefix, params, dollar, final = m.groups()
 
     if prefix == '?' and final == 'h':
-        modes = {"1049": "alt screen", "25": "show cursor", "1000": "mouse tracking",
-                 "1002": "mouse btn events", "1003": "mouse all events", "1006": "SGR mouse",
-                 "2004": "bracketed paste", "2027": "grapheme cluster", "2031": "mode 2031"}
+        modes = {"12": "blinking cursor", "1049": "alt screen", "25": "show cursor",
+                 "1000": "mouse tracking", "1002": "mouse btn events", "1003": "mouse all events",
+                 "1006": "SGR mouse", "2004": "bracketed paste", "2027": "grapheme cluster",
+                 "2031": "mode 2031"}
         return f"  (DECSET {modes.get(params, params)})"
     if prefix == '?' and final == 'l':
-        modes = {"25": "hide cursor", "1049": "normal screen", "2004": "no bracketed paste"}
+        modes = {"12": "no blink cursor", "25": "hide cursor", "1049": "normal screen",
+                 "2004": "no bracketed paste"}
         return f"  (DECRST {modes.get(params, params)})"
     if prefix == '' and final == 'm':
         return f"  (SGR {params})"
