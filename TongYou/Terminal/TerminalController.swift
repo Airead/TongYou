@@ -39,6 +39,8 @@ final class TerminalController: TerminalControlling {
     /// Pointer shape set by OSC 22 (e.g. "default", "pointer", "text").
     /// nil means no shape has been set by the application.
     nonisolated(unsafe) var pointerShape: String?
+    /// Called when the pointer shape changes via OSC 22.
+    nonisolated(unsafe) var onPointerShapeChanged: ((String) -> Void)?
 
     /// Active text selection (MainActor-only).
     private(set) var selection: Selection?
@@ -161,6 +163,9 @@ final class TerminalController: TerminalControlling {
         core.onPointerShapeChanged = { [weak self] shape in
             guard let self else { return }
             self.pointerShape = shape
+            DispatchQueue.main.async { [weak self] in
+                self?.onPointerShapeChanged?(shape)
+            }
         }
         core.onUnhandledSequence = { [weak self] message in
             let appName = self?.runningCommand ?? "shell"
