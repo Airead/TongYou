@@ -23,6 +23,7 @@ struct TabBarView: View {
         HStack(spacing: 0) {
             ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
                 tabItem(tab, index: index)
+                    .frame(maxWidth: .infinity)
                     .onDrag {
                         draggedTab = tab
                         return NSItemProvider(object: tab.id.uuidString as NSString)
@@ -40,13 +41,11 @@ struct TabBarView: View {
                 Image(systemName: "plus")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
-                    .frame(width: 28, height: Self.barHeight)
+                    .frame(maxWidth: .infinity, maxHeight: Self.barHeight)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help("New Tab (Cmd+T)")
-
-            Spacer()
         }
         .frame(height: Self.barHeight)
         .background(Color(nsColor: .windowBackgroundColor).opacity(0.9))
@@ -56,39 +55,46 @@ struct TabBarView: View {
     private func tabItem(_ tab: TerminalTab, index: Int) -> some View {
         let isActive = index == activeTabIndex
 
-        HStack(spacing: 4) {
-            Text(tab.title)
-                .font(.system(size: 11))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .foregroundStyle(isActive ? .primary : .secondary)
+        ZStack {
+            // Background layer: fills entire area and handles taps
+            RoundedRectangle(cornerRadius: 4)
+                .fill(isActive
+                    ? Color(nsColor: .controlBackgroundColor)
+                    : Color.clear)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    onSelect(index)
+                }
 
-            if let count = tabUnreadCounts[tab.id], count > 0 {
-                UnreadBadge(count: count)
-            }
+            // Content layer: title, badge, close button
+            HStack(spacing: 4) {
+                Text(tab.title)
+                    .font(.system(size: 11))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .foregroundStyle(isActive ? .primary : .secondary)
 
-            Button {
-                onClose(index)
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(.tertiary)
-                    .frame(width: 14, height: 14)
-                    .contentShape(Rectangle())
+                if let count = tabUnreadCounts[tab.id], count > 0 {
+                    UnreadBadge(count: count)
+                }
+
+                Spacer()
+
+                Button {
+                    onClose(index)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 14, height: 14)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .opacity(isActive ? 1 : 0.5)
             }
-            .buttonStyle(.plain)
-            .opacity(isActive ? 1 : 0.5)
+            .padding(.horizontal, 10)
         }
-        .padding(.horizontal, 10)
-        .frame(height: Self.barHeight)
-        .background(isActive
-            ? Color(nsColor: .controlBackgroundColor)
-            : Color.clear)
-        .clipShape(RoundedRectangle(cornerRadius: 4))
-        .contentShape(Rectangle())
-        .onTapGesture {
-            onSelect(index)
-        }
+        .frame(maxWidth: .infinity, minHeight: Self.barHeight)
     }
 }
 
