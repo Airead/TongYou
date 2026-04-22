@@ -84,7 +84,7 @@ final class TerminalController: TerminalControlling {
     /// Called on the main thread when a pane notification sequence is received (OSC 9 / 777 / 1337).
     nonisolated(unsafe) var onPaneNotification: ((String, String) -> Void)?
     /// Called on the main thread when a dynamic color changes via OSC 10/11.
-    nonisolated(unsafe) var onDynamicColorChanged: ((Int, RGBColor) -> Void)?
+    nonisolated(unsafe) var onDynamicColorChanged: ((Int, RGBColor?) -> Void)?
     /// Called on the main thread when a palette color changes via OSC 4.
     nonisolated(unsafe) var onPaletteColorChanged: ((Int, RGBColor) -> Void)?
 

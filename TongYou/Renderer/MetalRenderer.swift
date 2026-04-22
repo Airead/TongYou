@@ -34,6 +34,16 @@ final class MetalRenderer {
     let emojiAtlas: ColorEmojiAtlas
     private var colorPalette: ColorPalette
 
+    /// Exposed for dynamic color resets (e.g. OSC 117/119).
+    var palette: ColorPalette {
+        get { colorPalette }
+        set {
+            colorPalette = newValue
+            pendingDirtyRegion.markFull()
+            markAllFramesDirty()
+        }
+    }
+
     // Triple buffering (semaphore paces CPU vs GPU, not thread synchronization)
     private let frameSemaphore = DispatchSemaphore(value: swapChainCount)
     private var frameStates: [FrameState] = []

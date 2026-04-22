@@ -1011,15 +1011,37 @@ final class MetalView: NSView {
             guard let self else { return }
             switch oscNum {
             case 10:
-                self.renderer?.updateDynamicColors(foreground: color, background: nil, cursor: nil, selectionBg: nil, selectionFg: nil)
+                if let color = color {
+                    self.renderer?.updateDynamicColors(foreground: color)
+                }
             case 11:
-                self.renderer?.updateDynamicColors(foreground: nil, background: color, cursor: nil, selectionBg: nil, selectionFg: nil)
+                if let color = color {
+                    self.renderer?.updateDynamicColors(background: color)
+                }
             case 12:
-                self.renderer?.updateDynamicColors(foreground: nil, background: nil, cursor: color, selectionBg: nil, selectionFg: nil)
+                if let color = color {
+                    self.renderer?.updateDynamicColors(cursor: color)
+                } else {
+                    var palette = self.renderer?.palette
+                    palette?.cursorColor = nil
+                    if let p = palette { self.renderer?.palette = p }
+                }
             case 17:
-                self.renderer?.updateDynamicColors(foreground: nil, background: nil, cursor: nil, selectionBg: color, selectionFg: nil)
+                if let color = color {
+                    self.renderer?.updateDynamicColors(selectionBg: color)
+                } else {
+                    var palette = self.renderer?.palette
+                    palette?.selectionBg = nil
+                    if let p = palette { self.renderer?.palette = p }
+                }
             case 19:
-                self.renderer?.updateDynamicColors(foreground: nil, background: nil, cursor: nil, selectionBg: nil, selectionFg: color)
+                if let color = color {
+                    self.renderer?.updateDynamicColors(selectionFg: color)
+                } else {
+                    var palette = self.renderer?.palette
+                    palette?.selectionFg = nil
+                    if let p = palette { self.renderer?.palette = p }
+                }
             default:
                 break
             }

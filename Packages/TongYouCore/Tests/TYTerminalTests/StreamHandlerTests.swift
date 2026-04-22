@@ -1473,4 +1473,62 @@ struct StreamHandlerOSC22Tests {
         handler.flush()
         #expect(unhandled.isEmpty)
     }
+
+    // MARK: - OSC Reset (110/111/112/117/119)
+
+    @Test func osc117ResetsSelectionBackground() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var resets: [Int] = []
+        handler.onDynamicColorReset = { resets.append($0) }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]117\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(resets == [17])
+    }
+
+    @Test func osc119ResetsSelectionForeground() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var resets: [Int] = []
+        handler.onDynamicColorReset = { resets.append($0) }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]119\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(resets == [19])
+    }
+
+    @Test func osc110ResetsForeground() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var resets: [Int] = []
+        handler.onDynamicColorReset = { resets.append($0) }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]110\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(resets == [10])
+    }
+
+    @Test func osc111ResetsBackground() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var resets: [Int] = []
+        handler.onDynamicColorReset = { resets.append($0) }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]111\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(resets == [11])
+    }
 }

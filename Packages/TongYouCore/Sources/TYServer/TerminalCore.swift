@@ -98,7 +98,7 @@ public final class TerminalCore: @unchecked Sendable {
     public var onColorSchemeQuery: (() -> Bool)?
     /// Called when a dynamic color changes via OSC 10/11.
     /// Parameters: (OSC number, new color).
-    public var onDynamicColorChanged: ((Int, RGBColor) -> Void)?
+    public var onDynamicColorChanged: ((Int, RGBColor?) -> Void)?
     /// Called to query the current default foreground/background color.
     /// Used by OSC 10/11 queries when no dynamic color has been set.
     /// Parameter: OSC number (10 = foreground, 11 = background).
@@ -213,6 +213,29 @@ public final class TerminalCore: @unchecked Sendable {
                 return
             }
             self.onDynamicColorChanged?(oscNum, color)
+        }
+        streamHandler.onDynamicColorReset = { [weak self] oscNum in
+            guard let self else { return }
+            switch oscNum {
+            case 10:
+                self.dynamicForegroundColor = nil
+            case 11:
+                self.dynamicBackgroundColor = nil
+            case 12:
+                self.dynamicCursorColor = nil
+            case 13:
+                self.dynamicPointerForegroundColor = nil
+            case 14:
+                self.dynamicPointerBackgroundColor = nil
+            case 17:
+                self.dynamicSelectionBackgroundColor = nil
+            case 19:
+                self.dynamicSelectionForegroundColor = nil
+            default:
+                return
+            }
+            let defaultColor = self.onDefaultColorQuery?(oscNum)
+            self.onDynamicColorChanged?(oscNum, defaultColor)
         }
         streamHandler.onPointerShapeChanged = { [weak self] shape in
             self?.onPointerShapeChanged?(shape)

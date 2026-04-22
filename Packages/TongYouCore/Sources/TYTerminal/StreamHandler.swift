@@ -53,6 +53,9 @@ public struct StreamHandler {
     /// Callback: dynamic color changed by OSC 10/11/17/19 etc.
     /// Parameters are (OSC number, new color).
     public var onDynamicColorSet: ((Int, RGBColor) -> Void)?
+    /// Callback: dynamic color reset by OSC 110/111/112/117/119 etc.
+    /// Parameter is the original OSC number (10, 11, 12, 17, 19).
+    public var onDynamicColorReset: ((Int) -> Void)?
     /// Callback: pointer shape changed by OSC 22.
     /// Parameter is the cursor shape name (e.g. "default", "pointer", "text").
     public var onPointerShapeChanged: ((String) -> Void)?
@@ -490,17 +493,22 @@ public struct StreamHandler {
     // MARK: - OSC Dispatch
 
     private mutating func handleOSC(_ data: [UInt8]) {
-        // Parse "number;string" format
-        guard let separatorIdx = data.firstIndex(of: 0x3B) else { return }
-        let numBytes = data[0..<separatorIdx]
+        // Parse "number;string" format (semicolon is optional for reset sequences like OSC 117)
+        let numBytes: ArraySlice<UInt8>
+        let stringData: ArraySlice<UInt8>
+        if let separatorIdx = data.firstIndex(of: 0x3B) {
+            numBytes = data[0..<separatorIdx]
+            stringData = data[(separatorIdx + 1)...]
+        } else {
+            numBytes = data[0...]
+            stringData = []
+        }
         guard let numStr = String(bytes: numBytes, encoding: .utf8),
               let oscNum = Int(numStr) else { return }
 
-        let stringData = data[(separatorIdx + 1)...]
-
         switch oscNum {
         case 0, 1, 2: // Set window title (0=both, 1=icon, 2=window)
-            if let raw = String(bytes: stringData, encoding: .utf8) {
+            if !stringData.isEmpty, let raw = String(bytes: stringData, encoding: .utf8) {
                 let title = Self.sanitizeTitle(raw)
                 currentTitle = title
                 onTitleChanged?(title)
@@ -535,6 +543,16 @@ public struct StreamHandler {
             handleOSC19(stringData)
         case 22:
             handleOSC22(stringData)
+        case 110:
+            onDynamicColorReset?(10)
+        case 111:
+            onDynamicColorReset?(11)
+        case 112:
+            onDynamicColorReset?(12)
+        case 117:
+            onDynamicColorReset?(17)
+        case 119:
+            onDynamicColorReset?(19)
         case 66:
             // OSC 66 (Kitty text sizing protocol) — intentionally ignored for now.
             break
