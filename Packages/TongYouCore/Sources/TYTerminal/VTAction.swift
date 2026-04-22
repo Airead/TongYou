@@ -198,9 +198,11 @@ public struct PrintBatchBuffer: Sendable {
     /// Single withUnsafeMutableBytes call avoids per-byte overhead.
     public mutating func copyFrom(_ src: UnsafeBufferPointer<UInt8>, srcOffset: Int, count: Int, at destOffset: Int) {
         precondition(destOffset + count <= Self.capacity)
-        withUnsafeMutableBytes(of: &s) { buf in
-            buf.baseAddress!.advanced(by: destOffset)
-                .copyMemory(from: src.baseAddress!.advanced(by: srcOffset), byteCount: count)
+        guard let destAddr = withUnsafeMutableBytes(of: &s, { $0.baseAddress?.advanced(by: destOffset) }),
+              let srcAddr = src.baseAddress?.advanced(by: srcOffset) else {
+            assertionFailure("PrintBatchBuffer.copyFrom: baseAddress unexpectedly nil (destOffset=\(destOffset), srcOffset=\(srcOffset), count=\(count))")
+            return
         }
+        destAddr.copyMemory(from: srcAddr, byteCount: count)
     }
 }

@@ -362,6 +362,20 @@ public final class PTYProcess {
     // MARK: - Private: Read Source
 
     private func startReadSource(fd: Int32) {
+        // Defensive: cancel any existing read source before creating a new one
+        // to prevent buffer leaks or double-cancellation.
+        let oldSource = stateLock.withLock {
+            let s = readSource
+            readSource = nil
+            return s
+        }
+        if let oldSource {
+            // TYPTY module has no access to Log/GUILog; use stderr so the
+            // anomaly still surfaces in Console.app / log streams.
+            fputs("PTYProcess.startReadSource: replacing existing readSource (fd=\(fd))\n", stderr)
+            oldSource.cancel()
+        }
+
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: readQueue)
 
         // Allocate read buffer once; freed in cancel handler

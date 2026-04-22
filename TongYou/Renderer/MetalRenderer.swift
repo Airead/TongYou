@@ -82,6 +82,20 @@ final class MetalRenderer {
     private var backingColumns: Int = 0
     private var backingRows: Int = 0
 
+    /// Whether backingCells is consistent with backingColumns/backingRows.
+    private var backingStoreIsValid: Bool {
+        backingCells.count == backingColumns * backingRows
+    }
+
+    /// Safely access a cell in the backing store. Returns nil if out of bounds.
+    private func safeCell(row: Int, col: Int) -> Cell? {
+        guard row >= 0, row < backingRows,
+              col >= 0, col < backingColumns else { return nil }
+        let index = row * backingColumns + col
+        guard index < backingCells.count else { return nil }
+        return backingCells[index]
+    }
+
     /// CPU-side staging buffer for per-row text/emoji instances.
     private struct RowTextInstances {
         var text: [CellTextInstance] = []
@@ -663,24 +677,47 @@ final class MetalRenderer {
                 let shiftRows = backingRows - scrollDelta
                 let srcStart = scrollDelta * cols
                 let count = shiftRows * cols
-                backingCells.replaceSubrange(0..<count,
-                    with: backingCells[srcStart..<(srcStart + count)])
-                // Clear newly revealed bottom rows (dirty rows will overwrite them).
-                let clearStart = shiftRows * cols
-                let clearEnd = backingRows * cols
-                for i in clearStart..<clearEnd {
-                    backingCells[i] = .empty
+                // Defensive: verify backingCells has enough elements before shifting.
+                if backingCells.count < srcStart + count || backingCells.count < count {
+                    GUILog.error("setContent partial scroll: backingCells.count \(backingCells.count) insufficient for srcStart+count=\(srcStart + count)", category: .renderer)
+                    // Skip scroll shift but continue processing partial rows.
+                } else {
+                    backingCells.replaceSubrange(0..<count,
+                        with: backingCells[srcStart..<(srcStart + count)])
+                    // Clear newly revealed bottom rows (dirty rows will overwrite them).
+                    let clearStart = shiftRows * cols
+                    let clearEnd = backingRows * cols
+                    if backingCells.count >= clearEnd {
+                        for i in clearStart..<clearEnd {
+                            backingCells[i] = .empty
+                        }
+                    }
                 }
             }
 
             for (row, cells) in snapshot.partialRows {
                 let dst = row * backingColumns
-                backingCells.replaceSubrange(dst..<(dst + backingColumns), with: cells)
+                let end = dst + backingColumns
+                guard dst >= 0, end <= backingCells.count, cells.count == backingColumns else {
+                    GUILog.error("setContent partial: row \(row) out of bounds (dst=\(dst), end=\(end), backingCells.count=\(backingCells.count), cells.count=\(cells.count), backingColumns=\(backingColumns))", category: .renderer)
+                    continue
+                }
+                backingCells.replaceSubrange(dst..<end, with: cells)
             }
             let copiedCount = snapshot.partialRows.map { $0.cells.count }.reduce(0, +)
             frameMetrics?.recordSnapshotCellCopyCount(copiedCount)
         } else {
+            let expectedCount = snapshot.columns * snapshot.rows
             let count = snapshot.cells.count
+            // Defensive: reject snapshots whose cell array doesn't match the declared grid size.
+            // This protects against out-of-bounds access in render().
+            if count != expectedCount {
+                GUILog.error(
+                    "setContent: snapshot cell count mismatch (\(count) != \(snapshot.columns)*\(snapshot.rows)=\(expectedCount)). Dropping snapshot.",
+                    category: .renderer
+                )
+                return
+            }
             if backingColumns == snapshot.columns && backingRows == snapshot.rows
                 && backingCells.count == count {
                 // Same grid size: overwrite in-place to avoid malloc churn.
@@ -768,7 +805,10 @@ final class MetalRenderer {
         let endCol = min(backingColumns - 1, col + 5)
         guard startCol <= endCol else { return "[]" }
         let rowBase = row * backingColumns
-        guard rowBase + endCol < backingCells.count else { return "[?]" }
+        guard rowBase + endCol < backingCells.count else {
+            GUILog.error("sampleCellsAroundCursor: rowBase+endCol \(rowBase + endCol) out of bounds (backingCells.count=\(backingCells.count)). row=\(row), col=\(col)", category: .renderer)
+            return "[?]"
+        }
         var parts: [String] = []
         parts.reserveCapacity(endCol - startCol + 1)
         for c in startCol...endCol {
@@ -795,6 +835,18 @@ final class MetalRenderer {
         }
 
         guard frameSemaphore.wait(timeout: .now()) == .success else {
+            frameMetrics?.recordSkip()
+            return
+        }
+
+        // Defensive: if backingCells is out of sync with backingColumns/backingRows,
+        // skip rendering to avoid SIGSEGV from out-of-bounds access.
+        if !backingStoreIsValid {
+            GUILog.error(
+                "render: backingStore inconsistent (cells=\(backingCells.count) != \(backingColumns)*\(backingRows)=\(backingColumns * backingRows)). Skipping frame.",
+                category: .renderer
+            )
+            frameSemaphore.signal()
             frameMetrics?.recordSkip()
             return
         }
@@ -1018,16 +1070,20 @@ final class MetalRenderer {
     private func ensureBufferCapacity<T>(
         buffer: inout MTLBuffer, capacity: inout Int,
         requiredCount: Int, type: T.Type
-    ) {
-        guard requiredCount > capacity else { return }
+    ) -> Bool {
+        guard requiredCount > capacity else { return true }
         var newCapacity = max(capacity, 1)
         while newCapacity < requiredCount { newCapacity *= 2 }
         guard let newBuffer = device.makeBuffer(
             length: MemoryLayout<T>.stride * newCapacity,
             options: .storageModeShared
-        ) else { return }
+        ) else {
+            GUILog.error("Failed to allocate Metal buffer for \(T.self), requiredCount=\(requiredCount)", category: .renderer)
+            return false
+        }
         buffer = newBuffer
         capacity = newCapacity
+        return true
     }
 
     /// Shrink instance buffers when capacity exceeds 4x the needed amount after resize.
@@ -1102,11 +1158,14 @@ final class MetalRenderer {
         let rows = Int(grid.rows)
         let count = cols * rows
 
-        ensureBufferCapacity(
+        guard ensureBufferCapacity(
             buffer: &frame.pointee.bgInstanceBuffer,
             capacity: &frame.pointee.bgInstanceCapacity,
             requiredCount: count, type: CellBgInstance.self
-        )
+        ) else {
+            GUILog.error("fillBgInstanceBuffer: failed to ensure buffer capacity, count=\(count)", category: .renderer)
+            return
+        }
 
         let ptr = frame.pointee.bgInstanceBuffer.contents()
             .bindMemory(to: CellBgInstance.self, capacity: count)
@@ -1149,7 +1208,12 @@ final class MetalRenderer {
             if row < snapRows {
                 let rowBase = row * backingColumns
                 for col in 0..<snapCols {
-                    let attrs = backingCells[rowBase + col].attributes
+                    let cellIndex = rowBase + col
+                    guard cellIndex < backingCells.count else {
+                        GUILog.error("fillBgInstanceBuffer: cellIndex \(cellIndex) out of bounds (backingCells.count=\(backingCells.count)). row=\(row), col=\(col)", category: .renderer)
+                        continue
+                    }
+                    let attrs = backingCells[cellIndex].attributes
                     var (fg, bg) = palette.resolveDisplay(attrs)
                     if snapshot?.reverseVideo == true {
                         swap(&fg, &bg)
@@ -1231,10 +1295,16 @@ final class MetalRenderer {
         underlineInstances.reserveCapacity(64)
         strikethroughInstances.reserveCapacity(64)
 
-        if backingColumns > 0 && backingRows > 0 {
+        if backingColumns > 0 && backingRows > 0 && backingStoreIsValid {
             for row in 0..<min(rows, backingRows) {
+                let rowBase = row * backingColumns
                 for col in 0..<min(cols, backingColumns) {
-                    let cell = backingCells[row * backingColumns + col]
+                    let cellIndex = rowBase + col
+                    guard cellIndex < backingCells.count else {
+                        GUILog.error("fillDecorationInstanceBuffers: cellIndex \(cellIndex) out of bounds (backingCells.count=\(backingCells.count)). row=\(row), col=\(col)", category: .renderer)
+                        continue
+                    }
+                    let cell = backingCells[cellIndex]
                     let flags = cell.attributes.flags
                     if flags.contains(.underline) {
                         var (fg, bg) = colorPalette.resolveDisplay(cell.attributes)
@@ -1267,7 +1337,8 @@ final class MetalRenderer {
             let clampedEnd = min(url.endCol, maxCol)
             if clampedEnd >= clampedStart {
                 var (fg, bg) = (colorPalette.defaultFg, colorPalette.defaultBg)
-                if url.row < backingRows, clampedStart < backingColumns {
+                if url.row < backingRows, clampedStart < backingColumns,
+                   url.row * backingColumns + clampedStart < backingCells.count {
                     let attrs = backingCells[url.row * backingColumns + clampedStart].attributes
                     (fg, bg) = colorPalette.resolveDisplay(attrs)
                 }
@@ -1288,11 +1359,14 @@ final class MetalRenderer {
         // Write underline buffer
         let ulCount = underlineInstances.count
         if ulCount > 0 {
-            ensureBufferCapacity(
+            guard ensureBufferCapacity(
                 buffer: &frame.pointee.underlineInstanceBuffer,
                 capacity: &frame.pointee.underlineInstanceCapacity,
                 requiredCount: ulCount, type: CellBgInstance.self
-            )
+            ) else {
+                frame.pointee.underlineInstanceCount = 0
+                return
+            }
             let ptr = frame.pointee.underlineInstanceBuffer.contents()
                 .bindMemory(to: CellBgInstance.self, capacity: ulCount)
             for i in 0..<ulCount { ptr[i] = underlineInstances[i] }
@@ -1302,11 +1376,14 @@ final class MetalRenderer {
         // Write strikethrough buffer
         let stCount = strikethroughInstances.count
         if stCount > 0 {
-            ensureBufferCapacity(
+            guard ensureBufferCapacity(
                 buffer: &frame.pointee.strikethroughInstanceBuffer,
                 capacity: &frame.pointee.strikethroughInstanceCapacity,
                 requiredCount: stCount, type: CellBgInstance.self
-            )
+            ) else {
+                frame.pointee.strikethroughInstanceCount = 0
+                return
+            }
             let ptr = frame.pointee.strikethroughInstanceBuffer.contents()
                 .bindMemory(to: CellBgInstance.self, capacity: stCount)
             for i in 0..<stCount { ptr[i] = strikethroughInstances[i] }
@@ -1379,8 +1456,16 @@ final class MetalRenderer {
     /// renderable, non-space cells with identical attributes.
     func buildRuns(forRow row: Int) -> [TextRun] {
         var runs: [TextRun] = []
+        guard row >= 0, row < backingRows, backingColumns > 0, backingStoreIsValid else {
+            GUILog.error("buildRuns: invalid backing store or row \(row) out of bounds (backingRows=\(backingRows), backingColumns=\(backingColumns), valid=\(backingStoreIsValid))", category: .renderer)
+            return runs
+        }
         let rowBase = row * backingColumns
         let cols = backingColumns
+        guard rowBase + cols <= backingCells.count else {
+            GUILog.error("buildRuns: rowBase+cols \(rowBase + cols) exceeds backingCells.count \(backingCells.count). row=\(row)", category: .renderer)
+            return runs
+        }
 
         var currentStart: Int? = nil
         var currentCells: [Cell] = []
@@ -1591,9 +1676,12 @@ final class MetalRenderer {
                 if width == .wide {
                     targetCells = 2
                 } else if col + 1 < snapCols {
-                    let nextCell = backingCells[rowBase + col + 1]
-                    if nextCell.content.firstScalar == Unicode.Scalar(" ") || !nextCell.width.isRenderable {
-                        targetCells = 2
+                    let nextIndex = rowBase + col + 1
+                    if nextIndex < backingCells.count {
+                        let nextCell = backingCells[nextIndex]
+                        if nextCell.content.firstScalar == Unicode.Scalar(" ") || !nextCell.width.isRenderable {
+                            targetCells = 2
+                        }
                     }
                 }
 
@@ -1632,7 +1720,12 @@ final class MetalRenderer {
         let cw = UInt32(CGFloat(fontSystem.cellSize.width) * CGFloat(hScale))
         let ch = UInt32(CGFloat(fontSystem.cellSize.height) * CGFloat(vScale))
         for col in 0..<snapCols {
-            let cell = backingCells[rowBase + col]
+            let cellIndex = rowBase + col
+            guard cellIndex < backingCells.count else {
+                GUILog.error("rebuildTextRow: cellIndex \(cellIndex) out of bounds (backingCells.count=\(backingCells.count)). row=\(row), col=\(col)", category: .renderer)
+                continue
+            }
+            let cell = backingCells[cellIndex]
             guard let scalar = cell.content.firstScalar,
                   scalar.isBoxDrawing else { continue }
             let fg = colorState.foreground(
@@ -1716,7 +1809,10 @@ final class MetalRenderer {
             // Partial: only rebuild dirty rows
             var countsChanged = false
             for row in dirtyRegion.dirtyRows {
-                guard row >= 0 && row < rows && row < backingRows else { continue }
+                guard row >= 0 && row < rows && row < backingRows else {
+                    GUILog.error("fillTextInstanceBuffer partial: row \(row) out of bounds (rows=\(rows), backingRows=\(backingRows))", category: .renderer)
+                    continue
+                }
                 let oldTextCount = frame.pointee.stagedRowInstances[row].text.count
                 let oldEmojiCount = frame.pointee.stagedRowInstances[row].emoji.count
                 let oldBoxDrawCount = frame.pointee.stagedRowInstances[row].boxDraw.count
@@ -1752,7 +1848,10 @@ final class MetalRenderer {
                 let arcCornerPtr = frame.pointee.arcCornerInstanceBuffer.contents()
                     .bindMemory(to: ArcCornerInstance.self, capacity: frame.pointee.arcCornerInstanceCapacity)
                 for row in dirtyRegion.dirtyRows {
-                    guard row >= 0 && row < rows else { continue }
+                    guard row >= 0 && row < rows else {
+                        GUILog.error("fillTextInstanceBuffer fast path: dirty row \(row) out of bounds (rows=\(rows))", category: .renderer)
+                        continue
+                    }
                     let tOff = frame.pointee.textRowOffsets[row]
                     for (i, inst) in frame.pointee.stagedRowInstances[row].text.enumerated() {
                         textPtr[tOff + i] = inst
@@ -1780,26 +1879,30 @@ final class MetalRenderer {
         let totalBoxDrawCount = frame.pointee.stagedRowInstances.reduce(0) { $0 + $1.boxDraw.count }
         let totalArcCornerCount = frame.pointee.stagedRowInstances.reduce(0) { $0 + $1.arcCorner.count }
 
-        ensureBufferCapacity(
+        guard ensureBufferCapacity(
             buffer: &frame.pointee.textInstanceBuffer,
             capacity: &frame.pointee.textInstanceCapacity,
             requiredCount: max(1, totalTextCount), type: CellTextInstance.self
-        )
-        ensureBufferCapacity(
+        ), ensureBufferCapacity(
             buffer: &frame.pointee.emojiInstanceBuffer,
             capacity: &frame.pointee.emojiInstanceCapacity,
             requiredCount: max(1, totalEmojiCount), type: CellTextInstance.self
-        )
-        ensureBufferCapacity(
+        ), ensureBufferCapacity(
             buffer: &frame.pointee.boxDrawInstanceBuffer,
             capacity: &frame.pointee.boxDrawInstanceCapacity,
             requiredCount: max(1, totalBoxDrawCount), type: BoxDrawSegmentInstance.self
-        )
-        ensureBufferCapacity(
+        ), ensureBufferCapacity(
             buffer: &frame.pointee.arcCornerInstanceBuffer,
             capacity: &frame.pointee.arcCornerInstanceCapacity,
             requiredCount: max(1, totalArcCornerCount), type: ArcCornerInstance.self
-        )
+        ) else {
+            GUILog.error("fillTextInstanceBuffer: failed to ensure buffer capacity", category: .renderer)
+            frame.pointee.textInstanceCount = 0
+            frame.pointee.emojiInstanceCount = 0
+            frame.pointee.boxDrawInstanceCount = 0
+            frame.pointee.arcCornerInstanceCount = 0
+            return
+        }
 
         let textPtr = frame.pointee.textInstanceBuffer.contents()
             .bindMemory(to: CellTextInstance.self, capacity: max(1, totalTextCount))
@@ -1878,7 +1981,10 @@ final class MetalRenderer {
 
             let col = Int(ptr[i].gridPos.x)
             let rowBase = row * snapCols
-            guard rowBase + col < backingCells.count else { continue }
+            guard rowBase + col < backingCells.count else {
+                GUILog.error("patchTextInstanceColors: text instance (\(row),\(col)) out of bounds (rowBase+col=\(rowBase + col) >= \(backingCells.count))", category: .renderer)
+                continue
+            }
 
             let absLine = snapshot.absoluteLine(forViewportRow: row)
             ptr[i].color = colorState.foreground(
@@ -1897,7 +2003,10 @@ final class MetalRenderer {
 
                 let col = Int(bdPtr[i].gridPos.x)
                 let rowBase = row * snapCols
-                guard rowBase + col < backingCells.count else { continue }
+                guard rowBase + col < backingCells.count else {
+                    GUILog.error("patchTextInstanceColors: boxDraw instance (\(row),\(col)) out of bounds (rowBase+col=\(rowBase + col) >= \(backingCells.count))", category: .renderer)
+                    continue
+                }
 
                 let absLine = snapshot.absoluteLine(forViewportRow: row)
                 bdPtr[i].color = colorState.foreground(
@@ -1917,7 +2026,10 @@ final class MetalRenderer {
 
                 let col = Int(acPtr[i].gridPos.x)
                 let rowBase = row * snapCols
-                guard rowBase + col < backingCells.count else { continue }
+                guard rowBase + col < backingCells.count else {
+                    GUILog.error("patchTextInstanceColors: arcCorner instance (\(row),\(col)) out of bounds (rowBase+col=\(rowBase + col) >= \(backingCells.count))", category: .renderer)
+                    continue
+                }
 
                 let absLine = snapshot.absoluteLine(forViewportRow: row)
                 acPtr[i].color = colorState.foreground(
