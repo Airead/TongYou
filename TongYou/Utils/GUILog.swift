@@ -33,14 +33,14 @@ enum GUILog {
     /// When non-nil, only these categories are logged. Nil means all categories.
     nonisolated(unsafe) private static var _enabledCategories: Set<Category>?
 
-    nonisolated(unsafe) private static let fileWriter = FileLogWriter(
+    nonisolated private static let fileWriter = FileLogWriter(
         filePrefix: "gui",
         queueLabel: "io.github.airead.tongyou.guilog"
     )
 
     /// Override for the log directory. When set, logs write here instead of the
     /// default `~/.local/share/TongYou/logs`. Intended for testing.
-    nonisolated(unsafe) static var logDirectoryOverride: URL? {
+    nonisolated static var logDirectoryOverride: URL? {
         get { fileWriter.logDirectoryOverride }
         set { fileWriter.logDirectoryOverride = newValue }
     }
