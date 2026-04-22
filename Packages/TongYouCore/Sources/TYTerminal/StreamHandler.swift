@@ -116,7 +116,8 @@ public struct StreamHandler {
             handleOSC(data)
 
         case .dcsHook, .dcsPut, .dcsUnhook:
-            onUnhandledSequence?("DCS sequence (not implemented)")
+            // DCS sequences are silently ignored.
+            break
         case .apcStart, .apcPut, .apcEnd:
             // APC sequences are silently ignored per design.
             break
