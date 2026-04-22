@@ -1199,12 +1199,11 @@ final class MetalView: NSView {
         MainActor.assumeIsolated {
             if let snapshot = self.terminalController?.consumeSnapshot() {
                 let gen = self.terminalController?.contentGeneration ?? 0
-                if gen != self.lastRenderedContentGeneration {
-                    self.lastRenderedContentGeneration = gen
-                    self.renderer?.setContent(snapshot)
-                } else {
-                    self.renderer?.recordDedupedFrame()
-                }
+                // Always call setContent — MetalRenderer.merge() handles dedup
+                // at the dirtyRegion level, and skipping here causes stale cells
+                // when the generation counter fails to increment (last-line bug).
+                self.lastRenderedContentGeneration = gen
+                self.renderer?.setContent(snapshot)
             }
             guard let renderer = self.renderer, renderer.needsRender else {
                 link.isPaused = true

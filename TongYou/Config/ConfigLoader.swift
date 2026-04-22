@@ -413,7 +413,10 @@ final class ConfigLoader {
         if config.debugLogCategories.isEmpty {
             categories = nil
         } else {
-            categories = Set(config.debugLogCategories.compactMap { GUILog.Category(rawValue: $0) })
+            let allCases = GUILog.Category.allCases
+            categories = Set(config.debugLogCategories.compactMap { raw in
+                allCases.first { $0.rawValue.lowercased() == raw.lowercased() }
+            })
         }
         GUILog.enable(level: level, categories: categories)
     }

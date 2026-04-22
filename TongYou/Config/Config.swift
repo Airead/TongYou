@@ -279,7 +279,7 @@ extension Config {
             } else {
                 debugLogCategories = Set(
                     value.split(separator: ",")
-                        .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+                        .map { $0.trimmingCharacters(in: .whitespaces) }
                         .filter { !$0.isEmpty }
                 )
             }

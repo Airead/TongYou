@@ -17,6 +17,8 @@ public enum Log {
         /// Temporary: investigating remote-mode split-pane cursor misalignment.
         /// Remove along with its call sites once the bug is fixed.
         case cursorTrace
+        /// Temporary: investigating last-line rendering issue.
+        case renderDebug
     }
 
     public typealias Level = LogLevel
