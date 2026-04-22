@@ -842,6 +842,74 @@ struct StreamHandlerUnhandledSequenceTests {
         #expect(colors[0].1 == RGBColor(r: 0x00, g: 0x00, b: 0xFF))
     }
 
+    @Test func osc17QueryRespondsWithSelectionBackgroundColor() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var responses: [String] = []
+        handler.onWriteBack = { responses.append(String(data: $0, encoding: .utf8)!) }
+        handler.onDynamicColorQuery = { oscNum in
+            #expect(oscNum == 17)
+            return RGBColor(r: 0xC1, g: 0xDE, b: 0xFF)
+        }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]17;?\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(responses == ["\u{1B}]17;rgb:C1C1/DEDE/FFFF\u{07}"])
+    }
+
+    @Test func osc19QueryRespondsWithSelectionForegroundColor() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var responses: [String] = []
+        handler.onWriteBack = { responses.append(String(data: $0, encoding: .utf8)!) }
+        handler.onDynamicColorQuery = { oscNum in
+            #expect(oscNum == 19)
+            return RGBColor(r: 0x00, g: 0x00, b: 0x00)
+        }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]19;?\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(responses == ["\u{1B}]19;rgb:0000/0000/0000\u{07}"])
+    }
+
+    @Test func osc17SetColorWithHex() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var colors: [(Int, RGBColor)] = []
+        handler.onDynamicColorSet = { colors.append(($0, $1)) }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]17;#c1deff\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(colors.count == 1)
+        #expect(colors[0].0 == 17)
+        #expect(colors[0].1 == RGBColor(r: 0xC1, g: 0xDE, b: 0xFF))
+    }
+
+    @Test func osc19SetColorWithHex() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var colors: [(Int, RGBColor)] = []
+        handler.onDynamicColorSet = { colors.append(($0, $1)) }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]19;#000000\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(colors.count == 1)
+        #expect(colors[0].0 == 19)
+        #expect(colors[0].1 == RGBColor(r: 0x00, g: 0x00, b: 0x00))
+    }
+
     @Test func osc10SetColorWithHex() {
         let screen = Screen(columns: 10, rows: 2)
         var handler = StreamHandler(screen: screen)

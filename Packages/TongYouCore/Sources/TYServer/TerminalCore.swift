@@ -55,12 +55,14 @@ public final class TerminalCore: @unchecked Sendable {
     nonisolated(unsafe) private var pixelWidth: UInt32 = 0
     nonisolated(unsafe) private var pixelHeight: UInt32 = 0
 
-    /// Dynamic colors set via OSC 10/11/12/13/14. Confined to ptyQueue.
+    /// Dynamic colors set via OSC 10/11/12/13/14/17/19. Confined to ptyQueue.
     nonisolated(unsafe) private var dynamicForegroundColor: RGBColor?
     nonisolated(unsafe) private var dynamicBackgroundColor: RGBColor?
     nonisolated(unsafe) private var dynamicCursorColor: RGBColor?
     nonisolated(unsafe) private var dynamicPointerForegroundColor: RGBColor?
     nonisolated(unsafe) private var dynamicPointerBackgroundColor: RGBColor?
+    nonisolated(unsafe) private var dynamicSelectionBackgroundColor: RGBColor?
+    nonisolated(unsafe) private var dynamicSelectionForegroundColor: RGBColor?
     /// Palette color overrides set via OSC 4. Confined to ptyQueue.
     nonisolated(unsafe) private var paletteOverrides: [Int: RGBColor] = [:]
 
@@ -182,6 +184,10 @@ public final class TerminalCore: @unchecked Sendable {
                 return self.dynamicPointerForegroundColor ?? self.onDefaultColorQuery?(13)
             case 14:
                 return self.dynamicPointerBackgroundColor ?? self.onDefaultColorQuery?(14)
+            case 17:
+                return self.dynamicSelectionBackgroundColor ?? self.onDefaultColorQuery?(17)
+            case 19:
+                return self.dynamicSelectionForegroundColor ?? self.onDefaultColorQuery?(19)
             default:
                 return nil
             }
@@ -199,6 +205,10 @@ public final class TerminalCore: @unchecked Sendable {
                 self.dynamicPointerForegroundColor = color
             case 14:
                 self.dynamicPointerBackgroundColor = color
+            case 17:
+                self.dynamicSelectionBackgroundColor = color
+            case 19:
+                self.dynamicSelectionForegroundColor = color
             default:
                 return
             }

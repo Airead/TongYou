@@ -156,6 +156,10 @@ final class TerminalController: TerminalControlling {
                 return self.config.cursorColor
             case 13, 14:
                 return nil
+            case 17:
+                return self.config.selectionBackground
+            case 19:
+                return self.config.selectionForeground
             default:
                 return nil
             }

@@ -1011,11 +1011,15 @@ final class MetalView: NSView {
             guard let self else { return }
             switch oscNum {
             case 10:
-                self.renderer?.updateDynamicColors(foreground: color, background: nil, cursor: nil)
+                self.renderer?.updateDynamicColors(foreground: color, background: nil, cursor: nil, selectionBg: nil, selectionFg: nil)
             case 11:
-                self.renderer?.updateDynamicColors(foreground: nil, background: color, cursor: nil)
+                self.renderer?.updateDynamicColors(foreground: nil, background: color, cursor: nil, selectionBg: nil, selectionFg: nil)
             case 12:
-                self.renderer?.updateDynamicColors(foreground: nil, background: nil, cursor: color)
+                self.renderer?.updateDynamicColors(foreground: nil, background: nil, cursor: color, selectionBg: nil, selectionFg: nil)
+            case 17:
+                self.renderer?.updateDynamicColors(foreground: nil, background: nil, cursor: nil, selectionBg: color, selectionFg: nil)
+            case 19:
+                self.renderer?.updateDynamicColors(foreground: nil, background: nil, cursor: nil, selectionBg: nil, selectionFg: color)
             default:
                 break
             }

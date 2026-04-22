@@ -529,6 +529,10 @@ public struct StreamHandler {
             handleOSC13(stringData)
         case 14:
             handleOSC14(stringData)
+        case 17:
+            handleOSC17(stringData)
+        case 19:
+            handleOSC19(stringData)
         case 22:
             handleOSC22(stringData)
         case 66:
@@ -720,6 +724,18 @@ public struct StreamHandler {
         }
     }
 
+    // MARK: - OSC 17 (Selection Background Color)
+
+    private func handleOSC17(_ data: ArraySlice<UInt8>) {
+        handleOSCDynamicColor(oscNumber: 17, data: data)
+    }
+
+    // MARK: - OSC 19 (Selection Foreground Color)
+
+    private func handleOSC19(_ data: ArraySlice<UInt8>) {
+        handleOSCDynamicColor(oscNumber: 19, data: data)
+    }
+
     // MARK: - OSC 22 (Pointer Shape)
 
     /// Handle OSC 22 pointer shape sequences.
@@ -730,8 +746,8 @@ public struct StreamHandler {
         onPointerShapeChanged?(shape)
     }
 
-    /// Shared handler for OSC 10/11/12/17/19 dynamic colors.
-    /// - Parameter oscNumber: The OSC number (10=foreground, 11=background, etc.)
+    /// Shared handler for OSC 10/11/12/13/14/17/19 dynamic colors.
+    /// - Parameter oscNumber: The OSC number (10=foreground, 11=background, 12=cursor, 13=pointer fg, 14=pointer bg, 17=selection bg, 19=selection fg)
     /// - Parameter data: The payload after the semicolon.
     private func handleOSCDynamicColor(oscNumber: Int, data: ArraySlice<UInt8>) {
         guard let str = String(bytes: data, encoding: .utf8), !str.isEmpty else { return }

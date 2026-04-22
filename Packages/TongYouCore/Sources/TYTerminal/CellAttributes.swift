@@ -128,8 +128,8 @@ public struct ColorPalette: Sendable {
     public let cursorText: SIMD4<UInt8>?
 
     /// Selection colors. When nil, selection uses inverted fg/bg.
-    public let selectionBg: SIMD4<UInt8>?
-    public let selectionFg: SIMD4<UInt8>?
+    public var selectionBg: SIMD4<UInt8>?
+    public var selectionFg: SIMD4<UInt8>?
 
     public init(
         defaultFg: SIMD4<UInt8> = SIMD4<UInt8>(220, 220, 220, 255),
@@ -204,11 +204,13 @@ public struct ColorPalette: Sendable {
         }
     }
 
-    /// Update dynamic colors (OSC 10/11/12).
+    /// Update dynamic colors (OSC 10/11/12/17/19).
     public mutating func updateDynamicColors(
         foreground: SIMD4<UInt8>? = nil,
         background: SIMD4<UInt8>? = nil,
-        cursor: SIMD4<UInt8>? = nil
+        cursor: SIMD4<UInt8>? = nil,
+        selectionBg: SIMD4<UInt8>? = nil,
+        selectionFg: SIMD4<UInt8>? = nil
     ) {
         if let fg = foreground {
             self.defaultFg = fg
@@ -218,6 +220,12 @@ public struct ColorPalette: Sendable {
         }
         if let c = cursor {
             self.cursorColor = c
+        }
+        if let sb = selectionBg {
+            self.selectionBg = sb
+        }
+        if let sf = selectionFg {
+            self.selectionFg = sf
         }
     }
 
