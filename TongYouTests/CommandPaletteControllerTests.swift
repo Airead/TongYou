@@ -949,6 +949,7 @@ struct PaletteTextFieldKeyboardTests {
 
         controller.input = "ssh db1 edited"
         #expect(controller.isBrowsingHistory == false)
+        #expect(controller.input == "ssh db1 edited")
     }
 
     @Test func browseHistoryDoesNothingWhenInputIsNonEmpty() {

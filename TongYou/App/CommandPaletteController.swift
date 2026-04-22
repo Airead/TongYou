@@ -129,9 +129,11 @@ final class CommandPaletteController {
     var input: String = "" {
         didSet {
             if input != oldValue {
-                // If the user edits while browsing history, exit history mode.
-                if isBrowsingHistory, !isProgrammaticInputChange, input != historyBrowsingSnapshot {
-                    exitHistoryBrowsing()
+                // If the user edits while browsing history, exit history mode
+                // and keep the current input (do not restore the snapshot).
+                if isBrowsingHistory, !isProgrammaticInputChange {
+                    historyBrowsingIndex = -1
+                    historyBrowsingSnapshot = ""
                 }
                 isProgrammaticInputChange = false
                 refreshRows(resetHighlight: true)
