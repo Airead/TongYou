@@ -646,6 +646,118 @@ struct CommandPaletteControllerTests {
         // Non-parameterised actions do have a title.
         #expect(Keybinding.Action.newTab.paletteDisplayTitle == "New tab")
     }
+
+    // MARK: - History injection
+
+    @Test func emptyQueryShowsHistoryFirst() {
+        let controller = CommandPaletteController()
+        controller.sshCandidates = [
+            PaletteCandidate(primaryText: "alpha", scope: .ssh),
+            PaletteCandidate(primaryText: "beta", scope: .ssh),
+        ]
+        controller.historyCandidates = [
+            PaletteCandidate(primaryText: "gamma", scope: .ssh, historyIdentifier: "gamma"),
+        ]
+        controller.open()
+        controller.input = "ssh "
+
+        #expect(controller.rows.count == 3)
+        #expect(controller.rows[0].candidate.primaryText == "gamma")
+        #expect(controller.rows[0].candidate.historyIdentifier == "gamma")
+        #expect(controller.rows[1].candidate.primaryText == "alpha")
+        #expect(controller.rows[2].candidate.primaryText == "beta")
+    }
+
+    @Test func historyDedupedAgainstRegularPool() {
+        let controller = CommandPaletteController()
+        controller.sshCandidates = [
+            PaletteCandidate(primaryText: "alpha", scope: .ssh, sshResolution: SSHResolution(
+                candidate: SSHCandidate(target: "alpha", hostname: nil, isAdHoc: false),
+                target: SSHTarget.parse("alpha"), templateID: "ssh", variables: [:]
+            )),
+        ]
+        controller.historyCandidates = [
+            PaletteCandidate(primaryText: "alpha", scope: .ssh, historyIdentifier: "alpha"),
+        ]
+        controller.open()
+        controller.input = "ssh "
+
+        // History "alpha" is deduped because regular pool already has it.
+        #expect(controller.rows.count == 1)
+        #expect(controller.rows[0].candidate.historyIdentifier == nil)
+    }
+
+    @Test func nonEmptyQueryHidesHistory() {
+        let controller = CommandPaletteController()
+        controller.sshCandidates = [
+            PaletteCandidate(primaryText: "alpha", scope: .ssh),
+        ]
+        controller.historyCandidates = [
+            PaletteCandidate(primaryText: "beta", scope: .ssh, historyIdentifier: "beta"),
+        ]
+        controller.open()
+        controller.input = "ssh a"
+
+        #expect(controller.rows.count == 1)
+        #expect(controller.rows[0].candidate.primaryText == "alpha")
+    }
+
+    @Test func historyLimitedToFivePerScope() {
+        let controller = CommandPaletteController()
+        controller.commandCandidates = [
+            PaletteCandidate(primaryText: "cmd", scope: .command),
+        ]
+        controller.historyCandidates = (0..<10).map {
+            PaletteCandidate(primaryText: "h\($0)", scope: .command, historyIdentifier: "h\($0)")
+        }
+        controller.open()
+        controller.input = "> "
+
+        // 5 history + 1 regular
+        #expect(controller.rows.count == 6)
+    }
+
+    @Test func deleteHistoryEntryCallsCallback() {
+        let controller = CommandPaletteController()
+        controller.commandCandidates = [
+            PaletteCandidate(primaryText: "cmd", scope: .command),
+        ]
+        controller.historyCandidates = [
+            PaletteCandidate(primaryText: "old", scope: .command, historyIdentifier: "old-id"),
+        ]
+        controller.open()
+        controller.input = "> "
+
+        var deleted: [(PaletteScope, String)] = []
+        controller.onDeleteHistoryEntry = { scope, id in
+            deleted.append((scope, id))
+        }
+
+        let consumed = controller.deleteHighlighted()
+        #expect(consumed == true)
+        #expect(deleted.count == 1)
+        #expect(deleted[0].0 == .command)
+        #expect(deleted[0].1 == "old-id")
+    }
+
+    @Test func deleteHistoryDoesNotAffectRegularCandidates() {
+        let controller = CommandPaletteController()
+        controller.commandCandidates = [
+            PaletteCandidate(primaryText: "cmd", scope: .command),
+        ]
+        controller.open()
+        controller.input = "> "
+
+        var deleted: [(PaletteScope, String)] = []
+        controller.onDeleteHistoryEntry = { scope, id in
+            deleted.append((scope, id))
+        }
+
+        // Highlighted row is a regular candidate, not history.
+        let consumed = controller.deleteHighlighted()
+        #expect(consumed == false)
+        #expect(deleted.isEmpty)
+    }
 }
 
 // MARK: - Keyboard routing (PaletteTextField)

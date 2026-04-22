@@ -98,14 +98,16 @@ final class SSHLauncher {
     /// returned id to chain subsequent splits off the previous pane.
     private let spawn: @MainActor (String, [String: String], SSHPlacement) throws -> UUID?
     private let validateProfile: @MainActor (String, [String: String]) throws -> Void
-    private let history: SSHHistory
     private var matcher: SSHRuleMatcher
     private var sshConfigHosts: [SSHConfigHost]
 
-    /// Cached candidate list. Rebuilt from `history` + `sshConfigHosts`
-    /// when `refreshCandidates()` is called (palette open / after a
-    /// successful spawn).
+    /// Cached candidate list. Rebuilt from `historyCandidates` + `sshConfigHosts`
+    /// when `reload()` is called (palette open / after a successful spawn).
     private(set) var candidates: [SSHCandidate] = []
+
+    /// Called after a successful commit so the outer layer can record the
+    /// target to `PaletteHistory`. Parameters: `(candidate, templateID)`.
+    var onRecordHistory: ((SSHCandidate, String) -> Void)?
 
     // MARK: - Init
 
@@ -113,13 +115,11 @@ final class SSHLauncher {
     /// `validateProfile` are closures so tests can inject mocks without
     /// pulling in `SessionManager`.
     init(
-        history: SSHHistory,
         matcher: SSHRuleMatcher = SSHRuleMatcher(),
         sshConfigHosts: [SSHConfigHost] = [],
         validateProfile: @escaping @MainActor (String, [String: String]) throws -> Void,
         spawn: @escaping @MainActor (String, [String: String], SSHPlacement) throws -> UUID?
     ) {
-        self.history = history
         self.matcher = matcher
         self.sshConfigHosts = sshConfigHosts
         self.validateProfile = validateProfile
@@ -133,6 +133,7 @@ final class SSHLauncher {
     /// palette opens so a freshly edited ssh_config is picked up without
     /// restarting TongYou.
     func reload(
+        historyCandidates: [String] = [],
         ruleFileURL: URL = URL(fileURLWithPath: "/dev/null"),
         sshConfigURL: URL = SSHConfigHosts.defaultURL
     ) async {
@@ -140,48 +141,31 @@ final class SSHLauncher {
         catch { matcher = SSHRuleMatcher() }
         do { sshConfigHosts = try SSHConfigHosts.load(from: sshConfigURL).hosts }
         catch { sshConfigHosts = [] }
-        await rebuildCandidates()
+        rebuildCandidates(history: historyCandidates)
     }
 
-    /// Drop every history record whose target matches, then rebuild the
-    /// candidate list so the palette stops showing it. No-op when the
-    /// target has no history (e.g. ssh_config-only aliases — the palette
-    /// row will stay since it is sourced from the config file).
-    /// Returns the number of dropped records for callers that want to
-    /// distinguish "nothing happened" from "deleted".
-    @discardableResult
-    func deleteHistory(target: String) async -> Int {
-        let dropped = (try? await history.remove(target: target)) ?? 0
-        await rebuildCandidates()
-        return dropped
-    }
-
-    /// Rebuild the in-memory candidate list without re-reading the
-    /// on-disk files. Callers use this after an append-to-history so the
-    /// freshly used target bubbles to the top.
-    func rebuildCandidates() async {
-        let historyEntries = (try? await history.entries()) ?? []
+    /// Rebuild the in-memory candidate list. Callers pass the recent SSH
+    /// history targets so the palette can surface them first.
+    func rebuildCandidates(history: [String]) {
         candidates = Self.mergeCandidates(
-            history: historyEntries,
+            history: history,
             sshHosts: sshConfigHosts
         )
     }
 
     /// Merge history + ssh_config hosts into a single ordered list, preserving
     /// history-recency order first, then ssh_config order. De-duplicates by
-    /// `target` (case-sensitive, matching `SSHHistory`).
+    /// `target` (case-sensitive).
     static func mergeCandidates(
-        history: [SSHHistoryEntry],
+        history: [String],
         sshHosts: [SSHConfigHost]
     ) -> [SSHCandidate] {
         var result: [SSHCandidate] = []
         var seen = Set<String>()
-        for entry in history {
-            guard seen.insert(entry.target).inserted else { continue }
-            // History records the user-typed target; ssh_config hostname
-            // is only known for the alias path, not for the typed string.
+        for target in history {
+            guard seen.insert(target).inserted else { continue }
             result.append(SSHCandidate(
-                target: entry.target,
+                target: target,
                 hostname: nil,
                 isAdHoc: false
             ))
@@ -272,11 +256,7 @@ final class SSHLauncher {
 
         let paneID = try spawn(resolution.templateID, resolution.variables, placement)
 
-        try? await history.append(
-            template: resolution.templateID,
-            target: resolution.candidate.target
-        )
-        await rebuildCandidates()
+        onRecordHistory?(resolution.candidate, resolution.templateID)
         return paneID
     }
 
@@ -326,17 +306,13 @@ final class SSHLauncher {
         return .success(resolutions)
     }
 
-    /// Append history records for every successfully-committed resolution
-    /// and rebuild the in-memory candidate list. Called after the palette's
-    /// batch path finishes spawning the new tab.
-    func recordBatchHistory(resolutions: [SSHResolution]) async {
+    /// Notify the outer layer to record history for every
+    /// successfully-committed resolution. Called after the palette's batch
+    /// path finishes spawning the new tab.
+    func recordBatchHistory(resolutions: [SSHResolution]) {
         for resolution in resolutions {
-            try? await history.append(
-                template: resolution.templateID,
-                target: resolution.candidate.target
-            )
+            onRecordHistory?(resolution.candidate, resolution.templateID)
         }
-        await rebuildCandidates()
     }
 
     /// Map core `ProfileResolveError` cases onto the user-visible enum.

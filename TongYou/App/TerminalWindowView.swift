@@ -35,7 +35,7 @@ struct TerminalWindowView: View {
     /// in sync across palette opens. Wired in `init` because it needs
     /// closures that reference the `sessionManager`.
     @State private var sshLauncher: SSHLauncher
-    @State private var sshHistory = SSHHistory()
+    @State private var paletteHistory = PaletteHistory()
 
     /// IDs of panes whose in-pane search bar is currently open. Updated via
     /// `MetalView.onSearchBarToggled`. Consumed by `zoomedPaneView` to hide
@@ -60,10 +60,8 @@ struct TerminalWindowView: View {
         _configLoader = State(initialValue: loader)
         let manager = SessionManager(profileLoader: loader.profileLoader)
         _sessionManager = State(initialValue: manager)
-        let history = SSHHistory()
-        _sshHistory = State(initialValue: history)
+        _paletteHistory = State(initialValue: PaletteHistory())
         _sshLauncher = State(initialValue: SSHLauncher(
-            history: history,
             validateProfile: { [weak manager] templateID, vars in
                 try manager?.tryResolveProfile(id: templateID, variables: vars)
             },
@@ -375,6 +373,13 @@ struct TerminalWindowView: View {
             return
         }
         commandPalette.close()
+        Task { @MainActor in
+            try? await paletteHistory.record(
+                scope: .profile,
+                identifier: profileID,
+                display: profileID
+            )
+        }
         switch mode {
         case .plain:
             _ = sessionManager.createTab(profileID: profileID, variables: [:])
@@ -414,6 +419,15 @@ struct TerminalWindowView: View {
             return
         }
         dismissCommandPalette()
+        Task { @MainActor in
+            if let title = action.paletteDisplayTitle {
+                try? await paletteHistory.record(
+                    scope: .command,
+                    identifier: action.rawValue,
+                    display: title
+                )
+            }
+        }
         handleTabAction(tabAction)
     }
 
@@ -463,13 +477,22 @@ struct TerminalWindowView: View {
     /// after typing a host.
     private func handleSingleSSHCommit(resolution: SSHResolution, mode: PaletteEnterMode) {
         let placement = sshPlacement(for: mode)
+        sshLauncher.onRecordHistory = { [paletteHistory] candidate, templateID in
+            Task { @MainActor in
+                try? await paletteHistory.record(
+                    scope: .ssh,
+                    identifier: candidate.target,
+                    display: candidate.target,
+                    metadata: ["template": templateID]
+                )
+            }
+        }
         Task { @MainActor in
             do {
                 try await sshLauncher.commit(
                     resolution: resolution,
                     placement: placement
                 )
-                rewirePaletteForSSH()
             } catch let err as SSHLauncherError {
                 toastPresenter.show("SSH: \(err.localizedDescription)")
             } catch {
@@ -501,9 +524,16 @@ struct TerminalWindowView: View {
             let createdTabID = sessionManager.createTabWithGridPanes(
                 requests: requests
             )
+            sshLauncher.recordBatchHistory(resolutions: resolved)
             Task { @MainActor in
-                await sshLauncher.recordBatchHistory(resolutions: resolved)
-                rewirePaletteForSSH()
+                for resolution in resolved {
+                    try? await paletteHistory.record(
+                        scope: .ssh,
+                        identifier: resolution.candidate.target,
+                        display: resolution.candidate.target,
+                        metadata: ["template": resolution.templateID]
+                    )
+                }
                 // Local sessions: focus the first pane of the new tab
                 // (canonicalGridTree's row-major order) so the user lands
                 // on the top-left terminal. Remote sessions return nil —
@@ -569,6 +599,14 @@ struct TerminalWindowView: View {
                 toastPresenter.show("Session: \"\(row.candidate.primaryText)\" is no longer open")
                 return
             }
+            let session = sessionManager.sessions[index]
+            Task { @MainActor in
+                try? await paletteHistory.record(
+                    scope: .session,
+                    identifier: session.id.uuidString,
+                    display: session.name
+                )
+            }
             if sessionManager.isSessionDetached(at: index) {
                 attachSessionAtIndex(index)
             } else {
@@ -586,9 +624,9 @@ struct TerminalWindowView: View {
     /// because ssh_config is the source of truth, not ours.
     private func deleteSSHHistoryFromPalette(target: String) {
         Task { @MainActor in
-            let dropped = await sshLauncher.deleteHistory(target: target)
+            let removed = (try? await paletteHistory.remove(scope: .ssh, identifier: target)) ?? false
             rewirePaletteForSSH()
-            if dropped == 0 {
+            if !removed {
                 toastPresenter.show("SSH: \"\(target)\" 没有历史记录可删除")
             }
             commandPalette.requestRefocusInput()
@@ -1288,7 +1326,10 @@ struct TerminalWindowView: View {
     /// `t <tab>` / `> cmd` switches scopes from inside the input.
     private func openCommandPalette() {
         Task { @MainActor in
+            let sshHistoryEntries = (try? await paletteHistory.recent(scope: .ssh, limit: 50)) ?? []
+            let sshHistoryTargets = sshHistoryEntries.map { $0.identifier }
             await sshLauncher.reload(
+                historyCandidates: sshHistoryTargets,
                 ruleFileURL: ConfigLoader.sshRulesPath(),
                 sshConfigURL: SSHConfigHosts.defaultURL
             )
@@ -1296,7 +1337,97 @@ struct TerminalWindowView: View {
             rewirePaletteForSessions()
             rewirePaletteForProfiles()
             rewirePaletteForCommands()
+            commandPalette.historyCandidates = await buildHistoryCandidates()
+            commandPalette.onDeleteHistoryEntry = { [paletteHistory] scope, identifier in
+                Task { @MainActor in
+                    _ = try? await paletteHistory.remove(scope: scope, identifier: identifier)
+                    commandPalette.historyCandidates = await self.buildHistoryCandidates()
+                    commandPalette.requestRefocusInput()
+                }
+            }
             commandPalette.open()
+        }
+    }
+
+    /// Build history candidates for every scope. Skips entries whose
+    /// underlying resource no longer exists (closed sessions / tabs).
+    private func buildHistoryCandidates() async -> [PaletteCandidate] {
+        var candidates: [PaletteCandidate] = []
+        for scope in PaletteScope.allCases {
+            let entries = (try? await paletteHistory.recent(scope: scope, limit: 5)) ?? []
+            for entry in entries {
+                if let candidate = buildHistoryCandidate(entry, scope: scope) {
+                    candidates.append(candidate)
+                }
+            }
+        }
+        return candidates
+    }
+
+    /// Convert one `PaletteHistoryEntry` into a `PaletteCandidate` for the
+    /// given scope. Returns nil when the referenced resource no longer
+    /// exists (e.g. a closed session).
+    private func buildHistoryCandidate(_ entry: PaletteHistoryEntry, scope: PaletteScope) -> PaletteCandidate? {
+        switch scope {
+        case .ssh:
+            // Try to find the matching SSH candidate so we can preserve
+            // the resolution + accent colour. Fall back to an ad-hoc row.
+            if let match = sshLauncher.candidates.first(where: { $0.target == entry.identifier }) {
+                let resolution = sshLauncher.resolve(candidate: match)
+                return Self.paletteCandidate(
+                    for: match,
+                    resolution: resolution,
+                    backgroundHex: { template in
+                        configLoader.profileLoader.resolvedLive(id: template).scalars["background"]
+                    }
+                )
+            }
+            let adHoc = SSHCandidate(target: entry.identifier, hostname: nil, isAdHoc: true)
+            let resolution = sshLauncher.resolve(candidate: adHoc)
+            return Self.paletteCandidate(
+                for: adHoc,
+                resolution: resolution,
+                backgroundHex: { template in
+                    configLoader.profileLoader.resolvedLive(id: template).scalars["background"]
+                }
+            )
+        case .command:
+            guard let action = Keybinding.Action(rawValue: entry.identifier),
+                  let title = action.paletteDisplayTitle else { return nil }
+            return PaletteCandidate(
+                primaryText: title,
+                scope: .command,
+                commandAction: action,
+                historyIdentifier: entry.identifier
+            )
+        case .profile:
+            return PaletteCandidate(
+                primaryText: entry.identifier,
+                scope: .profile,
+                profileID: entry.identifier,
+                historyIdentifier: entry.identifier
+            )
+        case .session:
+            guard let sessionID = UUID(uuidString: entry.identifier),
+                  let session = sessionManager.sessions.first(where: { $0.id == sessionID })
+            else { return nil }
+            var candidate = Self.sessionPaletteCandidate(for: session)
+            return PaletteCandidate(
+                id: candidate.id,
+                primaryText: candidate.primaryText,
+                secondaryText: candidate.secondaryText,
+                scope: .session,
+                historyIdentifier: entry.identifier
+            )
+        case .tab:
+            guard let tabID = UUID(uuidString: entry.identifier),
+                  let tab = sessionManager.tabs.first(where: { $0.id == tabID })
+            else { return nil }
+            return PaletteCandidate(
+                primaryText: tab.title,
+                scope: .tab,
+                historyIdentifier: entry.identifier
+            )
         }
     }
 

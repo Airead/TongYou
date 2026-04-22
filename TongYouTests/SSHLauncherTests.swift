@@ -11,12 +11,7 @@ struct SSHLauncherTests {
 
     @Test func candidatesMergeHistoryBeforeSshConfig() {
         // History recency goes first; ssh_config entries fill in after.
-        let history = [
-            SSHHistoryEntry(target: "db-prod-1", template: "ssh-prod",
-                            lastUsed: Date(timeIntervalSince1970: 2000), frequency: 1),
-            SSHHistoryEntry(target: "api1", template: "ssh",
-                            lastUsed: Date(timeIntervalSince1970: 1000), frequency: 1),
-        ]
+        let history = ["db-prod-1", "api1"]
         let hosts = [
             SSHConfigHost(alias: "api1"),           // duplicate of history
             SSHConfigHost(alias: "web1", hostname: "web1.internal"),
@@ -34,7 +29,7 @@ struct SSHLauncherTests {
     @Test func adHocEntryAppearsWhenNoMatch() async throws {
         let env = try makeEnv()
         defer { env.cleanup() }
-        await env.launcher.rebuildCandidates()
+        env.launcher.rebuildCandidates(history: [])
         let candidates = env.launcher.candidates(matching: "totally-novel")
         #expect(candidates.count == 1)
         #expect(candidates.first?.isAdHoc == true)
@@ -46,7 +41,7 @@ struct SSHLauncherTests {
             sshHosts: [SSHConfigHost(alias: "alpha"), SSHConfigHost(alias: "beta")]
         )
         defer { env.cleanup() }
-        await env.launcher.rebuildCandidates()
+        env.launcher.rebuildCandidates(history: [])
         let candidates = env.launcher.candidates(matching: "")
         #expect(candidates.map(\.target) == ["alpha", "beta"])
         // An empty pool does not produce an ad-hoc row.
@@ -108,7 +103,7 @@ struct SSHLauncherTests {
     @Test func spawnResolvesProfileWithVariables() async throws {
         let env = try makeEnv()
         defer { env.cleanup() }
-        await env.launcher.rebuildCandidates()
+        env.launcher.rebuildCandidates(history: [])
 
         let candidate = SSHCandidate(
             target: "alice@db1.example.com",
@@ -142,29 +137,38 @@ struct SSHLauncherTests {
         #expect(env.spy.spawnCalls.isEmpty)
     }
 
-    @Test func historyAppendedOnSuccess() async throws {
+    @Test func historyCallbackFiresOnSuccess() async throws {
         let env = try makeEnv()
         defer { env.cleanup() }
+
+        var recorded: [(String, String)] = []
+        env.launcher.onRecordHistory = { candidate, templateID in
+            recorded.append((candidate.target, templateID))
+        }
 
         let candidate = SSHCandidate(target: "db1", hostname: nil, isAdHoc: false)
         let resolution = env.launcher.resolve(candidate: candidate)
         try await env.launcher.commit(resolution: resolution, placement: .newTab)
 
-        let entries = try await env.history.entries()
-        #expect(entries.count == 1)
-        #expect(entries[0].target == "db1")
-        #expect(entries[0].template == SSHLauncher.fallbackTemplate)
+        #expect(recorded.count == 1)
+        #expect(recorded[0].0 == "db1")
+        #expect(recorded[0].1 == SSHLauncher.fallbackTemplate)
     }
 
-    @Test func historyNotAppendedOnFailure() async throws {
+    @Test func historyCallbackNotFiredOnFailure() async throws {
         let env = try makeEnv(validateError: .profileNotFound(id: "ssh"))
         defer { env.cleanup() }
+
+        var recorded: [(String, String)] = []
+        env.launcher.onRecordHistory = { candidate, templateID in
+            recorded.append((candidate.target, templateID))
+        }
+
         let candidate = SSHCandidate(target: "db1", hostname: nil, isAdHoc: false)
         let resolution = env.launcher.resolve(candidate: candidate)
 
         _ = try? await env.launcher.commit(resolution: resolution, placement: .newTab)
-        let entries = try await env.history.entries()
-        #expect(entries.isEmpty)
+        #expect(recorded.isEmpty)
     }
 
     // MARK: - Batch validation + history (one-shot grid path)
@@ -202,18 +206,22 @@ struct SSHLauncherTests {
         #expect(failure.error == .undefinedVariable("CMDPLT_SSH_HOST"))
     }
 
-    @Test func recordBatchHistoryAppendsEveryResolution() async throws {
+    @Test func recordBatchHistoryFiresCallbackForEveryResolution() throws {
         // Called after a successful one-shot tab spawn: every resolution's
-        // target should land in history so the palette's next open
-        // surfaces the recency-sorted list.
+        // target should trigger the history callback so the outer layer can
+        // record it in PaletteHistory.
         let env = try makeEnv()
         defer { env.cleanup() }
 
-        let resolutions = Self.resolutions(env, targets: ["db1", "db2", "db3"])
-        await env.launcher.recordBatchHistory(resolutions: resolutions)
+        var recorded: [(String, String)] = []
+        env.launcher.onRecordHistory = { candidate, templateID in
+            recorded.append((candidate.target, templateID))
+        }
 
-        let entries = try await env.history.entries()
-        let targets = Set(entries.map(\.target))
+        let resolutions = Self.resolutions(env, targets: ["db1", "db2", "db3"])
+        env.launcher.recordBatchHistory(resolutions: resolutions)
+
+        let targets = Set(recorded.map(\.0))
         #expect(targets == ["db1", "db2", "db3"])
     }
 
@@ -246,8 +254,6 @@ struct SSHLauncherTests {
     }
 
     private struct Env {
-        let directoryURL: URL
-        let history: SSHHistory
         let launcher: SSHLauncher
         let spy: Spy
         let cleanup: @Sendable () -> Void
@@ -258,12 +264,8 @@ struct SSHLauncherTests {
         sshHosts: [SSHConfigHost] = [],
         validateError: ProfileResolveError? = nil
     ) throws -> Env {
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("tongyou-ssh-launcher-\(UUID().uuidString)", isDirectory: true)
-        let history = SSHHistory(directoryURL: dir)
         let spy = Spy()
         let launcher = SSHLauncher(
-            history: history,
             matcher: matcher,
             sshConfigHosts: sshHosts,
             validateProfile: { _, _ in
@@ -287,11 +289,9 @@ struct SSHLauncherTests {
             }
         )
         return Env(
-            directoryURL: dir,
-            history: history,
             launcher: launcher,
             spy: spy,
-            cleanup: { try? FileManager.default.removeItem(at: dir) }
+            cleanup: {}
         )
     }
 

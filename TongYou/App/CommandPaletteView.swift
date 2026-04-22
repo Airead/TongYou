@@ -188,7 +188,12 @@ struct CommandPaletteView: View {
         let isSelected = controller.selection.contains(row.id)
 
         HStack(spacing: 8) {
-            if isSelected {
+            if row.candidate.historyIdentifier != nil {
+                Image(systemName: "clock")
+                    .foregroundStyle(fgColor.opacity(0.55))
+                    .font(.system(size: 11))
+                    .frame(width: 14)
+            } else if isSelected {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(Color.accentColor)
                     .font(.system(size: 11))

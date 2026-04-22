@@ -79,6 +79,9 @@ struct PaletteCandidate: Identifiable, Equatable {
     /// Command-scope payload — the action the commit should dispatch.
     /// Non-nil only on command-scope candidates.
     let commandAction: Keybinding.Action?
+    /// Non-nil when this candidate represents a history entry. Used for
+    /// visual distinction (clock icon) and for ⌘⌫ deletion.
+    let historyIdentifier: String?
 
     init(
         id: UUID = UUID(),
@@ -88,7 +91,8 @@ struct PaletteCandidate: Identifiable, Equatable {
         accentHex: String? = nil,
         sshResolution: SSHResolution? = nil,
         profileID: String? = nil,
-        commandAction: Keybinding.Action? = nil
+        commandAction: Keybinding.Action? = nil,
+        historyIdentifier: String? = nil
     ) {
         self.id = id
         self.primaryText = primaryText
@@ -98,6 +102,7 @@ struct PaletteCandidate: Identifiable, Equatable {
         self.sshResolution = sshResolution
         self.profileID = profileID
         self.commandAction = commandAction
+        self.historyIdentifier = historyIdentifier
     }
 }
 
@@ -183,13 +188,24 @@ final class CommandPaletteController {
         didSet { refreshRows(resetHighlight: true) }
     }
 
+    // MARK: - History candidates
+
+    /// History candidates injected by the outer layer before `open()`.
+    /// Shown at the top of the list when the query is empty.
+    var historyCandidates: [PaletteCandidate] = [] {
+        didSet { refreshRows(resetHighlight: true) }
+    }
+
+    /// Called when the user hits ⌘⌫ on a history row.
+    var onDeleteHistoryEntry: ((_ scope: PaletteScope, _ identifier: String) -> Void)?
+
     // MARK: - Delete (⌘⌫)
 
     /// Invoked when the user hits ⌘⌫ on a highlighted SSH row whose
     /// `sshResolution` targets a real (non ad-hoc) host. The string is the
-    /// `target` — the host key used by ``SSHHistory``. The outer layer is
-    /// expected to drop the matching history records, rebuild SSH
-    /// candidates, and call ``requestRefocusInput()``.
+    /// `target` — the host key used by history. The outer layer is
+    /// expected to drop the matching history records and call
+    /// ``requestRefocusInput()``.
     var onDeleteHistory: ((_ target: String) -> Void)?
 
     /// Invoked when the user hits ⌘⌫ on a highlighted session row.
@@ -221,6 +237,14 @@ final class CommandPaletteController {
     func deleteHighlighted() -> Bool {
         guard rows.indices.contains(highlightedIndex) else { return false }
         let candidate = rows[highlightedIndex].candidate
+
+        // History entries take priority — delete from history, not the
+        // underlying resource.
+        if let identifier = candidate.historyIdentifier {
+            onDeleteHistoryEntry?(candidate.scope, identifier)
+            return true
+        }
+
         switch candidate.scope {
         case .ssh:
             guard let resolution = candidate.sshResolution,
@@ -333,12 +357,43 @@ final class CommandPaletteController {
             built = ranked.map { PaletteRow(candidate: $0.candidate, match: $0.match) }
         }
 
+        // Inject history candidates at the top when the query is empty.
+        if query.isEmpty {
+            let history = historyCandidates
+                .filter { $0.scope == scope }
+                .prefix(5)
+            // Deduplicate against the regular pool by identifier.
+            let poolIDs = Set(pool.map(historyKey(for:)))
+            let uniqueHistory = history.filter {
+                historyKey(for: $0) != nil
+                    ? !poolIDs.contains(historyKey(for: $0)!)
+                    : true
+            }
+            let historyRows = uniqueHistory.map {
+                PaletteRow(
+                    candidate: $0,
+                    match: FuzzyMatcher.Match(score: 0, matchedIndices: [])
+                )
+            }
+            built = historyRows + built
+        }
+
         rows = built
         if resetHighlight {
             highlightedIndex = rows.isEmpty ? -1 : 0
         } else if highlightedIndex >= rows.count {
             highlightedIndex = rows.isEmpty ? -1 : rows.count - 1
         }
+    }
+
+    /// Extract a stable key for deduplicating history candidates against
+    /// the regular candidate pool. Returns nil when the candidate has no
+    /// useful key (should not happen for history entries).
+    private func historyKey(for candidate: PaletteCandidate) -> String? {
+        candidate.historyIdentifier
+            ?? candidate.sshResolution?.candidate.target
+            ?? candidate.profileID
+            ?? candidate.commandAction?.rawValue
     }
 
     /// SSH-scope filter: glob-based matching with `,` as an OR separator.
