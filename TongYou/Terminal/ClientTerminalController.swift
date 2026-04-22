@@ -38,6 +38,7 @@ final class ClientTerminalController: TerminalControlling {
     var onPaletteColorChanged: ((Int, RGBColor) -> Void)?
     var pointerShape: String? { nil }
     var onPointerShapeChanged: ((String) -> Void)?
+    var onCursorBlinkingChanged: ((Bool) -> Void)?
 
     init(
         remoteClient: RemoteSessionClient,

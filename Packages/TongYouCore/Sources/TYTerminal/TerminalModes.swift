@@ -79,6 +79,9 @@ public struct TerminalModes: Equatable, Sendable {
         /// reports color scheme changes (dark/light) to the application
         /// via DECDSR 996/997, and responds to DECRQM queries.
         case colorSchemeReporting = 2031
+        /// Blinking cursor (mode 12). When enabled the cursor blinks.
+        /// xterm / AT&T 610 extension.
+        case blinkingCursor = 12
         /// Keypad application mode (DECKPAM, ESC =). On = application sequences.
         case keypadApplication = 9999
     }
@@ -203,6 +206,7 @@ public struct TerminalModes: Equatable, Sendable {
         case .originMode:        return 1 << 11
         case .graphemeClustering: return 1 << 12
         case .colorSchemeReporting: return 1 << 13
+        case .blinkingCursor:       return 1 << 14
         }
     }
 

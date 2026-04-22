@@ -19,6 +19,8 @@ final class MetalView: NSView {
     // nonisolated(unsafe) because deinit must invalidate without actor hop
     nonisolated(unsafe) private var displayLink: CADisplayLink?
     private var cursorBlinkTimer: Timer?
+    /// App-controlled cursor blink state via DECSET 12. Overrides config when non-nil.
+    private var appCursorBlink: Bool?
 
     /// Working directory for the shell spawned in this tab.
     var initialWorkingDirectory: String?
@@ -1058,6 +1060,11 @@ final class MetalView: NSView {
                 self.applyPointerShape()
             }
         }
+        controller.onCursorBlinkingChanged = { [weak self] enabled in
+            guard let self else { return }
+            self.appCursorBlink = enabled
+            self.startCursorBlinkTimer()
+        }
     }
 
     private func applyConfigChange(_ config: Config) {
@@ -1124,7 +1131,8 @@ final class MetalView: NSView {
 
     private func startCursorBlinkTimer() {
         stopCursorBlinkTimer()
-        guard effectiveConfig.cursorBlink else {
+        let shouldBlink = appCursorBlink ?? effectiveConfig.cursorBlink
+        guard shouldBlink else {
             renderer?.cursorBlinkOn = true
             renderer?.markCursorDirty()
             wakeDisplayLink()

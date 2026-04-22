@@ -44,6 +44,14 @@ public final class TerminalCore: @unchecked Sendable {
     /// Confined to ptyQueue.
     nonisolated(unsafe) private var focusReportingEnabled = false
 
+    /// Whether the application has enabled blinking cursor via DECSET 12.
+    /// Confined to ptyQueue.
+    nonisolated(unsafe) private(set) var cursorBlinkingEnabled = false
+
+    /// Callback: blinking cursor mode (DECSET 12) toggled on/off.
+    /// Fires on ptyQueue.
+    public var onCursorBlinkingChanged: ((Bool) -> Void)?
+
     /// Whether the application has subscribed to color scheme reporting via DECSET 2031.
     /// Confined to ptyQueue.
     nonisolated(unsafe) private var colorSchemeReportingEnabled = false
@@ -149,6 +157,10 @@ public final class TerminalCore: @unchecked Sendable {
         // they remain active in headless usage (tests, pre-start bootstrap).
         streamHandler.onFocusReportingChanged = { [weak self] enabled in
             self?.focusReportingEnabled = enabled
+        }
+        streamHandler.onBlinkingCursorChanged = { [weak self] enabled in
+            self?.cursorBlinkingEnabled = enabled
+            self?.onCursorBlinkingChanged?(enabled)
         }
         streamHandler.onColorSchemeReportingChanged = { [weak self] enabled in
             guard let self else { return }

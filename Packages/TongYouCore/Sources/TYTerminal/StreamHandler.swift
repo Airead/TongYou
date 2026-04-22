@@ -39,6 +39,8 @@ public struct StreamHandler {
     public var onPaneNotification: ((String, String) -> Void)?
     /// Callback: focus event reporting (DECSET 1004) toggled on/off.
     public var onFocusReportingChanged: ((Bool) -> Void)?
+    /// Callback: blinking cursor (DECSET 12) toggled on/off.
+    public var onBlinkingCursorChanged: ((Bool) -> Void)?
     /// Callback: color scheme reporting (DECSET 2031) toggled on/off.
     public var onColorSchemeReportingChanged: ((Bool) -> Void)?
     /// Callback: query current system color scheme (dark = true, light = false).
@@ -508,11 +510,14 @@ public struct StreamHandler {
 
         switch oscNum {
         case 0, 1, 2: // Set window title (0=both, 1=icon, 2=window)
+            let title: String
             if !stringData.isEmpty, let raw = String(bytes: stringData, encoding: .utf8) {
-                let title = Self.sanitizeTitle(raw)
-                currentTitle = title
-                onTitleChanged?(title)
+                title = Self.sanitizeTitle(raw)
+            } else {
+                title = ""
             }
+            currentTitle = title
+            onTitleChanged?(title)
         case 7:
             handleOSC7(stringData)
         case 4:
@@ -980,6 +985,8 @@ public struct StreamHandler {
             screen.setReverseVideo(value)
         case .originMode:
             screen.setOriginMode(value)
+        case .autowrap:
+            screen.setAutowrap(value)
         case .cursorVisible:
             screen.setCursorVisible(value)
         case .altScreen:
@@ -993,6 +1000,8 @@ public struct StreamHandler {
             }
         case .focusEvents:
             onFocusReportingChanged?(value)
+        case .blinkingCursor:
+            onBlinkingCursorChanged?(value)
         case .colorSchemeReporting:
             onColorSchemeReportingChanged?(value)
         case .syncedUpdate:
@@ -1017,6 +1026,10 @@ public struct StreamHandler {
         let mode = params[0]
         let state: Int?
         switch mode {
+        case 7:
+            state = modes.isSet(.autowrap) ? 1 : 2
+        case 12:
+            state = modes.isSet(.blinkingCursor) ? 1 : 2
         case 1004:
             state = modes.isSet(.focusEvents) ? 1 : 2
         case 1016:
@@ -1100,7 +1113,7 @@ public struct StreamHandler {
             .cursorKeys, .columnMode, .smoothScroll, .reverseVideo,
             .originMode, .autowrap, .cursorVisible, .focusEvents,
             .altScreen, .bracketedPaste, .syncedUpdate, .graphemeClustering,
-            .colorSchemeReporting, .keypadApplication
+            .colorSchemeReporting, .blinkingCursor, .keypadApplication
         ]
         for mode in decModes {
             let savedValue = saved.isSet(mode)

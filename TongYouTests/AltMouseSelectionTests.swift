@@ -22,6 +22,7 @@ private final class MockMouseController: TerminalControlling {
     var onPaletteColorChanged: ((Int, TYTerminal.RGBColor) -> Void)?
     var pointerShape: String?
     var onPointerShapeChanged: ((String) -> Void)?
+    var onCursorBlinkingChanged: ((Bool) -> Void)?
 
     struct Call {
         var name: String

@@ -87,6 +87,8 @@ final class TerminalController: TerminalControlling {
     nonisolated(unsafe) var onDynamicColorChanged: ((Int, RGBColor?) -> Void)?
     /// Called on the main thread when a palette color changes via OSC 4.
     nonisolated(unsafe) var onPaletteColorChanged: ((Int, RGBColor) -> Void)?
+    /// Called on the main thread when blinking cursor mode changes via DECSET 12.
+    nonisolated(unsafe) var onCursorBlinkingChanged: ((Bool) -> Void)?
 
     private(set) var isSuspended: Bool = false
 
@@ -181,6 +183,11 @@ final class TerminalController: TerminalControlling {
             self.pointerShape = shape
             DispatchQueue.main.async { [weak self] in
                 self?.onPointerShapeChanged?(shape)
+            }
+        }
+        core.onCursorBlinkingChanged = { [weak self] enabled in
+            DispatchQueue.main.async { [weak self] in
+                self?.onCursorBlinkingChanged?(enabled)
             }
         }
         core.onUnhandledSequence = { [weak self] message in

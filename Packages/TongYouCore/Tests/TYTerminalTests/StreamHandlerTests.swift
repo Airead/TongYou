@@ -357,6 +357,22 @@ struct StreamHandlerColorSchemeReportingTests {
 @Suite("StreamHandler unhandled sequence tests", .serialized)
 struct StreamHandlerUnhandledSequenceTests {
 
+    /// Feed bytes through parser + handler and return the owning screen plus
+    /// any `onWriteBack` bytes captured (DECRQM replies, DSR, etc.).
+    private func drive(_ s: String) -> (Screen, [UInt8]) {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var written: [UInt8] = []
+        handler.onWriteBack = { written.append(contentsOf: $0) }
+        var parser = VTParser()
+        let bytes = Array(s.utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        return (screen, written)
+    }
+
     /// Drive a sequence of bytes through the handler, recording every
     /// `onUnhandledSequence` notification in order.
     private func run(_ s: String) -> [String] {
@@ -408,6 +424,83 @@ struct StreamHandlerUnhandledSequenceTests {
         #expect(run("\u{1B}[?5l").isEmpty)  // DECSCNM reset
         #expect(run("\u{1B}[?6h").isEmpty)  // DECOM
         #expect(run("\u{1B}[?6l").isEmpty)  // DECOM reset
+    }
+
+    @Test func decawmModeDoesNotLog() {
+        // DECAWM (7) is fully supported; should not produce unhandled callbacks.
+        #expect(run("\u{1B}[?7h").isEmpty)
+        #expect(run("\u{1B}[?7l").isEmpty)
+    }
+
+    @Test func blinkingCursorModeDoesNotLog() {
+        // Mode 12 (blinking cursor) is supported; should not produce unhandled callbacks.
+        #expect(run("\u{1B}[?12h").isEmpty)
+        #expect(run("\u{1B}[?12l").isEmpty)
+    }
+
+    @Test func decawmTogglesScreenAutowrap() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var parser = VTParser()
+
+        // Default is on
+        #expect(screen.autowrap == true)
+
+        // DECRST 7 disables autowrap
+        let reset = Array("\u{1B}[?7l".utf8)
+        reset.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(screen.autowrap == false)
+
+        // DECSET 7 re-enables autowrap
+        let set = Array("\u{1B}[?7h".utf8)
+        set.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(screen.autowrap == true)
+    }
+
+    @Test func blinkingCursorTogglesCallback() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var events: [Bool] = []
+        handler.onBlinkingCursorChanged = { events.append($0) }
+        var parser = VTParser()
+
+        let set = Array("\u{1B}[?12h".utf8)
+        set.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(events == [true])
+
+        let reset = Array("\u{1B}[?12l".utf8)
+        reset.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(events == [true, false])
+    }
+
+    @Test func decrqm7ReportsState() {
+        let (_, written) = drive("\u{1B}[?7$p")
+        let reply = String(bytes: written, encoding: .ascii)
+        // Default is set (1) — autowrap is on by default.
+        #expect(reply == "\u{1B}[?7;1$y")
+    }
+
+    @Test func decrqm12ReportsState() {
+        let (_, writtenDefault) = drive("\u{1B}[?12$p")
+        #expect(String(bytes: writtenDefault, encoding: .ascii) == "\u{1B}[?12;2$y")
+
+        let (_, writtenSet) = drive("\u{1B}[?12h\u{1B}[?12$p")
+        #expect(String(bytes: writtenSet, encoding: .ascii) == "\u{1B}[?12;1$y")
+
+        let (_, writtenReset) = drive("\u{1B}[?12h\u{1B}[?12l\u{1B}[?12$p")
+        #expect(String(bytes: writtenReset, encoding: .ascii) == "\u{1B}[?12;2$y")
     }
 
     @Test func escBackslashIsSilentlyIgnored() {

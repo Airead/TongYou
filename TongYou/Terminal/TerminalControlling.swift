@@ -108,6 +108,11 @@ protocol TerminalControlling: AnyObject {
     var pointerShape: String? { get }
     /// Called when the pointer shape changes via OSC 22.
     var onPointerShapeChanged: ((String) -> Void)? { get set }
+
+    // MARK: - Cursor Blink (DECSET 12)
+
+    /// Called when blinking cursor mode changes via DECSET 12.
+    var onCursorBlinkingChanged: ((Bool) -> Void)? { get set }
 }
 
 /// Control characters unsafe to paste — could trigger shell signals or control sequences.
