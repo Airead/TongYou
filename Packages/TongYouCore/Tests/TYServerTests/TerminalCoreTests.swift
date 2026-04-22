@@ -129,8 +129,21 @@ struct TerminalCoreTests {
     func queryModes() {
         let core = TerminalCore(columns: 80, rows: 24)
         #expect(core.appCursorMode == false)
+        #expect(core.modifyOtherKeys == 0)
         #expect(core.bracketedPasteMode == false)
         #expect(core.mouseTrackingMode == .none)
+    }
+
+    @Test("XTMODKEYS toggles modifyOtherKeys on core")
+    func xtmodkeysToggles() {
+        let core = TerminalCore(columns: 80, rows: 24)
+        #expect(core.modifyOtherKeys == 0)
+        core.feedBytesForTesting(Array("\u{1B}[>4;1m".utf8))
+        #expect(core.modifyOtherKeys == 1)
+        core.feedBytesForTesting(Array("\u{1B}[>4;2m".utf8))
+        #expect(core.modifyOtherKeys == 2)
+        core.feedBytesForTesting(Array("\u{1B}[>4;0m".utf8))
+        #expect(core.modifyOtherKeys == 0)
     }
 
     @Test("Focus reporting flag is off by default")
@@ -157,6 +170,32 @@ struct TerminalCoreTests {
         #expect(core.isFocusReportingEnabledForTesting == false)
     }
 
+    // MARK: - Color Scheme Reporting (DECSET 2031)
+
+    @Test("Color scheme reporting flag is off by default")
+    func colorSchemeReportingInitiallyOff() {
+        let core = TerminalCore(columns: 80, rows: 24)
+        #expect(core.isColorSchemeReportingEnabledForTesting == false)
+    }
+
+    @Test("DECSET 2031 toggles color scheme reporting flag on core")
+    func colorSchemeReportingModeToggles() {
+        let core = TerminalCore(columns: 80, rows: 24)
+        core.feedBytesForTesting(Array("\u{1B}[?2031h".utf8))
+        #expect(core.isColorSchemeReportingEnabledForTesting == true)
+        core.feedBytesForTesting(Array("\u{1B}[?2031l".utf8))
+        #expect(core.isColorSchemeReportingEnabledForTesting == false)
+    }
+
+    @Test("reportColorScheme is a no-op when PTY not started")
+    func reportColorSchemeNoCrashWhenNotStarted() {
+        let core = TerminalCore(columns: 80, rows: 24)
+        core.reportColorScheme(true)
+        core.reportColorScheme(false)
+        // Must not crash; flag remains off since no app subscribed.
+        #expect(core.isColorSchemeReportingEnabledForTesting == false)
+    }
+
     // MARK: - Synchronized Update (DECSET 2026)
 
     @Test("DECSET 2026 toggles isSyncedUpdateActive on the core")
@@ -176,28 +215,28 @@ struct TerminalCoreTests {
         #expect(core.isSyncedUpdateActive == false)
     }
 
-    // MARK: - Unsupported Mode
+    // MARK: - Unhandled Sequence
 
-    @Test("onUnsupportedMode callback fires for unsupported DECSET mode")
-    func unsupportedModeCallback() {
+    @Test("onUnhandledSequence callback fires for unsupported DECSET mode")
+    func unhandledSequenceCallback() {
         let core = TerminalCore(columns: 80, rows: 24)
-        var capturedModes: [UInt16] = []
-        core.onUnsupportedMode = { mode in
-            capturedModes.append(mode)
+        var capturedMessages: [String] = []
+        core.onUnhandledSequence = { message in
+            capturedMessages.append(message)
         }
         core.feedBytesForTesting(Array("\u{1B}[?1005h".utf8))
-        #expect(capturedModes == [1005])
+        #expect(capturedMessages == ["DECSET/DECRST mode 1005 not implemented"])
     }
 
-    @Test("onUnsupportedMode callback does not fire for supported mode")
+    @Test("onUnhandledSequence callback does not fire for supported mode")
     func supportedModeDoesNotTriggerCallback() {
         let core = TerminalCore(columns: 80, rows: 24)
-        var capturedModes: [UInt16] = []
-        core.onUnsupportedMode = { mode in
-            capturedModes.append(mode)
+        var capturedMessages: [String] = []
+        core.onUnhandledSequence = { message in
+            capturedMessages.append(message)
         }
         core.feedBytesForTesting(Array("\u{1B}[?1004h".utf8))
-        #expect(capturedModes.isEmpty)
+        #expect(capturedMessages.isEmpty)
     }
 }
 

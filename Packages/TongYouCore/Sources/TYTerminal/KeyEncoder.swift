@@ -46,10 +46,14 @@ public struct KeyEncoder: Sendable {
     public struct Options: Sendable {
         public let appCursorMode: Bool
         public let optionAsAlt: Bool
+        public let keypadApplication: Bool
+        public let modifyOtherKeys: UInt8
 
-        public init(appCursorMode: Bool, optionAsAlt: Bool) {
+        public init(appCursorMode: Bool, optionAsAlt: Bool, keypadApplication: Bool = false, modifyOtherKeys: UInt8 = 0) {
             self.appCursorMode = appCursorMode
             self.optionAsAlt = optionAsAlt
+            self.keypadApplication = keypadApplication
+            self.modifyOtherKeys = modifyOtherKeys
         }
     }
 
@@ -73,6 +77,13 @@ public struct KeyEncoder: Sendable {
         // Try special key encoding first (arrows, function keys, etc.).
         if let data = encodeSpecialKey(input, modParam: modParam, options: options) {
             return data
+        }
+
+        // modifyOtherKeys: encode character keys with modifiers as CSI u.
+        if options.modifyOtherKeys > 0 && modParam > 1 {
+            if let data = encodeModifiedCharacter(input, modParam: modParam) {
+                return data
+            }
         }
 
         // Ctrl + character → control code, optionally with ESC prefix if Alt.
@@ -256,6 +267,19 @@ public struct KeyEncoder: Sendable {
         case 53: return dataEscape
         default: return nil
         }
+    }
+
+    /// Encode a character key with modifiers as CSI u (fixterms).
+    /// Returns nil if the key is not a plain character (e.g. control char).
+    private static func encodeModifiedCharacter(_ input: KeyInput, modParam: Int) -> Data? {
+        guard let chars = input.charactersIgnoringModifiers,
+              let scalar = chars.unicodeScalars.first else {
+            return nil
+        }
+        let codepoint = Int(scalar.value)
+        // Only encode printable ASCII and space.
+        guard codepoint >= 0x20 && codepoint <= 0x7E else { return nil }
+        return formatCSI(param1: codepoint, modParam: modParam, final: 0x75) // 'u'
     }
 
     /// Format: ESC[ {param1} ; {modParam} {final}

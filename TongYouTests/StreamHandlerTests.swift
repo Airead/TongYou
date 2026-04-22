@@ -585,11 +585,75 @@ import TYTerminal
         #expect(!cell.attributes.flags.contains(.bold))
     }
 
-    @Test func xtmodkeysResetDoesNotAffectAttrs() {
-        // CSI > 4 ; 0 m should not reset current attributes.
-        // Set bold first, then send XTMODKEYS reset, then print.
-        let screen = process("\u{1B}[1m\u{1B}[>4;0mA")
-        let cell = screen.cell(at: 0, row: 0)
-        #expect(cell.attributes.flags.contains(.bold))
+    @Test func xtmodkeysSetsModifyOtherKeys() {
+        let (_, handler) = processWithHandler("\u{1B}[>4;1m")
+        #expect(handler.modes.modifyOtherKeys == 1)
+    }
+
+    @Test func xtmodkeysResetsModifyOtherKeys() {
+        let (_, handler) = processWithHandler("\u{1B}[>4;2m\u{1B}[>4;0m")
+        #expect(handler.modes.modifyOtherKeys == 0)
+    }
+
+    @Test func xtmodkeysResetAllWithoutParams() {
+        let (_, handler) = processWithHandler("\u{1B}[>4;2m\u{1B}[>m")
+        #expect(handler.modes.modifyOtherKeys == 0)
+    }
+
+    // MARK: - DECDHL / DECDWL (ESC # sequences)
+
+    @Test func decdhlTopHalf() {
+        // ESC # 3 — double-height top half
+        let screen = process("\u{1B}#3")
+        let snapshot = screen.snapshot()
+        #expect(snapshot.lineFlags.count > 0)
+        #expect(snapshot.lineFlags[0].lineHeight == .doubleTop)
+        #expect(snapshot.lineFlags[0].lineWidth == .double)
+    }
+
+    @Test func decdhlBottomHalf() {
+        // ESC # 4 — double-height bottom half
+        let screen = process("\u{1B}#4")
+        let snapshot = screen.snapshot()
+        #expect(snapshot.lineFlags.count > 0)
+        #expect(snapshot.lineFlags[0].lineHeight == .doubleBottom)
+        #expect(snapshot.lineFlags[0].lineWidth == .double)
+    }
+
+    @Test func decswlNormal() {
+        // ESC # 5 — single-width single-height
+        let screen = process("\u{1B}#5")
+        let snapshot = screen.snapshot()
+        #expect(snapshot.lineFlags.count > 0)
+        #expect(snapshot.lineFlags[0].lineHeight == .normal)
+        #expect(snapshot.lineFlags[0].lineWidth == .normal)
+    }
+
+    @Test func decdwlDoubleWidth() {
+        // ESC # 6 — double-width single-height
+        let screen = process("\u{1B}#6")
+        let snapshot = screen.snapshot()
+        #expect(snapshot.lineFlags.count > 0)
+        #expect(snapshot.lineFlags[0].lineHeight == .normal)
+        #expect(snapshot.lineFlags[0].lineWidth == .double)
+    }
+
+    // MARK: - Window Pixel Size Report (CSI 14 t)
+
+    @Test func windowPixelSizeReport() {
+        var response: Data?
+        _ = feedSequences(["\u{1B}[14t"]) {
+            $0.onWriteBack = { response = $0 }
+            $0.onWindowPixelSizeRequest = { (width: 1920, height: 1080) }
+        }
+        #expect(response == Data("\u{1B}[4;1080;1920t".utf8))
+    }
+
+    @Test func windowPixelSizeReportNoProvider() {
+        var response: Data?
+        _ = feedSequences(["\u{1B}[14t"]) {
+            $0.onWriteBack = { response = $0 }
+        }
+        #expect(response == Data("\u{1B}[4;0;0t".utf8))
     }
 }

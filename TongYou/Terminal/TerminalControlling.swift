@@ -98,6 +98,16 @@ protocol TerminalControlling: AnyObject {
     var onProcessExited: ((Int32) -> Void)? { get set }
     var onTitleChanged: ((String) -> Void)? { get set }
     var onPaneNotification: ((String, String) -> Void)? { get set }
+    var onDynamicColorChanged: ((Int, RGBColor) -> Void)? { get set }
+    var onPaletteColorChanged: ((Int, RGBColor) -> Void)? { get set }
+
+    // MARK: - Pointer Shape (OSC 22)
+
+    /// Current pointer shape set by the application via OSC 22.
+    /// nil means no shape has been set.
+    var pointerShape: String? { get }
+    /// Called when the pointer shape changes via OSC 22.
+    var onPointerShapeChanged: ((String) -> Void)? { get set }
 }
 
 /// Control characters unsafe to paste — could trigger shell signals or control sequences.

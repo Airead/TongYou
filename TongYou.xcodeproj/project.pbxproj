@@ -13,6 +13,7 @@
 		2CC9C6C72F8B7B9500E10AD3 /* TYTerminal in Frameworks */ = {isa = PBXBuildFile; productRef = A1000002300000000000004 /* TYTerminal */; };
 		2CC9C6C82F8B7B9500E10AD3 /* TYPTY in Frameworks */ = {isa = PBXBuildFile; productRef = A1000002300000000000005 /* TYPTY */; };
 		2CC9C6C92F8B7B9500E10AD3 /* TYShell in Frameworks */ = {isa = PBXBuildFile; productRef = A1000002300000000000006 /* TYShell */; };
+		2CC9C6CA2F8B7B9500E10AD3 /* TYConfig in Frameworks */ = {isa = PBXBuildFile; productRef = A100000230000000000000B /* TYConfig */; };
 		A1000003300000000000001 /* TYClient in Frameworks */ = {isa = PBXBuildFile; productRef = A1000002300000000000007 /* TYClient */; };
 		A1000003300000000000002 /* TYProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = A1000002300000000000008 /* TYProtocol */; };
 		A1000003300000000000003 /* TYConfig in Frameworks */ = {isa = PBXBuildFile; productRef = A1000002300000000000009 /* TYConfig */; };
@@ -82,6 +83,7 @@
 				2CC9C6C92F8B7B9500E10AD3 /* TYShell in Frameworks */,
 				2CC9C6C82F8B7B9500E10AD3 /* TYPTY in Frameworks */,
 				2CC9C6C72F8B7B9500E10AD3 /* TYTerminal in Frameworks */,
+				2CC9C6CA2F8B7B9500E10AD3 /* TYConfig in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -169,6 +171,7 @@
 				A1000002300000000000004 /* TYTerminal */,
 				A1000002300000000000005 /* TYPTY */,
 				A1000002300000000000006 /* TYShell */,
+				A100000230000000000000B /* TYConfig */,
 			);
 			productName = TongYouTests;
 			productReference = 2C42371C2F88817C00DE6FC2 /* TongYouTests.xctest */;
@@ -683,6 +686,10 @@
 		A100000230000000000000A /* TYAutomation */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = TYAutomation;
+		};
+		A100000230000000000000B /* TYConfig */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TYConfig;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -44,8 +44,23 @@ public final class TerminalCore: @unchecked Sendable {
     /// Confined to ptyQueue.
     nonisolated(unsafe) private var focusReportingEnabled = false
 
+    /// Whether the application has subscribed to color scheme reporting via DECSET 2031.
+    /// Confined to ptyQueue.
+    nonisolated(unsafe) private var colorSchemeReportingEnabled = false
+
     /// Title for dedup — confined to ptyQueue.
     nonisolated(unsafe) private var windowTitle: String = ""
+
+    /// Text area pixel size for CSI 14 t responses — confined to ptyQueue.
+    nonisolated(unsafe) private var pixelWidth: UInt32 = 0
+    nonisolated(unsafe) private var pixelHeight: UInt32 = 0
+
+    /// Dynamic colors set via OSC 10/11. Confined to ptyQueue.
+    nonisolated(unsafe) private var dynamicForegroundColor: RGBColor?
+    nonisolated(unsafe) private var dynamicBackgroundColor: RGBColor?
+    nonisolated(unsafe) private var dynamicCursorColor: RGBColor?
+    /// Palette color overrides set via OSC 4. Confined to ptyQueue.
+    nonisolated(unsafe) private var paletteOverrides: [Int: RGBColor] = [:]
 
     private var ptyProcess: PTYProcess?
 
@@ -72,8 +87,28 @@ public final class TerminalCore: @unchecked Sendable {
     public var onRunningCommandChanged: ((String?) -> Void)?
     /// Called when a pane notification sequence is received (OSC 9 / 777 / 1337).
     public var onPaneNotification: ((String, String) -> Void)?
-    /// Called when an unsupported DECSET/DECRST mode is received.
-    public var onUnsupportedMode: ((UInt16) -> Void)?
+    /// Called when an unhandled control sequence is received.
+    public var onUnhandledSequence: ((String) -> Void)?
+    /// Called to query the current system color scheme (dark = true, light = false).
+    /// Used by DSR 996/997 and mode 2031 immediate-report on enable.
+    public var onColorSchemeQuery: (() -> Bool)?
+    /// Called when a dynamic color changes via OSC 10/11.
+    /// Parameters: (OSC number, new color).
+    public var onDynamicColorChanged: ((Int, RGBColor) -> Void)?
+    /// Called to query the current default foreground/background color.
+    /// Used by OSC 10/11 queries when no dynamic color has been set.
+    /// Parameter: OSC number (10 = foreground, 11 = background).
+    public var onDefaultColorQuery: ((Int) -> RGBColor?)?
+    /// Called when the pointer shape changes via OSC 22.
+    /// Parameter: cursor shape name (e.g. "default", "pointer", "text").
+    public var onPointerShapeChanged: ((String) -> Void)?
+    /// Called when a palette color changes via OSC 4.
+    /// Parameters: (palette index, new color).
+    public var onPaletteColorChanged: ((Int, RGBColor) -> Void)?
+    /// Called to query the current palette color for OSC 4 queries.
+    /// Used when no override has been set via OSC 4.
+    /// Parameter: palette index (0-255).
+    public var onPaletteColorQuery: ((Int) -> RGBColor?)?
 
     // MARK: - Init
 
@@ -111,9 +146,65 @@ public final class TerminalCore: @unchecked Sendable {
         streamHandler.onFocusReportingChanged = { [weak self] enabled in
             self?.focusReportingEnabled = enabled
         }
-        streamHandler.onUnsupportedMode = { [weak self] mode in
-            Log.warning("Unsupported terminal mode: \(mode)", category: .session)
-            self?.onUnsupportedMode?(mode)
+        streamHandler.onColorSchemeReportingChanged = { [weak self] enabled in
+            guard let self else { return }
+            self.colorSchemeReportingEnabled = enabled
+            // When mode 2031 is enabled, immediately report the current color scheme.
+            if enabled, let isDark = self.onColorSchemeQuery?() {
+                let ps = isDark ? 1 : 2
+                let sequence = "\u{1B}[?997;\(ps)n"
+                self.ptyProcess?.write(Data(sequence.utf8))
+            }
+        }
+        streamHandler.onColorSchemeQuery = { [weak self] in
+            self?.onColorSchemeQuery?() ?? false
+        }
+        streamHandler.onUnhandledSequence = { [weak self] message in
+            Log.warning("Unhandled sequence: \(message)", category: .session)
+            self?.onUnhandledSequence?(message)
+        }
+        streamHandler.onWindowPixelSizeRequest = { [weak self] in
+            guard let self else { return (width: 0, height: 0) }
+            return (width: self.pixelWidth, height: self.pixelHeight)
+        }
+        streamHandler.onDynamicColorQuery = { [weak self] oscNum in
+            guard let self else { return nil }
+            switch oscNum {
+            case 10:
+                return self.dynamicForegroundColor ?? self.onDefaultColorQuery?(10)
+            case 11:
+                return self.dynamicBackgroundColor ?? self.onDefaultColorQuery?(11)
+            case 12:
+                return self.dynamicCursorColor ?? self.onDefaultColorQuery?(12)
+            default:
+                return nil
+            }
+        }
+        streamHandler.onDynamicColorSet = { [weak self] oscNum, color in
+            guard let self else { return }
+            switch oscNum {
+            case 10:
+                self.dynamicForegroundColor = color
+            case 11:
+                self.dynamicBackgroundColor = color
+            case 12:
+                self.dynamicCursorColor = color
+            default:
+                return
+            }
+            self.onDynamicColorChanged?(oscNum, color)
+        }
+        streamHandler.onPointerShapeChanged = { [weak self] shape in
+            self?.onPointerShapeChanged?(shape)
+        }
+        streamHandler.onPaletteColorQuery = { [weak self] index in
+            guard let self else { return nil }
+            return self.paletteOverrides[index] ?? self.onPaletteColorQuery?(index)
+        }
+        streamHandler.onPaletteColorSet = { [weak self] index, color in
+            guard let self else { return }
+            self.paletteOverrides[index] = color
+            self.onPaletteColorChanged?(index, color)
         }
     }
 
@@ -251,6 +342,23 @@ public final class TerminalCore: @unchecked Sendable {
         ptyQueue.sync { focusReportingEnabled }
     }
 
+    /// Report a color scheme change to the PTY if the application has subscribed
+    /// via DECSET 2031. Writes `CSI ? 997 ; Ps n` where Ps=1 for dark, Ps=2 for light.
+    /// No-op when mode 2031 is not enabled.
+    public func reportColorScheme(_ isDark: Bool) {
+        ptyQueue.async { [weak self] in
+            guard let self, self.colorSchemeReportingEnabled else { return }
+            let ps = isDark ? 1 : 2
+            let sequence = "\u{1B}[?997;\(ps)n"
+            self.ptyProcess?.write(Data(sequence.utf8))
+        }
+    }
+
+    /// Test-only accessor for color scheme reporting state.
+    internal var isColorSchemeReportingEnabledForTesting: Bool {
+        ptyQueue.sync { colorSchemeReportingEnabled }
+    }
+
     // MARK: - Synchronized Update (DECSET 2026)
 
     /// Whether this pane currently has an open BSU..ESU window. Checked by
@@ -306,6 +414,8 @@ public final class TerminalCore: @unchecked Sendable {
 
         ptyQueue.async { [weak self] in
             guard let self else { return }
+            self.pixelWidth = UInt32(pixelWidth)
+            self.pixelHeight = UInt32(pixelHeight)
             guard self.screen.columns != cols || self.screen.rows != rows else { return }
             self.screen.resize(columns: cols, rows: rows)
             self.markScreenDirty()
@@ -384,6 +494,14 @@ public final class TerminalCore: @unchecked Sendable {
         ptyQueue.sync { streamHandler.modes.isSet(.cursorKeys) }
     }
 
+    public var appKeypadMode: Bool {
+        ptyQueue.sync { streamHandler.modes.isSet(.keypadApplication) }
+    }
+
+    public var modifyOtherKeys: UInt8 {
+        ptyQueue.sync { streamHandler.modes.modifyOtherKeys }
+    }
+
     public var bracketedPasteMode: Bool {
         ptyQueue.sync { streamHandler.modes.isSet(.bracketedPaste) }
     }
@@ -394,6 +512,11 @@ public final class TerminalCore: @unchecked Sendable {
 
     public var mouseFormat: TerminalModes.MouseFormat {
         ptyQueue.sync { streamHandler.modes.mouseFormat }
+    }
+
+    /// The hyperlink registry for OSC 8 support. Thread-safe access via ptyQueue.
+    public var hyperlinkRegistry: HyperlinkRegistry {
+        ptyQueue.sync { streamHandler.hyperlinkRegistry }
     }
 
     /// Number of scrollback lines above the visible screen.

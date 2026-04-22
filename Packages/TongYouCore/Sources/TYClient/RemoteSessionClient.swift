@@ -169,8 +169,8 @@ public final class RemoteSessionClient: @unchecked Sendable {
     }
 
     /// Resize a pane on the server.
-    public func resizePane(sessionID: SessionID, paneID: PaneID, cols: UInt16, rows: UInt16) {
-        connection?.send(.resize(sessionID, paneID, cols: cols, rows: rows))
+    public func resizePane(sessionID: SessionID, paneID: PaneID, cols: UInt16, rows: UInt16, pixelWidth: UInt16 = 0, pixelHeight: UInt16 = 0) {
+        connection?.send(.resize(sessionID, paneID, cols: cols, rows: rows, pixelWidth: pixelWidth, pixelHeight: pixelHeight))
     }
 
     /// Scroll the viewport for a pane on the server.

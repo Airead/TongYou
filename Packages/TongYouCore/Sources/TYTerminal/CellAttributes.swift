@@ -58,13 +58,21 @@ public struct CellAttributes: Equatable, Sendable {
     public var flags: StyleFlags = []
     public var fgColor: PackedColor = .default
     public var bgColor: PackedColor = .default
+    /// Hyperlink ID for OSC 8 support. 0 means no hyperlink.
+    public var hyperlinkId: UInt16 = 0
 
     public static let `default` = CellAttributes()
 
-    public init(flags: StyleFlags = [], fgColor: PackedColor = .default, bgColor: PackedColor = .default) {
+    public init(
+        flags: StyleFlags = [],
+        fgColor: PackedColor = .default,
+        bgColor: PackedColor = .default,
+        hyperlinkId: UInt16 = 0
+    ) {
         self.flags = flags
         self.fgColor = fgColor
         self.bgColor = bgColor
+        self.hyperlinkId = hyperlinkId
     }
 
     public mutating func reset() {
@@ -93,6 +101,14 @@ public struct RGBColor: Equatable, Sendable {
         self.g = g
         self.b = b
     }
+
+    /// X11 rgb:RRRR/GGGG/BBBB format string (16-bit per component).
+    public var xtermRGBString: String {
+        let rh = String(format: "%04X", (UInt16(r) << 8) | UInt16(r))
+        let gh = String(format: "%04X", (UInt16(g) << 8) | UInt16(g))
+        let bh = String(format: "%04X", (UInt16(b) << 8) | UInt16(b))
+        return "rgb:\(rh)/\(gh)/\(bh)"
+    }
 }
 
 /// Standard xterm-256color palette.
@@ -104,11 +120,11 @@ public struct ColorPalette: Sendable {
     public private(set) var entries: [SIMD4<UInt8>]
 
     /// Default fg/bg colors used when PackedColor is `.default`.
-    public let defaultFg: SIMD4<UInt8>
-    public let defaultBg: SIMD4<UInt8>
+    public var defaultFg: SIMD4<UInt8>
+    public var defaultBg: SIMD4<UInt8>
 
     /// Cursor colors. When nil, cursor uses inverted fg/bg.
-    public let cursorColor: SIMD4<UInt8>?
+    public var cursorColor: SIMD4<UInt8>?
     public let cursorText: SIMD4<UInt8>?
 
     /// Selection colors. When nil, selection uses inverted fg/bg.
@@ -172,11 +188,36 @@ public struct ColorPalette: Sendable {
         return (fg, bg)
     }
 
+    /// Set a single palette entry by index.
+    /// - Parameter index: Palette index (0-255).
+    /// - Parameter color: RGBA color value.
+    public mutating func setEntry(index: Int, color: SIMD4<UInt8>) {
+        guard (0...255).contains(index) else { return }
+        entries[index] = color
+    }
+
     /// Apply palette overrides from configuration.
     /// - Parameter overrides: Map of palette index (0-255) to RGB color.
     public mutating func applyOverrides(_ overrides: [Int: RGBColor]) {
         for (index, color) in overrides where (0...255).contains(index) {
             entries[index] = SIMD4<UInt8>(color.r, color.g, color.b, 255)
+        }
+    }
+
+    /// Update dynamic colors (OSC 10/11/12).
+    public mutating func updateDynamicColors(
+        foreground: SIMD4<UInt8>? = nil,
+        background: SIMD4<UInt8>? = nil,
+        cursor: SIMD4<UInt8>? = nil
+    ) {
+        if let fg = foreground {
+            self.defaultFg = fg
+        }
+        if let bg = background {
+            self.defaultBg = bg
+        }
+        if let c = cursor {
+            self.cursorColor = c
         }
     }
 

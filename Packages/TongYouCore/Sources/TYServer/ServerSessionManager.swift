@@ -172,7 +172,7 @@ public actor ServerSessionManager {
 
     /// Per-pane map of client window sizes for multi-client size negotiation.
     /// Effective PTY size = min(cols) × min(rows) across all clients (tmux-style).
-    private var clientPaneSizes: [PaneID: [UUID: (cols: UInt16, rows: UInt16)]] = [:]
+    private var clientPaneSizes: [PaneID: [UUID: (cols: UInt16, rows: UInt16, pixelWidth: UInt16, pixelHeight: UInt16)]] = [:]
 
     /// Overlay stack for run-in-place: maps paneID to suspended original cores.
     /// When an overlay is active, coreLookup[paneID] points to the overlay core;
@@ -679,12 +679,14 @@ public actor ServerSessionManager {
     /// Register a client's window size for a pane and recalculate the effective PTY size.
     @discardableResult
     public func registerClientSize(
-        clientID: UUID, paneID: PaneID, cols: UInt16, rows: UInt16
+        clientID: UUID, paneID: PaneID, cols: UInt16, rows: UInt16,
+        pixelWidth: UInt16 = 0, pixelHeight: UInt16 = 0
     ) -> (cols: UInt16, rows: UInt16)? {
-        clientPaneSizes[paneID, default: [:]][clientID] = (cols, rows)
+        clientPaneSizes[paneID, default: [:]][clientID] = (cols, rows, pixelWidth, pixelHeight)
         Log.debug(
             "registerClientSize: client=\(clientID.uuidString.prefix(8)) pane=\(paneID) "
-            + "requested=\(cols)x\(rows) totalClients=\(clientPaneSizes[paneID]?.count ?? 0)",
+            + "requested=\(cols)x\(rows) pixels=\(pixelWidth)x\(pixelHeight) "
+            + "totalClients=\(clientPaneSizes[paneID]?.count ?? 0)",
             category: .session
         )
         return applyEffectiveSize(paneID: paneID)
@@ -718,12 +720,15 @@ public actor ServerSessionManager {
         guard let sizes = clientPaneSizes[paneID], !sizes.isEmpty else { return nil }
         let effectiveCols = sizes.values.map(\.cols).min()!
         let effectiveRows = sizes.values.map(\.rows).min()!
+        let effectivePixelWidth = sizes.values.map(\.pixelWidth).min() ?? 0
+        let effectivePixelHeight = sizes.values.map(\.pixelHeight).min() ?? 0
         Log.debug(
             "applyEffectiveSize: pane=\(paneID) effective=\(effectiveCols)x\(effectiveRows) "
+            + "pixels=\(effectivePixelWidth)x\(effectivePixelHeight) "
             + "from \(sizes.count) client(s)",
             category: .session
         )
-        coreLookup[paneID]?.resize(columns: effectiveCols, rows: effectiveRows)
+        coreLookup[paneID]?.resize(columns: effectiveCols, rows: effectiveRows, pixelWidth: effectivePixelWidth, pixelHeight: effectivePixelHeight)
         return (effectiveCols, effectiveRows)
     }
 

@@ -535,6 +535,46 @@ final class MetalRenderer {
         return (clearColor, palette)
     }
 
+    /// Update default foreground/background colors from OSC 10/11 sequences.
+    /// Does not affect the config snapshot; these colors apply until the next
+    /// full config reload (e.g. hot reload) which rebuilds the palette from Config.
+    func updateDynamicColors(foreground: RGBColor? = nil, background: RGBColor? = nil, cursor: RGBColor? = nil) {
+        var didChange = false
+        if let fg = foreground {
+            let simd = SIMD4<UInt8>(fg.r, fg.g, fg.b, 255)
+            colorPalette.updateDynamicColors(foreground: simd)
+            didChange = true
+        }
+        if let bg = background {
+            let simd = SIMD4<UInt8>(bg.r, bg.g, bg.b, 255)
+            colorPalette.updateDynamicColors(background: simd)
+            clearColor = MTLClearColorMake(
+                Double(bg.r) / 255.0,
+                Double(bg.g) / 255.0,
+                Double(bg.b) / 255.0,
+                1.0
+            )
+            didChange = true
+        }
+        if let c = cursor {
+            let simd = SIMD4<UInt8>(c.r, c.g, c.b, 255)
+            colorPalette.updateDynamicColors(cursor: simd)
+            didChange = true
+        }
+        guard didChange else { return }
+        pendingDirtyRegion.markFull()
+        markAllFramesDirty()
+    }
+
+    /// Update a single palette color from OSC 4 sequence.
+    func updatePaletteColor(index: Int, color: RGBColor) {
+        guard (0...255).contains(index) else { return }
+        let simd = SIMD4<UInt8>(color.r, color.g, color.b, 255)
+        colorPalette.setEntry(index: index, color: simd)
+        pendingDirtyRegion.markFull()
+        markAllFramesDirty()
+    }
+
     // MARK: - Resize
 
     func resize(screen: ScreenSize) {
@@ -1085,6 +1125,9 @@ final class MetalRenderer {
                 for col in 0..<snapCols {
                     let attrs = backingCells[rowBase + col].attributes
                     var (fg, bg) = palette.resolveDisplay(attrs)
+                    if snapshot?.reverseVideo == true {
+                        swap(&fg, &bg)
+                    }
 
                     if let b = selBounds, Selection.contains(ordered: b, line: absLine, col: col) {
                         if palette.selectionBg != nil {
@@ -1114,8 +1157,9 @@ final class MetalRenderer {
                     )
                     idx += 1
                 }
+                let reversedDefaultBg = snapshot?.reverseVideo == true ? palette.defaultFg : defaultBg
                 for col in snapCols..<cols {
-                    var bg = defaultBg
+                    var bg = reversedDefaultBg
                     if let b = selBounds, Selection.contains(ordered: b, line: absLine, col: col) {
                         bg = selBgColor
                     }
@@ -1126,8 +1170,9 @@ final class MetalRenderer {
                     idx += 1
                 }
             } else {
+                let reversedDefaultBg = snapshot?.reverseVideo == true ? palette.defaultFg : defaultBg
                 for col in 0..<cols {
-                    var bg = defaultBg
+                    var bg = reversedDefaultBg
                     if let b = selBounds, Selection.contains(ordered: b, line: absLine, col: col) {
                         bg = selBgColor
                     }
@@ -1166,14 +1211,20 @@ final class MetalRenderer {
                     let cell = backingCells[row * backingColumns + col]
                     let flags = cell.attributes.flags
                     if flags.contains(.underline) {
-                        let fg = colorPalette.resolveDisplay(cell.attributes).fg
+                        var (fg, bg) = colorPalette.resolveDisplay(cell.attributes)
+                        if snapshot?.reverseVideo == true {
+                            swap(&fg, &bg)
+                        }
                         underlineInstances.append(CellBgInstance(
                             gridPos: SIMD2<UInt16>(UInt16(col), UInt16(row)),
                             color: fg
                         ))
                     }
                     if flags.contains(.strikethrough) {
-                        let fg = colorPalette.resolveDisplay(cell.attributes).fg
+                        var (fg, bg) = colorPalette.resolveDisplay(cell.attributes)
+                        if snapshot?.reverseVideo == true {
+                            swap(&fg, &bg)
+                        }
                         strikethroughInstances.append(CellBgInstance(
                             gridPos: SIMD2<UInt16>(UInt16(col), UInt16(row)),
                             color: fg
@@ -1189,12 +1240,13 @@ final class MetalRenderer {
             let clampedStart = min(url.startCol, maxCol)
             let clampedEnd = min(url.endCol, maxCol)
             if clampedEnd >= clampedStart {
-                let fg: SIMD4<UInt8>
+                var (fg, bg) = (colorPalette.defaultFg, colorPalette.defaultBg)
                 if url.row < backingRows, clampedStart < backingColumns {
                     let attrs = backingCells[url.row * backingColumns + clampedStart].attributes
-                    fg = colorPalette.resolveDisplay(attrs).fg
-                } else {
-                    fg = colorPalette.defaultFg
+                    (fg, bg) = colorPalette.resolveDisplay(attrs)
+                }
+                if snapshot?.reverseVideo == true {
+                    swap(&fg, &bg)
                 }
                 let row = UInt16(clamping: url.row)
                 for i in clampedStart...clampedEnd {
@@ -1249,12 +1301,17 @@ final class MetalRenderer {
         let cursorCol: Int
         /// Per-line search match ranges for visible lines.
         let searchLineMap: SearchLineMap
+        /// DECSCNM: global reverse video (swap fg/bg for all cells).
+        let reverseVideo: Bool
 
         /// Dark text color for cells with search highlight background.
         private static let searchTextColor = SIMD4<UInt8>(20, 20, 20, 255)
 
         func foreground(attrs: CellAttributes, row: Int, col: Int, absLine: Int) -> SIMD4<UInt8> {
             var (fg, bg) = palette.resolveDisplay(attrs)
+            if reverseVideo {
+                swap(&fg, &bg)
+            }
             if let b = selBounds, Selection.contains(ordered: b, line: absLine, col: col) {
                 if let selFg = palette.selectionFg {
                     fg = selFg
@@ -1285,7 +1342,8 @@ final class MetalRenderer {
             cursorShape: snapshot.cursorShape,
             cursorRow: snapshot.cursorRow,
             cursorCol: snapshot.cursorCol,
-            searchLineMap: searchLineMap
+            searchLineMap: searchLineMap,
+            reverseVideo: snapshot.reverseVideo
         )
     }
 
@@ -1443,6 +1501,12 @@ final class MetalRenderer {
         let rowBase = row * backingColumns
         let snapCols = min(cols, backingColumns)
 
+        // Line size scaling for DECDHL/DECDWL
+        let lineFlags = row < snapshot.lineFlags.count ? snapshot.lineFlags[row] : LineFlags()
+        let hScale: Float = lineFlags.lineWidth == .double ? 2.0 : 1.0
+        let vScale: Float = lineFlags.lineHeight != .normal ? 2.0 : 1.0
+        let cellHeight = Float(fontSystem.cellSize.height)
+
         let cached = shapeRow(row: row, shaper: shaper)
 
         for (run, glyphs) in cached.textRuns {
@@ -1454,16 +1518,36 @@ final class MetalRenderer {
                 ), glyphInfo.width > 0 && glyphInfo.height > 0 else { continue }
 
                 let glyphCol = run.startCol + glyph.cellIndex
+                var glyphSize = SIMD2<UInt32>(glyphInfo.width, glyphInfo.height)
+                var bearings = SIMD2<Int16>(glyphInfo.bearingX, glyphInfo.bearingY)
+                var offset = SIMD2<Int16>(0, 0)
+
+                if hScale != 1.0 || vScale != 1.0 {
+                    glyphSize.x = UInt32(Float(glyphInfo.width) * hScale)
+                    glyphSize.y = UInt32(Float(glyphInfo.height) * vScale)
+                    bearings.x = Int16(Float(glyphInfo.bearingX) * hScale)
+                    bearings.y = Int16(Float(glyphInfo.bearingY) * vScale)
+
+                    // For double-height lines, offset to show top or bottom half
+                    if lineFlags.lineHeight == .doubleTop {
+                        // Shift glyph down so top half is visible in this cell
+                        offset.y = Int16(cellHeight)
+                    } else if lineFlags.lineHeight == .doubleBottom {
+                        // Shift glyph up so bottom half is visible in this cell
+                        offset.y = -Int16(cellHeight)
+                    }
+                }
+
                 rowInstances.text.append(CellTextInstance(
                     glyphPos: SIMD2<UInt32>(glyphInfo.atlasX, glyphInfo.atlasY),
-                    glyphSize: SIMD2<UInt32>(glyphInfo.width, glyphInfo.height),
-                    bearings: SIMD2<Int16>(glyphInfo.bearingX, glyphInfo.bearingY),
+                    glyphSize: glyphSize,
+                    bearings: bearings,
                     gridPos: SIMD2<UInt16>(UInt16(glyphCol), UInt16(row)),
                     color: colorState.foreground(
                         attrs: run.cells[glyph.cellIndex].attributes,
                         row: row, col: glyphCol, absLine: absLine
                     ),
-                    offset: SIMD2<Int16>(0, 0)
+                    offset: offset
                 ))
             }
         }
@@ -1475,6 +1559,7 @@ final class MetalRenderer {
             ), emojiInfo.width > 0 && emojiInfo.height > 0 {
                 var glyphSize = SIMD2<UInt32>(emojiInfo.width, emojiInfo.height)
                 var bearings = SIMD2<Int16>(emojiInfo.bearingX, emojiInfo.bearingY)
+                var offset = SIMD2<Int16>(0, 0)
 
                 var targetCells: Int = 1
                 if width == .wide {
@@ -1486,13 +1571,25 @@ final class MetalRenderer {
                     }
                 }
 
-                if targetCells > 1 {
-                    let targetWidth = cellWidth * Float(targetCells)
-                    let scale = targetWidth / Float(emojiInfo.width)
-                    glyphSize.x = UInt32(targetWidth)
-                    glyphSize.y = scaled(emojiInfo.height, by: scale)
-                    bearings.x = scaled(bearings.x, by: scale)
-                    bearings.y = scaled(bearings.y, by: scale)
+                // Apply line size scaling on top of wide-char scaling
+                let baseScale = Float(targetCells)
+                let finalHScale = baseScale * hScale
+                let finalVScale = vScale
+
+                if finalHScale != 1.0 || finalVScale != 1.0 {
+                    let targetWidth = cellWidth * finalHScale
+                    let hScaleFactor = targetWidth / Float(emojiInfo.width)
+                    let vScaleFactor = finalVScale
+                    glyphSize.x = UInt32(Float(emojiInfo.width) * hScaleFactor)
+                    glyphSize.y = UInt32(Float(emojiInfo.height) * vScaleFactor)
+                    bearings.x = Int16(Float(emojiInfo.bearingX) * hScaleFactor)
+                    bearings.y = Int16(Float(emojiInfo.bearingY) * vScaleFactor)
+
+                    if lineFlags.lineHeight == .doubleTop {
+                        offset.y = Int16(cellHeight)
+                    } else if lineFlags.lineHeight == .doubleBottom {
+                        offset.y = -Int16(cellHeight)
+                    }
                 }
 
                 rowInstances.emoji.append(CellTextInstance(
@@ -1506,8 +1603,8 @@ final class MetalRenderer {
         }
 
         // Box-drawing characters: decompose into rectangular segments
-        let cw = fontSystem.cellSize.width
-        let ch = fontSystem.cellSize.height
+        let cw = UInt32(CGFloat(fontSystem.cellSize.width) * CGFloat(hScale))
+        let ch = UInt32(CGFloat(fontSystem.cellSize.height) * CGFloat(vScale))
         for col in 0..<snapCols {
             let cell = backingCells[rowBase + col]
             guard let scalar = cell.content.firstScalar,

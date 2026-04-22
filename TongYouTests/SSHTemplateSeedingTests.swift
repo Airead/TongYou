@@ -27,7 +27,7 @@ struct SSHTemplateSeedingTests {
             contentsOf: env.directory.appendingPathComponent("profiles/ssh.txt"),
             encoding: .utf8
         )
-        #expect(sshContent.contains("${HOST}"))
+        #expect(sshContent.contains("${CMDPLT_SSH_HOST}"))
 
         let prodContent = try String(
             contentsOf: env.directory.appendingPathComponent("profiles/ssh-prod.txt"),

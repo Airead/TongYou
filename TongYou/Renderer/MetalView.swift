@@ -520,6 +520,9 @@ final class MetalView: NSView {
 
     /// Currently hovered URL (Cmd held + mouse over URL).
     private var hoveredURL: DetectedURL?
+    /// Pointer shape set by OSC 22 (e.g. "default", "pointer", "text").
+    /// nil means no shape has been set by the application.
+    private var pointerShape: String?
 
     /// Returns true when the Option (Alt) key is held, forcing local text
     /// selection even if the terminal program has enabled mouse tracking.
@@ -736,6 +739,10 @@ final class MetalView: NSView {
         addTrackingArea(area)
     }
 
+    override func mouseEntered(with event: NSEvent) {
+        applyPointerShape()
+    }
+
     override func mouseExited(with event: NSEvent) {
         if hoveredURL != nil { clearHoveredURL() }
     }
@@ -757,7 +764,44 @@ final class MetalView: NSView {
     private func clearHoveredURL() {
         hoveredURL = nil
         renderer?.highlightedURL = nil
-        NSCursor.iBeam.set()
+        applyPointerShape()
+    }
+
+    /// Apply the current pointer shape based on OSC 22 state.
+    /// URL hover takes precedence over the application-set shape.
+    private func applyPointerShape() {
+        guard hoveredURL == nil else { return }
+        guard let shape = pointerShape else {
+            // No OSC 22 shape set: use the terminal default (i-beam).
+            NSCursor.iBeam.set()
+            return
+        }
+        switch shape {
+        case "pointer":
+            NSCursor.pointingHand.set()
+        case "text":
+            NSCursor.iBeam.set()
+        case "crosshair":
+            NSCursor.crosshair.set()
+        case "not-allowed", "no-drop":
+            NSCursor.operationNotAllowed.set()
+        case "wait", "progress":
+            NSCursor.arrow.set() // macOS doesn't have a wait cursor; fallback to arrow
+        case "help":
+            NSCursor.arrow.set() // macOS doesn't have a help cursor; fallback to arrow
+        case "move":
+            NSCursor.closedHand.set()
+        case "ns-resize", "row-resize":
+            NSCursor.resizeUpDown.set()
+        case "ew-resize", "col-resize":
+            NSCursor.resizeLeftRight.set()
+        case "nesw-resize":
+            NSCursor.crosshair.set() // No diagonal resize cursor available
+        case "nwse-resize":
+            NSCursor.crosshair.set() // No diagonal resize cursor available
+        default:
+            NSCursor.arrow.set()
+        }
     }
 
     // MARK: - Mouse Helpers
@@ -801,6 +845,7 @@ final class MetalView: NSView {
         button: MouseEncoder.Button?
     ) {
         let (col, row) = gridPosition(for: nsEvent)
+        let pixelPos = pixelPosition(for: nsEvent)
         let mods = MouseEncoder.Modifiers(
             shift: nsEvent.modifierFlags.contains(.shift),
             option: nsEvent.modifierFlags.contains(.option),
@@ -808,9 +853,19 @@ final class MetalView: NSView {
         )
         let mouseEvent = MouseEncoder.Event(
             action: action, button: button,
-            col: col, row: row, modifiers: mods
+            col: col, row: row,
+            x: pixelPos.x, y: pixelPos.y,
+            modifiers: mods
         )
         terminalController?.handleMouseEvent(mouseEvent)
+    }
+
+    private func pixelPosition(for event: NSEvent) -> (x: Int, y: Int) {
+        let viewPos = convert(event.locationInWindow, from: nil)
+        let scale = displayScale
+        let pixelX = Int(viewPos.x * scale)
+        let pixelY = Int((bounds.height - viewPos.y) * scale)
+        return (pixelX, pixelY)
     }
 
     // MARK: - View Lifecycle
@@ -838,6 +893,14 @@ final class MetalView: NSView {
                 self.stopDisplayLink()
                 self.removeWindowActivationObservers()
             }
+        }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        if let tc = terminalController as? TerminalController {
+            tc.reportColorScheme(isDark)
         }
     }
 
@@ -910,10 +973,12 @@ final class MetalView: NSView {
 
     private func configureController(_ controller: any TerminalControlling) {
         if let grid = renderer?.gridSize, grid.columns > 0, grid.rows > 0 {
+            let cellWidth = fontSystem?.cellSize.width ?? 0
+            let cellHeight = fontSystem?.cellSize.height ?? 0
             controller.resize(
                 columns: Int(grid.columns),
                 rows: Int(grid.rows),
-                cellWidth: 0, cellHeight: 0
+                cellWidth: cellWidth, cellHeight: cellHeight
             )
         }
         controller.applyConfig(effectiveConfig)
@@ -941,6 +1006,31 @@ final class MetalView: NSView {
         controller.onPaneNotification = { [weak self] title, body in
             guard let self, let paneID = self.paneID else { return }
             self.onTabAction?(.paneNotification(paneID, title, body))
+        }
+        controller.onDynamicColorChanged = { [weak self] oscNum, color in
+            guard let self else { return }
+            switch oscNum {
+            case 10:
+                self.renderer?.updateDynamicColors(foreground: color, background: nil, cursor: nil)
+            case 11:
+                self.renderer?.updateDynamicColors(foreground: nil, background: color, cursor: nil)
+            case 12:
+                self.renderer?.updateDynamicColors(foreground: nil, background: nil, cursor: color)
+            default:
+                break
+            }
+        }
+        controller.onPaletteColorChanged = { [weak self] index, color in
+            guard let self else { return }
+            self.renderer?.updatePaletteColor(index: index, color: color)
+        }
+        controller.onPointerShapeChanged = { [weak self] shape in
+            guard let self else { return }
+            self.pointerShape = shape
+            // Apply immediately if mouse is currently over this view
+            if self.window?.mouseLocationOutsideOfEventStream != nil {
+                self.applyPointerShape()
+            }
         }
     }
 

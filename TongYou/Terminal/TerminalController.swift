@@ -17,6 +17,9 @@ final class TerminalController: TerminalControlling {
 
     private let core: TerminalCore
 
+    /// Current configuration snapshot (updated on hot reload).
+    private var config: Config
+
     // Set on ptyQueue (via core callback), read on main — atomic flag avoids per-read snapshot copies.
     nonisolated(unsafe) private var screenDirty = false
 
@@ -32,6 +35,12 @@ final class TerminalController: TerminalControlling {
     /// Command currently running in the shell, reported via OSC 7727.
     /// nil means the shell is at a prompt.
     nonisolated(unsafe) private(set) var runningCommand: String?
+
+    /// Pointer shape set by OSC 22 (e.g. "default", "pointer", "text").
+    /// nil means no shape has been set by the application.
+    nonisolated(unsafe) var pointerShape: String?
+    /// Called when the pointer shape changes via OSC 22.
+    nonisolated(unsafe) var onPointerShapeChanged: ((String) -> Void)?
 
     /// Active text selection (MainActor-only).
     private(set) var selection: Selection?
@@ -74,6 +83,10 @@ final class TerminalController: TerminalControlling {
     var onTitleChanged: ((String) -> Void)?
     /// Called on the main thread when a pane notification sequence is received (OSC 9 / 777 / 1337).
     nonisolated(unsafe) var onPaneNotification: ((String, String) -> Void)?
+    /// Called on the main thread when a dynamic color changes via OSC 10/11.
+    nonisolated(unsafe) var onDynamicColorChanged: ((Int, RGBColor) -> Void)?
+    /// Called on the main thread when a palette color changes via OSC 4.
+    nonisolated(unsafe) var onPaletteColorChanged: ((Int, RGBColor) -> Void)?
 
     private(set) var isSuspended: Bool = false
 
@@ -90,6 +103,7 @@ final class TerminalController: TerminalControlling {
             maxScrollback: config.scrollbackLimit,
             tabWidth: config.tabWidth
         )
+        self.config = config
         self.bellMode = config.bell
         self.optionAsAlt = config.optionAsAlt
         self.toastPresenter = toastPresenter
@@ -128,17 +142,53 @@ final class TerminalController: TerminalControlling {
                 self?.onPaneNotification?(title, body)
             }
         }
-        core.onUnsupportedMode = { [weak self] mode in
-            let appName = self?.runningCommand ?? "shell"
-            GUILog.warning("Unsupported terminal mode: \(mode) from \"\(appName)\"", category: .session)
+        core.onColorSchemeQuery = {
+            NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        }
+        core.onDefaultColorQuery = { [weak self] oscNum in
+            guard let self else { return nil }
+            switch oscNum {
+            case 10:
+                return self.config.foreground
+            case 11:
+                return self.config.background
+            case 12:
+                return self.config.cursorColor
+            default:
+                return nil
+            }
+        }
+        core.onDynamicColorChanged = { [weak self] oscNum, color in
+            guard let self else { return }
+            self.onDynamicColorChanged?(oscNum, color)
+        }
+        core.onPaletteColorChanged = { [weak self] index, color in
+            guard let self else { return }
+            self.onPaletteColorChanged?(index, color)
+        }
+        core.onPaletteColorQuery = { [weak self] index in
+            guard let self else { return nil }
+            return self.config.palette[index]
+        }
+        core.onPointerShapeChanged = { [weak self] shape in
+            guard let self else { return }
+            self.pointerShape = shape
             DispatchQueue.main.async { [weak self] in
-                self?.showUnsupportedModeToast(mode)
+                self?.onPointerShapeChanged?(shape)
+            }
+        }
+        core.onUnhandledSequence = { [weak self] message in
+            let appName = self?.runningCommand ?? "shell"
+            GUILog.warning("Unhandled sequence: \(message) from \"\(appName)\"", category: .session)
+            DispatchQueue.main.async { [weak self] in
+                self?.showUnhandledSequenceToast(message)
             }
         }
     }
 
-    private func showUnsupportedModeToast(_ mode: UInt16) {
-        print("[DEBUG] showUnsupportedModeToast called with mode: \(mode), toastPresenter: \(toastPresenter != nil ? "set" : "nil")")
+    @MainActor
+    private func showUnhandledSequenceToast(_ message: String) {
+        print("[DEBUG] showUnhandledSequenceToast called with message: \(message), toastPresenter: \(toastPresenter != nil ? "set" : "nil")")
         unsupportedModeDebounceWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else {
@@ -149,8 +199,8 @@ final class TerminalController: TerminalControlling {
                 print("[DEBUG] toastPresenter is nil")
                 return
             }
-            print("[DEBUG] Showing toast for mode: \(mode)")
-            presenter.show("Unsupported terminal mode: \(mode)")
+            print("[DEBUG] Showing toast for message: \(message)")
+            presenter.show("Unhandled: \(message)")
         }
         unsupportedModeDebounceWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.unsupportedModeDebounceInterval, execute: work)
@@ -158,6 +208,7 @@ final class TerminalController: TerminalControlling {
 
     /// Apply updated configuration (called from MetalView on hot reload).
     func applyConfig(_ config: Config) {
+        self.config = config
         bellMode = config.bell
         optionAsAlt = config.optionAsAlt
         // scrollbackLimit and tabWidth are set at Screen init and not changed at runtime
@@ -246,7 +297,7 @@ final class TerminalController: TerminalControlling {
             _contentGeneration &+= 1
             // Refresh URL detection only while Command key is held and content changed.
             if commandKeyHeld, _contentGeneration != lastURLGeneration {
-                detectedURLs = URLDetector.detect(in: snapshot)
+                detectedURLs = URLDetector.detect(in: snapshot, hyperlinkRegistry: core.hyperlinkRegistry)
                 lastURLGeneration = _contentGeneration
             }
             return snapshot
@@ -270,7 +321,9 @@ final class TerminalController: TerminalControlling {
         let input = KeyEncoder.KeyInput(event: event)
         let options = KeyEncoder.Options(
             appCursorMode: core.appCursorMode,
-            optionAsAlt: optionAsAlt
+            optionAsAlt: optionAsAlt,
+            keypadApplication: core.appKeypadMode,
+            modifyOtherKeys: core.modifyOtherKeys
         )
         guard let data = KeyEncoder.encode(input, options: options) else { return }
         dispatchUserInput(data)
@@ -288,7 +341,9 @@ final class TerminalController: TerminalControlling {
     func sendKey(_ input: KeyEncoder.KeyInput) {
         let options = KeyEncoder.Options(
             appCursorMode: core.appCursorMode,
-            optionAsAlt: optionAsAlt
+            optionAsAlt: optionAsAlt,
+            keypadApplication: core.appKeypadMode,
+            modifyOtherKeys: core.modifyOtherKeys
         )
         guard let data = KeyEncoder.encode(input, options: options) else { return }
         writeToPTY(data)
@@ -303,6 +358,13 @@ final class TerminalController: TerminalControlling {
     /// has enabled DECSET 1004; otherwise this is a no-op.
     func reportFocus(_ focused: Bool) {
         core.reportFocus(focused)
+    }
+
+    /// Report the current system color scheme (dark/light) to the PTY.
+    /// The underlying `TerminalCore` only writes `CSI ? 997 ; Ps n` when
+    /// the running app has enabled DECSET 2031; otherwise this is a no-op.
+    func reportColorScheme(_ isDark: Bool) {
+        core.reportColorScheme(isDark)
     }
 
     private func dispatchUserInput(_ data: Data) {
@@ -420,7 +482,7 @@ final class TerminalController: TerminalControlling {
         commandKeyHeld = held
         if held {
             let snapshot = core.forceSnapshot()
-            detectedURLs = URLDetector.detect(in: snapshot)
+            detectedURLs = URLDetector.detect(in: snapshot, hyperlinkRegistry: core.hyperlinkRegistry)
             lastURLGeneration = _contentGeneration
         } else {
             detectedURLs = []

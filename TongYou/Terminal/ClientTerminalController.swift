@@ -34,6 +34,10 @@ final class ClientTerminalController: TerminalControlling {
     var onProcessExited: ((Int32) -> Void)?
     var onTitleChanged: ((String) -> Void)?
     var onPaneNotification: ((String, String) -> Void)?
+    var onDynamicColorChanged: ((Int, RGBColor) -> Void)?
+    var onPaletteColorChanged: ((Int, RGBColor) -> Void)?
+    var pointerShape: String? { nil }
+    var onPointerShapeChanged: ((String) -> Void)?
 
     init(
         remoteClient: RemoteSessionClient,
@@ -82,7 +86,8 @@ final class ClientTerminalController: TerminalControlling {
         let input = KeyEncoder.KeyInput(event: event)
         let options = KeyEncoder.Options(
             appCursorMode: false,
-            optionAsAlt: optionAsAlt
+            optionAsAlt: optionAsAlt,
+            modifyOtherKeys: 0
         )
         guard let data = KeyEncoder.encode(input, options: options) else { return }
         dispatchUserInput(data)
@@ -96,7 +101,8 @@ final class ClientTerminalController: TerminalControlling {
     func sendKey(_ input: KeyEncoder.KeyInput) {
         let options = KeyEncoder.Options(
             appCursorMode: false,
-            optionAsAlt: optionAsAlt
+            optionAsAlt: optionAsAlt,
+            modifyOtherKeys: 0
         )
         guard let data = KeyEncoder.encode(input, options: options) else { return }
         forwardInput(data)
@@ -307,18 +313,27 @@ final class ClientTerminalController: TerminalControlling {
 
     private var lastResizeCols: Int?
     private var lastResizeRows: Int?
+    private var lastPixelWidth: UInt16 = 0
+    private var lastPixelHeight: UInt16 = 0
 
     func resize(columns: Int, rows: Int, cellWidth: UInt32 = 0, cellHeight: UInt32 = 0) {
         let cols = max(Screen.minColumns, columns)
         let rows = max(Screen.minRows, rows)
-        guard cols != lastResizeCols || rows != lastResizeRows else { return }
+        let pixelWidth = UInt16(clamping: Int(cellWidth) * cols)
+        let pixelHeight = UInt16(clamping: Int(cellHeight) * rows)
+        guard cols != lastResizeCols || rows != lastResizeRows
+              || pixelWidth != lastPixelWidth || pixelHeight != lastPixelHeight else { return }
         lastResizeCols = cols
         lastResizeRows = rows
+        lastPixelWidth = pixelWidth
+        lastPixelHeight = pixelHeight
         remoteClient.resizePane(
             sessionID: sessionID,
             paneID: paneID,
             cols: UInt16(clamping: cols),
-            rows: UInt16(clamping: rows)
+            rows: UInt16(clamping: rows),
+            pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight
         )
     }
 

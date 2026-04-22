@@ -6,25 +6,55 @@
 /// Reference: Ghostty `src/terminal/modes.zig`.
 public struct TerminalModes: Equatable, Sendable {
     private var flags: UInt32
+    /// ANSI mode flags (separate from DEC private mode flags).
+    private var ansiFlags: UInt8 = 0
 
     /// Mouse tracking mode (mutually exclusive).
-    public private(set) var mouseTracking: MouseTrackingMode = .none
+    public var mouseTracking: MouseTrackingMode = .none
     /// Mouse encoding format.
-    public private(set) var mouseFormat: MouseFormat = .x10
+    public var mouseFormat: MouseFormat = .x10
+
+    /// xterm modifyOtherKeys level (XTMODKEYS, CSI > 4 ; Pv m).
+    /// 0 = disabled, 1 = old xterm behavior, 2 = all keys with modifiers.
+    public var modifyOtherKeys: UInt8 = 0
 
     public init() {
         var f: UInt32 = 0
-        // Defaults: cursor visible, autowrap on
+        // Defaults: cursor visible, autowrap on, grapheme clustering on
         f |= Self.bit(.cursorVisible)
         f |= Self.bit(.autowrap)
+        f |= Self.bit(.graphemeClustering)
         self.flags = f
     }
 
-    // MARK: - Mode Definitions
+    // MARK: - ANSI Mode Definitions
+
+    /// ANSI modes (CSI h / CSI l without `?`).
+    /// These use a separate bitfield from DEC private modes.
+    public enum ANSIMode: UInt16, Sendable {
+        /// Insert/Replace Mode (IRM). Set = insert mode, Reset = replace mode.
+        /// In insert mode, writing a character shifts existing content right.
+        case insert = 4
+        /// Line Feed/New Line Mode (LNM). Set = LF acts as CRLF, Reset = LF only.
+        /// When set, LF, VT, FF move cursor to first column after moving down.
+        case newline = 20
+    }
+
+    // MARK: - DEC Private Mode Definitions
 
     public enum Mode: UInt16, Sendable {
         /// Application cursor keys (DECCKM). Off = normal, On = application.
         case cursorKeys = 1
+        /// Column mode (DECCOLM). Set = 132 columns, Reset = 80 columns.
+        case columnMode = 3
+        /// Scrolling mode (DECSCLM). Set = smooth scroll, Reset = jump scroll.
+        /// No-op on modern GPU-accelerated terminals (always instant).
+        case smoothScroll = 4
+        /// Screen mode (DECSCNM). Set = reverse video, Reset = normal.
+        case reverseVideo = 5
+        /// Origin mode (DECOM). Set = cursor positioning relative to scroll
+        /// margins, Reset = absolute (top-left of screen).
+        case originMode = 6
         /// Auto-wrap mode (DECAWM). On = wrap at right margin.
         case autowrap = 7
         /// Cursor visible (DECTCEM). On = visible.
@@ -41,6 +71,16 @@ public struct TerminalModes: Equatable, Sendable {
         /// delivery to the client until the app ends the update or the
         /// safety timeout elapses.
         case syncedUpdate = 2026
+        /// Grapheme clustering mode (mode 2027). When enabled the terminal
+        /// treats Unicode grapheme clusters as single display units for
+        /// cursor movement and width calculation.
+        case graphemeClustering = 2027
+        /// Color scheme reporting (mode 2031). When enabled the terminal
+        /// reports color scheme changes (dark/light) to the application
+        /// via DECDSR 996/997, and responds to DECRQM queries.
+        case colorSchemeReporting = 2031
+        /// Keypad application mode (DECKPAM, ESC =). On = application sequences.
+        case keypadApplication = 9999
     }
 
     /// Mouse tracking modes — mutually exclusive (setting one clears others).
@@ -63,6 +103,8 @@ public struct TerminalModes: Equatable, Sendable {
         case x10 = 0
         /// SGR format (DECSET 1006): ESC[<btn;x;y;M/m. No coordinate limit.
         case sgr = 6
+        /// SGR pixel format (DECSET 1016): same as SGR but coordinates are pixels.
+        case sgrPixels = 16
     }
 
     // MARK: - Access
@@ -107,8 +149,25 @@ public struct TerminalModes: Equatable, Sendable {
         case 1006:
             mouseFormat = enabled ? .sgr : .x10
             return true
+        case 1016:
+            mouseFormat = enabled ? .sgrPixels : .x10
+            return true
         default:
             return false
+        }
+    }
+
+    // MARK: - ANSI Mode Access
+
+    public func isSet(_ mode: ANSIMode) -> Bool {
+        ansiFlags & Self.ansiBit(mode) != 0
+    }
+
+    public mutating func set(_ mode: ANSIMode, _ value: Bool) {
+        if value {
+            ansiFlags |= Self.ansiBit(mode)
+        } else {
+            ansiFlags &= ~Self.ansiBit(mode)
         }
     }
 
@@ -118,7 +177,15 @@ public struct TerminalModes: Equatable, Sendable {
 
     // MARK: - Private
 
-    /// Map mode enum to a bit position. Uses a fixed mapping to avoid
+    /// Map ANSI mode enum to a bit position.
+    private static func ansiBit(_ mode: ANSIMode) -> UInt8 {
+        switch mode {
+        case .insert:  return 1 << 0
+        case .newline: return 1 << 1
+        }
+    }
+
+    /// Map DEC private mode enum to a bit position. Uses a fixed mapping to avoid
     /// depending on rawValue (which can be large numbers like 2004).
     private static func bit(_ mode: Mode) -> UInt32 {
         switch mode {
@@ -129,11 +196,23 @@ public struct TerminalModes: Equatable, Sendable {
         case .bracketedPaste: return 1 << 4
         case .focusEvents:    return 1 << 5
         case .syncedUpdate:   return 1 << 6
+        case .keypadApplication: return 1 << 7
+        case .columnMode:     return 1 << 8
+        case .smoothScroll:   return 1 << 9
+        case .reverseVideo:      return 1 << 10
+        case .originMode:        return 1 << 11
+        case .graphemeClustering: return 1 << 12
+        case .colorSchemeReporting: return 1 << 13
         }
     }
 
     /// Convert a raw DECSET/DECRST parameter number to a Mode, if supported.
     public static func from(rawValue: UInt16) -> Mode? {
         Mode(rawValue: rawValue)
+    }
+
+    /// Convert a raw ANSI SM/RM parameter number to an ANSIMode, if supported.
+    public static func ansiFrom(rawValue: UInt16) -> ANSIMode? {
+        ANSIMode(rawValue: rawValue)
     }
 }

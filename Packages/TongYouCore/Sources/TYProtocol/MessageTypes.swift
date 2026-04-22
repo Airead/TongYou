@@ -206,7 +206,7 @@ public enum ClientMessage: Sendable {
 
     // Terminal I/O (hot path)
     case input(SessionID, PaneID, [UInt8])
-    case resize(SessionID, PaneID, cols: UInt16, rows: UInt16)
+    case resize(SessionID, PaneID, cols: UInt16, rows: UInt16, pixelWidth: UInt16, pixelHeight: UInt16)
     /// Scroll viewport: positive = up (older), negative = down (newer), Int32.max = jump to bottom.
     case scrollViewport(SessionID, PaneID, delta: Int32)
     /// Extract selected text from a pane (server replies with .clipboardSet).
@@ -305,8 +305,8 @@ public enum ClientMessage: Sendable {
             let preview = bytes.prefix(32).map { String(format: "%02x", $0) }.joined(separator: " ")
             let suffix = bytes.count > 32 ? "... (len=\(bytes.count))" : ""
             return "input(session=\(sid), pane=\(pid), data=[\(preview)\(suffix)])"
-        case .resize(let sid, let pid, let cols, let rows):
-            return "resize(session=\(sid), pane=\(pid), \(cols)x\(rows))"
+        case .resize(let sid, let pid, let cols, let rows, let pixelWidth, let pixelHeight):
+            return "resize(session=\(sid), pane=\(pid), \(cols)x\(rows), pixels=\(pixelWidth)x\(pixelHeight))"
         case .scrollViewport(let sid, let pid, let delta):
             return "scrollViewport(session=\(sid), pane=\(pid), delta=\(delta))"
         case .extractSelection(let sid, let pid, let sel):

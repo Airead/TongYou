@@ -23,7 +23,7 @@ import TYTerminal
         #expect(screen.cell(at: 0, row: 0).codepoint == "B")
         #expect(screen.cell(at: 0, row: 1).codepoint == "C")
         #expect(screen.cell(at: 0, row: 2).codepoint == "D")
-        #expect(screen.cursorCol == 5)
+        #expect(screen.cursorCol == 4)
         #expect(screen.cursorRow == 2)
     }
 
