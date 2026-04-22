@@ -527,6 +527,9 @@ public struct StreamHandler {
             handleOSC12(stringData)
         case 22:
             handleOSC22(stringData)
+        case 66:
+            // OSC 66 (Kitty text sizing protocol) — intentionally ignored for now.
+            break
         case 1337:
             handleOSC1337(stringData)
         default:
