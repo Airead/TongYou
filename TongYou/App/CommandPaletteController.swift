@@ -128,9 +128,21 @@ final class CommandPaletteController {
     /// The raw text shown in the palette input field.
     var input: String = "" {
         didSet {
-            if input != oldValue { refreshRows(resetHighlight: true) }
+            if input != oldValue {
+                // If the user edits while browsing history, exit history mode.
+                if isBrowsingHistory, !isProgrammaticInputChange, input != historyBrowsingSnapshot {
+                    exitHistoryBrowsing()
+                }
+                isProgrammaticInputChange = false
+                refreshRows(resetHighlight: true)
+            }
         }
     }
+
+    /// Set to `true` before programmatically changing `input` from inside
+    /// history-browsing methods so the didSet observer does not exit
+    /// history mode.
+    private var isProgrammaticInputChange: Bool = false
 
     /// Derived from `input`. Re-evaluated on every text change.
     private(set) var scope: PaletteScope = .session
@@ -198,6 +210,61 @@ final class CommandPaletteController {
 
     /// Called when the user hits ⌘⌫ on a history row.
     var onDeleteHistoryEntry: ((_ scope: PaletteScope, _ identifier: String) -> Void)?
+
+    // MARK: - Query history browsing
+
+    /// Query strings for the current scope, injected by the outer layer on
+    /// `open()`. Used for ↑↓ history browsing when the input is empty.
+    var queryHistory: [String] = []
+
+    /// When non-negative, the user is browsing query history with ↑↓ keys.
+    /// The value is an index into `queryHistory` (0 = most recent).
+    private(set) var historyBrowsingIndex: Int = -1
+
+    /// Snapshot of the input text when history browsing started. Used to
+    /// detect manual edits so we can exit history mode.
+    private var historyBrowsingSnapshot: String = ""
+
+    /// Returns `true` when the user is currently browsing query history.
+    var isBrowsingHistory: Bool { historyBrowsingIndex >= 0 }
+
+    /// Enter or continue browsing history backwards (older entries).
+    /// Only works when the input is empty or already in history mode.
+    /// Moves `input` to the next older query in `queryHistory`.
+    func browseHistoryPrevious() {
+        guard input.isEmpty || isBrowsingHistory else { return }
+        guard !queryHistory.isEmpty else { return }
+
+        if !isBrowsingHistory {
+            historyBrowsingSnapshot = input
+            historyBrowsingIndex = 0
+        } else if historyBrowsingIndex < queryHistory.count - 1 {
+            historyBrowsingIndex += 1
+        }
+        isProgrammaticInputChange = true
+        input = queryHistory[historyBrowsingIndex]
+    }
+
+    /// Browse history forwards (newer entries). Exits history mode and
+    /// restores an empty input when already at the most recent entry.
+    func browseHistoryNext() {
+        guard isBrowsingHistory else { return }
+        if historyBrowsingIndex > 0 {
+            historyBrowsingIndex -= 1
+            isProgrammaticInputChange = true
+            input = queryHistory[historyBrowsingIndex]
+        } else {
+            exitHistoryBrowsing()
+        }
+    }
+
+    /// Exit history browsing mode and restore the pre-browsing input.
+    private func exitHistoryBrowsing() {
+        historyBrowsingIndex = -1
+        isProgrammaticInputChange = true
+        input = historyBrowsingSnapshot
+        historyBrowsingSnapshot = ""
+    }
 
     // MARK: - Delete (⌘⌫)
 
@@ -268,6 +335,8 @@ final class CommandPaletteController {
     func open() {
         input = ""
         selection = []
+        historyBrowsingIndex = -1
+        historyBrowsingSnapshot = ""
         isOpen = true
         refreshRows(resetHighlight: true)
     }
@@ -280,6 +349,8 @@ final class CommandPaletteController {
         selection = []
         rows = []
         highlightedIndex = -1
+        historyBrowsingIndex = -1
+        historyBrowsingSnapshot = ""
     }
 
     // MARK: - Keyboard navigation

@@ -36,6 +36,7 @@ struct TerminalWindowView: View {
     /// closures that reference the `sessionManager`.
     @State private var sshLauncher: SSHLauncher
     @State private var paletteHistory = PaletteHistory()
+    @State private var paletteQueryHistory = PaletteQueryHistory()
 
     /// IDs of panes whose in-pane search bar is currently open. Updated via
     /// `MetalView.onSearchBarToggled`. Consumed by `zoomedPaneView` to hide
@@ -61,6 +62,7 @@ struct TerminalWindowView: View {
         let manager = SessionManager(profileLoader: loader.profileLoader)
         _sessionManager = State(initialValue: manager)
         _paletteHistory = State(initialValue: PaletteHistory())
+        _paletteQueryHistory = State(initialValue: PaletteQueryHistory())
         _sshLauncher = State(initialValue: SSHLauncher(
             validateProfile: { [weak manager] templateID, vars in
                 try manager?.tryResolveProfile(id: templateID, variables: vars)
@@ -341,9 +343,13 @@ struct TerminalWindowView: View {
     /// commit for the four Enter variants; Phase 7 adds a batch path for
     /// multi-select. Other scopes fall through to a simple close (Phase 8).
     private func handlePaletteCommit(mode: PaletteEnterMode) {
+        let query = commandPalette.input
         guard let committed = commandPalette.commit(mode: mode) else {
             dismissCommandPalette()
             return
+        }
+        Task { @MainActor in
+            try? await paletteQueryHistory.record(query: query)
         }
         switch commandPalette.scope {
         case .ssh:
@@ -1338,6 +1344,7 @@ struct TerminalWindowView: View {
             rewirePaletteForProfiles()
             rewirePaletteForCommands()
             commandPalette.historyCandidates = await buildHistoryCandidates()
+            commandPalette.queryHistory = (try? await paletteQueryHistory.recent(limit: 100)) ?? []
             commandPalette.onDeleteHistoryEntry = { [paletteHistory] scope, identifier in
                 Task { @MainActor in
                     _ = try? await paletteHistory.remove(scope: scope, identifier: identifier)

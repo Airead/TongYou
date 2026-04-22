@@ -967,4 +967,127 @@ struct PaletteTextFieldKeyboardTests {
         #expect(field.performKeyEquivalent(with: event) == false)
         #expect(called == false)
     }
+
+    // MARK: - Query history browsing
+
+    @Test func browseHistoryPreviousWithEmptyInputEntersHistoryMode() {
+        let controller = CommandPaletteController()
+        controller.queryHistory = ["ssh db1", "p home", "> newTab"]
+        controller.open()
+
+        #expect(controller.input == "")
+        #expect(controller.isBrowsingHistory == false)
+
+        controller.browseHistoryPrevious()
+        #expect(controller.input == "ssh db1")
+        #expect(controller.isBrowsingHistory == true)
+        #expect(controller.historyBrowsingIndex == 0)
+    }
+
+    @Test func browseHistoryPreviousMovesToOlderEntries() {
+        let controller = CommandPaletteController()
+        controller.queryHistory = ["ssh db1", "p home", "> newTab"]
+        controller.open()
+
+        controller.browseHistoryPrevious()
+        controller.browseHistoryPrevious()
+        #expect(controller.input == "p home")
+        #expect(controller.historyBrowsingIndex == 1)
+
+        controller.browseHistoryPrevious()
+        #expect(controller.input == "> newTab")
+        #expect(controller.historyBrowsingIndex == 2)
+    }
+
+    @Test func browseHistoryPreviousStopsAtOldest() {
+        let controller = CommandPaletteController()
+        controller.queryHistory = ["ssh db1", "p home"]
+        controller.open()
+
+        controller.browseHistoryPrevious()
+        controller.browseHistoryPrevious()
+        controller.browseHistoryPrevious()
+        #expect(controller.input == "p home")
+        #expect(controller.historyBrowsingIndex == 1)
+    }
+
+    @Test func browseHistoryNextMovesToNewerEntries() {
+        let controller = CommandPaletteController()
+        controller.queryHistory = ["ssh db1", "p home", "> newTab"]
+        controller.open()
+
+        controller.browseHistoryPrevious()
+        controller.browseHistoryPrevious()
+        controller.browseHistoryPrevious()
+        #expect(controller.input == "> newTab")
+
+        controller.browseHistoryNext()
+        #expect(controller.input == "p home")
+        #expect(controller.historyBrowsingIndex == 1)
+
+        controller.browseHistoryNext()
+        #expect(controller.input == "ssh db1")
+        #expect(controller.historyBrowsingIndex == 0)
+    }
+
+    @Test func browseHistoryNextAtMostRecentExitsHistoryMode() {
+        let controller = CommandPaletteController()
+        controller.queryHistory = ["ssh db1", "p home"]
+        controller.open()
+
+        controller.browseHistoryPrevious()
+        #expect(controller.input == "ssh db1")
+        #expect(controller.isBrowsingHistory == true)
+
+        controller.browseHistoryNext()
+        #expect(controller.input == "")
+        #expect(controller.isBrowsingHistory == false)
+    }
+
+    @Test func editingWhileBrowsingHistoryExitsHistoryMode() {
+        let controller = CommandPaletteController()
+        controller.queryHistory = ["ssh db1", "p home"]
+        controller.open()
+
+        controller.browseHistoryPrevious()
+        #expect(controller.input == "ssh db1")
+        #expect(controller.isBrowsingHistory == true)
+
+        controller.input = "ssh db1 edited"
+        #expect(controller.isBrowsingHistory == false)
+    }
+
+    @Test func browseHistoryDoesNothingWhenInputIsNonEmpty() {
+        let controller = CommandPaletteController()
+        controller.queryHistory = ["ssh db1", "p home"]
+        controller.open()
+        controller.input = "some query"
+
+        controller.browseHistoryPrevious()
+        #expect(controller.input == "some query")
+        #expect(controller.isBrowsingHistory == false)
+    }
+
+    @Test func browseHistoryDoesNothingWithEmptyHistory() {
+        let controller = CommandPaletteController()
+        controller.queryHistory = []
+        controller.open()
+
+        controller.browseHistoryPrevious()
+        #expect(controller.input == "")
+        #expect(controller.isBrowsingHistory == false)
+    }
+
+    @Test func closeResetsHistoryBrowsingState() {
+        let controller = CommandPaletteController()
+        controller.queryHistory = ["ssh db1"]
+        controller.open()
+
+        controller.browseHistoryPrevious()
+        #expect(controller.isBrowsingHistory == true)
+
+        controller.close()
+        #expect(controller.isBrowsingHistory == false)
+        #expect(controller.input == "")
+    }
 }

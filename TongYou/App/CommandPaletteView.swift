@@ -36,11 +36,19 @@ struct CommandPaletteView: View {
         .frame(width: 600)
         .overlayPanelStyle(cornerRadius: 10)
         .onKeyPress(.upArrow) {
-            controller.moveHighlight(by: -1)
+            if controller.input.isEmpty || controller.isBrowsingHistory {
+                controller.browseHistoryPrevious()
+            } else {
+                controller.moveHighlight(by: -1)
+            }
             return .handled
         }
         .onKeyPress(.downArrow) {
-            controller.moveHighlight(by: 1)
+            if controller.isBrowsingHistory {
+                controller.browseHistoryNext()
+            } else {
+                controller.moveHighlight(by: 1)
+            }
             return .handled
         }
         .onKeyPress(.tab) {
