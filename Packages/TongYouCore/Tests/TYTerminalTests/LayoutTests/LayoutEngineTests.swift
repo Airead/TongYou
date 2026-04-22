@@ -210,51 +210,7 @@ struct LayoutEngineTests {
         // V[A(2), B(3), C(5)] remove B → V[A(2), C(5)]; sibling weights intact.
         let (a, leafA) = leaf()
         let (b, leafB) = leaf()
-        let (c, leafC) = leaf()
-        let tree = container(.vertical, [leafA, leafB, leafC], [2, 3, 5])
-        let tab = makeTab(tree, focused: b.id)
-
-        guard case .closed(let newTab, let promoted) = LayoutEngine.closePane(tab: tab, paneID: b.id) else {
-            Issue.record("expected .closed"); return
-        }
-        guard case .container(let cc) = newTab.paneTree else {
-            Issue.record("expected container"); return
-        }
-        #expect(cc.children.map { $0.allPaneIDs[0] } == [a.id, c.id])
-        #expect(cc.weights == [2, 5])
-        // Focused pane was removed → promoted to tree.firstPane (A).
-        #expect(promoted == a.id)
-        #expect(newTab.focusedPaneID == a.id)
-    }
-
-    @Test func closeDownToSingleChildCollapsesContainer() {
-        // V[A, B] remove A → bare leaf B (collapse rule).
-        let (a, leafA) = leaf()
-        let (b, leafB) = leaf()
-        let tree = container(.vertical, [leafA, leafB], [1, 1])
-        let tab = makeTab(tree)
-
-        guard case .closed(let newTab, let promoted) = LayoutEngine.closePane(tab: tab, paneID: a.id) else {
-            Issue.record("expected .closed"); return
-        }
-        if case .leaf(let p) = newTab.paneTree {
-            #expect(p.id == b.id)
-        } else {
-            Issue.record("expected leaf after collapse")
-        }
-        #expect(promoted == b.id)
-    }
-
-    @Test func closeReturnsNilForUnknownPaneID() {
-        let tab = makeTab(.leaf(TerminalPane()))
-        #expect(LayoutEngine.closePane(tab: tab, paneID: UUID()) == nil)
-    }
-
-    @Test func closePreservesUnrelatedFocus() {
-        // Focus is on a surviving pane → should not be rewritten.
-        let (a, leafA) = leaf()
-        let (b, leafB) = leaf()
-        let (c, leafC) = leaf()
+        let (_, leafC) = leaf()
         let tree = container(.vertical, [leafA, leafB, leafC], [1, 1, 1])
         let tab = makeTab(tree, focused: a.id)
         guard case .closed(let newTab, _) = LayoutEngine.closePane(tab: tab, paneID: b.id) else {

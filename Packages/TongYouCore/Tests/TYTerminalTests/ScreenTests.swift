@@ -9,7 +9,7 @@ struct ScreenTests {
         let screen = Screen(columns: 5, rows: 3)
         screen.write(GraphemeCluster(Character("A")), attributes: .default)
         screen.setCursorPos(row: 1, col: 2)
-        screen.consumeDirtyRegion() // clear initial full rebuild
+        let _ = screen.consumeDirtyRegion() // clear initial full rebuild
 
         screen.fillWithE()
 
@@ -224,7 +224,7 @@ struct ScreenTests {
 
     @Test func reverseVideoMarkedFullOnChange() {
         let screen = Screen(columns: 10, rows: 2)
-        screen.consumeDirtyRegion() // clear initial full rebuild
+        let _ = screen.consumeDirtyRegion() // clear initial full rebuild
         screen.setReverseVideo(true)
         #expect(screen.consumeDirtyRegion().fullRebuild == true)
     }

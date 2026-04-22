@@ -1081,7 +1081,7 @@ struct StreamHandlerDECModeTests {
 
     @Test func reverseVideoTriggersFullRedraw() {
         let screen = Screen(columns: 10, rows: 2)
-        screen.consumeDirtyRegion() // clear initial full rebuild
+        let _ = screen.consumeDirtyRegion() // clear initial full rebuild
         var handler = StreamHandler(screen: screen)
         var parser = VTParser()
         let bytes = Array("\u{1B}[?5h".utf8)
@@ -1156,7 +1156,7 @@ struct StreamHandlerANSIModeTests {
     // MARK: - LNM (Line Feed/New Line Mode, mode 20)
 
     @Test func lnmInitiallyDisabled() {
-        let screen = drive("")
+        let _ = drive("")
         // When LNM is disabled, LF should only move down, not to column 0
         // This is the default state
         let screen2 = drive("AB\u{1B}[H\nC")
