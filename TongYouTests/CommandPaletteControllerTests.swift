@@ -668,7 +668,7 @@ struct CommandPaletteControllerTests {
         #expect(controller.rows[2].candidate.primaryText == "beta")
     }
 
-    @Test func historyDedupedAgainstRegularPool() {
+    @Test func regularPoolDedupedAgainstHistory() {
         let controller = CommandPaletteController()
         controller.sshCandidates = [
             PaletteCandidate(primaryText: "alpha", scope: .ssh, sshResolution: SSHResolution(
@@ -682,9 +682,9 @@ struct CommandPaletteControllerTests {
         controller.open()
         controller.input = "ssh "
 
-        // History "alpha" is deduped because regular pool already has it.
+        // Regular pool "alpha" is removed because history already has it.
         #expect(controller.rows.count == 1)
-        #expect(controller.rows[0].candidate.historyIdentifier == nil)
+        #expect(controller.rows[0].candidate.historyIdentifier == "alpha")
     }
 
     @Test func nonEmptyQueryHidesHistory() {

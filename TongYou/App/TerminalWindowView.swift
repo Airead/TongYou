@@ -1379,7 +1379,8 @@ struct TerminalWindowView: View {
                     resolution: resolution,
                     backgroundHex: { template in
                         configLoader.profileLoader.resolvedLive(id: template).scalars["background"]
-                    }
+                    },
+                    historyIdentifier: entry.identifier
                 )
             }
             let adHoc = SSHCandidate(target: entry.identifier, hostname: nil, isAdHoc: true)
@@ -1389,7 +1390,8 @@ struct TerminalWindowView: View {
                 resolution: resolution,
                 backgroundHex: { template in
                     configLoader.profileLoader.resolvedLive(id: template).scalars["background"]
-                }
+                },
+                historyIdentifier: entry.identifier
             )
         case .command:
             guard let action = Keybinding.Action(rawValue: entry.identifier),
@@ -1602,7 +1604,8 @@ struct TerminalWindowView: View {
     private static func paletteCandidate(
         for candidate: SSHCandidate,
         resolution: SSHResolution,
-        backgroundHex: (String) -> String?
+        backgroundHex: (String) -> String?,
+        historyIdentifier: String? = nil
     ) -> PaletteCandidate {
         let primary: String
         if candidate.isAdHoc {
@@ -1620,7 +1623,8 @@ struct TerminalWindowView: View {
             secondaryText: subtitle,
             scope: .ssh,
             accentHex: hex,
-            sshResolution: resolution
+            sshResolution: resolution,
+            historyIdentifier: historyIdentifier
         )
     }
 

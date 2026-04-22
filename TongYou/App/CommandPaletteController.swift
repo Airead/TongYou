@@ -362,14 +362,14 @@ final class CommandPaletteController {
             let history = historyCandidates
                 .filter { $0.scope == scope }
                 .prefix(5)
-            // Deduplicate against the regular pool by identifier.
-            let poolIDs = Set(pool.map(historyKey(for:)))
-            let uniqueHistory = history.filter {
-                historyKey(for: $0) != nil
-                    ? !poolIDs.contains(historyKey(for: $0)!)
-                    : true
+            let historyIDs = Set(history.compactMap(historyKey(for:)))
+            // Remove regular candidates that already appear in history so
+            // the history entry stays at the top.
+            built = built.filter {
+                guard let key = historyKey(for: $0.candidate) else { return true }
+                return !historyIDs.contains(key)
             }
-            let historyRows = uniqueHistory.map {
+            let historyRows = history.map {
                 PaletteRow(
                     candidate: $0,
                     match: FuzzyMatcher.Match(score: 0, matchedIndices: [])
@@ -387,13 +387,14 @@ final class CommandPaletteController {
     }
 
     /// Extract a stable key for deduplicating history candidates against
-    /// the regular candidate pool. Returns nil when the candidate has no
-    /// useful key (should not happen for history entries).
+    /// the regular candidate pool. Falls back to `candidate.id` for session
+    /// and tab candidates that don't have other identifying fields.
     private func historyKey(for candidate: PaletteCandidate) -> String? {
         candidate.historyIdentifier
             ?? candidate.sshResolution?.candidate.target
             ?? candidate.profileID
             ?? candidate.commandAction?.rawValue
+            ?? candidate.id.uuidString
     }
 
     /// SSH-scope filter: glob-based matching with `,` as an OR separator.
