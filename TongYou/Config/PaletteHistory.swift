@@ -4,7 +4,7 @@ import SQLite3
 // Swift does not expose SQLITE_TRANSIENT; this is the documented
 // sentinel for sqlite3_bind_text that tells SQLite to make its own
 // copy of the string before the pointer goes stale.
-private var _sqlTransient: sqlite3_destructor_type {
+private nonisolated var _sqlTransient: sqlite3_destructor_type {
     unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 }
 
@@ -304,7 +304,7 @@ extension PaletteScope: RawRepresentable, CaseIterable {
         }
     }
 
-    var rawValue: String {
+    nonisolated var rawValue: String {
         switch self {
         case .ssh:     return "ssh"
         case .command: return "command"
