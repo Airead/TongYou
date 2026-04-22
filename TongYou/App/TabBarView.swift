@@ -80,7 +80,10 @@ struct TabBarView: View {
                 }
 
                 if !isActive, activeTabIDs.contains(tab.id) {
-                    ActivityPulseDot()
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 7))
+                        .foregroundStyle(.green)
+                        .frame(width: 8, height: 8)
                 }
 
                 Spacer()
@@ -133,23 +136,4 @@ private struct TabDropDelegate: DropDelegate {
     }
 }
 
-/// Small pulsing dot indicating a non-active tab has received recent terminal output.
-struct ActivityPulseDot: View {
-    @State private var isPulsing = false
 
-    var body: some View {
-        Circle()
-            .fill(Color.accentColor)
-            .frame(width: 6, height: 6)
-            .scaleEffect(isPulsing ? 1.3 : 1.0)
-            .opacity(isPulsing ? 0.6 : 1.0)
-            .animation(
-                .easeInOut(duration: 0.8)
-                .repeatForever(autoreverses: true),
-                value: isPulsing
-            )
-            .onAppear {
-                isPulsing = true
-            }
-    }
-}

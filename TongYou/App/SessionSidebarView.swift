@@ -118,13 +118,15 @@ struct SessionSidebarView: View {
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            if let count = sessionUnreadCounts[session.id], count > 0 {
-                UnreadBadge(count: count)
+            if !isActive, activeSessionIDs.contains(session.id) {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 7))
+                    .foregroundStyle(.green)
+                    .frame(width: 8, height: 8)
             }
 
-            if !isActive, activeSessionIDs.contains(session.id) {
-                ActivityPulseDot()
-                    .padding(.trailing, 2)
+            if let count = sessionUnreadCounts[session.id], count > 0 {
+                UnreadBadge(count: count)
             }
 
             if !(sessionUnreadCounts[session.id] ?? 0 > 0) {

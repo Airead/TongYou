@@ -160,9 +160,9 @@ final class SessionManager {
     private(set) var activeTabIDs: Set<UUID> = []
     /// Activity tracking: session IDs whose tabs have received content updates within the last 1.5s.
     private(set) var activeSessionIDs: Set<UUID> = []
-    private var tabActivityTimers: [UUID: DispatchWorkItem] = [:]
-    private var sessionActivityTimers: [UUID: DispatchWorkItem] = [:]
-    private static let activityExpiryInterval: TimeInterval = 1.5
+    @ObservationIgnored private var tabActivityTimers: [UUID: DispatchWorkItem] = [:]
+    @ObservationIgnored private var sessionActivityTimers: [UUID: DispatchWorkItem] = [:]
+    private static let activityExpiryInterval: TimeInterval = 5
 
     init(
         localSessionStore: SessionStore? = nil,
@@ -2783,7 +2783,10 @@ final class SessionManager {
     }
 
     private func markTabActive(tabID: UUID) {
-        activeTabIDs.insert(tabID)
+        let wasAlreadyActive = activeTabIDs.contains(tabID)
+        if !wasAlreadyActive {
+            activeTabIDs.insert(tabID)
+        }
         tabActivityTimers[tabID]?.cancel()
         let work = DispatchWorkItem { [weak self] in
             self?.activeTabIDs.remove(tabID)
@@ -2794,7 +2797,10 @@ final class SessionManager {
     }
 
     private func markSessionActive(sessionID: UUID) {
-        activeSessionIDs.insert(sessionID)
+        let wasAlreadyActive = activeSessionIDs.contains(sessionID)
+        if !wasAlreadyActive {
+            activeSessionIDs.insert(sessionID)
+        }
         sessionActivityTimers[sessionID]?.cancel()
         let work = DispatchWorkItem { [weak self] in
             self?.activeSessionIDs.remove(sessionID)
