@@ -21,6 +21,26 @@ struct CommandPaletteView: View {
 
     var body: some View {
         let fgColor = Color(nsColor: themeForeground.nsColor)
+        let bgNS = themeBackground.nsColor
+        // Slightly lighten/darken the theme background so the panel
+        // is distinguishable from the terminal surface behind it.
+        let panelNS: NSColor = {
+            var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            if let rgbColor = bgNS.usingColorSpace(.genericRGB) {
+                rgbColor.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
+                let newB = b > 0.5 ? max(0, b - 0.08) : min(1, b + 0.08)
+                return NSColor(hue: h, saturation: s, brightness: newB, alpha: a)
+            }
+            // Fallback: blend toward white/black.
+            let blend: CGFloat = (bgNS.redComponent + bgNS.greenComponent + bgNS.blueComponent) / 3 > 0.5 ? -0.08 : 0.08
+            return NSColor(
+                red: min(1, max(0, bgNS.redComponent + blend)),
+                green: min(1, max(0, bgNS.greenComponent + blend)),
+                blue: min(1, max(0, bgNS.blueComponent + blend)),
+                alpha: 1
+            )
+        }()
+        let bgColor = Color(nsColor: panelNS)
 
         VStack(spacing: 0) {
             inputRow(fgColor: fgColor)
@@ -34,7 +54,7 @@ struct CommandPaletteView: View {
             }
         }
         .frame(width: 600)
-        .overlayPanelStyle(cornerRadius: 10)
+        .overlayPanelStyle(cornerRadius: 10, background: bgColor)
         .onKeyPress(.upArrow) {
             if controller.input.isEmpty || controller.isBrowsingHistory {
                 controller.browseHistoryPrevious()
@@ -92,6 +112,7 @@ struct CommandPaletteView: View {
                 text: $controller.input,
                 placeholder: placeholderText,
                 textColor: themeForeground.nsColor,
+                placeholderColor: themeForeground.nsColor.withAlphaComponent(0.45),
                 refocusTick: controller.refocusTick,
                 onCommit: { mode in onCommit(mode) },
                 onCancel: { onDismiss() },
@@ -305,6 +326,7 @@ struct PaletteTextField: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
     let textColor: NSColor
+    let placeholderColor: NSColor
     /// Monotonically increasing counter. Each time it changes, the text
     /// field re-promotes itself to first responder on the next update
     /// pass. Lets the controller reclaim focus after an external action
@@ -325,7 +347,10 @@ struct PaletteTextField: NSViewRepresentable {
         field.focusRingType = .none
         field.font = .systemFont(ofSize: 15)
         field.textColor = textColor
-        field.placeholderString = placeholder
+        field.placeholderAttributedString = NSAttributedString(
+            string: placeholder,
+            attributes: [.foregroundColor: placeholderColor]
+        )
         field.stringValue = text
         field.delegate = context.coordinator
         field.onDidMoveToWindow = { [weak field] in
@@ -358,7 +383,10 @@ struct PaletteTextField: NSViewRepresentable {
         if nsView.stringValue != text {
             nsView.stringValue = text
         }
-        nsView.placeholderString = placeholder
+        nsView.placeholderAttributedString = NSAttributedString(
+            string: placeholder,
+            attributes: [.foregroundColor: placeholderColor]
+        )
         if context.coordinator.lastRefocusTick != refocusTick {
             context.coordinator.lastRefocusTick = refocusTick
             // Defer so any in-flight AppKit responder switch (caused by
