@@ -700,7 +700,7 @@ final class MetalRenderer {
 
         if pendingDirtyRegion.fullRebuild {
             markAllFramesDirty()
-        } else {
+        } else if pendingDirtyRegion.isDirty || pendingDirtyRegion.scrollDelta > 0 {
             instanceRebuildCounter = 1
             textContentDirtyCounter = 1
             for i in frameStateDirtyRegions.indices {

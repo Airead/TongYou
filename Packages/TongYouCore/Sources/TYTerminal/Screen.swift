@@ -815,7 +815,10 @@ public final class Screen {
     /// Carriage return: move cursor to column 0.
     public func carriageReturn() {
         clearPendingWrap()
-        cursorCol = 0
+        if cursorCol != 0 {
+            dirtyRegion.markLine(cursorRow)
+            cursorCol = 0
+        }
     }
 
     /// Newline: carriage return + line feed.
