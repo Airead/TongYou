@@ -85,6 +85,8 @@ final class TerminalController: TerminalControlling {
     nonisolated(unsafe) var onPaneNotification: ((String, String) -> Void)?
     /// Called on the main thread when a dynamic color changes via OSC 10/11.
     nonisolated(unsafe) var onDynamicColorChanged: ((Int, RGBColor) -> Void)?
+    /// Called on the main thread when a palette color changes via OSC 4.
+    nonisolated(unsafe) var onPaletteColorChanged: ((Int, RGBColor) -> Void)?
 
     private(set) var isSuspended: Bool = false
 
@@ -159,6 +161,10 @@ final class TerminalController: TerminalControlling {
         core.onDynamicColorChanged = { [weak self] oscNum, color in
             guard let self else { return }
             self.onDynamicColorChanged?(oscNum, color)
+        }
+        core.onPaletteColorChanged = { [weak self] index, color in
+            guard let self else { return }
+            self.onPaletteColorChanged?(index, color)
         }
         core.onPointerShapeChanged = { [weak self] shape in
             guard let self else { return }

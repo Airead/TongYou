@@ -1020,6 +1020,10 @@ final class MetalView: NSView {
                 break
             }
         }
+        controller.onPaletteColorChanged = { [weak self] index, color in
+            guard let self else { return }
+            self.renderer?.updatePaletteColor(index: index, color: color)
+        }
         controller.onPointerShapeChanged = { [weak self] shape in
             guard let self else { return }
             self.pointerShape = shape

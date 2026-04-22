@@ -59,6 +59,8 @@ public final class TerminalCore: @unchecked Sendable {
     nonisolated(unsafe) private var dynamicForegroundColor: RGBColor?
     nonisolated(unsafe) private var dynamicBackgroundColor: RGBColor?
     nonisolated(unsafe) private var dynamicCursorColor: RGBColor?
+    /// Palette color overrides set via OSC 4. Confined to ptyQueue.
+    nonisolated(unsafe) private var paletteOverrides: [Int: RGBColor] = [:]
 
     private var ptyProcess: PTYProcess?
 
@@ -100,6 +102,9 @@ public final class TerminalCore: @unchecked Sendable {
     /// Called when the pointer shape changes via OSC 22.
     /// Parameter: cursor shape name (e.g. "default", "pointer", "text").
     public var onPointerShapeChanged: ((String) -> Void)?
+    /// Called when a palette color changes via OSC 4.
+    /// Parameters: (palette index, new color).
+    public var onPaletteColorChanged: ((Int, RGBColor) -> Void)?
 
     // MARK: - Init
 
@@ -187,6 +192,15 @@ public final class TerminalCore: @unchecked Sendable {
         }
         streamHandler.onPointerShapeChanged = { [weak self] shape in
             self?.onPointerShapeChanged?(shape)
+        }
+        streamHandler.onPaletteColorQuery = { [weak self] index in
+            guard let self else { return nil }
+            return self.paletteOverrides[index]
+        }
+        streamHandler.onPaletteColorSet = { [weak self] index, color in
+            guard let self else { return }
+            self.paletteOverrides[index] = color
+            self.onPaletteColorChanged?(index, color)
         }
     }
 

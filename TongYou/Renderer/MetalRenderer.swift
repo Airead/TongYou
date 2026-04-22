@@ -566,6 +566,15 @@ final class MetalRenderer {
         markAllFramesDirty()
     }
 
+    /// Update a single palette color from OSC 4 sequence.
+    func updatePaletteColor(index: Int, color: RGBColor) {
+        guard (0...255).contains(index) else { return }
+        let simd = SIMD4<UInt8>(color.r, color.g, color.b, 255)
+        colorPalette.entries[index] = simd
+        pendingDirtyRegion.markFull()
+        markAllFramesDirty()
+    }
+
     // MARK: - Resize
 
     func resize(screen: ScreenSize) {

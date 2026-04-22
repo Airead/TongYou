@@ -56,6 +56,12 @@ public struct StreamHandler {
     /// Callback: pointer shape changed by OSC 22.
     /// Parameter is the cursor shape name (e.g. "default", "pointer", "text").
     public var onPointerShapeChanged: ((String) -> Void)?
+    /// Callback: query palette color for OSC 4.
+    /// Parameter is the palette index (0-255). Return nil if not available.
+    public var onPaletteColorQuery: ((Int) -> RGBColor?)?
+    /// Callback: palette color changed by OSC 4.
+    /// Parameters are (palette index, new color).
+    public var onPaletteColorSet: ((Int, RGBColor) -> Void)?
     /// Callback: unhandled control sequence or mode received (for debugging/telemetry).
     public var onUnhandledSequence: ((String) -> Void)?
 
@@ -501,6 +507,8 @@ public struct StreamHandler {
             }
         case 7:
             handleOSC7(stringData)
+        case 4:
+            handleOSC4(stringData)
         case 8:
             handleOSC8(stringData)
         case 52:
@@ -658,6 +666,39 @@ public struct StreamHandler {
 
     private func handleOSC12(_ data: ArraySlice<UInt8>) {
         handleOSCDynamicColor(oscNumber: 12, data: data)
+    }
+
+    // MARK: - OSC 4 (Set/Query Palette Color)
+
+    /// Handle OSC 4 palette color sequences.
+    /// Format: OSC 4 ; idx1 ; color1 ; idx2 ; color2 ; ... ST
+    /// Each idx is a palette index (0-255), color is a color spec or "?" for query.
+    private func handleOSC4(_ data: ArraySlice<UInt8>) {
+        guard let str = String(bytes: data, encoding: .utf8), !str.isEmpty else { return }
+
+        // Split by semicolons into pairs of (index, color)
+        let parts = str.split(separator: ";", omittingEmptySubsequences: false)
+        guard !parts.isEmpty else { return }
+
+        var i = 0
+        while i < parts.count {
+            guard let index = Int(parts[i]), (0...255).contains(index) else {
+                i += 1
+                continue
+            }
+            i += 1
+            guard i < parts.count else { break }
+            let colorSpec = String(parts[i])
+            i += 1
+
+            if colorSpec == "?" {
+                guard let color = onPaletteColorQuery?(index) else { continue }
+                let response = "\u{1B}]4;\(index);\(color.xtermRGBString)\u{07}"
+                onWriteBack?(Data(response.utf8))
+            } else if let color = parseXtermColor(colorSpec) {
+                onPaletteColorSet?(index, color)
+            }
+        }
     }
 
     // MARK: - OSC 22 (Pointer Shape)

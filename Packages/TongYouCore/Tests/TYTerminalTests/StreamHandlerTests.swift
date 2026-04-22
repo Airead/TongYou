@@ -818,6 +818,100 @@ struct StreamHandlerUnhandledSequenceTests {
         handler.flush()
         #expect(colors.isEmpty)
     }
+
+    @Test func osc4SetSingleColor() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var colors: [(Int, RGBColor)] = []
+        handler.onPaletteColorSet = { colors.append(($0, $1)) }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]4;1;#ff0000\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(colors.count == 1)
+        #expect(colors[0].0 == 1)
+        #expect(colors[0].1 == RGBColor(r: 0xFF, g: 0x00, b: 0x00))
+    }
+
+    @Test func osc4SetMultipleColors() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var colors: [(Int, RGBColor)] = []
+        handler.onPaletteColorSet = { colors.append(($0, $1)) }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]4;0;#000000;1;#ff0000;2;#00ff00\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(colors.count == 3)
+        #expect(colors[0] == (0, RGBColor(r: 0x00, g: 0x00, b: 0x00)))
+        #expect(colors[1] == (1, RGBColor(r: 0xFF, g: 0x00, b: 0x00)))
+        #expect(colors[2] == (2, RGBColor(r: 0x00, g: 0xFF, b: 0x00)))
+    }
+
+    @Test func osc4QueryRespondsWithColor() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var responses: [String] = []
+        handler.onWriteBack = { responses.append(String(data: $0, encoding: .utf8)!) }
+        handler.onPaletteColorQuery = { index in
+            #expect(index == 1)
+            return RGBColor(r: 0xFF, g: 0x00, b: 0x00)
+        }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]4;1;?\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(responses == ["\u{1B}]4;1;rgb:FFFF/0000/0000\u{07}"])
+    }
+
+    @Test func osc4QueryWithoutHandlerIsSilent() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var responses: [String] = []
+        handler.onWriteBack = { responses.append(String(data: $0, encoding: .utf8)!) }
+        // No onPaletteColorQuery set
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]4;1;?\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(responses.isEmpty)
+    }
+
+    @Test func osc4InvalidIndexIsIgnored() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var colors: [(Int, RGBColor)] = []
+        handler.onPaletteColorSet = { colors.append(($0, $1)) }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]4;256;#ff0000\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(colors.isEmpty)
+    }
+
+    @Test func osc4InvalidColorIsIgnored() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var colors: [(Int, RGBColor)] = []
+        handler.onPaletteColorSet = { colors.append(($0, $1)) }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]4;1;not-a-color\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(colors.isEmpty)
+    }
 }
 
 @Suite("StreamHandler DA1 tests", .serialized)
