@@ -1,6 +1,5 @@
 import Testing
 import Metal
-import TYTerminal
 @testable import TongYou
 
 @Suite("MetalRenderer backing cells tests")

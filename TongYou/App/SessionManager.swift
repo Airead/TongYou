@@ -192,16 +192,12 @@ final class SessionManager {
             self?.flushLocalSave(sessionID: id)
         }
 
-        MainActor.assumeIsolated {
-            SessionManagerRegistry.shared.register(self)
-        }
+        SessionManagerRegistry.shared.register(self)
     }
 
     deinit {
         remoteClient?.disconnect()
-        MainActor.assumeIsolated {
-            SessionManagerRegistry.shared.unregister(self)
-        }
+        SessionManagerRegistry.shared.unregister(self)
     }
 
     /// Metadata describing which session and tab own a given pane.

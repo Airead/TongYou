@@ -1,6 +1,5 @@
 import CoreText
 import Testing
-import TYTerminal
 @testable import TongYou
 
 struct CodepointResolverTests {

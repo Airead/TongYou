@@ -33,9 +33,6 @@ let package = Package(
             name: "TongYouTests",
             dependencies: [
                 "TongYou",
-                .product(name: "TYTerminal", package: "TongYouCore"),
-                .product(name: "TYPTY", package: "TongYouCore"),
-                .product(name: "TYShell", package: "TongYouCore"),
             ],
             path: "TongYouTests"
         ),

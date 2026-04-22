@@ -1,7 +1,6 @@
 import AppKit
 import Foundation
 import Testing
-import TYTerminal
 @testable import TongYou
 
 @Suite("Pane Split & Focus")

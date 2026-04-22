@@ -1,7 +1,6 @@
 import Foundation
 import Testing
 import TYServer
-import TYTerminal
 @testable import TongYou
 
 @Suite("NotificationStore", .serialized)

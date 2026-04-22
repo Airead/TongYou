@@ -1,6 +1,5 @@
 import Testing
 import Metal
-import TYTerminal
 @testable import TongYou
 
 struct URLHoverTests {

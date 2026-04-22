@@ -1,5 +1,4 @@
 import AppKit
-import TYTerminal
 import Testing
 @testable import TongYou
 

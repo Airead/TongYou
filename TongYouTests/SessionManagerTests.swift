@@ -2,7 +2,6 @@ import Foundation
 import Testing
 import TYProtocol
 import TYServer
-import TYTerminal
 @testable import TongYou
 
 @Suite("SessionManager")

@@ -1,9 +1,7 @@
 import Foundation
 import Testing
-import TYConfig
 import TYProtocol
 import TYServer
-import TYTerminal
 @testable import TongYou
 
 @Suite("SessionManager Profile", .serialized)

@@ -2,7 +2,6 @@ import Testing
 import Metal
 import QuartzCore
 import AppKit
-import TYTerminal
 @testable import TongYou
 
 /// 生成emoji渲染的真实快照PNG

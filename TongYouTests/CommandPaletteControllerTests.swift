@@ -2,8 +2,6 @@ import AppKit
 import Foundation
 import SwiftUI
 import Testing
-import TYConfig
-import TYTerminal
 @testable import TongYou
 
 @MainActor

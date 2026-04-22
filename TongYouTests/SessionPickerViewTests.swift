@@ -1,7 +1,6 @@
 import AppKit
 import SwiftUI
 import Testing
-import TYTerminal
 @testable import TongYou
 
 @Suite("SessionPickerView")

@@ -1,7 +1,6 @@
 import CoreGraphics
 import Foundation
 import Testing
-import TYTerminal
 @testable import TongYou
 
 @Suite("Floating Panes")

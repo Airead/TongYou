@@ -2,8 +2,7 @@ import Foundation
 import TYTerminal
 
 /// Global weak-object registry for all active SessionManager instances.
-/// All access is MainActor-isolated.
-@MainActor
+/// Uses NSHashTable for thread-safe weak-reference storage.
 final class SessionManagerRegistry {
     static let shared = SessionManagerRegistry()
 

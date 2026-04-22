@@ -1,6 +1,5 @@
 import Foundation
 import Testing
-import TYTerminal
 @testable import TongYou
 
 struct KeyEncoderTests {

@@ -1,6 +1,5 @@
 import Foundation
 import Testing
-import TYConfig
 @testable import TongYou
 
 @MainActor
