@@ -13,6 +13,7 @@ struct SessionSidebarView: View {
     let activeSessionIndex: Int
     let attachedSessionIDs: Set<UUID>
     let sessionUnreadCounts: [UUID: Int]
+    let activeSessionIDs: Set<UUID>
     let themeForeground: RGBColor
     let themeBackground: RGBColor
     let onSelect: (Int) -> Void
@@ -119,7 +120,14 @@ struct SessionSidebarView: View {
 
             if let count = sessionUnreadCounts[session.id], count > 0 {
                 UnreadBadge(count: count)
-            } else {
+            }
+
+            if !isActive, activeSessionIDs.contains(session.id) {
+                ActivityPulseDot()
+                    .padding(.trailing, 2)
+            }
+
+            if !(sessionUnreadCounts[session.id] ?? 0 > 0) {
                 Text("\(session.tabCount)")
                     .font(.system(size: 10))
                     .foregroundStyle(fgColor.opacity(0.3))

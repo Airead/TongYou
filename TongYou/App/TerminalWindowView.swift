@@ -130,6 +130,7 @@ struct TerminalWindowView: View {
                     activeSessionIndex: sessionManager.activeSessionIndex,
                     attachedSessionIDs: sessionManager.allAttachedSessionIDs,
                     sessionUnreadCounts: notificationStore.unreadCountBySessionID,
+                    activeSessionIDs: sessionManager.activeSessionIDs,
                     themeForeground: configLoader.config.foreground,
                     themeBackground: configLoader.config.background,
                     onSelect: { index in
@@ -167,6 +168,7 @@ struct TerminalWindowView: View {
                         tabs: sessionManager.tabs,
                         activeTabIndex: sessionManager.activeTabIndex,
                         tabUnreadCounts: notificationStore.unreadCountByTabID,
+                        activeTabIDs: sessionManager.activeTabIDs,
                         onSelect: { index in
                             switchToTab(at: index)
                         },
@@ -765,6 +767,9 @@ struct TerminalWindowView: View {
                     onUserInteraction: { paneID in
                         notificationStore.markRead(paneID: paneID)
                     },
+                    onPaneActivity: { paneID in
+                        sessionManager.reportPaneActivity(paneID: paneID)
+                    },
                     isTreePaneExited: { paneID in
                         sessionManager.exitedTreePanes[paneID] != nil
                     },
@@ -800,6 +805,9 @@ struct TerminalWindowView: View {
                 },
                 onUserInteraction: { paneID in
                     notificationStore.markRead(paneID: paneID)
+                },
+                onPaneActivity: { paneID in
+                    sessionManager.reportPaneActivity(paneID: paneID)
                 },
                 isProcessExited: { paneID in
                     sessionManager.exitedFloatingPanes[paneID] != nil
@@ -838,6 +846,9 @@ struct TerminalWindowView: View {
             onTitleChanged: updateTabTitle,
             onFocused: { focusManager.focusPane(id: pane.id) },
             onUserInteraction: { notificationStore.markRead(paneID: pane.id) },
+            onActivity: {
+                sessionManager.reportPaneActivity(paneID: pane.id)
+            },
             onToggleSelection: {
                 paneSelectionManager.togglePane(pane.id, inTab: tabID)
             },

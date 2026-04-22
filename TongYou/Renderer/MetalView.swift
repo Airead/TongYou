@@ -119,6 +119,9 @@ final class MetalView: NSView {
     /// Called on any keyboard or mouse interaction to indicate the pane is active.
     var onUserInteraction: (() -> Void)?
 
+    /// Called when the terminal content updates (screen dirty) to drive activity indicators.
+    var onActivity: (() -> Void)?
+
     /// Callback when the window title changes (from OSC 0/2).
     var onTitleChanged: ((String) -> Void)?
 
@@ -990,8 +993,12 @@ final class MetalView: NSView {
         controller.onNeedsDisplay = { [weak self] in
             if Thread.isMainThread {
                 self?.wakeDisplayLink()
+                self?.onActivity?()
             } else {
-                DispatchQueue.main.async { self?.wakeDisplayLink() }
+                DispatchQueue.main.async {
+                    self?.wakeDisplayLink()
+                    self?.onActivity?()
+                }
             }
         }
         controller.onTitleChanged = { [weak self] title in

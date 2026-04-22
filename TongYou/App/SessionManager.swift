@@ -156,6 +156,14 @@ final class SessionManager {
     /// Sidebar session sort order persisted alongside local sessions.
     private var sessionSortOrder: [UUID] = []
 
+    /// Activity tracking: tab IDs whose panes have received content updates within the last 1.5s.
+    private(set) var activeTabIDs: Set<UUID> = []
+    /// Activity tracking: session IDs whose tabs have received content updates within the last 1.5s.
+    private(set) var activeSessionIDs: Set<UUID> = []
+    private var tabActivityTimers: [UUID: DispatchWorkItem] = [:]
+    private var sessionActivityTimers: [UUID: DispatchWorkItem] = [:]
+    private static let activityExpiryInterval: TimeInterval = 1.5
+
     init(
         localSessionStore: SessionStore? = nil,
         profileLoader: ProfileLoader? = nil
@@ -2735,6 +2743,55 @@ final class SessionManager {
             }
         }
         return nil
+    }
+
+    // MARK: - Activity Tracking
+
+    /// Report that a pane has received new terminal content. Marks the pane's
+    /// tab and session as active for 1.5s.
+    func reportPaneActivity(paneID: UUID) {
+        // Find which tab and session contain this pane.
+        for (sessionIndex, session) in sessions.enumerated() {
+            for (tabIndex, tab) in session.tabs.enumerated() {
+                if tab.hasPane(id: paneID) {
+                    let tabID = tab.id
+                    let sessionID = session.id
+
+                    // Mark tab active (skip if this is the active tab of the active session).
+                    if !(sessionIndex == activeSessionIndex && tabIndex == session.activeTabIndex) {
+                        markTabActive(tabID: tabID)
+                    }
+
+                    // Mark session active (skip if this is the active session).
+                    if sessionIndex != activeSessionIndex {
+                        markSessionActive(sessionID: sessionID)
+                    }
+                    return
+                }
+            }
+        }
+    }
+
+    private func markTabActive(tabID: UUID) {
+        activeTabIDs.insert(tabID)
+        tabActivityTimers[tabID]?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.activeTabIDs.remove(tabID)
+            self?.tabActivityTimers.removeValue(forKey: tabID)
+        }
+        tabActivityTimers[tabID] = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.activityExpiryInterval, execute: work)
+    }
+
+    private func markSessionActive(sessionID: UUID) {
+        activeSessionIDs.insert(sessionID)
+        sessionActivityTimers[sessionID]?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.activeSessionIDs.remove(sessionID)
+            self?.sessionActivityTimers.removeValue(forKey: sessionID)
+        }
+        sessionActivityTimers[sessionID] = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.activityExpiryInterval, execute: work)
     }
 
     private func resolveCommandPath(_ command: String, workingDirectory: String?) async -> String {

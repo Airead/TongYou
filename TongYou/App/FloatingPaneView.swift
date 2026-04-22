@@ -19,6 +19,7 @@ struct FloatingPaneView: View {
     let onClose: (UUID) -> Void
     let onTogglePin: (UUID) -> Void
     let onUserInteraction: ((UUID) -> Void)?
+    let onPaneActivity: ((UUID) -> Void)?
     let isProcessExited: (UUID) -> Bool
     let paneSelectionManager: PaneSelectionManager
     let tabID: UUID
@@ -118,6 +119,9 @@ struct FloatingPaneView: View {
             onTitleChanged: onTitleChanged,
             onFocused: { bringToFrontAndFocus() },
             onUserInteraction: { onUserInteraction?(floatingPane.pane.id) },
+            onActivity: {
+                onPaneActivity?(floatingPane.pane.id)
+            },
             onToggleSelection: {
                 paneSelectionManager.togglePane(floatingPane.pane.id, inTab: tabID)
             },

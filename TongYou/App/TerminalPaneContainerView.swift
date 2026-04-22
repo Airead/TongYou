@@ -19,6 +19,8 @@ struct TerminalPaneContainerView: NSViewRepresentable {
     let onTitleChanged: (String) -> Void
     let onFocused: () -> Void
     let onUserInteraction: (() -> Void)?
+    /// Called when the terminal content updates to drive activity indicators.
+    var onActivity: (() -> Void)?
     /// Cmd+Alt+click on this pane. Used by `PaneSelectionManager` to toggle
     /// broadcast-input membership without stealing focus.
     var onToggleSelection: (() -> Void)?
@@ -37,6 +39,7 @@ struct TerminalPaneContainerView: NSViewRepresentable {
             existing.onTitleChanged = onTitleChanged
             existing.onFocused = onFocused
             existing.onUserInteraction = onUserInteraction
+            existing.onActivity = onActivity
             existing.onToggleSelection = onToggleSelection
             existing.isProcessExited = isProcessExited
             existing.onSearchBarToggled = onSearchBarToggled
@@ -54,6 +57,7 @@ struct TerminalPaneContainerView: NSViewRepresentable {
         view.onTitleChanged = onTitleChanged
         view.onFocused = onFocused
         view.onUserInteraction = onUserInteraction
+        view.onActivity = onActivity
         view.onToggleSelection = onToggleSelection
         view.isProcessExited = isProcessExited
         view.onSearchBarToggled = onSearchBarToggled
@@ -69,6 +73,7 @@ struct TerminalPaneContainerView: NSViewRepresentable {
         nsView.onTitleChanged = onTitleChanged
         nsView.onFocused = onFocused
         nsView.onUserInteraction = onUserInteraction
+        nsView.onActivity = onActivity
         nsView.onToggleSelection = onToggleSelection
         nsView.isProcessExited = isProcessExited
         nsView.onSearchBarToggled = onSearchBarToggled

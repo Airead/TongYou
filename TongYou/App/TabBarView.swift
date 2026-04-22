@@ -9,6 +9,7 @@ struct TabBarView: View {
     let tabs: [TerminalTab]
     let activeTabIndex: Int
     let tabUnreadCounts: [UUID: Int]
+    let activeTabIDs: Set<UUID>
     let onSelect: (Int) -> Void
     let onClose: (Int) -> Void
     let onNew: () -> Void
@@ -78,6 +79,10 @@ struct TabBarView: View {
                     UnreadBadge(count: count)
                 }
 
+                if !isActive, activeTabIDs.contains(tab.id) {
+                    ActivityPulseDot()
+                }
+
                 Spacer()
 
                 Button {
@@ -125,5 +130,26 @@ private struct TabDropDelegate: DropDelegate {
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
         DropProposal(operation: .move)
+    }
+}
+
+/// Small pulsing dot indicating a non-active tab has received recent terminal output.
+struct ActivityPulseDot: View {
+    @State private var isPulsing = false
+
+    var body: some View {
+        Circle()
+            .fill(Color.accentColor)
+            .frame(width: 6, height: 6)
+            .scaleEffect(isPulsing ? 1.3 : 1.0)
+            .opacity(isPulsing ? 0.6 : 1.0)
+            .animation(
+                .easeInOut(duration: 0.8)
+                .repeatForever(autoreverses: true),
+                value: isPulsing
+            )
+            .onAppear {
+                isPulsing = true
+            }
     }
 }

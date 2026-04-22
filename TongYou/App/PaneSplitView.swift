@@ -134,6 +134,8 @@ struct PaneSplitView: View {
     let onTitleChanged: (String) -> Void
     let onNodeChanged: (PaneNode) -> Void
     let onUserInteraction: ((UUID) -> Void)?
+    /// Called when a pane's terminal content updates to drive activity indicators.
+    let onPaneActivity: ((UUID) -> Void)?
     /// Whether a tree pane's PTY process has exited (zombie state). Drives
     /// ESC-to-dismiss / Enter-to-rerun key handling inside the MetalView.
     let isTreePaneExited: (UUID) -> Bool
@@ -160,6 +162,7 @@ struct PaneSplitView: View {
                 onTitleChanged: onTitleChanged,
                 onNodeChanged: onNodeChanged,
                 onUserInteraction: onUserInteraction,
+                onPaneActivity: onPaneActivity,
                 isTreePaneExited: isTreePaneExited,
                 paneSelectionManager: paneSelectionManager,
                 tabID: tabID
@@ -185,6 +188,9 @@ struct PaneSplitView: View {
             },
             onUserInteraction: {
                 onUserInteraction?(pane.id)
+            },
+            onActivity: {
+                onPaneActivity?(pane.id)
             },
             onToggleSelection: {
                 paneSelectionManager.togglePane(pane.id, inTab: tabID)
@@ -257,6 +263,7 @@ private struct ContainerView: View {
     let onTitleChanged: (String) -> Void
     let onNodeChanged: (PaneNode) -> Void
     let onUserInteraction: ((UUID) -> Void)?
+    let onPaneActivity: ((UUID) -> Void)?
     let isTreePaneExited: (UUID) -> Bool
     let paneSelectionManager: PaneSelectionManager
     let tabID: UUID
@@ -447,6 +454,7 @@ private struct ContainerView: View {
                 )))
             },
             onUserInteraction: onUserInteraction,
+            onPaneActivity: onPaneActivity,
             isTreePaneExited: isTreePaneExited,
             paneSelectionManager: paneSelectionManager,
             tabID: tabID

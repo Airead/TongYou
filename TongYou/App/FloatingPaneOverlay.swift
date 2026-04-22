@@ -19,6 +19,7 @@ struct FloatingPaneOverlay: View {
     let onClose: (UUID) -> Void
     let onTogglePin: (UUID) -> Void
     let onUserInteraction: ((UUID) -> Void)?
+    let onPaneActivity: ((UUID) -> Void)?
     let isProcessExited: (UUID) -> Bool
     let paneSelectionManager: PaneSelectionManager
     let tabID: UUID
@@ -56,6 +57,7 @@ struct FloatingPaneOverlay: View {
                         onClose: onClose,
                         onTogglePin: onTogglePin,
                         onUserInteraction: onUserInteraction,
+                        onPaneActivity: onPaneActivity,
                         isProcessExited: isProcessExited,
                         paneSelectionManager: paneSelectionManager,
                         tabID: tabID,
