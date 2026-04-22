@@ -33,7 +33,7 @@ enum GUILog {
     /// When non-nil, only these categories are logged. Nil means all categories.
     nonisolated(unsafe) private static var _enabledCategories: Set<Category>?
 
-    private static let fileWriter = FileLogWriter(
+    nonisolated(unsafe) private static let fileWriter = FileLogWriter(
         filePrefix: "gui",
         queueLabel: "io.github.airead.tongyou.guilog"
     )
