@@ -107,7 +107,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 struct TongYouCommands: Commands {
     @Environment(\.openWindow) private var openWindow
     @State private var isInstalling = false
-    @State private var daemonRunning = false
 
     var body: some Commands {
         CommandGroup(replacing: .appSettings) {
@@ -124,20 +123,6 @@ struct TongYouCommands: Commands {
                 installOrUninstallCLI()
             }
             .disabled(CLIInstaller.bundledCLIPath == nil || isInstalling)
-
-            Divider()
-
-            Button {
-                if DaemonLifecycle.stopRunningDaemon() {
-                    daemonRunning = false
-                }
-            } label: {
-                Text(daemonRunning ? "Stop Daemon" : "Daemon Not Running")
-                    .onAppear {
-                        daemonRunning = DaemonLifecycle.checkExistingProcess() != nil
-                    }
-            }
-            .disabled(!daemonRunning)
         }
 
         CommandGroup(after: .windowList) {

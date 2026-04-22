@@ -2,6 +2,7 @@ import SwiftUI
 import TYClient
 import TYConfig
 import TYProtocol
+import TYServer
 import TYTerminal
 
 /// Root view for a terminal window, managing sessions, tabs, and panes.
@@ -1334,6 +1335,10 @@ struct TerminalWindowView: View {
             clearPaneSelection()
         case .showCommandPalette:
             openCommandPalette()
+        case .startDaemon:
+            startDaemon()
+        case .stopDaemon:
+            stopDaemon()
         }
     }
 
@@ -1566,6 +1571,7 @@ struct TerminalWindowView: View {
         .detachSession, .renameSession,
         .toggleBroadcastInput, .clearPaneSelection,
         .showCommandPalette,
+        .startDaemon, .stopDaemon,
     ]
 
     /// Build `action → shortcut glyph` map from the active keybindings.
@@ -1824,6 +1830,35 @@ struct TerminalWindowView: View {
         guard sessionManager.activeSession != nil else { return }
         suppressAutoSidebar = false
         startRenamingSession(at: sessionManager.activeSessionIndex)
+    }
+
+    private func startDaemon() {
+        Task { @MainActor in
+            if DaemonLifecycle.checkExistingProcess() != nil {
+                toastPresenter.show("Daemon is already running")
+                return
+            }
+            do {
+                let execPath = try TYDConnectionManager.findTongYou()
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: execPath)
+                process.arguments = ["daemon"]
+                process.standardOutput = nil
+                process.standardError = nil
+                try process.run()
+                toastPresenter.show("Daemon started")
+            } catch {
+                toastPresenter.show("Failed to start daemon: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func stopDaemon() {
+        if DaemonLifecycle.stopRunningDaemon() {
+            toastPresenter.show("Daemon stopped")
+        } else {
+            toastPresenter.show("Daemon is not running")
+        }
     }
 
     private func startRenamingSession(at index: Int) {

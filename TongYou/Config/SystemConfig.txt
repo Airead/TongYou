@@ -139,6 +139,7 @@ daemon-auto-exit-on-no-sessions = false
 #   list_remote_sessions, new_remote_session, show_session_picker,
 #   detach_session, rename_session,
 #   show_command_palette,
+#   start_daemon, stop_daemon,
 #   run_in_place:command, run_in_place:command:arg1,arg2,
 #   run_command[opts]:command, run_command[opts]:command:arg1,arg2,
 #   toggle_broadcast_input, clear_pane_selection,

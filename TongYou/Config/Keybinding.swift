@@ -193,6 +193,9 @@ struct Keybinding: Equatable {
         // scope (the default). Prefixes inside the input switch to command
         // / profile / tab / ssh scopes.
         case showCommandPalette
+        // Daemon lifecycle management
+        case startDaemon
+        case stopDaemon
         // Pass through to PTY (disables the keybinding)
         case unbind
 
@@ -255,6 +258,8 @@ struct Keybinding: Equatable {
             case .toggleBroadcastInput: "toggle_broadcast_input"
             case .clearPaneSelection: "clear_pane_selection"
             case .showCommandPalette: "show_command_palette"
+            case .startDaemon: "start_daemon"
+            case .stopDaemon: "stop_daemon"
             case .unbind: "unbind"
             }
         }
@@ -374,6 +379,8 @@ struct Keybinding: Equatable {
             case .toggleBroadcastInput: .toggleBroadcastInput
             case .clearPaneSelection: .clearPaneSelection
             case .showCommandPalette: .showCommandPalette
+            case .startDaemon: .startDaemon
+            case .stopDaemon: .stopDaemon
             case .copy, .paste, .search, .searchNext, .searchPrevious,
                  .resetFontSize, .increaseFontSize, .decreaseFontSize,
                  .unbind:
@@ -437,6 +444,8 @@ struct Keybinding: Equatable {
             case .toggleBroadcastInput: return "Toggle broadcast input"
             case .clearPaneSelection: return "Clear pane selection"
             case .showCommandPalette: return "Show command palette"
+            case .startDaemon: return "Start daemon"
+            case .stopDaemon: return "Stop daemon"
             case .gotoTab, .runInPlace, .runCommand, .unbind:
                 return nil
             }
@@ -488,6 +497,8 @@ struct Keybinding: Equatable {
             case "toggle_broadcast_input": self = .toggleBroadcastInput
             case "clear_pane_selection": self = .clearPaneSelection
             case "show_command_palette": self = .showCommandPalette
+            case "start_daemon": self = .startDaemon
+            case "stop_daemon": self = .stopDaemon
             case "unbind": self = .unbind
             default:
                 if rawValue.hasPrefix("goto_tab:"),

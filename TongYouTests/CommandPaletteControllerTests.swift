@@ -628,6 +628,21 @@ struct CommandPaletteControllerTests {
         #expect(Keybinding.Action.unbind.paletteDisplayTitle == nil)
         // Non-parameterised actions do have a title.
         #expect(Keybinding.Action.newTab.paletteDisplayTitle == "New tab")
+        #expect(Keybinding.Action.startDaemon.paletteDisplayTitle == "Start daemon")
+        #expect(Keybinding.Action.stopDaemon.paletteDisplayTitle == "Stop daemon")
+    }
+
+    @Test func daemonActionRawValueRoundTrip() {
+        let actions: [Keybinding.Action] = [.startDaemon, .stopDaemon]
+        for action in actions {
+            let parsed = Keybinding.Action(rawValue: action.rawValue)
+            #expect(parsed == action, "Round-trip failed for \(action.rawValue)")
+        }
+    }
+
+    @Test func daemonActionTabActionMapping() {
+        #expect(Keybinding.Action.startDaemon.tabAction == .startDaemon)
+        #expect(Keybinding.Action.stopDaemon.tabAction == .stopDaemon)
     }
 
     // MARK: - Delete (⌘⌫)

@@ -3,7 +3,7 @@ import Foundation
 import TYTerminal
 
 /// Actions communicated from MetalView up to the window for dispatch.
-enum TabAction {
+enum TabAction: Equatable {
     // Session management
     case newSession
     case closeSession
@@ -53,6 +53,9 @@ enum TabAction {
     case clearPaneSelection
     // Command palette (⌘P) — opens fuzzy panel in session scope by default.
     case showCommandPalette
+    // Daemon lifecycle management
+    case startDaemon
+    case stopDaemon
 }
 
 /// Manages the list of terminal tabs and the active tab index.
@@ -331,8 +334,8 @@ final class TabManager {
              .listRemoteSessions, .newRemoteSession, .showSessionPicker, .detachSession,
              .renameSession, .runInPlace, .runCommand,
              .paneNotification, .toggleBroadcastInput, .clearPaneSelection,
-             .showCommandPalette:
-            // Pane/remote actions are handled by TerminalWindowView, not TabManager.
+             .showCommandPalette, .startDaemon, .stopDaemon:
+            // Pane/remote/daemon actions are handled by TerminalWindowView, not TabManager.
             return false
         }
     }
