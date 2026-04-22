@@ -228,6 +228,20 @@ struct StreamHandlerSyncedUpdateTests {
         #expect(String(bytes: writtenReset, encoding: .ascii) == "\u{1B}[?2031;2$y")
     }
 
+    @Test func decrqm2048ReportsState() {
+        // Default is reset (2).
+        let (_, writtenDefault) = drive("\u{1B}[?2048$p")
+        #expect(String(bytes: writtenDefault, encoding: .ascii) == "\u{1B}[?2048;2$y")
+
+        // After DECSET 2048 it is set (1).
+        let (_, writtenSet) = drive("\u{1B}[?2048h\u{1B}[?2048$p")
+        #expect(String(bytes: writtenSet, encoding: .ascii) == "\u{1B}[?2048;1$y")
+
+        // After DECRST 2048 it is reset (2).
+        let (_, writtenReset) = drive("\u{1B}[?2048h\u{1B}[?2048l\u{1B}[?2048$p")
+        #expect(String(bytes: writtenReset, encoding: .ascii) == "\u{1B}[?2048;2$y")
+    }
+
     @Test func decrqm2031DSR996ReportsDark() {
         var handler = StreamHandler(screen: Screen(columns: 10, rows: 2))
         var response: Data?
@@ -357,6 +371,22 @@ struct StreamHandlerColorSchemeReportingTests {
 @Suite("StreamHandler unhandled sequence tests", .serialized)
 struct StreamHandlerUnhandledSequenceTests {
 
+    /// Feed bytes through parser + handler and return the owning screen plus
+    /// any `onWriteBack` bytes captured (DECRQM replies, DSR, etc.).
+    private func drive(_ s: String) -> (Screen, [UInt8]) {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var written: [UInt8] = []
+        handler.onWriteBack = { written.append(contentsOf: $0) }
+        var parser = VTParser()
+        let bytes = Array(s.utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        return (screen, written)
+    }
+
     /// Drive a sequence of bytes through the handler, recording every
     /// `onUnhandledSequence` notification in order.
     private func run(_ s: String) -> [String] {
@@ -374,8 +404,8 @@ struct StreamHandlerUnhandledSequenceTests {
     }
 
     @Test func unsupportedModeTriggersCallback() {
-        // Mode 1005 (UTF-8 mouse) is not supported
-        #expect(run("\u{1B}[?1005h") == ["DECSET/DECRST mode 1005 not implemented"])
+        // Mode 1007 (alternate scroll) is not supported
+        #expect(run("\u{1B}[?1007h") == ["DECSET/DECRST mode 1007 not implemented"])
     }
 
     @Test func supportedModeDoesNotTriggerCallback() {
@@ -384,8 +414,8 @@ struct StreamHandlerUnhandledSequenceTests {
     }
 
     @Test func multipleUnsupportedModesAreReported() {
-        #expect(run("\u{1B}[?1005h\u{1B}[?1006h\u{1B}[?1007h") == ["DECSET/DECRST mode 1005 not implemented", "DECSET/DECRST mode 1007 not implemented"])
-        // 1006 is supported (mouse format), so only 1005 and 1007 are reported
+        #expect(run("\u{1B}[?1001h\u{1B}[?1006h\u{1B}[?1007h") == ["DECSET/DECRST mode 1001 not implemented", "DECSET/DECRST mode 1007 not implemented"])
+        // 1006 is supported (mouse format), so only 1001 and 1007 are reported
     }
 
     @Test func cursorKeysAndBracketedPasteModesDoNotLog() {
@@ -395,6 +425,8 @@ struct StreamHandlerUnhandledSequenceTests {
         #expect(run("\u{1B}[?1l").isEmpty)   // cursorKeys reset
         #expect(run("\u{1B}[?2004h").isEmpty) // bracketedPaste
         #expect(run("\u{1B}[?2004l").isEmpty) // bracketedPaste reset
+        #expect(run("\u{1B}[?2048h").isEmpty) // textAreaSizeReporting
+        #expect(run("\u{1B}[?2048l").isEmpty) // textAreaSizeReporting reset
     }
 
     @Test func vttestModesThreeToSixDoNotLog() {
@@ -408,6 +440,83 @@ struct StreamHandlerUnhandledSequenceTests {
         #expect(run("\u{1B}[?5l").isEmpty)  // DECSCNM reset
         #expect(run("\u{1B}[?6h").isEmpty)  // DECOM
         #expect(run("\u{1B}[?6l").isEmpty)  // DECOM reset
+    }
+
+    @Test func decawmModeDoesNotLog() {
+        // DECAWM (7) is fully supported; should not produce unhandled callbacks.
+        #expect(run("\u{1B}[?7h").isEmpty)
+        #expect(run("\u{1B}[?7l").isEmpty)
+    }
+
+    @Test func blinkingCursorModeDoesNotLog() {
+        // Mode 12 (blinking cursor) is supported; should not produce unhandled callbacks.
+        #expect(run("\u{1B}[?12h").isEmpty)
+        #expect(run("\u{1B}[?12l").isEmpty)
+    }
+
+    @Test func decawmTogglesScreenAutowrap() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var parser = VTParser()
+
+        // Default is on
+        #expect(screen.autowrap == true)
+
+        // DECRST 7 disables autowrap
+        let reset = Array("\u{1B}[?7l".utf8)
+        reset.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(screen.autowrap == false)
+
+        // DECSET 7 re-enables autowrap
+        let set = Array("\u{1B}[?7h".utf8)
+        set.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(screen.autowrap == true)
+    }
+
+    @Test func blinkingCursorTogglesCallback() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var events: [Bool] = []
+        handler.onBlinkingCursorChanged = { events.append($0) }
+        var parser = VTParser()
+
+        let set = Array("\u{1B}[?12h".utf8)
+        set.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(events == [true])
+
+        let reset = Array("\u{1B}[?12l".utf8)
+        reset.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(events == [true, false])
+    }
+
+    @Test func decrqm7ReportsState() {
+        let (_, written) = drive("\u{1B}[?7$p")
+        let reply = String(bytes: written, encoding: .ascii)
+        // Default is set (1) — autowrap is on by default.
+        #expect(reply == "\u{1B}[?7;1$y")
+    }
+
+    @Test func decrqm12ReportsState() {
+        let (_, writtenDefault) = drive("\u{1B}[?12$p")
+        #expect(String(bytes: writtenDefault, encoding: .ascii) == "\u{1B}[?12;2$y")
+
+        let (_, writtenSet) = drive("\u{1B}[?12h\u{1B}[?12$p")
+        #expect(String(bytes: writtenSet, encoding: .ascii) == "\u{1B}[?12;1$y")
+
+        let (_, writtenReset) = drive("\u{1B}[?12h\u{1B}[?12l\u{1B}[?12$p")
+        #expect(String(bytes: writtenReset, encoding: .ascii) == "\u{1B}[?12;2$y")
     }
 
     @Test func escBackslashIsSilentlyIgnored() {
@@ -772,6 +881,142 @@ struct StreamHandlerUnhandledSequenceTests {
         #expect(colors.count == 1)
         #expect(colors[0].0 == 12)
         #expect(colors[0].1 == RGBColor(r: 0x00, g: 0xFF, b: 0x00))
+    }
+
+    @Test func osc13QueryRespondsWithPointerForegroundColor() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var responses: [String] = []
+        handler.onWriteBack = { responses.append(String(data: $0, encoding: .utf8)!) }
+        handler.onDynamicColorQuery = { oscNum in
+            #expect(oscNum == 13)
+            return RGBColor(r: 0xFF, g: 0x00, b: 0x00)
+        }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]13;?\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(responses == ["\u{1B}]13;rgb:FFFF/0000/0000\u{07}"])
+    }
+
+    @Test func osc14QueryRespondsWithPointerBackgroundColor() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var responses: [String] = []
+        handler.onWriteBack = { responses.append(String(data: $0, encoding: .utf8)!) }
+        handler.onDynamicColorQuery = { oscNum in
+            #expect(oscNum == 14)
+            return RGBColor(r: 0x00, g: 0x00, b: 0xFF)
+        }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]14;?\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(responses == ["\u{1B}]14;rgb:0000/0000/FFFF\u{07}"])
+    }
+
+    @Test func osc13SetColorWithHex() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var colors: [(Int, RGBColor)] = []
+        handler.onDynamicColorSet = { colors.append(($0, $1)) }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]13;#ff0000\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(colors.count == 1)
+        #expect(colors[0].0 == 13)
+        #expect(colors[0].1 == RGBColor(r: 0xFF, g: 0x00, b: 0x00))
+    }
+
+    @Test func osc14SetColorWithHex() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var colors: [(Int, RGBColor)] = []
+        handler.onDynamicColorSet = { colors.append(($0, $1)) }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]14;#0000ff\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(colors.count == 1)
+        #expect(colors[0].0 == 14)
+        #expect(colors[0].1 == RGBColor(r: 0x00, g: 0x00, b: 0xFF))
+    }
+
+    @Test func osc17QueryRespondsWithSelectionBackgroundColor() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var responses: [String] = []
+        handler.onWriteBack = { responses.append(String(data: $0, encoding: .utf8)!) }
+        handler.onDynamicColorQuery = { oscNum in
+            #expect(oscNum == 17)
+            return RGBColor(r: 0xC1, g: 0xDE, b: 0xFF)
+        }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]17;?\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(responses == ["\u{1B}]17;rgb:C1C1/DEDE/FFFF\u{07}"])
+    }
+
+    @Test func osc19QueryRespondsWithSelectionForegroundColor() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var responses: [String] = []
+        handler.onWriteBack = { responses.append(String(data: $0, encoding: .utf8)!) }
+        handler.onDynamicColorQuery = { oscNum in
+            #expect(oscNum == 19)
+            return RGBColor(r: 0x00, g: 0x00, b: 0x00)
+        }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]19;?\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(responses == ["\u{1B}]19;rgb:0000/0000/0000\u{07}"])
+    }
+
+    @Test func osc17SetColorWithHex() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var colors: [(Int, RGBColor)] = []
+        handler.onDynamicColorSet = { colors.append(($0, $1)) }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]17;#c1deff\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(colors.count == 1)
+        #expect(colors[0].0 == 17)
+        #expect(colors[0].1 == RGBColor(r: 0xC1, g: 0xDE, b: 0xFF))
+    }
+
+    @Test func osc19SetColorWithHex() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var colors: [(Int, RGBColor)] = []
+        handler.onDynamicColorSet = { colors.append(($0, $1)) }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]19;#000000\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(colors.count == 1)
+        #expect(colors[0].0 == 19)
+        #expect(colors[0].1 == RGBColor(r: 0x00, g: 0x00, b: 0x00))
     }
 
     @Test func osc10SetColorWithHex() {
@@ -1336,5 +1581,63 @@ struct StreamHandlerOSC22Tests {
         }
         handler.flush()
         #expect(unhandled.isEmpty)
+    }
+
+    // MARK: - OSC Reset (110/111/112/117/119)
+
+    @Test func osc117ResetsSelectionBackground() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var resets: [Int] = []
+        handler.onDynamicColorReset = { resets.append($0) }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]117\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(resets == [17])
+    }
+
+    @Test func osc119ResetsSelectionForeground() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var resets: [Int] = []
+        handler.onDynamicColorReset = { resets.append($0) }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]119\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(resets == [19])
+    }
+
+    @Test func osc110ResetsForeground() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var resets: [Int] = []
+        handler.onDynamicColorReset = { resets.append($0) }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]110\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(resets == [10])
+    }
+
+    @Test func osc111ResetsBackground() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var resets: [Int] = []
+        handler.onDynamicColorReset = { resets.append($0) }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]111\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(resets == [11])
     }
 }

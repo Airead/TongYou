@@ -529,6 +529,71 @@ struct ScreenTests {
         #expect(screen.pendingWrap == false)
     }
 
+    @Test func autowrapDisabledOverwritesLastColumn() {
+        let screen = Screen(columns: 5, rows: 3)
+        screen.setAutowrap(false)
+        screen.setCursorPos(row: 0, col: 4)
+
+        // Write at last column with autowrap off — should not set pendingWrap
+        screen.write(GraphemeCluster("A"), attributes: .default)
+        #expect(screen.cursorCol == 4)
+        #expect(screen.pendingWrap == false)
+        #expect(screen.cell(at: 4, row: 0).codepoint == "A")
+
+        // Next write should overwrite the same cell
+        screen.write(GraphemeCluster("B"), attributes: .default)
+        #expect(screen.cursorCol == 4)
+        #expect(screen.pendingWrap == false)
+        #expect(screen.cell(at: 4, row: 0).codepoint == "B")
+    }
+
+    @Test func autowrapDisabledClearsPendingWrap() {
+        let screen = Screen(columns: 5, rows: 3)
+        screen.setCursorPos(row: 0, col: 4)
+        screen.write(GraphemeCluster("A"), attributes: .default)
+        #expect(screen.pendingWrap == true)
+
+        screen.setAutowrap(false)
+        #expect(screen.pendingWrap == false)
+    }
+
+    @Test func autowrapEnabledRespectsPendingWrap() {
+        let screen = Screen(columns: 5, rows: 3)
+        screen.setAutowrap(true)
+        screen.setCursorPos(row: 0, col: 4)
+        screen.write(GraphemeCluster("A"), attributes: .default)
+        #expect(screen.pendingWrap == true)
+
+        screen.write(GraphemeCluster("B"), attributes: .default)
+        #expect(screen.cursorRow == 1)
+        #expect(screen.cursorCol == 1)
+    }
+
+    @Test func fullResetRestoresAutowrap() {
+        let screen = Screen(columns: 5, rows: 3)
+        screen.setAutowrap(false)
+        #expect(screen.autowrap == false)
+        screen.fullReset()
+        #expect(screen.autowrap == true)
+    }
+
+    @Test func writeASCIIBatchRespectsAutowrapDisabled() {
+        let screen = Screen(columns: 5, rows: 3)
+        screen.setAutowrap(false)
+        screen.setCursorPos(row: 0, col: 3)
+
+        var buffer = PrintBatchBuffer()
+        buffer[0] = 0x41 // 'A'
+        buffer[1] = 0x42 // 'B'
+        buffer[2] = 0x43 // 'C'
+        screen.writeASCIIBatch(buffer, count: 3, attributes: .default)
+
+        // Should overwrite last column three times, staying at col 4
+        #expect(screen.cursorCol == 4)
+        #expect(screen.pendingWrap == false)
+        #expect(screen.cell(at: 4, row: 0).codepoint == "C")
+    }
+
     // MARK: - Insert Mode (IRM)
 
     @Test func insertModeInitiallyDisabled() {

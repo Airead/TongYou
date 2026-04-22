@@ -34,10 +34,11 @@ final class ClientTerminalController: TerminalControlling {
     var onProcessExited: ((Int32) -> Void)?
     var onTitleChanged: ((String) -> Void)?
     var onPaneNotification: ((String, String) -> Void)?
-    var onDynamicColorChanged: ((Int, RGBColor) -> Void)?
+    var onDynamicColorChanged: ((Int, RGBColor?) -> Void)?
     var onPaletteColorChanged: ((Int, RGBColor) -> Void)?
     var pointerShape: String? { nil }
     var onPointerShapeChanged: ((String) -> Void)?
+    var onCursorBlinkingChanged: ((Bool) -> Void)?
 
     init(
         remoteClient: RemoteSessionClient,

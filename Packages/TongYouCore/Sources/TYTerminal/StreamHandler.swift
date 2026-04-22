@@ -39,6 +39,8 @@ public struct StreamHandler {
     public var onPaneNotification: ((String, String) -> Void)?
     /// Callback: focus event reporting (DECSET 1004) toggled on/off.
     public var onFocusReportingChanged: ((Bool) -> Void)?
+    /// Callback: blinking cursor (DECSET 12) toggled on/off.
+    public var onBlinkingCursorChanged: ((Bool) -> Void)?
     /// Callback: color scheme reporting (DECSET 2031) toggled on/off.
     public var onColorSchemeReportingChanged: ((Bool) -> Void)?
     /// Callback: query current system color scheme (dark = true, light = false).
@@ -53,6 +55,9 @@ public struct StreamHandler {
     /// Callback: dynamic color changed by OSC 10/11/17/19 etc.
     /// Parameters are (OSC number, new color).
     public var onDynamicColorSet: ((Int, RGBColor) -> Void)?
+    /// Callback: dynamic color reset by OSC 110/111/112/117/119 etc.
+    /// Parameter is the original OSC number (10, 11, 12, 17, 19).
+    public var onDynamicColorReset: ((Int) -> Void)?
     /// Callback: pointer shape changed by OSC 22.
     /// Parameter is the cursor shape name (e.g. "default", "pointer", "text").
     public var onPointerShapeChanged: ((String) -> Void)?
@@ -111,7 +116,8 @@ public struct StreamHandler {
             handleOSC(data)
 
         case .dcsHook, .dcsPut, .dcsUnhook:
-            onUnhandledSequence?("DCS sequence (not implemented)")
+            // DCS sequences are silently ignored.
+            break
         case .apcStart, .apcPut, .apcEnd:
             // APC sequences are silently ignored per design.
             break
@@ -490,21 +496,29 @@ public struct StreamHandler {
     // MARK: - OSC Dispatch
 
     private mutating func handleOSC(_ data: [UInt8]) {
-        // Parse "number;string" format
-        guard let separatorIdx = data.firstIndex(of: 0x3B) else { return }
-        let numBytes = data[0..<separatorIdx]
+        // Parse "number;string" format (semicolon is optional for reset sequences like OSC 117)
+        let numBytes: ArraySlice<UInt8>
+        let stringData: ArraySlice<UInt8>
+        if let separatorIdx = data.firstIndex(of: 0x3B) {
+            numBytes = data[0..<separatorIdx]
+            stringData = data[(separatorIdx + 1)...]
+        } else {
+            numBytes = data[0...]
+            stringData = []
+        }
         guard let numStr = String(bytes: numBytes, encoding: .utf8),
               let oscNum = Int(numStr) else { return }
 
-        let stringData = data[(separatorIdx + 1)...]
-
         switch oscNum {
         case 0, 1, 2: // Set window title (0=both, 1=icon, 2=window)
-            if let raw = String(bytes: stringData, encoding: .utf8) {
-                let title = Self.sanitizeTitle(raw)
-                currentTitle = title
-                onTitleChanged?(title)
+            let title: String
+            if !stringData.isEmpty, let raw = String(bytes: stringData, encoding: .utf8) {
+                title = Self.sanitizeTitle(raw)
+            } else {
+                title = ""
             }
+            currentTitle = title
+            onTitleChanged?(title)
         case 7:
             handleOSC7(stringData)
         case 4:
@@ -525,8 +539,29 @@ public struct StreamHandler {
             handleOSC11(stringData)
         case 12:
             handleOSC12(stringData)
+        case 13:
+            handleOSC13(stringData)
+        case 14:
+            handleOSC14(stringData)
+        case 17:
+            handleOSC17(stringData)
+        case 19:
+            handleOSC19(stringData)
         case 22:
             handleOSC22(stringData)
+        case 110:
+            onDynamicColorReset?(10)
+        case 111:
+            onDynamicColorReset?(11)
+        case 112:
+            onDynamicColorReset?(12)
+        case 117:
+            onDynamicColorReset?(17)
+        case 119:
+            onDynamicColorReset?(19)
+        case 15, 16:
+            // OSC 15/16 (Tektronix foreground/background color) — intentionally ignored.
+            break
         case 66:
             // OSC 66 (Kitty text sizing protocol) — intentionally ignored for now.
             break
@@ -671,6 +706,18 @@ public struct StreamHandler {
         handleOSCDynamicColor(oscNumber: 12, data: data)
     }
 
+    // MARK: - OSC 13 (Pointer Foreground Color)
+
+    private func handleOSC13(_ data: ArraySlice<UInt8>) {
+        handleOSCDynamicColor(oscNumber: 13, data: data)
+    }
+
+    // MARK: - OSC 14 (Pointer Background Color)
+
+    private func handleOSC14(_ data: ArraySlice<UInt8>) {
+        handleOSCDynamicColor(oscNumber: 14, data: data)
+    }
+
     // MARK: - OSC 4 (Set/Query Palette Color)
 
     /// Handle OSC 4 palette color sequences.
@@ -704,6 +751,18 @@ public struct StreamHandler {
         }
     }
 
+    // MARK: - OSC 17 (Selection Background Color)
+
+    private func handleOSC17(_ data: ArraySlice<UInt8>) {
+        handleOSCDynamicColor(oscNumber: 17, data: data)
+    }
+
+    // MARK: - OSC 19 (Selection Foreground Color)
+
+    private func handleOSC19(_ data: ArraySlice<UInt8>) {
+        handleOSCDynamicColor(oscNumber: 19, data: data)
+    }
+
     // MARK: - OSC 22 (Pointer Shape)
 
     /// Handle OSC 22 pointer shape sequences.
@@ -714,8 +773,8 @@ public struct StreamHandler {
         onPointerShapeChanged?(shape)
     }
 
-    /// Shared handler for OSC 10/11/12/17/19 dynamic colors.
-    /// - Parameter oscNumber: The OSC number (10=foreground, 11=background, etc.)
+    /// Shared handler for OSC 10/11/12/13/14/17/19 dynamic colors.
+    /// - Parameter oscNumber: The OSC number (10=foreground, 11=background, 12=cursor, 13=pointer fg, 14=pointer bg, 17=selection bg, 19=selection fg)
     /// - Parameter data: The payload after the semicolon.
     private func handleOSCDynamicColor(oscNumber: Int, data: ArraySlice<UInt8>) {
         guard let str = String(bytes: data, encoding: .utf8), !str.isEmpty else { return }
@@ -909,6 +968,12 @@ public struct StreamHandler {
         // Try mouse format modes (1006)
         if modes.setMouseFormat(rawParam: rawParam, enabled: value) { return }
 
+        // Silently ignore legacy mouse encoding modes (1005, 1015)
+        // that we do not support; SGR (1006) is the modern standard.
+        if rawParam == 1005 || rawParam == 1015 {
+            return
+        }
+
         guard let mode = TerminalModes.from(rawValue: rawParam) else {
             onUnhandledSequence?("DECSET/DECRST mode \(rawParam) not implemented")
             return
@@ -918,7 +983,7 @@ public struct StreamHandler {
 
         // Side effects
         switch mode {
-        case .cursorKeys, .bracketedPaste, .columnMode, .smoothScroll, .graphemeClustering:
+        case .cursorKeys, .bracketedPaste, .columnMode, .smoothScroll, .graphemeClustering, .textAreaSizeReporting:
             // Passive modes: recognized and stored, but either have no side
             // effects in this method (consumers read the bitfield directly)
             // or their full implementation is deferred.
@@ -927,6 +992,8 @@ public struct StreamHandler {
             screen.setReverseVideo(value)
         case .originMode:
             screen.setOriginMode(value)
+        case .autowrap:
+            screen.setAutowrap(value)
         case .cursorVisible:
             screen.setCursorVisible(value)
         case .altScreen:
@@ -940,6 +1007,8 @@ public struct StreamHandler {
             }
         case .focusEvents:
             onFocusReportingChanged?(value)
+        case .blinkingCursor:
+            onBlinkingCursorChanged?(value)
         case .colorSchemeReporting:
             onColorSchemeReportingChanged?(value)
         case .syncedUpdate:
@@ -964,6 +1033,10 @@ public struct StreamHandler {
         let mode = params[0]
         let state: Int?
         switch mode {
+        case 7:
+            state = modes.isSet(.autowrap) ? 1 : 2
+        case 12:
+            state = modes.isSet(.blinkingCursor) ? 1 : 2
         case 1004:
             state = modes.isSet(.focusEvents) ? 1 : 2
         case 1016:
@@ -976,6 +1049,8 @@ public struct StreamHandler {
             state = modes.isSet(.graphemeClustering) ? 1 : 2
         case 2031:
             state = modes.isSet(.colorSchemeReporting) ? 1 : 2
+        case 2048:
+            state = modes.isSet(.textAreaSizeReporting) ? 1 : 2
         default:
             onUnhandledSequence?("DECRQM query for mode \(mode) not implemented")
             return
@@ -1047,7 +1122,7 @@ public struct StreamHandler {
             .cursorKeys, .columnMode, .smoothScroll, .reverseVideo,
             .originMode, .autowrap, .cursorVisible, .focusEvents,
             .altScreen, .bracketedPaste, .syncedUpdate, .graphemeClustering,
-            .colorSchemeReporting, .keypadApplication
+            .colorSchemeReporting, .textAreaSizeReporting, .blinkingCursor, .keypadApplication
         ]
         for mode in decModes {
             let savedValue = saved.isSet(mode)

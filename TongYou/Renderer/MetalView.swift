@@ -19,6 +19,8 @@ final class MetalView: NSView {
     // nonisolated(unsafe) because deinit must invalidate without actor hop
     nonisolated(unsafe) private var displayLink: CADisplayLink?
     private var cursorBlinkTimer: Timer?
+    /// App-controlled cursor blink state via DECSET 12. Overrides config when non-nil.
+    private var appCursorBlink: Bool?
 
     /// Working directory for the shell spawned in this tab.
     var initialWorkingDirectory: String?
@@ -1011,11 +1013,37 @@ final class MetalView: NSView {
             guard let self else { return }
             switch oscNum {
             case 10:
-                self.renderer?.updateDynamicColors(foreground: color, background: nil, cursor: nil)
+                if let color = color {
+                    self.renderer?.updateDynamicColors(foreground: color)
+                }
             case 11:
-                self.renderer?.updateDynamicColors(foreground: nil, background: color, cursor: nil)
+                if let color = color {
+                    self.renderer?.updateDynamicColors(background: color)
+                }
             case 12:
-                self.renderer?.updateDynamicColors(foreground: nil, background: nil, cursor: color)
+                if let color = color {
+                    self.renderer?.updateDynamicColors(cursor: color)
+                } else {
+                    var palette = self.renderer?.palette
+                    palette?.cursorColor = nil
+                    if let p = palette { self.renderer?.palette = p }
+                }
+            case 17:
+                if let color = color {
+                    self.renderer?.updateDynamicColors(selectionBg: color)
+                } else {
+                    var palette = self.renderer?.palette
+                    palette?.selectionBg = nil
+                    if let p = palette { self.renderer?.palette = p }
+                }
+            case 19:
+                if let color = color {
+                    self.renderer?.updateDynamicColors(selectionFg: color)
+                } else {
+                    var palette = self.renderer?.palette
+                    palette?.selectionFg = nil
+                    if let p = palette { self.renderer?.palette = p }
+                }
             default:
                 break
             }
@@ -1031,6 +1059,11 @@ final class MetalView: NSView {
             if self.window?.mouseLocationOutsideOfEventStream != nil {
                 self.applyPointerShape()
             }
+        }
+        controller.onCursorBlinkingChanged = { [weak self] enabled in
+            guard let self else { return }
+            self.appCursorBlink = enabled
+            self.startCursorBlinkTimer()
         }
     }
 
@@ -1098,7 +1131,8 @@ final class MetalView: NSView {
 
     private func startCursorBlinkTimer() {
         stopCursorBlinkTimer()
-        guard effectiveConfig.cursorBlink else {
+        let shouldBlink = appCursorBlink ?? effectiveConfig.cursorBlink
+        guard shouldBlink else {
             renderer?.cursorBlinkOn = true
             renderer?.markCursorDirty()
             wakeDisplayLink()

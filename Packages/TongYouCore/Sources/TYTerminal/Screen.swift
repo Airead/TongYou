@@ -329,6 +329,11 @@ public final class Screen {
     /// at the cursor position, shifting existing content right.
     public private(set) var insertMode: Bool = false
 
+    /// DECAWM: auto-wrap mode. When true, text wraps to the next line at
+    /// the right margin. When false, characters written at the last column
+    /// overwrite it and the cursor stays put.
+    public private(set) var autowrap: Bool = true
+
     /// When true, the next printable character (or certain cursor movements)
     /// must trigger a wrap-to-next-line before proceeding.  Set when a
     /// single-width character is written in the last column with DECAWM on.
@@ -682,8 +687,12 @@ public final class Screen {
             cells[contIdx].width = .continuation
             cursorCol = col + 2
         } else if col == columns - 1 {
-            // Single-width char written in the last column — defer the wrap.
-            pendingWrap = true
+            // Single-width char written in the last column — defer the wrap
+            // only when autowrap is enabled.
+            if autowrap {
+                pendingWrap = true
+            }
+            // When autowrap is off the cursor stays at the last column.
         } else {
             cursorCol = col + 1
         }
@@ -743,10 +752,12 @@ public final class Screen {
             cursorCol = startCol + writeCount
 
             // If we filled exactly to the end of the line (cursorCol == columns),
-            // apply delayed wrap: stay at last column and set pendingWrap.
+            // apply delayed wrap only when autowrap is enabled.
             if cursorCol >= columns {
                 cursorCol = columns - 1
-                pendingWrap = true
+                if autowrap {
+                    pendingWrap = true
+                }
             }
         }
     }
@@ -933,6 +944,14 @@ public final class Screen {
     /// Set the pending wrap flag (used by DECRC restore cursor).
     public func setPendingWrap(_ value: Bool) {
         pendingWrap = value
+    }
+
+    /// Set auto-wrap mode (DECAWM). When disabled, clears any pending wrap.
+    public func setAutowrap(_ value: Bool) {
+        autowrap = value
+        if !value {
+            pendingWrap = false
+        }
     }
 
     /// Set insert/replace mode (IRM).
@@ -1373,6 +1392,7 @@ public final class Screen {
         scrollBottom = rows - 1
         reverseVideo = false
         originMode = false
+        autowrap = true
         pendingWrap = false
         altCells = nil
         altLineFlags = nil

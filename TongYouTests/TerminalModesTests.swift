@@ -11,6 +11,7 @@ import TYTerminal
         #expect(!modes.isSet(.cursorKeys))
         #expect(!modes.isSet(.altScreen))
         #expect(!modes.isSet(.bracketedPaste))
+        #expect(!modes.isSet(.blinkingCursor))
     }
 
     @Test func setAndReset() {
@@ -35,6 +36,8 @@ import TYTerminal
         #expect(TerminalModes.from(rawValue: 4) == .smoothScroll)
         #expect(TerminalModes.from(rawValue: 5) == .reverseVideo)
         #expect(TerminalModes.from(rawValue: 6) == .originMode)
+        #expect(TerminalModes.from(rawValue: 7) == .autowrap)
+        #expect(TerminalModes.from(rawValue: 12) == .blinkingCursor)
         #expect(TerminalModes.from(rawValue: 25) == .cursorVisible)
         #expect(TerminalModes.from(rawValue: 1049) == .altScreen)
         #expect(TerminalModes.from(rawValue: 9999) == .keypadApplication)

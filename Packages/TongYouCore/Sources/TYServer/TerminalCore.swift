@@ -44,6 +44,14 @@ public final class TerminalCore: @unchecked Sendable {
     /// Confined to ptyQueue.
     nonisolated(unsafe) private var focusReportingEnabled = false
 
+    /// Whether the application has enabled blinking cursor via DECSET 12.
+    /// Confined to ptyQueue.
+    nonisolated(unsafe) private(set) var cursorBlinkingEnabled = false
+
+    /// Callback: blinking cursor mode (DECSET 12) toggled on/off.
+    /// Fires on ptyQueue.
+    public var onCursorBlinkingChanged: ((Bool) -> Void)?
+
     /// Whether the application has subscribed to color scheme reporting via DECSET 2031.
     /// Confined to ptyQueue.
     nonisolated(unsafe) private var colorSchemeReportingEnabled = false
@@ -55,10 +63,14 @@ public final class TerminalCore: @unchecked Sendable {
     nonisolated(unsafe) private var pixelWidth: UInt32 = 0
     nonisolated(unsafe) private var pixelHeight: UInt32 = 0
 
-    /// Dynamic colors set via OSC 10/11. Confined to ptyQueue.
+    /// Dynamic colors set via OSC 10/11/12/13/14/17/19. Confined to ptyQueue.
     nonisolated(unsafe) private var dynamicForegroundColor: RGBColor?
     nonisolated(unsafe) private var dynamicBackgroundColor: RGBColor?
     nonisolated(unsafe) private var dynamicCursorColor: RGBColor?
+    nonisolated(unsafe) private var dynamicPointerForegroundColor: RGBColor?
+    nonisolated(unsafe) private var dynamicPointerBackgroundColor: RGBColor?
+    nonisolated(unsafe) private var dynamicSelectionBackgroundColor: RGBColor?
+    nonisolated(unsafe) private var dynamicSelectionForegroundColor: RGBColor?
     /// Palette color overrides set via OSC 4. Confined to ptyQueue.
     nonisolated(unsafe) private var paletteOverrides: [Int: RGBColor] = [:]
 
@@ -94,7 +106,7 @@ public final class TerminalCore: @unchecked Sendable {
     public var onColorSchemeQuery: (() -> Bool)?
     /// Called when a dynamic color changes via OSC 10/11.
     /// Parameters: (OSC number, new color).
-    public var onDynamicColorChanged: ((Int, RGBColor) -> Void)?
+    public var onDynamicColorChanged: ((Int, RGBColor?) -> Void)?
     /// Called to query the current default foreground/background color.
     /// Used by OSC 10/11 queries when no dynamic color has been set.
     /// Parameter: OSC number (10 = foreground, 11 = background).
@@ -146,6 +158,10 @@ public final class TerminalCore: @unchecked Sendable {
         streamHandler.onFocusReportingChanged = { [weak self] enabled in
             self?.focusReportingEnabled = enabled
         }
+        streamHandler.onBlinkingCursorChanged = { [weak self] enabled in
+            self?.cursorBlinkingEnabled = enabled
+            self?.onCursorBlinkingChanged?(enabled)
+        }
         streamHandler.onColorSchemeReportingChanged = { [weak self] enabled in
             guard let self else { return }
             self.colorSchemeReportingEnabled = enabled
@@ -176,6 +192,14 @@ public final class TerminalCore: @unchecked Sendable {
                 return self.dynamicBackgroundColor ?? self.onDefaultColorQuery?(11)
             case 12:
                 return self.dynamicCursorColor ?? self.onDefaultColorQuery?(12)
+            case 13:
+                return self.dynamicPointerForegroundColor ?? self.onDefaultColorQuery?(13)
+            case 14:
+                return self.dynamicPointerBackgroundColor ?? self.onDefaultColorQuery?(14)
+            case 17:
+                return self.dynamicSelectionBackgroundColor ?? self.onDefaultColorQuery?(17)
+            case 19:
+                return self.dynamicSelectionForegroundColor ?? self.onDefaultColorQuery?(19)
             default:
                 return nil
             }
@@ -189,10 +213,41 @@ public final class TerminalCore: @unchecked Sendable {
                 self.dynamicBackgroundColor = color
             case 12:
                 self.dynamicCursorColor = color
+            case 13:
+                self.dynamicPointerForegroundColor = color
+            case 14:
+                self.dynamicPointerBackgroundColor = color
+            case 17:
+                self.dynamicSelectionBackgroundColor = color
+            case 19:
+                self.dynamicSelectionForegroundColor = color
             default:
                 return
             }
             self.onDynamicColorChanged?(oscNum, color)
+        }
+        streamHandler.onDynamicColorReset = { [weak self] oscNum in
+            guard let self else { return }
+            switch oscNum {
+            case 10:
+                self.dynamicForegroundColor = nil
+            case 11:
+                self.dynamicBackgroundColor = nil
+            case 12:
+                self.dynamicCursorColor = nil
+            case 13:
+                self.dynamicPointerForegroundColor = nil
+            case 14:
+                self.dynamicPointerBackgroundColor = nil
+            case 17:
+                self.dynamicSelectionBackgroundColor = nil
+            case 19:
+                self.dynamicSelectionForegroundColor = nil
+            default:
+                return
+            }
+            let defaultColor = self.onDefaultColorQuery?(oscNum)
+            self.onDynamicColorChanged?(oscNum, defaultColor)
         }
         streamHandler.onPointerShapeChanged = { [weak self] shape in
             self?.onPointerShapeChanged?(shape)
@@ -357,6 +412,11 @@ public final class TerminalCore: @unchecked Sendable {
     /// Test-only accessor for color scheme reporting state.
     internal var isColorSchemeReportingEnabledForTesting: Bool {
         ptyQueue.sync { colorSchemeReportingEnabled }
+    }
+
+    /// Test-only accessor for cursor blinking state (DECSET 12).
+    internal var isCursorBlinkingEnabledForTesting: Bool {
+        ptyQueue.sync { cursorBlinkingEnabled }
     }
 
     // MARK: - Synchronized Update (DECSET 2026)

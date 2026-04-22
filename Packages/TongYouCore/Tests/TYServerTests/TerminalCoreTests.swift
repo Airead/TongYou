@@ -196,6 +196,34 @@ struct TerminalCoreTests {
         #expect(core.isColorSchemeReportingEnabledForTesting == false)
     }
 
+    // MARK: - Cursor Blinking (DECSET 12)
+
+    @Test("Cursor blinking flag is off by default")
+    func cursorBlinkingInitiallyOff() {
+        let core = TerminalCore(columns: 80, rows: 24)
+        #expect(core.isCursorBlinkingEnabledForTesting == false)
+    }
+
+    @Test("DECSET 12 toggles cursor blinking flag on core")
+    func cursorBlinkingModeToggles() {
+        let core = TerminalCore(columns: 80, rows: 24)
+        core.feedBytesForTesting(Array("\u{1B}[?12h".utf8))
+        #expect(core.isCursorBlinkingEnabledForTesting == true)
+        core.feedBytesForTesting(Array("\u{1B}[?12l".utf8))
+        #expect(core.isCursorBlinkingEnabledForTesting == false)
+    }
+
+    @Test("onCursorBlinkingChanged callback fires on DECSET 12 toggle")
+    func cursorBlinkingCallbackFires() {
+        let core = TerminalCore(columns: 80, rows: 24)
+        var events: [Bool] = []
+        core.onCursorBlinkingChanged = { events.append($0) }
+        core.feedBytesForTesting(Array("\u{1B}[?12h".utf8))
+        #expect(events == [true])
+        core.feedBytesForTesting(Array("\u{1B}[?12l".utf8))
+        #expect(events == [true, false])
+    }
+
     // MARK: - Synchronized Update (DECSET 2026)
 
     @Test("DECSET 2026 toggles isSyncedUpdateActive on the core")
@@ -224,8 +252,8 @@ struct TerminalCoreTests {
         core.onUnhandledSequence = { message in
             capturedMessages.append(message)
         }
-        core.feedBytesForTesting(Array("\u{1B}[?1005h".utf8))
-        #expect(capturedMessages == ["DECSET/DECRST mode 1005 not implemented"])
+        core.feedBytesForTesting(Array("\u{1B}[?1007h".utf8))
+        #expect(capturedMessages == ["DECSET/DECRST mode 1007 not implemented"])
     }
 
     @Test("onUnhandledSequence callback does not fire for supported mode")

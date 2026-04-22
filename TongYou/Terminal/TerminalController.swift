@@ -84,9 +84,11 @@ final class TerminalController: TerminalControlling {
     /// Called on the main thread when a pane notification sequence is received (OSC 9 / 777 / 1337).
     nonisolated(unsafe) var onPaneNotification: ((String, String) -> Void)?
     /// Called on the main thread when a dynamic color changes via OSC 10/11.
-    nonisolated(unsafe) var onDynamicColorChanged: ((Int, RGBColor) -> Void)?
+    nonisolated(unsafe) var onDynamicColorChanged: ((Int, RGBColor?) -> Void)?
     /// Called on the main thread when a palette color changes via OSC 4.
     nonisolated(unsafe) var onPaletteColorChanged: ((Int, RGBColor) -> Void)?
+    /// Called on the main thread when blinking cursor mode changes via DECSET 12.
+    nonisolated(unsafe) var onCursorBlinkingChanged: ((Bool) -> Void)?
 
     private(set) var isSuspended: Bool = false
 
@@ -154,6 +156,12 @@ final class TerminalController: TerminalControlling {
                 return self.config.background
             case 12:
                 return self.config.cursorColor
+            case 13, 14:
+                return nil
+            case 17:
+                return self.config.selectionBackground
+            case 19:
+                return self.config.selectionForeground
             default:
                 return nil
             }
@@ -175,6 +183,11 @@ final class TerminalController: TerminalControlling {
             self.pointerShape = shape
             DispatchQueue.main.async { [weak self] in
                 self?.onPointerShapeChanged?(shape)
+            }
+        }
+        core.onCursorBlinkingChanged = { [weak self] enabled in
+            DispatchQueue.main.async { [weak self] in
+                self?.onCursorBlinkingChanged?(enabled)
             }
         }
         core.onUnhandledSequence = { [weak self] message in
