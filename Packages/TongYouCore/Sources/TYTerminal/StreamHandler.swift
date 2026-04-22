@@ -525,6 +525,10 @@ public struct StreamHandler {
             handleOSC11(stringData)
         case 12:
             handleOSC12(stringData)
+        case 13:
+            handleOSC13(stringData)
+        case 14:
+            handleOSC14(stringData)
         case 22:
             handleOSC22(stringData)
         case 66:
@@ -669,6 +673,18 @@ public struct StreamHandler {
 
     private func handleOSC12(_ data: ArraySlice<UInt8>) {
         handleOSCDynamicColor(oscNumber: 12, data: data)
+    }
+
+    // MARK: - OSC 13 (Pointer Foreground Color)
+
+    private func handleOSC13(_ data: ArraySlice<UInt8>) {
+        handleOSCDynamicColor(oscNumber: 13, data: data)
+    }
+
+    // MARK: - OSC 14 (Pointer Background Color)
+
+    private func handleOSC14(_ data: ArraySlice<UInt8>) {
+        handleOSCDynamicColor(oscNumber: 14, data: data)
     }
 
     // MARK: - OSC 4 (Set/Query Palette Color)
