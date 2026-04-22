@@ -520,6 +520,9 @@ final class MetalView: NSView {
 
     /// Currently hovered URL (Cmd held + mouse over URL).
     private var hoveredURL: DetectedURL?
+    /// Pointer shape set by OSC 22 (e.g. "default", "pointer", "text").
+    /// nil means no shape has been set by the application.
+    private var pointerShape: String?
 
     /// Returns true when the Option (Alt) key is held, forcing local text
     /// selection even if the terminal program has enabled mouse tracking.
@@ -736,6 +739,10 @@ final class MetalView: NSView {
         addTrackingArea(area)
     }
 
+    override func mouseEntered(with event: NSEvent) {
+        applyPointerShape()
+    }
+
     override func mouseExited(with event: NSEvent) {
         if hoveredURL != nil { clearHoveredURL() }
     }
@@ -757,7 +764,44 @@ final class MetalView: NSView {
     private func clearHoveredURL() {
         hoveredURL = nil
         renderer?.highlightedURL = nil
-        NSCursor.iBeam.set()
+        applyPointerShape()
+    }
+
+    /// Apply the current pointer shape based on OSC 22 state.
+    /// URL hover takes precedence over the application-set shape.
+    private func applyPointerShape() {
+        guard hoveredURL == nil else { return }
+        guard let shape = pointerShape else {
+            // No OSC 22 shape set: use the terminal default (i-beam).
+            NSCursor.iBeam.set()
+            return
+        }
+        switch shape {
+        case "pointer":
+            NSCursor.pointingHand.set()
+        case "text":
+            NSCursor.iBeam.set()
+        case "crosshair":
+            NSCursor.crosshair.set()
+        case "not-allowed", "no-drop":
+            NSCursor.operationNotAllowed.set()
+        case "wait", "progress":
+            NSCursor.arrow.set() // macOS doesn't have a wait cursor; fallback to arrow
+        case "help":
+            NSCursor.arrow.set() // macOS doesn't have a help cursor; fallback to arrow
+        case "move":
+            NSCursor.closedHand.set()
+        case "ns-resize", "row-resize":
+            NSCursor.resizeUpDown.set()
+        case "ew-resize", "col-resize":
+            NSCursor.resizeLeftRight.set()
+        case "nesw-resize":
+            NSCursor.crosshair.set() // No diagonal resize cursor available
+        case "nwse-resize":
+            NSCursor.crosshair.set() // No diagonal resize cursor available
+        default:
+            NSCursor.arrow.set()
+        }
     }
 
     // MARK: - Mouse Helpers
@@ -974,6 +1018,14 @@ final class MetalView: NSView {
                 self.renderer?.updateDynamicColors(foreground: nil, background: nil, cursor: color)
             default:
                 break
+            }
+        }
+        controller.onPointerShapeChanged = { [weak self] shape in
+            guard let self else { return }
+            self.pointerShape = shape
+            // Apply immediately if mouse is currently over this view
+            if self.window?.mouseLocationOutsideOfEventStream != nil {
+                self.applyPointerShape()
             }
         }
     }

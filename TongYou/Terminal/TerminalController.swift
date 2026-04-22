@@ -36,6 +36,10 @@ final class TerminalController: TerminalControlling {
     /// nil means the shell is at a prompt.
     nonisolated(unsafe) private(set) var runningCommand: String?
 
+    /// Pointer shape set by OSC 22 (e.g. "default", "pointer", "text").
+    /// nil means no shape has been set by the application.
+    nonisolated(unsafe) var pointerShape: String?
+
     /// Active text selection (MainActor-only).
     private(set) var selection: Selection?
 
@@ -153,6 +157,10 @@ final class TerminalController: TerminalControlling {
         core.onDynamicColorChanged = { [weak self] oscNum, color in
             guard let self else { return }
             self.onDynamicColorChanged?(oscNum, color)
+        }
+        core.onPointerShapeChanged = { [weak self] shape in
+            guard let self else { return }
+            self.pointerShape = shape
         }
         core.onUnhandledSequence = { [weak self] message in
             let appName = self?.runningCommand ?? "shell"

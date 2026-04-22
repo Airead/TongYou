@@ -97,6 +97,9 @@ public final class TerminalCore: @unchecked Sendable {
     /// Used by OSC 10/11 queries when no dynamic color has been set.
     /// Parameter: OSC number (10 = foreground, 11 = background).
     public var onDefaultColorQuery: ((Int) -> RGBColor?)?
+    /// Called when the pointer shape changes via OSC 22.
+    /// Parameter: cursor shape name (e.g. "default", "pointer", "text").
+    public var onPointerShapeChanged: ((String) -> Void)?
 
     // MARK: - Init
 
@@ -181,6 +184,9 @@ public final class TerminalCore: @unchecked Sendable {
                 return
             }
             self.onDynamicColorChanged?(oscNum, color)
+        }
+        streamHandler.onPointerShapeChanged = { [weak self] shape in
+            self?.onPointerShapeChanged?(shape)
         }
     }
 

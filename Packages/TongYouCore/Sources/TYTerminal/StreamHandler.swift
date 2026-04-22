@@ -53,6 +53,9 @@ public struct StreamHandler {
     /// Callback: dynamic color changed by OSC 10/11/17/19 etc.
     /// Parameters are (OSC number, new color).
     public var onDynamicColorSet: ((Int, RGBColor) -> Void)?
+    /// Callback: pointer shape changed by OSC 22.
+    /// Parameter is the cursor shape name (e.g. "default", "pointer", "text").
+    public var onPointerShapeChanged: ((String) -> Void)?
     /// Callback: unhandled control sequence or mode received (for debugging/telemetry).
     public var onUnhandledSequence: ((String) -> Void)?
 
@@ -514,6 +517,8 @@ public struct StreamHandler {
             handleOSC11(stringData)
         case 12:
             handleOSC12(stringData)
+        case 22:
+            handleOSC22(stringData)
         case 1337:
             handleOSC1337(stringData)
         default:
@@ -653,6 +658,16 @@ public struct StreamHandler {
 
     private func handleOSC12(_ data: ArraySlice<UInt8>) {
         handleOSCDynamicColor(oscNumber: 12, data: data)
+    }
+
+    // MARK: - OSC 22 (Pointer Shape)
+
+    /// Handle OSC 22 pointer shape sequences.
+    /// Format: OSC 22 ; shape ST/BEL
+    /// Shape names follow X11 / CSS cursor names.
+    private func handleOSC22(_ data: ArraySlice<UInt8>) {
+        guard let shape = String(bytes: data, encoding: .utf8), !shape.isEmpty else { return }
+        onPointerShapeChanged?(shape)
     }
 
     /// Shared handler for OSC 10/11/12/17/19 dynamic colors.

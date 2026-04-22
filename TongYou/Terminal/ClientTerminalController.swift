@@ -35,6 +35,8 @@ final class ClientTerminalController: TerminalControlling {
     var onTitleChanged: ((String) -> Void)?
     var onPaneNotification: ((String, String) -> Void)?
     var onDynamicColorChanged: ((Int, RGBColor) -> Void)?
+    var pointerShape: String? { nil }
+    var onPointerShapeChanged: ((String) -> Void)?
 
     init(
         remoteClient: RemoteSessionClient,

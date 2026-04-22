@@ -1170,3 +1170,77 @@ struct StreamHandlerESCCharsetSelectTests {
         #expect(run("\u{1B}%X") == ["ESC %X (charset select) not implemented"])
     }
 }
+
+@Suite("StreamHandler OSC 22 tests", .serialized)
+struct StreamHandlerOSC22Tests {
+
+    @Test func osc22SetsPointerShape() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var shapes: [String] = []
+        handler.onPointerShapeChanged = { shapes.append($0) }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]22;pointer\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(shapes == ["pointer"])
+    }
+
+    @Test func osc22SetsTextShape() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var shapes: [String] = []
+        handler.onPointerShapeChanged = { shapes.append($0) }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]22;text\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(shapes == ["text"])
+    }
+
+    @Test func osc22WithSTTerminator() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var shapes: [String] = []
+        handler.onPointerShapeChanged = { shapes.append($0) }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]22;crosshair\u{1B}\\".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(shapes == ["crosshair"])
+    }
+
+    @Test func osc22EmptyPayloadIsIgnored() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var shapes: [String] = []
+        handler.onPointerShapeChanged = { shapes.append($0) }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]22;\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(shapes.isEmpty)
+    }
+
+    @Test func osc22WithoutHandlerIsSilent() {
+        let screen = Screen(columns: 10, rows: 2)
+        var handler = StreamHandler(screen: screen)
+        var unhandled: [String] = []
+        handler.onUnhandledSequence = { unhandled.append($0) }
+        var parser = VTParser()
+        let bytes = Array("\u{1B}]22;pointer\u{07}".utf8)
+        bytes.withUnsafeBufferPointer { ptr in
+            parser.feed(ptr) { action in handler.handle(action) }
+        }
+        handler.flush()
+        #expect(unhandled.isEmpty)
+    }
+}
