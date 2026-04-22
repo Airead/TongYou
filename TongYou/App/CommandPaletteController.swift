@@ -407,46 +407,33 @@ final class CommandPaletteController {
         let parsed = PaletteScope.parse(input: input)
         scope = parsed.scope
         query = parsed.query
-        let pool = candidates(for: scope)
-        var built: [PaletteRow]
-        if scope == .ssh {
-            built = rankSSH(query: query, in: pool)
-            // ad-hoc fallback: only when the query is a plain literal
-            // (no glob metachars / comma). With wildcards or multiple
-            // alternatives the user is filtering, not naming a host, so
-            // synthesising `ssh <query>` would never do what they want.
-            if built.isEmpty, !query.isEmpty,
-               !query.contains(where: SSHGlobMatcher.metaCharacters.contains),
-               let adHoc = sshAdHocBuilder?(query) {
-                built = [PaletteRow(
-                    candidate: adHoc,
-                    match: FuzzyMatcher.Match(score: 0, matchedIndices: [])
-                )]
-            }
-        } else {
-            let ranked = FuzzyMatcher.rank(query: query, in: pool, extract: { $0.primaryText })
-            built = ranked.map { PaletteRow(candidate: $0.candidate, match: $0.match) }
-        }
 
-        // Inject history candidates at the top when the query is empty.
+        var built: [PaletteRow]
+
         if query.isEmpty {
-            let history = historyCandidates
-                .filter { $0.scope == scope }
-                .prefix(5)
-            let historyIDs = Set(history.compactMap(historyKey(for:)))
-            // Remove regular candidates that already appear in history so
-            // the history entry stays at the top.
-            built = built.filter {
-                guard let key = historyKey(for: $0.candidate) else { return true }
-                return !historyIDs.contains(key)
+            // Empty input: show nothing. The user must type something or
+            // browse history (which fills input and triggers a re-rank).
+            built = []
+        } else {
+            let pool = candidates(for: scope)
+            if scope == .ssh {
+                built = rankSSH(query: query, in: pool)
+                // ad-hoc fallback: only when the query is a plain literal
+                // (no glob metachars / comma). With wildcards or multiple
+                // alternatives the user is filtering, not naming a host, so
+                // synthesising `ssh <query>` would never do what they want.
+                if built.isEmpty, !query.isEmpty,
+                   !query.contains(where: SSHGlobMatcher.metaCharacters.contains),
+                   let adHoc = sshAdHocBuilder?(query) {
+                    built = [PaletteRow(
+                        candidate: adHoc,
+                        match: FuzzyMatcher.Match(score: 0, matchedIndices: [])
+                    )]
+                }
+            } else {
+                let ranked = FuzzyMatcher.rank(query: query, in: pool, extract: { $0.primaryText })
+                built = ranked.map { PaletteRow(candidate: $0.candidate, match: $0.match) }
             }
-            let historyRows = history.map {
-                PaletteRow(
-                    candidate: $0,
-                    match: FuzzyMatcher.Match(score: 0, matchedIndices: [])
-                )
-            }
-            built = historyRows + built
         }
 
         rows = built

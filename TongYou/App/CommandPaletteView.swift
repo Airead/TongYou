@@ -147,7 +147,10 @@ struct CommandPaletteView: View {
     @ViewBuilder
     private func resultArea(fgColor: Color) -> some View {
         if controller.rows.isEmpty {
-            Text("No matches")
+            let label = controller.input.isEmpty
+                ? "Type to search or press ↑ for history"
+                : "No matches"
+            Text(label)
                 .font(.system(size: 12))
                 .foregroundStyle(fgColor.opacity(0.55))
                 .frame(maxWidth: .infinity)

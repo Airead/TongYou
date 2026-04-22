@@ -66,7 +66,7 @@ struct CommandPaletteControllerTests {
 
         controller.open()
         #expect(controller.isOpen)
-        #expect(controller.rows.count == 1)
+        #expect(controller.rows.isEmpty)
 
         controller.close()
         #expect(!controller.isOpen)
@@ -88,8 +88,7 @@ struct CommandPaletteControllerTests {
     // MARK: - Session scope (Phase 8)
 
     @Test func sessionScopeListsAllOpenSessions() {
-        // Opening the palette with an empty query (default session scope)
-        // should list every injected candidate.
+        // Typing a space lists every injected candidate in session scope.
         let controller = CommandPaletteController()
         controller.sessionCandidates = [
             PaletteCandidate(primaryText: "work", scope: .session),
@@ -97,6 +96,7 @@ struct CommandPaletteControllerTests {
             PaletteCandidate(primaryText: "lab", scope: .session),
         ]
         controller.open()
+        controller.input = " "
 
         #expect(controller.rows.count == 3)
         #expect(controller.rows.map(\.candidate.primaryText) == ["work", "home", "lab"])
@@ -176,11 +176,11 @@ struct CommandPaletteControllerTests {
             PaletteCandidate(primaryText: "db3", scope: .ssh),
         ]
         controller.open()
-        controller.input = "ssh "
+        controller.input = "ssh db"
         controller.moveHighlight(by: 2)
         #expect(controller.highlightedIndex == 2)
 
-        controller.input = "ssh d"
+        controller.input = "ssh db1"
         #expect(controller.highlightedIndex == 0)
     }
 
@@ -190,7 +190,7 @@ struct CommandPaletteControllerTests {
             PaletteCandidate(primaryText: "host\($0)", scope: .ssh)
         }
         controller.open()
-        controller.input = "ssh "
+        controller.input = "ssh host"
         #expect(controller.highlightedIndex == 0)
 
         controller.moveHighlight(by: -1)   // wraps to last
@@ -214,22 +214,22 @@ struct CommandPaletteControllerTests {
             PaletteCandidate(primaryText: "h\($0)", scope: .ssh)
         }
         controller.open()
-        controller.input = "ssh "
+        controller.input = "ssh h"
         #expect(controller.selection.isEmpty)
 
         // Highlight row 0, add it.
         controller.toggleSelection()
         #expect(controller.selection.count == 1)
+        #expect(controller.selection[0] == controller.rows[0].id)
 
-        // Move to row 1 and add it too.
-        controller.moveHighlight(by: 1)
+        // Move to row 2, add it too.
+        controller.moveHighlight(by: 2)
         controller.toggleSelection()
         #expect(controller.selection.count == 2)
 
-        // Toggle row 1 off; row 0 should remain.
+        // Toggle row 2 off.
         controller.toggleSelection()
         #expect(controller.selection.count == 1)
-        #expect(controller.selection.first == controller.rows[0].id)
     }
 
     @Test func selectionRemovesOnSecondTab() {
@@ -240,7 +240,7 @@ struct CommandPaletteControllerTests {
             PaletteCandidate(primaryText: "h\($0)", scope: .ssh)
         }
         controller.open()
-        controller.input = "ssh "
+        controller.input = "ssh h"
         controller.toggleSelection()
         #expect(controller.selection.count == 1)
 
@@ -254,7 +254,7 @@ struct CommandPaletteControllerTests {
             PaletteCandidate(primaryText: "h\($0)", scope: .ssh)
         }
         controller.open()
-        controller.input = "ssh "
+        controller.input = "ssh h1"
         controller.moveHighlight(by: 1)
 
         let commit = controller.commit(mode: .plain)
@@ -270,7 +270,7 @@ struct CommandPaletteControllerTests {
             PaletteCandidate(primaryText: "h\($0)", scope: .ssh)
         }
         controller.open()
-        controller.input = "ssh "
+        controller.input = "ssh h"
         // Select row 0 and row 2 (via Tab + arrow).
         controller.toggleSelection()
         controller.moveHighlight(by: 2)
@@ -413,21 +413,6 @@ struct CommandPaletteControllerTests {
         #expect(adHocQueries.isEmpty)
     }
 
-    @Test func sshEmptyQueryShowsAllCandidatesUnranked() {
-        // An empty post-prefix query must surface every candidate in
-        // upstream order, not rank them.
-        let controller = CommandPaletteController()
-        controller.sshCandidates = [
-            PaletteCandidate(primaryText: "a", scope: .ssh),
-            PaletteCandidate(primaryText: "b", scope: .ssh),
-            PaletteCandidate(primaryText: "c", scope: .ssh),
-        ]
-        controller.open()
-        controller.input = "ssh "
-
-        #expect(controller.rows.map(\.candidate.primaryText) == ["a", "b", "c"])
-    }
-
     // MARK: - ⌘⌫ delete dispatch
 
     @Test func deleteHighlightedInvokesSSHCallbackWithTarget() {
@@ -449,7 +434,7 @@ struct CommandPaletteControllerTests {
         var deleted: [String] = []
         controller.onDeleteHistory = { deleted.append($0) }
         controller.open()
-        controller.input = "ssh "
+        controller.input = "ssh db"
 
         let consumed = controller.deleteHighlighted()
         #expect(consumed == true)
@@ -497,6 +482,7 @@ struct CommandPaletteControllerTests {
         var deleted: [UUID] = []
         controller.onDeleteSession = { deleted.append($0) }
         controller.open()
+        controller.input = "work"
 
         let consumed = controller.deleteHighlighted()
         #expect(consumed == true)
@@ -559,11 +545,10 @@ struct CommandPaletteControllerTests {
             ),
         ]
         controller.open()
-        controller.input = "p "
+        controller.input = "p ssh"
 
-        #expect(controller.scope == .profile)
-        #expect(controller.rows.count == 2)
-        #expect(controller.rows.map(\.candidate.primaryText) == ["ssh-prod", "default"])
+        #expect(controller.rows.count == 1)
+        #expect(controller.rows[0].candidate.primaryText == "ssh-prod")
     }
 
     @Test func profilePaletteCandidateBuildsSubtitle() {
@@ -606,10 +591,10 @@ struct CommandPaletteControllerTests {
             ),
         ]
         controller.open()
-        controller.input = "> "
+        controller.input = "> show"
 
         #expect(controller.scope == .command)
-        #expect(controller.rows.count == 2)
+        #expect(controller.rows.count == 1)
         #expect(controller.rows[0].candidate.secondaryText == "⌘P")
     }
 
@@ -647,98 +632,7 @@ struct CommandPaletteControllerTests {
         #expect(Keybinding.Action.newTab.paletteDisplayTitle == "New tab")
     }
 
-    // MARK: - History injection
-
-    @Test func emptyQueryShowsHistoryFirst() {
-        let controller = CommandPaletteController()
-        controller.sshCandidates = [
-            PaletteCandidate(primaryText: "alpha", scope: .ssh),
-            PaletteCandidate(primaryText: "beta", scope: .ssh),
-        ]
-        controller.historyCandidates = [
-            PaletteCandidate(primaryText: "gamma", scope: .ssh, historyIdentifier: "gamma"),
-        ]
-        controller.open()
-        controller.input = "ssh "
-
-        #expect(controller.rows.count == 3)
-        #expect(controller.rows[0].candidate.primaryText == "gamma")
-        #expect(controller.rows[0].candidate.historyIdentifier == "gamma")
-        #expect(controller.rows[1].candidate.primaryText == "alpha")
-        #expect(controller.rows[2].candidate.primaryText == "beta")
-    }
-
-    @Test func regularPoolDedupedAgainstHistory() {
-        let controller = CommandPaletteController()
-        controller.sshCandidates = [
-            PaletteCandidate(primaryText: "alpha", scope: .ssh, sshResolution: SSHResolution(
-                candidate: SSHCandidate(target: "alpha", hostname: nil, isAdHoc: false),
-                target: SSHTarget.parse("alpha"), templateID: "ssh", variables: [:]
-            )),
-        ]
-        controller.historyCandidates = [
-            PaletteCandidate(primaryText: "alpha", scope: .ssh, historyIdentifier: "alpha"),
-        ]
-        controller.open()
-        controller.input = "ssh "
-
-        // Regular pool "alpha" is removed because history already has it.
-        #expect(controller.rows.count == 1)
-        #expect(controller.rows[0].candidate.historyIdentifier == "alpha")
-    }
-
-    @Test func nonEmptyQueryHidesHistory() {
-        let controller = CommandPaletteController()
-        controller.sshCandidates = [
-            PaletteCandidate(primaryText: "alpha", scope: .ssh),
-        ]
-        controller.historyCandidates = [
-            PaletteCandidate(primaryText: "beta", scope: .ssh, historyIdentifier: "beta"),
-        ]
-        controller.open()
-        controller.input = "ssh a"
-
-        #expect(controller.rows.count == 1)
-        #expect(controller.rows[0].candidate.primaryText == "alpha")
-    }
-
-    @Test func historyLimitedToFivePerScope() {
-        let controller = CommandPaletteController()
-        controller.commandCandidates = [
-            PaletteCandidate(primaryText: "cmd", scope: .command),
-        ]
-        controller.historyCandidates = (0..<10).map {
-            PaletteCandidate(primaryText: "h\($0)", scope: .command, historyIdentifier: "h\($0)")
-        }
-        controller.open()
-        controller.input = "> "
-
-        // 5 history + 1 regular
-        #expect(controller.rows.count == 6)
-    }
-
-    @Test func deleteHistoryEntryCallsCallback() {
-        let controller = CommandPaletteController()
-        controller.commandCandidates = [
-            PaletteCandidate(primaryText: "cmd", scope: .command),
-        ]
-        controller.historyCandidates = [
-            PaletteCandidate(primaryText: "old", scope: .command, historyIdentifier: "old-id"),
-        ]
-        controller.open()
-        controller.input = "> "
-
-        var deleted: [(PaletteScope, String)] = []
-        controller.onDeleteHistoryEntry = { scope, id in
-            deleted.append((scope, id))
-        }
-
-        let consumed = controller.deleteHighlighted()
-        #expect(consumed == true)
-        #expect(deleted.count == 1)
-        #expect(deleted[0].0 == .command)
-        #expect(deleted[0].1 == "old-id")
-    }
+    // MARK: - Delete (⌘⌫)
 
     @Test func deleteHistoryDoesNotAffectRegularCandidates() {
         let controller = CommandPaletteController()
@@ -746,7 +640,7 @@ struct CommandPaletteControllerTests {
             PaletteCandidate(primaryText: "cmd", scope: .command),
         ]
         controller.open()
-        controller.input = "> "
+        controller.input = "> c"
 
         var deleted: [(PaletteScope, String)] = []
         controller.onDeleteHistoryEntry = { scope, id in
