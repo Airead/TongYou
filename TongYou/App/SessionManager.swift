@@ -3015,14 +3015,19 @@ final class SessionManager {
     /// after every `localControllers[_] = ` / `remoteControllers[_] = `
     /// assignment so freshly-created controllers participate in broadcast.
     private func armBroadcastDispatcher(forPane paneID: UUID) {
-        let closure: @MainActor @Sendable (Data) -> Void = { [weak self] data in
+        let inputClosure: @MainActor @Sendable (Data) -> Void = { [weak self] data in
             self?.dispatchUserInput(fromPane: paneID, data: data)
         }
+        let pasteClosure: @MainActor @Sendable (String) -> Void = { [weak self] text in
+            self?.dispatchUserPaste(fromPane: paneID, text: text)
+        }
         if let local = localControllers[paneID] {
-            local.onUserInputDispatched = closure
+            local.onUserInputDispatched = inputClosure
+            local.onUserPasteDispatched = pasteClosure
         }
         if let remote = remoteControllers[paneID] {
-            remote.onUserInputDispatched = closure
+            remote.onUserInputDispatched = inputClosure
+            remote.onUserPasteDispatched = pasteClosure
         }
     }
 
@@ -3041,6 +3046,22 @@ final class SessionManager {
         }
         for targetID in targets {
             activeController(for: targetID)?.receiveUserInput(data)
+        }
+    }
+
+    /// Route paste content for a pane, applying broadcast fan-out when
+    /// the source pane is part of an active broadcasting selection.
+    private func dispatchUserPaste(fromPane sourcePaneID: UUID, text: String) {
+        let targets: Set<UUID>
+        if let manager = paneSelectionManager,
+           let tabID = tabID(forPane: sourcePaneID),
+           let broadcastTargets = manager.broadcastTargets(from: sourcePaneID, inTab: tabID) {
+            targets = broadcastTargets
+        } else {
+            targets = [sourcePaneID]
+        }
+        for targetID in targets {
+            activeController(for: targetID)?.receiveUserPaste(text)
         }
     }
 

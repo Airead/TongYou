@@ -330,6 +330,11 @@ final class TerminalController: TerminalControlling {
     /// input fan-out so selected sibling panes receive the same bytes.
     var onUserInputDispatched: (@MainActor (Data) -> Void)?
 
+    /// Dispatcher for paste events. When set, `handlePaste` routes through
+    /// this closure instead of writing directly to the PTY, enabling broadcast
+    /// fan-out in SessionManager.
+    var onUserPasteDispatched: (@MainActor (String) -> Void)?
+
     func handleKeyDown(_ event: NSEvent) {
         let input = KeyEncoder.KeyInput(event: event)
         let options = KeyEncoder.Options(
@@ -645,6 +650,15 @@ final class TerminalController: TerminalControlling {
     // MARK: - Paste
 
     func handlePaste(_ text: String) {
+        guard !text.isEmpty else { return }
+        if let dispatcher = onUserPasteDispatched {
+            dispatcher(text)
+            return
+        }
+        receiveUserPaste(text)
+    }
+
+    func receiveUserPaste(_ text: String) {
         guard !text.isEmpty else { return }
         var bytes = Array(text.utf8)
 

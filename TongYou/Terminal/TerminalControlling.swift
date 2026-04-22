@@ -76,6 +76,14 @@ protocol TerminalControlling: AnyObject {
 
     func handlePaste(_ text: String)
 
+    /// Dispatcher for paste events. When non-nil it replaces the direct
+    /// paste so the caller (SessionManager) can fan out to other panes.
+    var onUserPasteDispatched: (@MainActor (String) -> Void)? { get set }
+
+    /// Replay paste content to this controller. Used by the broadcast
+    /// dispatcher to mirror paste across sibling panes.
+    func receiveUserPaste(_ text: String)
+
     // MARK: - Config
 
     func applyConfig(_ config: Config)

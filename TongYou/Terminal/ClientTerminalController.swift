@@ -83,6 +83,10 @@ final class ClientTerminalController: TerminalControlling {
     /// by `SessionManager` to fan out to broadcast-input targets.
     var onUserInputDispatched: (@MainActor (Data) -> Void)?
 
+    /// Dispatcher for paste events. Installed by `SessionManager` to fan out
+    /// paste content to broadcast targets.
+    var onUserPasteDispatched: (@MainActor (String) -> Void)?
+
     func handleKeyDown(_ event: NSEvent) {
         let input = KeyEncoder.KeyInput(event: event)
         let options = KeyEncoder.Options(
@@ -357,6 +361,15 @@ final class ClientTerminalController: TerminalControlling {
     // MARK: - Paste
 
     func handlePaste(_ text: String) {
+        guard !text.isEmpty else { return }
+        if let dispatcher = onUserPasteDispatched {
+            dispatcher(text)
+            return
+        }
+        receiveUserPaste(text)
+    }
+
+    func receiveUserPaste(_ text: String) {
         guard !text.isEmpty else { return }
         var bytes = Array(text.utf8)
 
