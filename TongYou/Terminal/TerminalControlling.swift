@@ -99,6 +99,7 @@ protocol TerminalControlling: AnyObject {
     var onTitleChanged: ((String) -> Void)? { get set }
     var onPaneNotification: ((String, String) -> Void)? { get set }
     var onDynamicColorChanged: ((Int, RGBColor) -> Void)? { get set }
+    var onPaletteColorChanged: ((Int, RGBColor) -> Void)? { get set }
 
     // MARK: - Pointer Shape (OSC 22)
 

@@ -188,6 +188,14 @@ public struct ColorPalette: Sendable {
         return (fg, bg)
     }
 
+    /// Set a single palette entry by index.
+    /// - Parameter index: Palette index (0-255).
+    /// - Parameter color: RGBA color value.
+    public mutating func setEntry(index: Int, color: SIMD4<UInt8>) {
+        guard (0...255).contains(index) else { return }
+        entries[index] = color
+    }
+
     /// Apply palette overrides from configuration.
     /// - Parameter overrides: Map of palette index (0-255) to RGB color.
     public mutating func applyOverrides(_ overrides: [Int: RGBColor]) {
