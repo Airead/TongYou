@@ -553,6 +553,9 @@ public struct StreamHandler {
             onDynamicColorReset?(17)
         case 119:
             onDynamicColorReset?(19)
+        case 15, 16:
+            // OSC 15/16 (Tektronix foreground/background color) — intentionally ignored.
+            break
         case 66:
             // OSC 66 (Kitty text sizing protocol) — intentionally ignored for now.
             break
