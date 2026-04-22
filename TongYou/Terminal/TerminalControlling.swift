@@ -103,6 +103,9 @@ protocol TerminalControlling: AnyObject {
     // MARK: - Callbacks
 
     var onNeedsDisplay: (() -> Void)? { get set }
+    /// Called whenever the terminal content updates (screen dirty).
+    /// Unlike onNeedsDisplay, this fires for every update even if the view is off-screen.
+    var onActivity: (() -> Void)? { get set }
     var onProcessExited: ((Int32) -> Void)? { get set }
     var onTitleChanged: ((String) -> Void)? { get set }
     var onPaneNotification: ((String, String) -> Void)? { get set }

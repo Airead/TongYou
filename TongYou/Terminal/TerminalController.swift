@@ -27,6 +27,10 @@ final class TerminalController: TerminalControlling {
     /// Used by MetalView to unpause the display link.
     nonisolated(unsafe) var onNeedsDisplay: (() -> Void)?
 
+    /// Called whenever the terminal content updates (screen dirty).
+    /// Unlike onNeedsDisplay, this fires for every update even if the view is off-screen.
+    nonisolated(unsafe) var onActivity: (() -> Void)?
+
     /// Window title as reported by the running program via OSC 0/2.
     nonisolated(unsafe) private(set) var windowTitle: String = ""
     /// Pending debounce work item for title changes (runs on ptyQueue).
@@ -117,6 +121,9 @@ final class TerminalController: TerminalControlling {
     private func wireCallbacks() {
         core.onScreenDirty = { [weak self] in
             self?.handleScreenDirty()
+        }
+        core.onActivity = { [weak self] in
+            self?.onActivity?()
         }
         core.onTitleChanged = { [weak self] title in
             guard let self else { return }

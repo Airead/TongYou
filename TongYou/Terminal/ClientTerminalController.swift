@@ -31,6 +31,7 @@ final class ClientTerminalController: TerminalControlling {
     private var optionAsAlt: Bool = false
 
     var onNeedsDisplay: (() -> Void)?
+    var onActivity: (() -> Void)?
     var onProcessExited: ((Int32) -> Void)?
     var onTitleChanged: ((String) -> Void)?
     var onPaneNotification: ((String, String) -> Void)?
@@ -416,6 +417,7 @@ final class ClientTerminalController: TerminalControlling {
     /// Called by the session manager when screen content is updated from the server.
     func handleScreenUpdated() {
         _contentGeneration &+= 1
+        onActivity?()
         onNeedsDisplay?()
     }
 

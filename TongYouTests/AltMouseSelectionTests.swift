@@ -15,6 +15,7 @@ private final class MockMouseController: TerminalControlling {
     var currentWorkingDirectory: String?
     var foregroundProcessName: String?
     var onNeedsDisplay: (() -> Void)?
+    var onActivity: (() -> Void)?
     var onProcessExited: ((Int32) -> Void)?
     var onTitleChanged: ((String) -> Void)?
     var onPaneNotification: ((String, String) -> Void)?

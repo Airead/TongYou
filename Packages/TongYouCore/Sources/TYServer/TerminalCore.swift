@@ -81,7 +81,13 @@ public final class TerminalCore: @unchecked Sendable {
     // MARK: - Callbacks (fired on ptyQueue)
 
     /// Called when screen content becomes dirty.
+    /// Only fires on the transition from clean to dirty; coalesced.
     public var onScreenDirty: (() -> Void)?
+
+    /// Called whenever the terminal receives new content (e.g. PTY output).
+    /// Unlike `onScreenDirty`, this fires for every update even if the screen
+    /// is already dirty (e.g. background tabs). Use for activity indicators.
+    public var onActivity: (() -> Void)?
 
     /// Called when the window title changes (OSC 0/2).
     public var onTitleChanged: ((String) -> Void)?
@@ -650,6 +656,7 @@ public final class TerminalCore: @unchecked Sendable {
     private func markScreenDirty() {
         let wasDirty = screenDirty
         screenDirty = true
+        onActivity?()
         if !wasDirty {
             onScreenDirty?()
         }

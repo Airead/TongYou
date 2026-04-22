@@ -2484,6 +2484,11 @@ final class SessionManager {
                 paneID: serverPaneID
             )
             remoteControllers[pane.id] = controller
+            // Wire activity tracking directly on the controller so it fires even when
+            // the view is off-screen (background tabs).
+            controller.onActivity = { [weak self] in
+                self?.reportPaneActivity(paneID: pane.id)
+            }
             armBroadcastDispatcher(forPane: pane.id)
             serverToLocalPaneID[serverPaneID.uuid] = pane.id
             // Temporary cursorTrace rosetta: emit once per binding so the user
@@ -2712,6 +2717,11 @@ final class SessionManager {
         let controller = TerminalController(columns: 80, rows: 24)
         controller.start(snapshot: snapshot)
         localControllers[paneID] = controller
+        // Wire activity tracking directly on the controller so it fires even when
+        // the view is off-screen (background tabs).
+        controller.onActivity = { [weak self] in
+            self?.reportPaneActivity(paneID: paneID)
+        }
         armBroadcastDispatcher(forPane: paneID)
         return controller
     }
