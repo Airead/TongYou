@@ -78,6 +78,17 @@ public final class TerminalCore: @unchecked Sendable {
 
     private let ptyQueue: DispatchQueue
 
+    /// Dispatch-specific key to detect when we are running on ptyQueue.
+    /// Used by deinit to avoid deadlocking when the last strong reference
+    /// is released by an event handler running on ptyQueue.
+    private let ptyQueueKey = DispatchSpecificKey<Int>()
+
+    /// Whether `stop()` has already been called. Used to prevent redundant
+    /// cleanup and to let deinit know whether it needs to perform a fallback
+    /// clear on ptyQueue.
+    private let stoppedLock = NSLock()
+    private var stopped = false
+
     // MARK: - Callbacks (fired on ptyQueue)
 
     /// Called when screen content becomes dirty.
@@ -150,6 +161,7 @@ public final class TerminalCore: @unchecked Sendable {
             qos: .userInteractive
         )
         self.ptyQueue = queue
+        queue.setSpecific(key: ptyQueueKey, value: 1)
         let screen = Screen(
             columns: columns,
             rows: rows,
@@ -365,6 +377,12 @@ public final class TerminalCore: @unchecked Sendable {
     }
 
     public func stop() {
+        stoppedLock.lock()
+        let alreadyStopped = stopped
+        stopped = true
+        stoppedLock.unlock()
+        guard !alreadyStopped else { return }
+
         // Clear callbacks synchronously on ptyQueue before tearing down the
         // PTY process. This prevents any in-flight handler from invoking
         // closures that capture resources we are about to release.
@@ -670,14 +688,33 @@ public final class TerminalCore: @unchecked Sendable {
     }
 
     deinit {
-        // Callbacks should have been cleared by stop(). Calling ptyQueue.sync
-        // here is unsafe because deinit may be running on ptyQueue (if the
-        // last strong reference was released by an event handler), which
-        // would cause a deadlock. Instead, we simply clear the callbacks
-        // directly since deinit is nonisolated and this is the last chance
-        // to sever the back-edge. All queue-confined access during normal
-        // operation has already stopped because ptyProcess is nil.
-        clearStreamHandlerCallbacks()
+        // Callbacks should have been cleared by stop(). If stop() was already
+        // called, there is nothing left to do.
+        stoppedLock.lock()
+        let alreadyStopped = stopped
+        stoppedLock.unlock()
+        guard !alreadyStopped else { return }
+
+        // stop() was never called (e.g. the view was destroyed without an
+        // orderly teardown). We must clear the callbacks, but we have to be
+        // careful about which thread deinit is running on:
+        //
+        // • If we are on ptyQueue already (last strong reference released by an
+        //   event handler), sync-ing to ptyQueue would deadlock. Clearing
+        //   directly is safe because no other ptyQueue work can run concurrently
+        //   with the current handler.
+        //
+        // • If we are on any other thread, we must sync to ptyQueue first so
+        //   that any in-flight handler completes before we nil out the
+        //   callbacks. Otherwise a handler that is mid-flight could read a
+        //   partially-cleared or already-deallocated callback closure.
+        if DispatchQueue.getSpecific(key: ptyQueueKey) == nil {
+            ptyQueue.sync {
+                clearStreamHandlerCallbacks()
+            }
+        } else {
+            clearStreamHandlerCallbacks()
+        }
     }
 
     /// Clear all streamHandler callbacks. Must only be called when no further

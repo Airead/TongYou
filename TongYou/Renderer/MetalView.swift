@@ -1384,6 +1384,12 @@ final class MetalView: NSView {
     }
 
     deinit {
+        // Stop the terminal controller to ensure orderly teardown of the
+        // PTY and VTParser before the view is destroyed. Without this,
+        // TerminalCore may deinit while ptyQueue work is still in flight,
+        // causing use-after-free races on streamHandler callbacks.
+        terminalController?.stop()
+
         cursorBlinkTimer?.invalidate()
         dragAutoScrollTimer?.invalidate()
         pendingPTYResizeWork?.cancel()
