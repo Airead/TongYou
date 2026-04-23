@@ -51,6 +51,9 @@ struct TerminalWindowView: View {
 
     @State private var notificationStore = NotificationStore.shared
 
+    /// The NSWindow that hosts this view. Updated by WindowCaptureView.
+    @State private var hostingWindow: NSWindow?
+
     /// Loads config + profiles. Owned here and shared with SessionManager
     /// (for startup resolution) and every MetalView (for live-field rendering
     /// + hot reload).
@@ -233,6 +236,7 @@ struct TerminalWindowView: View {
                 sessionManager.onFocusPaneRequest = nil
             }
         ))
+        .background(WindowCaptureView(window: $hostingWindow))
         .overlay {
             ToastOverlay(presenter: toastPresenter)
         }
@@ -264,6 +268,23 @@ struct TerminalWindowView: View {
                 let shouldShow = notificationStore.unreadPaneIDs.contains(paneID) && paneID != newID
                 view.setNotificationRing(visible: shouldShow)
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: SystemNotificationService.focusPaneNotification)) { note in
+            guard let paneID = note.userInfo?["paneID"] as? UUID else { return }
+            guard let (sessionID, tabID) = sessionManager.paneOwnerIDs(paneID: paneID) else { return }
+            if let idx = sessionManager.sessions.firstIndex(where: { $0.id == sessionID }),
+               idx != sessionManager.activeSessionIndex {
+                sessionManager.selectSession(at: idx)
+            }
+            if let session = sessionManager.sessions.first(where: { $0.id == sessionID }),
+               let tabIdx = session.tabs.firstIndex(where: { $0.id == tabID }),
+               session.activeTabIndex != tabIdx {
+                sessionManager.selectTab(inSessionID: sessionID, at: tabIdx)
+            }
+            focusManager.focusPane(id: paneID)
+            sessionManager.notifyPaneFocused(paneID)
+            hostingWindow?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             if let paneID = focusManager.focusedPaneID {
@@ -1368,6 +1389,17 @@ struct TerminalWindowView: View {
             )
             if paneID == focusManager.focusedPaneID {
                 viewStore.view(for: paneID)?.flashNotificationRing()
+            }
+
+            let isWindowForeground = hostingWindow?.isKeyWindow ?? false
+            let isSessionActive = sessionManager.activeSession?.id == sessionID
+            let isTabActive = isSessionActive && sessionManager.activeTab?.id == tabID
+            if !isWindowForeground || !isTabActive {
+                SystemNotificationService.shared.send(
+                    paneID: paneID,
+                    title: title,
+                    body: body
+                )
             }
         case .toggleBroadcastInput:
             toggleBroadcastInput()

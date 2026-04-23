@@ -36,6 +36,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        SystemNotificationService.shared.requestAuthorizationIfNeeded()
         GUIAutomationService.shared.start()
         installFocusTraceObservers()
         installDebugMarkerMonitor()
