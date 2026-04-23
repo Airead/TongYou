@@ -891,18 +891,16 @@ final class GUIAutomationService {
         }
 
         // When --no-notify-if-visible is set, skip the macOS notification
-        // if the target pane's tab is currently visible.
+        // if the target pane's tab is currently visible (the active tab of
+        // the active session). Background activity does not count as visible.
         let shouldSendSystemNotification: Bool
         if noNotifyIfVisible {
             let isTabVisible = SessionManagerRegistry.shared.allManagers.contains { manager in
-                // Check if this tab is the active tab of the active session
-                if let activeSession = manager.activeSession,
-                   let activeTab = activeSession.activeTab,
-                   activeTab.id == tabID {
-                    return true
+                guard let activeSession = manager.activeSession,
+                      let activeTab = activeSession.activeTab else {
+                    return false
                 }
-                // Check if this tab is in the active tabs set (background activity)
-                return manager.activeTabIDs.contains(tabID)
+                return activeTab.id == tabID
             }
             shouldSendSystemNotification = !isTabVisible
         } else {
