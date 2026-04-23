@@ -49,7 +49,7 @@ enum Command {
     case appFloatPaneMove(ref: String, x: Double, y: Double, width: Double, height: Double, json: Bool)
     case appWindowFocus(json: Bool)
     case appSSH(targets: [String], open: Bool, profile: String?, overrides: [String], json: Bool)
-    case appNotify(ref: String?, title: String, body: String?, noSystemNotification: Bool, json: Bool)
+    case appNotify(ref: String?, title: String, body: String?, noNotifyIfVisible: Bool, json: Bool)
 
     case help
 }
@@ -156,13 +156,13 @@ func parseAppArgs(_ args: [String]) -> Command {
         }
         return .appKey(ref: rest[0], key: rest[1], json: json)
     case "notify":
-        // Parse: [--no-system-notification] [ref] title [body]
+        // Parse: [--no-notify-if-visible] [ref] title [body]
         // If first arg looks like a ref (contains '/' or is a UUID), treat as ref.
         // Otherwise use TONGYOU_PANE_ID from environment.
-        var noSystemNotification = false
+        var noNotifyIfVisible = false
         var notifyRest = rest
-        if let idx = notifyRest.firstIndex(of: "--no-system-notification") {
-            noSystemNotification = true
+        if let idx = notifyRest.firstIndex(of: "--no-notify-if-visible") {
+            noNotifyIfVisible = true
             notifyRest.remove(at: idx)
         }
         if notifyRest.isEmpty {
@@ -181,7 +181,7 @@ func parseAppArgs(_ args: [String]) -> Command {
             title = notifyRest[0]
             body = notifyRest.count >= 2 ? notifyRest.dropFirst().joined(separator: " ") : nil
         }
-        return .appNotify(ref: ref, title: title, body: body, noSystemNotification: noSystemNotification, json: json)
+        return .appNotify(ref: ref, title: title, body: body, noNotifyIfVisible: noNotifyIfVisible, json: json)
     case "new-tab":
         return parseAppNewTab(rest, json: json)
     case "select-tab":
@@ -611,11 +611,11 @@ func printAppUsage() {
       detach <ref>                         Detach the session identified by ref (stops rendering / receiving input).
       send <ref> <text>                    Send raw UTF-8 text to the target pane (no trailing newline).
       key <ref> <key>                      Send a key event (e.g. Enter, Ctrl+C, Alt+Left) to the target pane.
-      notify [--no-system-notification] [<ref>] <title> [<body>]
+      notify [--no-notify-if-visible] [<ref>] <title> [<body>]
                                              Send a notification from the target pane.
                                              If <ref> is omitted, uses TONGYOU_PANE_ID from environment
                                              (requires running inside a TongYou pane).
-                                             --no-system-notification skips the macOS notification
+                                             --no-notify-if-visible skips the macOS notification
                                              when the pane's tab is currently visible.
       new-tab <session-ref> [--focus] [--profile <name>] [--set key=value ...]
                                            Create a new tab. --focus switches to the new tab.
@@ -702,10 +702,10 @@ func printUsage() {
       app detach <ref>               Detach a session by ref (stop rendering / receiving input)
       app send <ref> <text>          Send text to the target pane (no trailing newline)
       app key <ref> <key>            Send a key event (Enter, Ctrl+C, …) to the target pane
-      app notify [--no-system-notification] [<ref>] <title> [<body>]
+      app notify [--no-notify-if-visible] [<ref>] <title> [<body>]
                                      Send a notification from the target pane.
                                      Omit <ref> to use current pane (inside TongYou only).
-                                     --no-system-notification skips the macOS notification
+                                     --no-notify-if-visible skips the macOS notification
                                      when the pane's tab is currently visible.
       app new-tab <session-ref> [--focus] [--profile <name>] [--set k=v ...]
                                      Create a new tab; --profile/--set layer profile + inline overrides
@@ -1197,7 +1197,7 @@ func appKey(ref: String, key: String, json: Bool) {
     if json { printJSONResult("null") }
 }
 
-func appNotify(ref: String?, title: String, body: String?, noSystemNotification: Bool, json: Bool) {
+func appNotify(ref: String?, title: String, body: String?, noNotifyIfVisible: Bool, json: Bool) {
     let effectiveRef: String
     if let ref = ref {
         effectiveRef = ref
@@ -1210,7 +1210,7 @@ func appNotify(ref: String?, title: String, body: String?, noSystemNotification:
     
     let client = connectToGUIOrExit()
     handleCommandResult({
-        try client.notify(ref: effectiveRef, title: title, body: body, noSystemNotification: noSystemNotification)
+        try client.notify(ref: effectiveRef, title: title, body: body, noNotifyIfVisible: noNotifyIfVisible)
     }, json: json, verb: "notify")
 }
 
@@ -1521,8 +1521,8 @@ case .appSend(let ref, let text, let json):
     appSend(ref: ref, text: text, json: json)
 case .appKey(let ref, let key, let json):
     appKey(ref: ref, key: key, json: json)
-case .appNotify(let ref, let title, let body, let noSystemNotification, let json):
-    appNotify(ref: ref, title: title, body: body, noSystemNotification: noSystemNotification, json: json)
+case .appNotify(let ref, let title, let body, let noNotifyIfVisible, let json):
+    appNotify(ref: ref, title: title, body: body, noNotifyIfVisible: noNotifyIfVisible, json: json)
 case .appNewTab(let sessionRef, let focus, let profile, let overrides, let json):
     appNewTab(sessionRef: sessionRef, focus: focus, profile: profile, overrides: overrides, json: json)
 case .appSelectTab(let sessionRef, let index, let json):

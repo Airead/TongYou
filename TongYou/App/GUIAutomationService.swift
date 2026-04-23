@@ -63,9 +63,9 @@ final class GUIAutomationService {
                 return service?.handlePaneSendKey(ref: ref, input: input)
                     ?? .failure(.internal("GUIAutomationService deallocated"))
             },
-            handlePaneNotify: { [weak self] ref, title, body, noSystemNotification in
+            handlePaneNotify: { [weak self] ref, title, body, noNotifyIfVisible in
                 let service = self
-                return service?.handlePaneNotify(ref: ref, title: title, body: body, noSystemNotification: noSystemNotification)
+                return service?.handlePaneNotify(ref: ref, title: title, body: body, noNotifyIfVisible: noNotifyIfVisible)
                     ?? .failure(.internal("GUIAutomationService deallocated"))
             },
             handleTabCreate: { [weak self] ref, focus, profile, overrides in
@@ -332,11 +332,11 @@ final class GUIAutomationService {
         ref: String,
         title: String,
         body: String?,
-        noSystemNotification: Bool
+        noNotifyIfVisible: Bool
     ) -> Result<Void, AutomationError> {
         Self.runOnMain {
             GUIAutomationPolicy.withAutomationRequest(command: .paneNotify) {
-                self.notifyOnMain(ref: ref, title: title, body: body, noSystemNotification: noSystemNotification)
+                self.notifyOnMain(ref: ref, title: title, body: body, noNotifyIfVisible: noNotifyIfVisible)
             }
         }
     }
@@ -876,7 +876,7 @@ final class GUIAutomationService {
         }
     }
 
-    private func notifyOnMain(ref: String, title: String, body: String?, noSystemNotification: Bool = false) -> Result<Void, AutomationError> {
+    private func notifyOnMain(ref: String, title: String, body: String?, noNotifyIfVisible: Bool = false) -> Result<Void, AutomationError> {
         // Resolve the pane to get source info and paneID for the notification
         let (paneID, sessionID, tabID, source): (UUID, UUID, UUID, String)
         switch resolvePaneSourceInfo(ref: ref) {
@@ -890,10 +890,10 @@ final class GUIAutomationService {
             return .failure(err)
         }
 
-        // When --no-system-notification is set, skip the macOS notification
+        // When --no-notify-if-visible is set, skip the macOS notification
         // if the target pane's tab is currently visible.
         let shouldSendSystemNotification: Bool
-        if noSystemNotification {
+        if noNotifyIfVisible {
             let isTabVisible = SessionManagerRegistry.shared.allManagers.contains { $0.activeTabIDs.contains(tabID) }
             shouldSendSystemNotification = !isTabVisible
         } else {

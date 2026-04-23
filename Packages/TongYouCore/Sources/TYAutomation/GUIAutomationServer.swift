@@ -60,7 +60,7 @@ public final class GUIAutomationServer: @unchecked Sendable {
         public let handlePaneSendKey: (@Sendable (String, KeyEncoder.KeyInput) -> Result<Void, AutomationError>)?
         /// Displays a system notification from the pane resolved from `ref`.
         /// Not focus-whitelisted — must not activate the window.
-        /// The fourth parameter is `noSystemNotification`: when true, the
+        /// The fourth parameter is `noNotifyIfVisible`: when true, the
         /// implementation should skip the macOS notification if the target
         /// pane's tab is currently visible.
         public let handlePaneNotify: (@Sendable (String, String, String?, Bool) -> Result<Void, AutomationError>)?
@@ -609,8 +609,8 @@ public final class GUIAutomationServer: @unchecked Sendable {
             return .error(code: "INVALID_PARAMS", message: "`title` is required")
         }
         let body = request.params["body"] as? String
-        let noSystemNotification = request.params["noSystemNotification"] as? Bool ?? false
-        switch handler(ref, title, body, noSystemNotification) {
+        let noNotifyIfVisible = request.params["noNotifyIfVisible"] as? Bool ?? false
+        switch handler(ref, title, body, noNotifyIfVisible) {
         case .success:
             return .success(.null)
         case .failure(let error):
