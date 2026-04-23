@@ -1603,3 +1603,260 @@ struct GUIAutomationPathsTests {
         #expect(removed.isEmpty)
     }
 }
+
+// MARK: - SSH Commands
+
+extension GUIAutomationServerTests {
+
+    @Test func sshListReturnsEmptyWhenNotWired() throws {
+        let (config, tmpDir) = Self.isolatedConfig()
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        let server = GUIAutomationServer(configuration: config)
+        try server.start()
+        defer { server.stop() }
+
+        let token = try GUIAutomationAuth.read(tokenPath: config.tokenPath)!
+        let socket = try TYSocket.connect(path: config.socketPath)
+        defer { socket.closeSocket() }
+
+        // Handshake
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        _ = try Self.readLine(socket)
+
+        // Request list
+        try Self.sendLine(socket, #"{"cmd":"ssh.list"}"#)
+        let response = try Self.readLine(socket)!
+
+        #expect(response.contains(#""candidates":[]"#))
+    }
+
+    @Test func sshListReturnsCandidatesWhenWired() throws {
+        let (config, tmpDir) = Self.isolatedConfig()
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        let expectedCandidates = [
+            GUIAutomationServer.SSHListCandidate(target: "host1", hostname: "host1.internal"),
+            GUIAutomationServer.SSHListCandidate(target: "host2", hostname: nil)
+        ]
+
+        var configWithHandler = config
+        configWithHandler = GUIAutomationServer.Configuration(
+            socketPath: config.socketPath,
+            tokenPath: config.tokenPath,
+            allowedPeerUID: config.allowedPeerUID,
+            handleSSHList: {
+                .success(GUIAutomationServer.SSHListResponse(candidates: expectedCandidates))
+            }
+        )
+
+        let server = GUIAutomationServer(configuration: configWithHandler)
+        try server.start()
+        defer { server.stop() }
+
+        let token = try GUIAutomationAuth.read(tokenPath: config.tokenPath)!
+        let socket = try TYSocket.connect(path: config.socketPath)
+        defer { socket.closeSocket() }
+
+        // Handshake
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        _ = try Self.readLine(socket)
+
+        // Request list
+        try Self.sendLine(socket, #"{"cmd":"ssh.list"}"#)
+        let response = try Self.readLine(socket)!
+
+        #expect(response.contains(#""target":"host1""#))
+        #expect(response.contains(#""target":"host2""#))
+    }
+
+    @Test func sshSearchRequiresNonEmptyQueries() throws {
+        let (config, tmpDir) = Self.isolatedConfig()
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        var configWithHandler = config
+        configWithHandler = GUIAutomationServer.Configuration(
+            socketPath: config.socketPath,
+            tokenPath: config.tokenPath,
+            allowedPeerUID: config.allowedPeerUID,
+            handleSSHSearch: { queries, profile in
+                if queries.isEmpty {
+                    return .failure(.invalidParams("queries must be non-empty"))
+                }
+                return .success(GUIAutomationServer.SSHSearchResponse(matches: []))
+            }
+        )
+
+        let server = GUIAutomationServer(configuration: configWithHandler)
+        try server.start()
+        defer { server.stop() }
+
+        let token = GUIAutomationAuth.read(tokenPath: config.tokenPath)!
+        let socket = try TYSocket.connect(path: config.socketPath)
+        defer { socket.closeSocket() }
+
+        // Handshake
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        _ = try Self.readLine(socket)
+
+        // Request search with empty queries
+        try Self.sendLine(socket, #"{"cmd":"ssh.search","queries":[]}"#)
+        let response = try Self.readLine(socket)!
+
+        #expect(response.contains(#""ok":false"#))
+    }
+
+    @Test func sshSearchReturnsMatches() throws {
+        let (config, tmpDir) = Self.isolatedConfig()
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        let expectedMatches = [
+            GUIAutomationServer.SSHSearchMatch(target: "host1", template: "ssh", variables: ["CMDPLT_SSH_HOST": "host1"])
+        ]
+
+        var configWithHandler = config
+        configWithHandler = GUIAutomationServer.Configuration(
+            socketPath: config.socketPath,
+            tokenPath: config.tokenPath,
+            allowedPeerUID: config.allowedPeerUID,
+            handleSSHSearch: { queries, profile in
+                .success(GUIAutomationServer.SSHSearchResponse(matches: expectedMatches))
+            }
+        )
+
+        let server = GUIAutomationServer(configuration: configWithHandler)
+        try server.start()
+        defer { server.stop() }
+
+        let token = try GUIAutomationAuth.read(tokenPath: config.tokenPath)!
+        let socket = try TYSocket.connect(path: config.socketPath)
+        defer { socket.closeSocket() }
+
+        // Handshake
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        _ = try Self.readLine(socket)
+
+        // Request search
+        try Self.sendLine(socket, #"{"cmd":"ssh.search","queries":["host*"]}"#)
+        let response = try Self.readLine(socket)!
+
+        #expect(response.contains(#""target":"host1""#))
+        #expect(response.contains(#""ok":true"#))
+    }
+
+    @Test func sshBatchRequiresNonEmptyTargets() throws {
+        let (config, tmpDir) = Self.isolatedConfig()
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        var configWithHandler = config
+        configWithHandler = GUIAutomationServer.Configuration(
+            socketPath: config.socketPath,
+            tokenPath: config.tokenPath,
+            allowedPeerUID: config.allowedPeerUID,
+            handleSSHBatch: { targets, profile, overrides in
+                if targets.isEmpty {
+                    return .failure(.invalidParams("targets must be non-empty"))
+                }
+                return .success(GUIAutomationServer.SSHBatchResponse(tabRef: "s1/t0", paneCount: 0))
+            }
+        )
+
+        let server = GUIAutomationServer(configuration: configWithHandler)
+        try server.start()
+        defer { server.stop() }
+
+        let token = GUIAutomationAuth.read(tokenPath: config.tokenPath)!
+        let socket = try TYSocket.connect(path: config.socketPath)
+        defer { socket.closeSocket() }
+
+        // Handshake
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        _ = try Self.readLine(socket)
+
+        // Request batch with empty targets
+        try Self.sendLine(socket, #"{"cmd":"ssh.batch","targets":[]}"#)
+        let response = try Self.readLine(socket)!
+
+        #expect(response.contains(#""ok":false"#))
+    }
+
+    @Test func sshBatchReturnsResult() throws {
+        let (config, tmpDir) = Self.isolatedConfig()
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        let expectedResponse = GUIAutomationServer.SSHBatchResponse(tabRef: "s1/t0", paneCount: 2)
+
+        var configWithHandler = config
+        configWithHandler = GUIAutomationServer.Configuration(
+            socketPath: config.socketPath,
+            tokenPath: config.tokenPath,
+            allowedPeerUID: config.allowedPeerUID,
+            handleSSHBatch: { targets, profile, overrides in
+                .success(expectedResponse)
+            }
+        )
+
+        let server = GUIAutomationServer(configuration: configWithHandler)
+        try server.start()
+        defer { server.stop() }
+
+        let token = try GUIAutomationAuth.read(tokenPath: config.tokenPath)!
+        let socket = try TYSocket.connect(path: config.socketPath)
+        defer { socket.closeSocket() }
+
+        // Handshake
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        _ = try Self.readLine(socket)
+
+        // Request batch
+        try Self.sendLine(socket, #"{"cmd":"ssh.batch","targets":["host1","host2"]}"#)
+        let response = try Self.readLine(socket)!
+
+        #expect(response.contains(#""tabRef"#))
+        #expect(response.contains("s1"))
+        #expect(response.contains(#""paneCount":2"#))
+        #expect(response.contains(#""ok":true"#))
+    }
+
+    @Test func sshBatchPassesProfileAndOverrides() throws {
+        let (config, tmpDir) = Self.isolatedConfig()
+        defer { try? FileManager.default.removeItem(atPath: tmpDir) }
+
+        final class CapturedValues: @unchecked Sendable {
+            var profile: String?
+            var overrides: [String]?
+        }
+        let captured = CapturedValues()
+
+        var configWithHandler = config
+        configWithHandler = GUIAutomationServer.Configuration(
+            socketPath: config.socketPath,
+            tokenPath: config.tokenPath,
+            allowedPeerUID: config.allowedPeerUID,
+            handleSSHBatch: { targets, profile, overrides in
+                captured.profile = profile
+                captured.overrides = overrides
+                return .success(GUIAutomationServer.SSHBatchResponse(tabRef: "s1/t0", paneCount: 1))
+            }
+        )
+
+        let server = GUIAutomationServer(configuration: configWithHandler)
+        try server.start()
+        defer { server.stop() }
+
+        let token = GUIAutomationAuth.read(tokenPath: config.tokenPath)!
+        let socket = try TYSocket.connect(path: config.socketPath)
+        defer { socket.closeSocket() }
+
+        // Handshake
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        _ = try Self.readLine(socket)
+
+        // Request batch with profile and overrides
+        try Self.sendLine(socket, #"{"cmd":"ssh.batch","targets":["host1"],"profile":"ssh-prod","overrides":["VAR=value"]}"#)
+        _ = try Self.readLine(socket)!
+
+        #expect(captured.profile == "ssh-prod")
+        #expect(captured.overrides == ["VAR=value"])
+    }
+}

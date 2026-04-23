@@ -13,6 +13,56 @@ public enum AppControlError: Error {
     case serverError(code: String, message: String)
 }
 
+// MARK: - SSH Response Types
+
+public struct SSHListCandidate: Codable {
+    public let target: String
+    public let hostname: String?
+}
+
+public struct SSHListResponse: Codable {
+    public let candidates: [SSHListCandidate]
+
+    public func jsonString() -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        guard let data = try? encoder.encode(self),
+              let s = String(data: data, encoding: .utf8) else { return "{}" }
+        return s
+    }
+}
+
+public struct SSHSearchMatch: Codable {
+    public let target: String
+    public let template: String
+    public let variables: [String: String]
+}
+
+public struct SSHSearchResponse: Codable {
+    public let matches: [SSHSearchMatch]
+
+    public func jsonString() -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        guard let data = try? encoder.encode(self),
+              let s = String(data: data, encoding: .utf8) else { return "{}" }
+        return s
+    }
+}
+
+public struct SSHBatchResponse: Codable {
+    public let tabRef: String
+    public let paneCount: Int
+
+    public func jsonString() -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        guard let data = try? encoder.encode(self),
+              let s = String(data: data, encoding: .utf8) else { return "{}" }
+        return s
+    }
+}
+
 /// Client for the GUI automation socket.
 ///
 /// Phase 1 surface: `ping()` and an extension seam for future commands.
@@ -404,6 +454,67 @@ public final class AppControlClient {
     public func focusWindow() throws {
         let response = try sendCommand("window.focus")
         if case .error(let code, let message) = response {
+            throw AppControlError.serverError(code: code, message: message)
+        }
+    }
+
+    // MARK: - SSH Commands
+
+    /// Send `ssh.list` and return the list of available SSH servers.
+    public func sshList() throws -> SSHListResponse {
+        let response = try sendCommand("ssh.list")
+        switch response {
+        case .success(let value):
+            guard case .raw(let data) = value else {
+                throw AppControlError.invalidResponse(raw: "expected object result for ssh.list")
+            }
+            do {
+                return try JSONDecoder().decode(SSHListResponse.self, from: data)
+            } catch {
+                throw AppControlError.invalidResponse(raw: String(data: data, encoding: .utf8) ?? "")
+            }
+        case .error(let code, let message):
+            throw AppControlError.serverError(code: code, message: message)
+        }
+    }
+
+    /// Send `ssh.search` with queries and optional profile override.
+    public func sshSearch(queries: [String], profile: String?) throws -> SSHSearchResponse {
+        var params: [String: Any] = ["queries": queries]
+        if let profile { params["profile"] = profile }
+        let response = try sendCommand("ssh.search", params: params)
+        switch response {
+        case .success(let value):
+            guard case .raw(let data) = value else {
+                throw AppControlError.invalidResponse(raw: "expected object result for ssh.search")
+            }
+            do {
+                return try JSONDecoder().decode(SSHSearchResponse.self, from: data)
+            } catch {
+                throw AppControlError.invalidResponse(raw: String(data: data, encoding: .utf8) ?? "")
+            }
+        case .error(let code, let message):
+            throw AppControlError.serverError(code: code, message: message)
+        }
+    }
+
+    /// Send `ssh.batch` to open SSH connections for the given targets.
+    public func sshBatch(targets: [String], profile: String?, overrides: [String]?) throws -> SSHBatchResponse {
+        var params: [String: Any] = ["targets": targets]
+        if let profile { params["profile"] = profile }
+        if let overrides, !overrides.isEmpty { params["overrides"] = overrides }
+        let response = try sendCommand("ssh.batch", params: params)
+        switch response {
+        case .success(let value):
+            guard case .raw(let data) = value else {
+                throw AppControlError.invalidResponse(raw: "expected object result for ssh.batch")
+            }
+            do {
+                return try JSONDecoder().decode(SSHBatchResponse.self, from: data)
+            } catch {
+                throw AppControlError.invalidResponse(raw: String(data: data, encoding: .utf8) ?? "")
+            }
+        case .error(let code, let message):
             throw AppControlError.serverError(code: code, message: message)
         }
     }

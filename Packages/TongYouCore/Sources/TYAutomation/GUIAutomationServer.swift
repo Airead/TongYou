@@ -110,6 +110,12 @@ public final class GUIAutomationServer: @unchecked Sendable {
         /// Brings the GUI to the foreground without mutating focus.
         /// Focus-whitelisted.
         public let handleWindowFocus: (@Sendable () -> Result<Void, AutomationError>)?
+        /// Lists available SSH servers from ssh_config (no history).
+        public let handleSSHList: (@Sendable () -> Result<SSHListResponse, AutomationError>)?
+        /// Searches SSH servers with glob queries (no history).
+        public let handleSSHSearch: (@Sendable ([String], String?) -> Result<SSHSearchResponse, AutomationError>)?
+        /// Opens SSH connections for the given targets (no history).
+        public let handleSSHBatch: (@Sendable ([String], String?, [String]?) -> Result<SSHBatchResponse, AutomationError>)?
 
         public init(
             socketPath: String = GUIAutomationPaths.socketPath(),
@@ -134,7 +140,10 @@ public final class GUIAutomationServer: @unchecked Sendable {
             handleFloatPaneClose: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
             handleFloatPanePin: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
             handleFloatPaneMove: (@Sendable (String, FloatPaneFrame) -> Result<Void, AutomationError>)? = nil,
-            handleWindowFocus: (@Sendable () -> Result<Void, AutomationError>)? = nil
+            handleWindowFocus: (@Sendable () -> Result<Void, AutomationError>)? = nil,
+            handleSSHList: (@Sendable () -> Result<SSHListResponse, AutomationError>)? = nil,
+            handleSSHSearch: (@Sendable ([String], String?) -> Result<SSHSearchResponse, AutomationError>)? = nil,
+            handleSSHBatch: (@Sendable ([String], String?, [String]?) -> Result<SSHBatchResponse, AutomationError>)? = nil
         ) {
             self.socketPath = socketPath
             self.tokenPath = tokenPath
@@ -159,6 +168,9 @@ public final class GUIAutomationServer: @unchecked Sendable {
             self.handleFloatPanePin = handleFloatPanePin
             self.handleFloatPaneMove = handleFloatPaneMove
             self.handleWindowFocus = handleWindowFocus
+            self.handleSSHList = handleSSHList
+            self.handleSSHSearch = handleSSHSearch
+            self.handleSSHBatch = handleSSHBatch
         }
     }
 
@@ -413,6 +425,12 @@ public final class GUIAutomationServer: @unchecked Sendable {
             return handleFloatPaneMoveCommand(request: request, config: config)
         case "window.focus":
             return handleWindowFocusCommand(config: config)
+        case "ssh.list":
+            return handleSSHListCommand(config: config)
+        case "ssh.search":
+            return handleSSHSearchCommand(request: request, config: config)
+        case "ssh.batch":
+            return handleSSHBatchCommand(request: request, config: config)
         default:
             return .error(code: "UNKNOWN_COMMAND", message: "unknown command: \(request.cmd)")
         }
@@ -978,6 +996,114 @@ public final class GUIAutomationServer: @unchecked Sendable {
     private enum JSONResponse {
         case success(JSONValue)
         case error(code: String, message: String)
+    }
+
+    // MARK: - SSH Response Types
+
+    public struct SSHListCandidate: Codable, Sendable {
+        public let target: String
+        public let hostname: String?
+
+        public init(target: String, hostname: String?) {
+            self.target = target
+            self.hostname = hostname
+        }
+    }
+
+    public struct SSHListResponse: Codable, Sendable {
+        public let candidates: [SSHListCandidate]
+        
+        public init(candidates: [SSHListCandidate]) {
+            self.candidates = candidates
+        }
+    }
+
+    public struct SSHSearchMatch: Codable, Sendable {
+        public let target: String
+        public let template: String
+        public let variables: [String: String]
+        
+        public init(target: String, template: String, variables: [String: String]) {
+            self.target = target
+            self.template = template
+            self.variables = variables
+        }
+    }
+
+    public struct SSHSearchResponse: Codable, Sendable {
+        public let matches: [SSHSearchMatch]
+        
+        public init(matches: [SSHSearchMatch]) {
+            self.matches = matches
+        }
+    }
+
+    public struct SSHBatchResponse: Codable, Sendable {
+        public let tabRef: String
+        public let paneCount: Int
+        
+        public init(tabRef: String, paneCount: Int) {
+            self.tabRef = tabRef
+            self.paneCount = paneCount
+        }
+    }
+
+    // MARK: - SSH Command Handlers
+
+    private static func handleSSHListCommand(config: Configuration) -> JSONResponse {
+        guard let handler = config.handleSSHList else {
+            return .success(rawJSON(#"{"candidates":[]}"#))
+        }
+        switch handler() {
+        case .success(let response):
+            return encodeCodableResult(response)
+        case .failure(let error):
+            return .error(code: error.code, message: error.message)
+        }
+    }
+
+    private static func handleSSHSearchCommand(
+        request: ParsedRequest,
+        config: Configuration
+    ) -> JSONResponse {
+        guard let handler = config.handleSSHSearch else {
+            return .error(code: "INTERNAL_ERROR", message: "ssh.search not wired")
+        }
+        guard let queries = request.params["queries"] as? [String], !queries.isEmpty else {
+            return .error(code: "INVALID_PARAMS", message: "`queries` must be a non-empty array")
+        }
+        let profile = request.params["profile"] as? String
+        switch handler(queries, profile) {
+        case .success(let response):
+            return encodeCodableResult(response)
+        case .failure(let error):
+            return .error(code: error.code, message: error.message)
+        }
+    }
+
+    private static func handleSSHBatchCommand(
+        request: ParsedRequest,
+        config: Configuration
+    ) -> JSONResponse {
+        guard let handler = config.handleSSHBatch else {
+            return .error(code: "INTERNAL_ERROR", message: "ssh.batch not wired")
+        }
+        guard let targets = request.params["targets"] as? [String], !targets.isEmpty else {
+            return .error(code: "INVALID_PARAMS", message: "`targets` must be a non-empty array")
+        }
+        let profile = request.params["profile"] as? String
+        let overrides: [String]?
+        if let ov = request.params["overrides"] as? [String], !ov.isEmpty {
+            overrides = ov
+        } else {
+            overrides = nil
+        }
+        switch handler(targets, profile, overrides) {
+        case .success(let response):
+            return encodeCodableResult(response)
+        case .failure(let error):
+            return .error(code: error.code, message: error.message)
+        }
     }
 
     /// Minimal JSON value used for response payloads.

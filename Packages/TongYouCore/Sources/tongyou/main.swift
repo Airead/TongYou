@@ -41,6 +41,7 @@ enum Command {
     case appFloatPanePin(ref: String, json: Bool)
     case appFloatPaneMove(ref: String, x: Double, y: Double, width: Double, height: Double, json: Bool)
     case appWindowFocus(json: Bool)
+    case appSSH(targets: [String], open: Bool, profile: String?, overrides: [String], json: Bool)
 
     case help
 }
@@ -172,6 +173,8 @@ func parseAppArgs(_ args: [String]) -> Command {
         return parseAppFloatPane(rest, json: json)
     case "window-focus":
         return .appWindowFocus(json: json)
+    case "ssh":
+        return parseAppSSH(rest, json: json)
     case "--help", "-h", "help":
         printAppUsage()
         exit(0)
@@ -464,6 +467,71 @@ func parseAppResizePane(_ args: [String], json: Bool) -> Command {
     return .appResizePane(ref: ref, ratio: ratio, json: json)
 }
 
+func parseAppSSH(_ args: [String], json: Bool) -> Command {
+    var targets: [String] = []
+    var open = false
+    var profile: String?
+    var overrides: [String] = []
+    var i = 0
+    while i < args.count {
+        let arg = args[i]
+        if arg == "--list" || arg == "-l" {
+            return .appSSH(targets: ["--list"], open: false, profile: nil, overrides: [], json: json)
+        } else if arg == "--open" || arg == "-o" {
+            open = true
+            i += 1
+        } else if arg == "--profile" || arg == "-p" {
+            if i + 1 < args.count {
+                profile = args[i + 1]
+                i += 2
+            } else {
+                fputs("tongyou: app ssh: --profile requires a value\n", stderr)
+                exit(1)
+            }
+        } else if arg == "--set" {
+            if i + 1 < args.count {
+                overrides.append(args[i + 1])
+                i += 2
+            } else {
+                fputs("tongyou: app ssh: --set expects key=value\n", stderr)
+                exit(1)
+            }
+        } else if arg == "--help" || arg == "-h" {
+            printAppSSHUsage()
+            exit(0)
+        } else if arg.hasPrefix("-") {
+            fputs("tongyou: app ssh: unknown option '\(arg)'\n", stderr)
+            exit(1)
+        } else {
+            targets.append(arg)
+            i += 1
+        }
+    }
+    return .appSSH(targets: targets, open: open, profile: profile, overrides: overrides, json: json)
+}
+
+func printAppSSHUsage() {
+    let usage = """
+    Usage: tongyou app ssh [OPTIONS] [<target>...]
+
+    List, search, or open SSH connections via the GUI.
+
+    Options:
+      --list, -l                    List all available SSH servers (from ssh_config)
+      --open, -o                    Open the matched SSH servers in the GUI
+      --profile <name>              Force a specific SSH profile
+      --set key=value               Pass variable overrides (repeatable)
+      --help, -h                    Show this help message
+
+    Examples:
+      tongyou app ssh --list
+      tongyou app ssh "*btc-node*"
+      tongyou app ssh "*btc-node*" -o
+      tongyou app ssh host1 user@host2 -o --profile ssh-prod
+    """
+    print(usage)
+}
+
 func parseAppCreateArgs(_ args: [String], json: Bool) -> Command {
     var name: String?
     var type: AutomationSessionType = .local
@@ -531,6 +599,11 @@ func printAppUsage() {
       float-pane move <float-ref> --x <v> --y <v> --width <v> --height <v>
                                            Move / resize a floating pane (normalized 0–1 coords).
       window-focus                         Bring the GUI window to the foreground (no focus change).
+      ssh [--list|-l] [<target>...] [--open|-o] [--profile <name>] [--set k=v ...]
+                                           List/search SSH servers or open connections.
+                                           --list shows all servers from ssh_config.
+                                           Without --open, searches and shows matches.
+                                           With --open, creates tabs for the targets.
     """
     print(usage)
 }
@@ -1411,6 +1484,140 @@ case .appFloatPaneMove(let ref, let x, let y, let width, let height, let json):
     appFloatPaneMove(ref: ref, x: x, y: y, width: width, height: height, json: json)
 case .appWindowFocus(let json):
     appWindowFocus(json: json)
+case .appSSH(let targets, let open, let profile, let overrides, let json):
+    appSSH(targets: targets, open: open, profile: profile, overrides: overrides, json: json)
 case .help:
     printUsage()
+}
+
+// MARK: - SSH Commands
+
+func appSSH(targets: [String], open: Bool, profile: String?, overrides: [String], json: Bool) {
+    let client = connectToGUIOrExit()
+    
+    // Handle --list first
+    if targets == ["--list"] {
+        do {
+            let response = try client.sshList()
+            if json {
+                printJSONResult(response.jsonString())
+            } else {
+                if response.candidates.isEmpty {
+                    print("No SSH servers configured in ~/.ssh/config")
+                } else {
+                    print("SSH servers:")
+                    for candidate in response.candidates {
+                        let hostname = candidate.hostname ?? "-"
+                        print("  \(candidate.target)\t\(hostname)")
+                    }
+                }
+            }
+        } catch AppControlError.serverError(let code, let message) {
+            if json {
+                printJSONError(code: code, message: message)
+            } else {
+                fputs("tongyou: GUI returned error: \(code): \(message)\n", stderr)
+            }
+            exit(1)
+        } catch {
+            fputs("tongyou: ssh list failed: \(error)\n", stderr)
+            exit(1)
+        }
+        return
+    }
+    
+    // Validate that we have targets
+    if targets.isEmpty {
+        if json {
+            printJSONError(code: "MISSING_ARGUMENTS", message: "expected target(s) or --list")
+        } else {
+            fputs("tongyou: expected target(s) or --list\n", stderr)
+        }
+        exit(1)
+    }
+    
+    // If not opening, perform search
+    if !open {
+        do {
+            let response = try client.sshSearch(queries: targets, profile: profile)
+            if json {
+                printJSONResult(response.jsonString())
+            } else {
+                if response.matches.isEmpty {
+                    print("No matches found for: \(targets.joined(separator: ", "))")
+                } else {
+                    print("Matching SSH servers:")
+                    for match in response.matches {
+                        print("  \(match.target)\t\(match.template)")
+                    }
+                }
+            }
+        } catch AppControlError.serverError(let code, let message) {
+            if json {
+                printJSONError(code: code, message: message)
+            } else {
+                fputs("tongyou: GUI returned error: \(code): \(message)\n", stderr)
+            }
+            exit(1)
+        } catch {
+            fputs("tongyou: ssh search failed: \(error)\n", stderr)
+            exit(1)
+        }
+        return
+    }
+    
+    // Open mode: check if targets contain glob patterns
+    let hasGlob = targets.contains { target in
+        target.contains(where: { $0 == "*" || $0 == "?" || $0 == "," })
+    }
+    
+    let batchTargets: [String]
+    if hasGlob {
+        // Need to search first to resolve glob patterns
+        do {
+            let searchResponse = try client.sshSearch(queries: targets, profile: profile)
+            if searchResponse.matches.isEmpty {
+                if json {
+                    printJSONError(code: "NO_MATCHES", message: "No SSH servers matched the query: \(targets.joined(separator: ", "))")
+                } else {
+                    fputs("tongyou: No SSH servers matched the query: \(targets.joined(separator: ", "))\n", stderr)
+                }
+                exit(1)
+            }
+            batchTargets = searchResponse.matches.map { $0.target }
+        } catch AppControlError.serverError(let code, let message) {
+            if json {
+                printJSONError(code: code, message: message)
+            } else {
+                fputs("tongyou: GUI returned error: \(code): \(message)\n", stderr)
+            }
+            exit(1)
+        } catch {
+            fputs("tongyou: ssh search failed: \(error)\n", stderr)
+            exit(1)
+        }
+    } else {
+        // Exact targets
+        batchTargets = targets
+    }
+    
+    // Execute batch
+    do {
+        let response = try client.sshBatch(targets: batchTargets, profile: profile, overrides: overrides.isEmpty ? nil : overrides)
+        if json {
+            printJSONResult(response.jsonString())
+        } else {
+            print("Opened \(response.paneCount) SSH connection(s) in tab \(response.tabRef)")
+        }
+    } catch AppControlError.serverError(let code, let message) {
+        if json {
+            printJSONError(code: code, message: message)
+        } else {
+            fputs("tongyou: GUI returned error: \(code): \(message)\n", stderr)
+        }
+        exit(1)
+    } catch {
+        fputs("tongyou: ssh open failed: \(error)\n", stderr)
+        exit(1)
+    }
 }

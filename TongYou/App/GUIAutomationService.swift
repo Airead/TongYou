@@ -134,6 +134,21 @@ final class GUIAutomationService {
                 let service = self
                 return service?.handleWindowFocus()
                     ?? .failure(.internal("GUIAutomationService deallocated"))
+            },
+            handleSSHList: { [weak self] in
+                let service = self
+                return service?.handleSSHList()
+                    ?? .failure(.internal("GUIAutomationService deallocated"))
+            },
+            handleSSHSearch: { [weak self] queries, profile in
+                let service = self
+                return service?.handleSSHSearch(queries: queries, profile: profile)
+                    ?? .failure(.internal("GUIAutomationService deallocated"))
+            },
+            handleSSHBatch: { [weak self] targets, profile, overrides in
+                let service = self
+                return service?.handleSSHBatch(targets: targets, profile: profile, overrides: overrides)
+                    ?? .failure(.internal("GUIAutomationService deallocated"))
             }
         )
         let instance = GUIAutomationServer(configuration: config)
@@ -498,6 +513,180 @@ final class GUIAutomationService {
                 return .success(())
             }
         }
+    }
+
+    // MARK: - SSH Commands
+
+    nonisolated private func handleSSHList() -> Result<GUIAutomationServer.SSHListResponse, AutomationError> {
+        Self.runOnMain {
+            self.buildSSHList()
+        }
+    }
+
+    @MainActor
+    private func buildSSHList() -> Result<GUIAutomationServer.SSHListResponse, AutomationError> {
+        let launcher = createSSHLauncher()
+        Task { @MainActor in
+            await launcher.reload(historyCandidates: [])
+        }
+        let candidates = launcher.candidates
+        let response = GUIAutomationServer.SSHListResponse(
+            candidates: candidates.map { c in
+                GUIAutomationServer.SSHListCandidate(
+                    target: c.target,
+                    hostname: c.hostname
+                )
+            }
+        )
+        return .success(response)
+    }
+
+    nonisolated private func handleSSHSearch(
+        queries: [String],
+        profile: String?
+    ) -> Result<GUIAutomationServer.SSHSearchResponse, AutomationError> {
+        Self.runOnMain {
+            self.searchSSH(queries: queries, profile: profile)
+        }
+    }
+
+    @MainActor
+    private func searchSSH(
+        queries: [String],
+        profile: String?
+    ) -> Result<GUIAutomationServer.SSHSearchResponse, AutomationError> {
+        let launcher = createSSHLauncher()
+        Task { @MainActor in
+            await launcher.reload(historyCandidates: [])
+        }
+
+        // Check if any query contains glob meta characters
+        let hasGlob = queries.contains { $0.contains(where: { SSHGlobMatcher.metaCharacters.contains($0) }) }
+
+        var matchedCandidates: [SSHCandidate]
+        if hasGlob {
+            matchedCandidates = []
+            for query in queries {
+                guard let patterns = SSHGlobMatcher.parse(query) else { continue }
+                for candidate in launcher.candidates {
+                    if SSHGlobMatcher.match(text: candidate.target, patterns: patterns) != nil {
+                        if !matchedCandidates.contains(where: { $0.target == candidate.target }) {
+                            matchedCandidates.append(candidate)
+                        }
+                    }
+                }
+            }
+        } else {
+            // Exact match or ad-hoc
+            matchedCandidates = []
+            for query in queries {
+                if let exact = launcher.candidates.first(where: { $0.target == query }) {
+                    if !matchedCandidates.contains(where: { $0.target == exact.target }) {
+                        matchedCandidates.append(exact)
+                    }
+                }
+            }
+        }
+
+        let matches = matchedCandidates.map { candidate in
+            let resolution = launcher.resolve(candidate: candidate)
+            let template = profile ?? resolution.templateID
+            return GUIAutomationServer.SSHSearchMatch(
+                target: candidate.target,
+                template: template,
+                variables: resolution.variables
+            )
+        }
+
+        return .success(GUIAutomationServer.SSHSearchResponse(matches: matches))
+    }
+
+    nonisolated private func handleSSHBatch(
+        targets: [String],
+        profile: String?,
+        overrides: [String]?
+    ) -> Result<GUIAutomationServer.SSHBatchResponse, AutomationError> {
+        Self.runOnMain {
+            self.batchSSH(targets: targets, profile: profile, overrides: overrides)
+        }
+    }
+
+    @MainActor
+    private func batchSSH(
+        targets: [String],
+        profile: String?,
+        overrides: [String]?
+    ) -> Result<GUIAutomationServer.SSHBatchResponse, AutomationError> {
+        let launcher = createSSHLauncher()
+        Task { @MainActor in
+            await launcher.reload(historyCandidates: [])
+        }
+
+        // Resolve all targets
+        var resolutions: [SSHResolution] = []
+        for target in targets {
+            let candidate: SSHCandidate
+            if let exact = launcher.candidates.first(where: { $0.target == target }) {
+                candidate = exact
+            } else {
+                candidate = SSHCandidate(target: target, hostname: nil, isAdHoc: true)
+            }
+            let resolution = launcher.resolve(candidate: candidate)
+            let finalResolution = SSHResolution(
+                candidate: resolution.candidate,
+                target: resolution.target,
+                templateID: profile ?? resolution.templateID,
+                variables: resolution.variables
+            )
+            resolutions.append(finalResolution)
+        }
+
+        // Validate batch
+        switch launcher.validateBatch(resolutions: resolutions) {
+        case .failure(let failure):
+            return .failure(.invalidParams("\(failure.target): \(failure.error.localizedDescription ?? "unknown error")"))
+        case .success(let resolved):
+            let requests = resolved.map { resolution in
+                SessionManager.GridPaneRequest(
+                    profileID: resolution.templateID,
+                    variables: resolution.variables
+                )
+            }
+
+            guard let manager = SessionManagerRegistry.shared.primaryManager else {
+                return .failure(.internal("no SessionManager available"))
+            }
+
+            guard let tabID = manager.createTabWithGridPanes(requests: requests) else {
+                return .failure(.internal("failed to create tab with grid panes"))
+            }
+
+            // Build ref for the new tab
+            let snapshots = Self.collectSnapshots()
+            refStore.refreshRefs(snapshots: snapshots)
+            guard let tabRef = refStore.tabRef(sessionID: manager.activeSession?.id ?? tabID, tabID: tabID) else {
+                return .failure(.internal("ref allocation failed for new tab"))
+            }
+
+            // Do NOT record history
+
+            return .success(GUIAutomationServer.SSHBatchResponse(
+                tabRef: tabRef,
+                paneCount: requests.count
+            ))
+        }
+    }
+
+    @MainActor
+    private func createSSHLauncher() -> SSHLauncher {
+        SSHLauncher(
+            validateProfile: { [weak self] id, variables in
+                guard let self else { return }
+                guard let manager = SessionManagerRegistry.shared.primaryManager else { return }
+                _ = Self.validateProfile(manager: manager, id: id, overrides: [])
+            },
+            spawn: { _, _, _ in nil }
+        )
     }
 
     // MARK: - MainActor operations
