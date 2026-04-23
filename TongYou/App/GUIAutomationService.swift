@@ -877,10 +877,12 @@ final class GUIAutomationService {
 
     private func notifyOnMain(ref: String, title: String, body: String?) -> Result<Void, AutomationError> {
         // Resolve the pane to get source info and paneID for the notification
-        let (paneID, source): (UUID, String)
+        let (paneID, sessionID, tabID, source): (UUID, UUID, UUID, String)
         switch resolvePaneSourceInfo(ref: ref) {
-        case .success((let resolvedPaneID, let sourceInfo)):
+        case .success((let resolvedPaneID, let resolvedSessionID, let resolvedTabID, let sourceInfo)):
             paneID = resolvedPaneID
+            sessionID = resolvedSessionID
+            tabID = resolvedTabID
             source = sourceInfo
         case .failure(let err):
             // If resolution fails completely, we can't even send a notification
@@ -894,12 +896,22 @@ final class GUIAutomationService {
             title: displayTitle,
             body: body ?? title
         )
+
+        // Also record in-app notification history
+        NotificationStore.shared.add(
+            sessionID: sessionID,
+            tabID: tabID,
+            paneID: paneID,
+            title: title,
+            body: body ?? title
+        )
+
         return .success(())
     }
 
-    /// Resolves a pane ref to its paneID and source info (session name › tab name).
-    /// Returns (paneID, "Session › Tab") or fails if pane cannot be resolved.
-    private func resolvePaneSourceInfo(ref: String) -> Result<(UUID, String), AutomationError> {
+    /// Resolves a pane ref to its paneID, sessionID, tabID and source info (session name › tab name).
+    /// Returns (paneID, sessionID, tabID, "Session › Tab") or fails if pane cannot be resolved.
+    private func resolvePaneSourceInfo(ref: String) -> Result<(UUID, UUID, UUID, String), AutomationError> {
         let snapshots = Self.collectSnapshots()
         refStore.refreshRefs(snapshots: snapshots)
 
@@ -913,7 +925,7 @@ final class GUIAutomationService {
                               manager.controller(for: paneID) != nil else {
                             continue
                         }
-                        return .success((paneID, "\(session.name) › \(tab.title)"))
+                        return .success((paneID, session.id, tab.id, "\(session.name) › \(tab.title)"))
                     }
                 }
             }
@@ -935,19 +947,28 @@ final class GUIAutomationService {
         }
 
         let paneID: UUID
+        let tabID: UUID
         if let explicit = target.paneID ?? target.floatID {
             paneID = explicit
+            if let tID = target.tabID {
+                tabID = tID
+            } else if let foundTab = session.tabs.first(where: { $0.hasPane(id: paneID) }) {
+                tabID = foundTab.id
+            } else {
+                return .failure(.paneNotFound(ref))
+            }
         } else {
             // Session- or tab-level ref: resolve to the focused pane, fallback first tree pane
             let tab: TerminalTab?
-            if let tabID = target.tabID {
-                tab = session.tabs.first(where: { $0.id == tabID })
+            if let tID = target.tabID {
+                tab = session.tabs.first(where: { $0.id == tID })
             } else {
                 tab = session.activeTab
             }
             guard let resolvedTab = tab else {
                 return .failure(.paneNotFound(ref))
             }
+            tabID = resolvedTab.id
             if let focused = resolvedTab.focusedPaneID, resolvedTab.hasPane(id: focused) {
                 paneID = focused
             } else {
@@ -961,16 +982,15 @@ final class GUIAutomationService {
         }
 
         let tabName: String
-        if let tabID = target.tabID,
-           let tab = session.tabs.first(where: { $0.id == tabID }) {
-            tabName = tab.title
+        if let foundTab = session.tabs.first(where: { $0.id == tabID }) {
+            tabName = foundTab.title
         } else if let activeTab = session.activeTab {
             tabName = activeTab.title
         } else {
             tabName = "Tab"
         }
 
-        return .success((paneID, "\(session.name) › \(tabName)"))
+        return .success((paneID, session.id, tabID, "\(session.name) › \(tabName)"))
     }
 
     // MARK: - Phase 5 main-actor operations
