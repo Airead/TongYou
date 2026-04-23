@@ -894,7 +894,16 @@ final class GUIAutomationService {
         // if the target pane's tab is currently visible.
         let shouldSendSystemNotification: Bool
         if noNotifyIfVisible {
-            let isTabVisible = SessionManagerRegistry.shared.allManagers.contains { $0.activeTabIDs.contains(tabID) }
+            let isTabVisible = SessionManagerRegistry.shared.allManagers.contains { manager in
+                // Check if this tab is the active tab of the active session
+                if let activeSession = manager.activeSession,
+                   let activeTab = activeSession.activeTab,
+                   activeTab.id == tabID {
+                    return true
+                }
+                // Check if this tab is in the active tabs set (background activity)
+                return manager.activeTabIDs.contains(tabID)
+            }
             shouldSendSystemNotification = !isTabVisible
         } else {
             shouldSendSystemNotification = true
