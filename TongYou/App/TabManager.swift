@@ -17,6 +17,7 @@ enum TabAction: Equatable {
     case nextTab
     case gotoTab(Int)  // 1-based index
     // Pane management
+    case newPane
     case splitVertical
     case splitHorizontal
     case closePane
@@ -326,7 +327,7 @@ final class TabManager {
         case .newSession, .closeSession, .previousSession, .nextSession, .toggleSidebar:
             // Session actions are handled by SessionManager / TerminalWindowView.
             return false
-        case .splitVertical, .splitHorizontal, .closePane,
+        case .splitVertical, .splitHorizontal, .newPane, .closePane,
              .focusPane, .movePane, .paneExited, .growPane, .shrinkPane, .toggleZoom,
              .changeStrategy, .cycleStrategy,
              .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane,

@@ -1819,7 +1819,7 @@ final class SessionManager {
         case .closeSession, .previousSession, .nextSession, .toggleSidebar:
             // Session-level actions are handled by TerminalWindowView.
             return false
-        case .splitVertical, .splitHorizontal, .closePane,
+        case .splitVertical, .splitHorizontal, .newPane, .closePane,
              .focusPane, .movePane, .paneExited, .growPane, .shrinkPane, .toggleZoom,
              .changeStrategy, .cycleStrategy,
              .newFloatingPane, .closeFloatingPane, .toggleOrCreateFloatingPane,

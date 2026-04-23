@@ -1024,6 +1024,44 @@ struct TerminalWindowView: View {
         forceClosePane(id: focusedID)
     }
 
+    /// Add a new pane following the current layout strategy of the focused
+    /// pane's parent container. For grid / master-stack / fibonacci layouts
+    /// the tab is re-flattened after the split so the new pane lands in the
+    /// correct position.
+    private func addNewPane() {
+        guard let focusedID = focusManager.focusedPaneID,
+              let activeTab = sessionManager.activeTab else { return }
+
+        let cwd = viewStore.view(for: focusedID)?.currentWorkingDirectory
+
+        let parentStrategy: LayoutStrategyKind
+        if let container = LayoutEngine.parentContainer(tree: activeTab.paneTree, paneID: focusedID) {
+            parentStrategy = container.strategy
+        } else {
+            parentStrategy = .vertical
+        }
+
+        let needsFlatten: [LayoutStrategyKind] = [.grid, .masterStack, .fibonacci]
+        if needsFlatten.contains(parentStrategy) {
+            guard let newPaneID = sessionManager.splitPane(
+                parentPaneID: focusedID,
+                direction: .vertical,
+                initialWorkingDirectory: cwd
+            ) else { return }
+            _ = sessionManager.changeStrategy(paneID: newPaneID, newKind: parentStrategy)
+            focusManager.focusPane(id: newPaneID)
+            return
+        }
+
+        let direction: SplitDirection = (parentStrategy == .horizontal) ? .horizontal : .vertical
+        guard let newPaneID = sessionManager.splitPane(
+            parentPaneID: focusedID,
+            direction: direction,
+            initialWorkingDirectory: cwd
+        ) else { return }
+        focusManager.focusPane(id: newPaneID)
+    }
+
     /// Resize the focused pane. Works for both tree panes (adjusts split ratio)
     /// and floating panes (scales frame around center).
     private func resizePane(delta: CGFloat) {
@@ -1260,6 +1298,8 @@ struct TerminalWindowView: View {
             splitPane(direction: .vertical)
         case .splitHorizontal:
             splitPane(direction: .horizontal)
+        case .newPane:
+            addNewPane()
         case .closePane:
             closePane()
         case .focusPane(let direction):

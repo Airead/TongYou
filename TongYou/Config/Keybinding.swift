@@ -174,6 +174,8 @@ struct Keybinding: Equatable {
         // Pane layout strategy (plan §P4.5)
         case changeStrategy(LayoutStrategyKind)
         case cycleStrategy(forward: Bool)
+        // Pane management
+        case newPane
         // Floating pane management
         case newFloatingPane
         case toggleOrCreateFloatingPane
@@ -244,6 +246,7 @@ struct Keybinding: Equatable {
                 "change_strategy_\(Self.strategyToken(for: kind))"
             case .cycleStrategy(let forward):
                 forward ? "cycle_strategy_next" : "cycle_strategy_previous"
+            case .newPane: "new_pane"
             case .newFloatingPane: "new_floating_pane"
             case .toggleOrCreateFloatingPane: "toggle_or_create_floating_pane"
             case .listRemoteSessions: "list_remote_sessions"
@@ -367,6 +370,7 @@ struct Keybinding: Equatable {
             case .toggleZoom: .toggleZoom
             case .changeStrategy(let kind): .changeStrategy(kind)
             case .cycleStrategy(let forward): .cycleStrategy(forward: forward)
+            case .newPane: .newPane
             case .newFloatingPane: .newFloatingPane
             case .toggleOrCreateFloatingPane: .toggleOrCreateFloatingPane
             case .listRemoteSessions: .listRemoteSessions
@@ -434,6 +438,7 @@ struct Keybinding: Equatable {
                 return "Layout: \(Self.strategyToken(for: kind).replacingOccurrences(of: "_", with: " "))"
             case .cycleStrategy(let forward):
                 return forward ? "Next layout" : "Previous layout"
+            case .newPane: return "New pane"
             case .newFloatingPane: return "New floating pane"
             case .toggleOrCreateFloatingPane: return "Toggle floating pane"
             case .listRemoteSessions: return "List remote sessions"
@@ -487,6 +492,7 @@ struct Keybinding: Equatable {
             case "toggle_zoom": self = .toggleZoom
             case "cycle_strategy_next": self = .cycleStrategy(forward: true)
             case "cycle_strategy_previous": self = .cycleStrategy(forward: false)
+            case "new_pane": self = .newPane
             case "new_floating_pane": self = .newFloatingPane
             case "toggle_or_create_floating_pane": self = .toggleOrCreateFloatingPane
             case "list_remote_sessions": self = .listRemoteSessions
@@ -615,9 +621,10 @@ struct Keybinding: Equatable {
                    action: .cycleStrategy(forward: true)),
         Keybinding(modifiers: .option, key: "[",
                    action: .cycleStrategy(forward: false)),
+        // Pane management
+        Keybinding(modifiers: .option, key: "n", action: .newPane),
         // Floating pane management
         Keybinding(modifiers: .option, key: "f", action: .toggleOrCreateFloatingPane),
-        Keybinding(modifiers: .option, key: "n", action: .newFloatingPane),
         // In-place overlay
         Keybinding(modifiers: .option, key: "m", action: .runInPlace(command: "lazygit", arguments: [])),
         // Remote session management

@@ -128,7 +128,7 @@ daemon-auto-exit-on-no-sessions = false
 #   new_tab, close_tab, previous_tab, next_tab, goto_tab:1..9,
 #   copy, paste, search, search_next, search_previous,
 #   reset_font_size, increase_font_size, decrease_font_size,
-#   split_vertical, split_horizontal, close_pane,
+#   split_vertical, split_horizontal, new_pane, close_pane,
 #   focus_pane_left, focus_pane_right, focus_pane_up, focus_pane_down,
 #   move_pane_left, move_pane_right, move_pane_up, move_pane_down,
 #   grow_pane, shrink_pane, toggle_zoom,
@@ -244,7 +244,7 @@ keybind = alt+[=cycle_strategy_previous
 
 # Floating pane management
 keybind = alt+f=toggle_or_create_floating_pane
-keybind = alt+n=new_floating_pane
+keybind = alt+n=new_pane
 
 # In-place overlay (works in both local and remote mode)
 keybind = alt+m=run_in_place:lazygit
