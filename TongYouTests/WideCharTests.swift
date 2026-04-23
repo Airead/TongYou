@@ -265,7 +265,9 @@ import Testing
         let screen = Screen(columns: 4, rows: 1)
         screen.write("\u{4E2D}") // col 0-1
         screen.write("\u{65E5}") // col 2-3
-        #expect(screen.cursorCol == 4) // past end, next write wraps
+        // Cursor clamped to columns-1 with pending wrap (consistent with writeASCIIBatch)
+        #expect(screen.cursorCol == 3)
+        #expect(screen.pendingWrap == true)
         #expect(screen.cell(at: 0, row: 0).width == .wide)
         #expect(screen.cell(at: 1, row: 0).width == .continuation)
         #expect(screen.cell(at: 2, row: 0).width == .wide)
@@ -283,6 +285,59 @@ import Testing
         #expect(screen.cell(at: 0, row: 1).width == .wide)
         #expect(screen.cursorRow == 1)
         #expect(screen.cursorCol == 2)
+    }
+
+    @Test func wideCharAtSecondLastColumnWithAutowrap() {
+        // 4-column screen: wide char at col 2-3 (second-to-last column)
+        // should set pendingWrap and clamp cursorCol to columns-1
+        let screen = Screen(columns: 4, rows: 2)
+        screen.write(Unicode.Scalar("A"))
+        screen.write(Unicode.Scalar("B"))       // col 0-1
+        screen.write("\u{4E2D}") // 中 at col 2-3
+        #expect(screen.cursorCol == 3)
+        #expect(screen.pendingWrap == true)
+        // Next write should wrap to next row
+        screen.write(Unicode.Scalar("C"))
+        #expect(screen.cursorRow == 1)
+        #expect(screen.cursorCol == 1)
+        #expect(screen.cell(at: 0, row: 1).codepoint == Unicode.Scalar("C"))
+    }
+
+    @Test func wideCharAtSecondLastColumnWithoutAutowrap() {
+        // 4-column screen, autowrap off: wide char at col 2-3
+        // cursor should stay at columns-1, no pendingWrap
+        let screen = Screen(columns: 4, rows: 2)
+        screen.setAutowrap(false)
+        screen.write(Unicode.Scalar("A"))
+        screen.write(Unicode.Scalar("B"))       // col 0-1
+        screen.write("\u{4E2D}") // 中 at col 2-3
+        #expect(screen.cursorCol == 3)
+        #expect(screen.pendingWrap == false)
+        // Next write should overwrite the last column
+        screen.write(Unicode.Scalar("C"))
+        #expect(screen.cursorRow == 0)
+        #expect(screen.cursorCol == 3)
+        #expect(screen.cell(at: 3, row: 0).codepoint == Unicode.Scalar("C"))
+    }
+
+    @Test func wideCharAtSecondLastColumnFollowedByBatchASCII() {
+        // Regression test: wide char at second-to-last column followed by
+        // batched ASCII writes must not crash with negative writeCount.
+        let screen = Screen(columns: 4, rows: 2)
+        screen.write(Unicode.Scalar("A"))
+        screen.write(Unicode.Scalar("B"))       // col 0-1
+        screen.write("\u{4E2D}") // 中 at col 2-3
+        #expect(screen.cursorCol == 3)
+        #expect(screen.pendingWrap == true)
+        // Batch write "CDE" — should wrap and continue on next row
+        screen.write(Unicode.Scalar("C"))
+        screen.write(Unicode.Scalar("D"))
+        screen.write(Unicode.Scalar("E"))
+        #expect(screen.cursorRow == 1)
+        #expect(screen.cursorCol == 3)
+        #expect(screen.cell(at: 0, row: 1).codepoint == Unicode.Scalar("C"))
+        #expect(screen.cell(at: 1, row: 1).codepoint == Unicode.Scalar("D"))
+        #expect(screen.cell(at: 2, row: 1).codepoint == Unicode.Scalar("E"))
     }
 
     // MARK: - Wide Char Reflow

@@ -686,6 +686,14 @@ public final class Screen {
             cells[contIdx].attributes = attributes
             cells[contIdx].width = .continuation
             cursorCol = col + 2
+            // If the wide char filled exactly to the end of the line,
+            // apply delayed wrap only when autowrap is enabled.
+            if cursorCol >= columns {
+                cursorCol = columns - 1
+                if autowrap {
+                    pendingWrap = true
+                }
+            }
         } else if col == columns - 1 {
             // Single-width char written in the last column — defer the wrap
             // only when autowrap is enabled.
