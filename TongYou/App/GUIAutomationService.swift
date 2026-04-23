@@ -903,6 +903,23 @@ final class GUIAutomationService {
         let snapshots = Self.collectSnapshots()
         refStore.refreshRefs(snapshots: snapshots)
 
+        // If the ref is a raw UUID, resolve it directly as a pane ID.
+        if let paneID = UUID(uuidString: ref) {
+            for snapshot in snapshots {
+                let session = snapshot.session
+                for tab in session.tabs {
+                    if tab.hasPane(id: paneID) {
+                        guard let manager = SessionManagerRegistry.shared.manager(owning: session.id),
+                              manager.controller(for: paneID) != nil else {
+                            continue
+                        }
+                        return .success((paneID, "\(session.name) › \(tab.title)"))
+                    }
+                }
+            }
+            return .failure(.paneNotFound(ref))
+        }
+
         let target: GUIAutomationRefStore.ResolvedTarget
         do {
             target = try refStore.resolve(refString: ref)
