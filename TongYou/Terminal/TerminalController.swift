@@ -63,6 +63,7 @@ final class TerminalController: TerminalControlling {
 
     /// Debounce work item for coalescing rapid display-link wakeups.
     nonisolated(unsafe) private var displayLinkDebounceWork: DispatchWorkItem?
+    private let displayLinkDebounceLock = NSLock()
     private var lastURLGeneration: UInt64 = 0
     /// Whether the Command key is currently held — drives on-demand URL detection.
     private var commandKeyHeld = false
@@ -688,11 +689,15 @@ final class TerminalController: TerminalControlling {
         // Coalesce rapid dirty marks into a single display-link wakeup.
         // If a wakeup is already scheduled, do not reschedule to avoid
         // pushing the render indefinitely while the user is scrolling.
+        displayLinkDebounceLock.lock()
+        defer { displayLinkDebounceLock.unlock() }
         guard displayLinkDebounceWork == nil else { return }
 
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
+            self.displayLinkDebounceLock.lock()
             self.displayLinkDebounceWork = nil
+            self.displayLinkDebounceLock.unlock()
             if self.screenDirty {
                 self.onNeedsDisplay?()
             }

@@ -262,6 +262,12 @@ public final class PTYProcess {
             return snapshot
         }
 
+        // Drain the read queue to ensure any in-flight event handler completes
+        // before we cancel the source and deallocate its buffer. This prevents
+        // use-after-free if the handler is still using the buffer when cancel()
+        // triggers the deallocation in the cancel handler.
+        readQueue.sync {}
+
         readSrc?.cancel()
         processSrc?.cancel()
 

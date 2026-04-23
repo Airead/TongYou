@@ -41,6 +41,10 @@ public final class SocketServer: @unchecked Sendable {
     /// Number of consecutive flush cycles without an idle gap.
     /// Used to compute the adaptive coalesce delay. Managed on `messageQueue`.
     private var consecutiveFlushCount = 0
+    /// Guard to prevent re-entrant flushes when `performFlush` suspends at an
+    /// `await` and a timer fires while the calling thread is blocked in
+    /// `blockingAwait`. Managed on `messageQueue`.
+    private var isPerformingFlush = false
 
     /// Fixed retry delay for panes stuck in a DECSET 2026 synchronized update.
     /// Independent of the ramping coalesce delay so a long sync does not
@@ -392,13 +396,17 @@ public final class SocketServer: @unchecked Sendable {
     /// Schedule a one-shot timer for the next flush. Must run on `messageQueue`.
     private func scheduleFlush() {
         let delay = coalesceDelay(for: consecutiveFlushCount)
+        // Cancel the old timer *before* resuming the new one so an already-
+        // queued handler from the old timer does not execute after the new
+        // timer fires, which would cause back-to-back flushes.
+        flushTimer?.cancel()
+        flushTimer = nil
         let timer = DispatchSource.makeTimerSource(queue: messageQueue)
         timer.schedule(deadline: .now() + delay)
         timer.setEventHandler { [weak self] in
             self?.performFlushFromTimer()
         }
         timer.resume()
-        flushTimer?.cancel()
         flushTimer = timer
     }
 
@@ -568,6 +576,17 @@ public final class SocketServer: @unchecked Sendable {
     /// code relies on (e.g. `flushTimer` / `consecutiveFlushCount`
     /// mutations, `lastSentState` writes).
     private func performFlushFromTimer() {
+        guard !isPerformingFlush else {
+            // This is an abnormal path: a timer fired while another flush
+            // was still running (re-entrancy). Log it for investigation.
+            Log.error(
+                "performFlushFromTimer: re-entrant call detected; skipping flush",
+                category: .server
+            )
+            return
+        }
+        isPerformingFlush = true
+        defer { isPerformingFlush = false }
         blockingAwait {
             await self.performFlush()
         }
@@ -576,13 +595,14 @@ public final class SocketServer: @unchecked Sendable {
     /// Fixed-delay retry for panes that were deferred because their PTY is
     /// inside a DECSET 2026 synchronized update. Must run on `messageQueue`.
     private func scheduleSyncedUpdateRetry() {
+        flushTimer?.cancel()
+        flushTimer = nil
         let timer = DispatchSource.makeTimerSource(queue: messageQueue)
         timer.schedule(deadline: .now() + Self.syncedUpdateRetryDelay)
         timer.setEventHandler { [weak self] in
             self?.performFlushFromTimer()
         }
         timer.resume()
-        flushTimer?.cancel()
         flushTimer = timer
     }
 

@@ -1383,7 +1383,16 @@ final class MetalView: NSView {
         dragAutoScrollTimer?.invalidate()
         pendingPTYResizeWork?.cancel()
         pendingPTYResizeWork = nil
-        displayLink?.invalidate()
+        // CADisplayLink must be invalidated on the main thread. If deinit is
+        // running off-main, hop synchronously to main to ensure the invalidate
+        // completes before the object is destroyed.
+        if Thread.isMainThread {
+            displayLink?.invalidate()
+        } else {
+            DispatchQueue.main.sync { [displayLink] in
+                displayLink?.invalidate()
+            }
+        }
         displayLink = nil
     }
 }

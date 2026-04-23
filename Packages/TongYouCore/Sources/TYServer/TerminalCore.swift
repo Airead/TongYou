@@ -661,4 +661,31 @@ public final class TerminalCore: @unchecked Sendable {
             onScreenDirty?()
         }
     }
+
+    deinit {
+        // Invalidate all callbacks so that any in-flight ptyQueue work that
+        // outlives us does not invoke closures captured from the owner.
+        // Clearing the streamHandler callbacks severs the back-edge from the
+        // VTParser/StreamHandler back to TerminalCore.
+        ptyQueue.sync {
+            streamHandler.onWriteBack = nil
+            streamHandler.onTitleChanged = nil
+            streamHandler.onBell = nil
+            streamHandler.onClipboardSet = nil
+            streamHandler.onRunningCommandChanged = nil
+            streamHandler.onPaneNotification = nil
+            streamHandler.onFocusReportingChanged = nil
+            streamHandler.onBlinkingCursorChanged = nil
+            streamHandler.onColorSchemeReportingChanged = nil
+            streamHandler.onColorSchemeQuery = nil
+            streamHandler.onUnhandledSequence = nil
+            streamHandler.onWindowPixelSizeRequest = nil
+            streamHandler.onDynamicColorQuery = nil
+            streamHandler.onDynamicColorSet = nil
+            streamHandler.onDynamicColorReset = nil
+            streamHandler.onPointerShapeChanged = nil
+            streamHandler.onPaletteColorQuery = nil
+            streamHandler.onPaletteColorSet = nil
+        }
+    }
 }
