@@ -666,7 +666,7 @@ final class GUIAutomationService {
         // Validate batch
         switch launcher.validateBatch(resolutions: resolutions) {
         case .failure(let failure):
-            return .failure(.invalidParams("\(failure.target): \(failure.error.localizedDescription ?? "unknown error")"))
+            return .failure(.invalidParams("\(failure.target): \(failure.error.localizedDescription)"))
         case .success(let resolved):
             let requests = resolved.map { resolution in
                 SessionManager.GridPaneRequest(
@@ -711,7 +711,7 @@ final class GUIAutomationService {
             matcher: matcher,
             sshConfigHosts: sshConfigHosts,
             validateProfile: { [weak self] id, variables in
-                guard let self else { return }
+                guard self != nil else { return }
                 guard let manager = SessionManagerRegistry.shared.primaryManager else { return }
                 _ = Self.validateProfile(manager: manager, id: id, overrides: [])
             },
