@@ -937,6 +937,7 @@ final class GUIAutomationService {
 
         // If the ref is a raw UUID, resolve it directly as a pane ID.
         if let paneID = UUID(uuidString: ref) {
+            // First try: direct local pane ID lookup
             for snapshot in snapshots {
                 let session = snapshot.session
                 for tab in session.tabs {
@@ -949,6 +950,25 @@ final class GUIAutomationService {
                     }
                 }
             }
+
+            // Second try: the ref might be a remote server pane ID, try to map it
+            for manager in SessionManagerRegistry.shared.allManagers {
+                if let localPaneID = manager.localPaneID(forServerPaneID: paneID) {
+                    for snapshot in snapshots {
+                        let session = snapshot.session
+                        for tab in session.tabs {
+                            if tab.hasPane(id: localPaneID) {
+                                guard let owningManager = SessionManagerRegistry.shared.manager(owning: session.id),
+                                      owningManager.controller(for: localPaneID) != nil else {
+                                    continue
+                                }
+                                return .success((localPaneID, session.id, tab.id, "\(session.name) › \(tab.title)"))
+                            }
+                        }
+                    }
+                }
+            }
+
             return .failure(.paneNotFound(ref))
         }
 

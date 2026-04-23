@@ -270,6 +270,11 @@ final class SessionManager {
         serverToLocalPaneID.first(where: { $0.value == localID })?.key
     }
 
+    /// Look up the local pane UUID for a given server pane UUID.
+    func localPaneID(forServerPaneID serverPaneID: UUID) -> UUID? {
+        serverToLocalPaneID[serverPaneID]
+    }
+
     /// The currently active session, if any.
     var activeSession: TerminalSession? {
         guard sessions.indices.contains(activeSessionIndex) else { return nil }
