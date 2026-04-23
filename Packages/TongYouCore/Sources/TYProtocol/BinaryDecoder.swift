@@ -620,6 +620,13 @@ public struct BinaryDecoder: Sendable {
             let paneID = try readPaneID()
             return .bell(sessionID, paneID)
 
+        case .paneNotification:
+            let sessionID = try readSessionID()
+            let paneID = try readPaneID()
+            let title = try readString()
+            let body = try readString()
+            return .paneNotification(sessionID, paneID, title, body)
+
         case .paneExited:
             let sessionID = try readSessionID()
             let paneID = try readPaneID()

@@ -1880,6 +1880,9 @@ final class SessionManager {
         client.onPaneExited = { [weak self] _, paneID, exitCode in
             self?.handleRemotePaneExited(paneID, exitCode: exitCode)
         }
+        client.onPaneNotification = { [weak self] _, paneID, title, body in
+            self?.handleRemotePaneNotification(paneID, title: title, body: body)
+        }
         client.onLayoutUpdate = { [weak self] info in
             self?.handleRemoteLayoutUpdate(info)
         }
@@ -2285,6 +2288,10 @@ final class SessionManager {
 
     private func handleRemotePaneExited(_ paneID: PaneID, exitCode: Int32) {
         controllerForServerPane(paneID)?.handleProcessExited(exitCode: exitCode)
+    }
+
+    private func handleRemotePaneNotification(_ paneID: PaneID, title: String, body: String) {
+        controllerForServerPane(paneID)?.onPaneNotification?(title, body)
     }
 
     /// Apply pane metadata (cwd, etc.) from a SessionInfo to the corresponding controllers.

@@ -57,6 +57,9 @@ public final class RemoteSessionClient: @unchecked Sendable {
     /// Called when a pane's process exits.
     public var onPaneExited: ((SessionID, PaneID, Int32) -> Void)?
 
+    /// Called when a pane sends an OSC 9/777/1337 notification.
+    public var onPaneNotification: ((SessionID, PaneID, String, String) -> Void)?
+
     /// Called when a session's layout changes (full tab list + active index).
     public var onLayoutUpdate: ((SessionInfo) -> Void)?
 
@@ -481,6 +484,11 @@ public final class RemoteSessionClient: @unchecked Sendable {
         case .paneExited(let sessionID, let paneID, let exitCode):
             DispatchQueue.main.async { [weak self] in
                 self?.onPaneExited?(sessionID, paneID, exitCode)
+            }
+
+        case .paneNotification(let sessionID, let paneID, let title, let body):
+            DispatchQueue.main.async { [weak self] in
+                self?.onPaneNotification?(sessionID, paneID, title, body)
             }
 
         case .layoutUpdate(let info):

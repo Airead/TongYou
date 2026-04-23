@@ -878,6 +878,10 @@ public final class SocketServer: @unchecked Sendable {
             self?.broadcast(.bell(sessionID, paneID), toSession: sessionID)
         }
 
+        sessionManager.onPaneNotification = { [weak self] sessionID, paneID, title, body in
+            self?.broadcast(.paneNotification(sessionID, paneID, title, body), toSession: sessionID)
+        }
+
         sessionManager.onClipboardSet = { [weak self] text in
             self?.broadcastAll(.clipboardSet(text))
         }

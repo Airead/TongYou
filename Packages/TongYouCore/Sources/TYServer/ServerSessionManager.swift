@@ -196,6 +196,7 @@ public actor ServerSessionManager {
     nonisolated(unsafe) var onTitleChanged: (@Sendable (SessionID, PaneID, String) -> Void)?
     nonisolated(unsafe) var onCwdChanged: (@Sendable (SessionID, PaneID, String) -> Void)?
     nonisolated(unsafe) var onBell: (@Sendable (SessionID, PaneID) -> Void)?
+    nonisolated(unsafe) var onPaneNotification: (@Sendable (SessionID, PaneID, String, String) -> Void)?
     nonisolated(unsafe) var onClipboardSet: (@Sendable (String) -> Void)?
     nonisolated(unsafe) var onPaneExited: (@Sendable (SessionID, PaneID, Int32) -> Void)?
 
@@ -1075,6 +1076,9 @@ public actor ServerSessionManager {
         overlayCore.onBell = { [weak self] in
             self?.onBell?(sessionID, paneID)
         }
+        overlayCore.onPaneNotification = { [weak self] title, body in
+            self?.onPaneNotification?(sessionID, paneID, title, body)
+        }
         overlayCore.onClipboardSet = { [weak self] text in
             self?.onClipboardSet?(text)
         }
@@ -1220,6 +1224,9 @@ public actor ServerSessionManager {
         }
         core.onBell = { [weak self] in
             self?.onBell?(sessionID, paneID)
+        }
+        core.onPaneNotification = { [weak self] title, body in
+            self?.onPaneNotification?(sessionID, paneID, title, body)
         }
         core.onClipboardSet = { [weak self] text in
             self?.onClipboardSet?(text)

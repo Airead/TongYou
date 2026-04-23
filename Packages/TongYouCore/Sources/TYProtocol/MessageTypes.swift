@@ -30,6 +30,7 @@ public enum ServerMessageType: UInt16, Sendable {
     case bell            = 0x0121
     case paneExited      = 0x0122
     case cwdChanged      = 0x0123
+    case paneNotification = 0x0124
     case layoutUpdate    = 0x0130
     case clipboardSet    = 0x0131
 }
@@ -127,6 +128,7 @@ public enum ServerMessage: Sendable {
     case cwdChanged(SessionID, PaneID, String)
     case bell(SessionID, PaneID)
     case paneExited(SessionID, PaneID, exitCode: Int32)
+    case paneNotification(SessionID, PaneID, String, String)
     case layoutUpdate(SessionInfo)
     case clipboardSet(String)
 
@@ -163,6 +165,8 @@ public enum ServerMessage: Sendable {
             return "bell(session=\(sid), pane=\(pid))"
         case .paneExited(let sid, let pid, let exitCode):
             return "paneExited(session=\(sid), pane=\(pid), exitCode=\(exitCode))"
+        case .paneNotification(let sid, let pid, let title, let body):
+            return "paneNotification(session=\(sid), pane=\(pid), title=\(truncate(title, maxLength: 40)), body=\(truncate(body, maxLength: 40)))"
         case .layoutUpdate(let info):
             return "layoutUpdate(session=\(info.id), tabs=\(info.tabs.count))"
         case .clipboardSet(let text):
@@ -183,6 +187,7 @@ public enum ServerMessage: Sendable {
         case .cwdChanged:     return .cwdChanged
         case .bell:           return .bell
         case .paneExited:     return .paneExited
+        case .paneNotification: return .paneNotification
         case .layoutUpdate:   return .layoutUpdate
         case .clipboardSet:   return .clipboardSet
         }

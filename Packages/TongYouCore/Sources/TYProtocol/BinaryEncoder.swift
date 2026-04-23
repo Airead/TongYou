@@ -437,6 +437,12 @@ public struct BinaryEncoder: Sendable {
             writeSessionID(sessionID)
             writePaneID(paneID)
 
+        case .paneNotification(let sessionID, let paneID, let title, let body):
+            writeSessionID(sessionID)
+            writePaneID(paneID)
+            writeString(title)
+            writeString(body)
+
         case .paneExited(let sessionID, let paneID, let exitCode):
             writeSessionID(sessionID)
             writePaneID(paneID)
