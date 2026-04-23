@@ -29,6 +29,8 @@ struct TerminalPaneContainerView: NSViewRepresentable {
     /// (`false`). Optional — callers that don't care about search state
     /// leave it nil.
     var onSearchBarToggled: ((Bool) -> Void)?
+    /// Called when MetalView needs TONGYOU_* environment variables for a new controller.
+    var onRequestEnvironmentVars: (() -> [(String, String)])?
 
     func makeNSView(context: Context) -> MetalView {
         if let existing = viewStore.view(for: paneID) {
@@ -43,6 +45,7 @@ struct TerminalPaneContainerView: NSViewRepresentable {
             existing.onToggleSelection = onToggleSelection
             existing.isProcessExited = isProcessExited
             existing.onSearchBarToggled = onSearchBarToggled
+            existing.onRequestEnvironmentVars = onRequestEnvironmentVars
             existing.toastPresenter = toastPresenter
             return existing
         }
@@ -61,6 +64,7 @@ struct TerminalPaneContainerView: NSViewRepresentable {
         view.onToggleSelection = onToggleSelection
         view.isProcessExited = isProcessExited
         view.onSearchBarToggled = onSearchBarToggled
+        view.onRequestEnvironmentVars = onRequestEnvironmentVars
         viewStore.store(view, for: paneID)
         return view
     }
@@ -77,6 +81,7 @@ struct TerminalPaneContainerView: NSViewRepresentable {
         nsView.onToggleSelection = onToggleSelection
         nsView.isProcessExited = isProcessExited
         nsView.onSearchBarToggled = onSearchBarToggled
+        nsView.onRequestEnvironmentVars = onRequestEnvironmentVars
         nsView.toastPresenter = toastPresenter
         if nsView.externalController !== externalController {
             nsView.externalController = externalController

@@ -63,6 +63,11 @@ final class GUIAutomationService {
                 return service?.handlePaneSendKey(ref: ref, input: input)
                     ?? .failure(.internal("GUIAutomationService deallocated"))
             },
+            handlePaneNotify: { [weak self] ref, title, body in
+                let service = self
+                return service?.handlePaneNotify(ref: ref, title: title, body: body)
+                    ?? .failure(.internal("GUIAutomationService deallocated"))
+            },
             handleTabCreate: { [weak self] ref, focus, profile, overrides in
                 let service = self
                 return service?.handleTabCreate(
@@ -319,6 +324,18 @@ final class GUIAutomationService {
         Self.runOnMain {
             GUIAutomationPolicy.withAutomationRequest(command: .paneSendKey) {
                 self.sendKeyOnMain(ref: ref, input: input)
+            }
+        }
+    }
+
+    nonisolated private func handlePaneNotify(
+        ref: String,
+        title: String,
+        body: String?
+    ) -> Result<Void, AutomationError> {
+        Self.runOnMain {
+            GUIAutomationPolicy.withAutomationRequest(command: .paneNotify) {
+                self.notifyOnMain(ref: ref, title: title, body: body)
             }
         }
     }
@@ -856,6 +873,87 @@ final class GUIAutomationService {
         case .failure(let err):
             return .failure(err)
         }
+    }
+
+    private func notifyOnMain(ref: String, title: String, body: String?) -> Result<Void, AutomationError> {
+        // Resolve the pane to get source info and paneID for the notification
+        let (paneID, source): (UUID, String)
+        switch resolvePaneSourceInfo(ref: ref) {
+        case .success((let resolvedPaneID, let sourceInfo)):
+            paneID = resolvedPaneID
+            source = sourceInfo
+        case .failure(let err):
+            // If resolution fails completely, we can't even send a notification
+            return .failure(err)
+        }
+
+        let sourcePrefix = source.isEmpty ? "" : "[\(source)] "
+        let displayTitle = "\(sourcePrefix)\(title)"
+        SystemNotificationService.shared.send(
+            paneID: paneID,
+            title: displayTitle,
+            body: body ?? title
+        )
+        return .success(())
+    }
+
+    /// Resolves a pane ref to its paneID and source info (session name › tab name).
+    /// Returns (paneID, "Session › Tab") or fails if pane cannot be resolved.
+    private func resolvePaneSourceInfo(ref: String) -> Result<(UUID, String), AutomationError> {
+        let snapshots = Self.collectSnapshots()
+        refStore.refreshRefs(snapshots: snapshots)
+
+        let target: GUIAutomationRefStore.ResolvedTarget
+        do {
+            target = try refStore.resolve(refString: ref)
+        } catch let err as AutomationError {
+            return .failure(err)
+        } catch {
+            return .failure(.internal("ref resolution failed: \(error)"))
+        }
+
+        guard let manager = SessionManagerRegistry.shared.manager(owning: target.sessionID),
+              let session = manager.sessions.first(where: { $0.id == target.sessionID }) else {
+            return .failure(.sessionNotFound(ref))
+        }
+
+        let paneID: UUID
+        if let explicit = target.paneID ?? target.floatID {
+            paneID = explicit
+        } else {
+            // Session- or tab-level ref: resolve to the focused pane, fallback first tree pane
+            let tab: TerminalTab?
+            if let tabID = target.tabID {
+                tab = session.tabs.first(where: { $0.id == tabID })
+            } else {
+                tab = session.activeTab
+            }
+            guard let resolvedTab = tab else {
+                return .failure(.paneNotFound(ref))
+            }
+            if let focused = resolvedTab.focusedPaneID, resolvedTab.hasPane(id: focused) {
+                paneID = focused
+            } else {
+                paneID = resolvedTab.paneTree.firstPane.id
+            }
+        }
+
+        // Verify the pane exists
+        guard manager.controller(for: paneID) != nil else {
+            return .failure(.paneNotFound(ref))
+        }
+
+        let tabName: String
+        if let tabID = target.tabID,
+           let tab = session.tabs.first(where: { $0.id == tabID }) {
+            tabName = tab.title
+        } else if let activeTab = session.activeTab {
+            tabName = activeTab.title
+        } else {
+            tabName = "Tab"
+        }
+
+        return .success((paneID, "\(session.name) › \(tabName)"))
     }
 
     // MARK: - Phase 5 main-actor operations

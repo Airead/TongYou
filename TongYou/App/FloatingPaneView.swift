@@ -24,6 +24,7 @@ struct FloatingPaneView: View {
     let paneSelectionManager: PaneSelectionManager
     let tabID: UUID
     let toastPresenter: ToastPresenter?
+    let onRequestEnvironmentVars: ((UUID) -> [(String, String)])?
 
     private static let titleBarHeight: CGFloat = 24
     private static let resizeHandleSize: CGFloat = 6
@@ -126,7 +127,10 @@ struct FloatingPaneView: View {
                 paneSelectionManager.togglePane(floatingPane.pane.id, inTab: tabID)
             },
             isProcessExited: { isProcessExited(floatingPane.pane.id) },
-            onSearchBarToggled: nil
+            onSearchBarToggled: nil,
+            onRequestEnvironmentVars: {
+                onRequestEnvironmentVars?(floatingPane.pane.id) ?? []
+            }
         )
         .id(floatingPane.pane.id)
         .modifier(PaneSelectionBorder(

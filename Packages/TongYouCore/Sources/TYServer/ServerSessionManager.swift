@@ -270,7 +270,7 @@ public actor ServerSessionManager {
         let tabID = TabID()
         let sessionName = name ?? "Session \(sessions.count + 1)"
 
-        let (paneID, pane, core) = createAndStartPane(sessionID: sessionID)
+        let (paneID, pane, core) = createAndStartPane(sessionID: sessionID, tabID: tabID)
         let paneTree = PaneNode.leaf(pane)
 
         let tab = ServerTab(
@@ -343,6 +343,7 @@ public actor ServerSessionManager {
         let tabID = TabID()
         let (paneID, pane, core) = createAndStartPane(
             sessionID: sessionID,
+            tabID: tabID,
             workingDirectory: effectiveCwd,
             snapshot: snapshot,
             profileID: profileID,
@@ -383,6 +384,7 @@ public actor ServerSessionManager {
         for spec in specs {
             let (paneID, pane, core) = createAndStartPane(
                 sessionID: sessionID,
+                tabID: tabID,
                 snapshot: spec.snapshot,
                 profileID: spec.profileID,
                 variables: spec.variables
@@ -494,8 +496,10 @@ public actor ServerSessionManager {
         let effectiveVariables = variables.isEmpty ? parentVariables : variables
         let effectiveCwd = snapshot == nil ? sourceCwd : nil
 
+        let tabID = session.tabs[tabIndex].id
         let (newPaneID, newPane, core) = createAndStartPane(
             sessionID: sessionID,
+            tabID: tabID,
             workingDirectory: effectiveCwd,
             snapshot: snapshot,
             profileID: effectiveProfileID,
@@ -611,8 +615,10 @@ public actor ServerSessionManager {
             teardownPane(paneID, core: old)
         }
 
+        let tabID = session.tabs[tabIndex].id
         let (_, _, core) = createAndStartPane(
             sessionID: sessionID,
+            tabID: tabID,
             paneID: paneID,
             snapshot: pane.startupSnapshot,
             profileID: pane.profileID
@@ -779,6 +785,7 @@ public actor ServerSessionManager {
 
         let (paneID, pane, core) = createAndStartPane(
             sessionID: sessionID,
+            tabID: tabID,
             workingDirectory: effectiveCwd,
             snapshot: snapshot,
             profileID: effectiveProfileID,
@@ -968,7 +975,8 @@ public actor ServerSessionManager {
             let (paneTree, treeCores) = restorePaneTree(
                 layout: tabInfo.layout,
                 contexts: contexts,
-                sessionID: info.id
+                sessionID: info.id,
+                tabID: tabInfo.id
             )
             let floatingPanes = tabInfo.floatingPanes
             var floatingCores: [PaneID: TerminalCore] = [:]
@@ -977,6 +985,7 @@ public actor ServerSessionManager {
             for fp in floatingPanes {
                 let (_, pane, core) = createAndStartPane(
                     sessionID: info.id,
+                    tabID: tabInfo.id,
                     workingDirectory: contexts[fp.paneID]?.cwd,
                     paneID: fp.paneID
                 )
@@ -1013,12 +1022,14 @@ public actor ServerSessionManager {
     private func restorePaneTree(
         layout: LayoutTree,
         contexts: [PaneID: PersistedPaneContext],
-        sessionID: SessionID
+        sessionID: SessionID,
+        tabID: TabID
     ) -> (PaneNode, [PaneID: TerminalCore]) {
         switch layout {
         case .leaf(let paneID):
             let (_, pane, core) = createAndStartPane(
                 sessionID: sessionID,
+                tabID: tabID,
                 workingDirectory: contexts[paneID]?.cwd,
                 paneID: paneID
             )
@@ -1031,7 +1042,8 @@ public actor ServerSessionManager {
                 let (childNode, childCores) = restorePaneTree(
                     layout: child,
                     contexts: contexts,
-                    sessionID: sessionID
+                    sessionID: sessionID,
+                    tabID: tabID
                 )
                 nodes.append(childNode)
                 combinedCores.merge(childCores) { _, new in new }
@@ -1279,6 +1291,7 @@ public actor ServerSessionManager {
     ///     to actually launch the profile's command.
     private func createAndStartPane(
         sessionID: SessionID,
+        tabID: TabID,
         workingDirectory: String? = nil,
         paneID: PaneID? = nil,
         snapshot: StartupSnapshot? = nil,
@@ -1319,7 +1332,11 @@ public actor ServerSessionManager {
         coreLookup[actualPaneID] = core
 
         let effectiveCwd = resolvedWorkingDirectory(workingDirectory ?? resolvedSnapshot.cwd)
-        let extraEnv = resolvedSnapshot.envTuples
+        let extraEnv = resolvedSnapshot.envTuples + [
+            ("TONGYOU_SESSION_ID", sessionID.uuid.uuidString),
+            ("TONGYOU_TAB_ID", tabID.uuid.uuidString),
+            ("TONGYOU_PANE_ID", actualPaneID.uuid.uuidString)
+        ]
 
         do {
             if let command = resolvedSnapshot.command, !command.isEmpty {

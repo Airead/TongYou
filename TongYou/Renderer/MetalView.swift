@@ -138,6 +138,10 @@ final class MetalView: NSView {
     /// is active (would otherwise visually conflict with the full-width bar).
     var onSearchBarToggled: ((Bool) -> Void)?
 
+    /// Callback to retrieve TONGYOU_* environment variables for this pane.
+    /// Called when creating a local controller to inject session/tab/pane IDs.
+    var onRequestEnvironmentVars: (() -> [(String, String)])?
+
     // MARK: - IME State
 
     /// Stores the in-progress composition text from the input method.
@@ -1352,7 +1356,8 @@ final class MetalView: NSView {
                 config: config,
                 toastPresenter: toastPresenter
             )
-            tc.start(workingDirectory: initialWorkingDirectory)
+            let extraEnv = onRequestEnvironmentVars?() ?? []
+            tc.start(workingDirectory: initialWorkingDirectory, extraEnv: extraEnv)
             controller = tc
         }
         wireControllerCallbacks(controller)

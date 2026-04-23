@@ -24,6 +24,7 @@ struct FloatingPaneOverlay: View {
     let paneSelectionManager: PaneSelectionManager
     let tabID: UUID
     let toastPresenter: ToastPresenter?
+    let onRequestEnvironmentVars: ((UUID) -> [(String, String)])?
 
     private var visiblePanes: [FloatingPane] {
         floatingPanes
@@ -61,7 +62,8 @@ struct FloatingPaneOverlay: View {
                         isProcessExited: isProcessExited,
                         paneSelectionManager: paneSelectionManager,
                         tabID: tabID,
-                        toastPresenter: toastPresenter
+                        toastPresenter: toastPresenter,
+                        onRequestEnvironmentVars: onRequestEnvironmentVars
                     )
                 }
             }

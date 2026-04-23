@@ -23,6 +23,7 @@ enum AutomationCommand {
     case sessionDetach
     case paneSendText
     case paneSendKey
+    case paneNotify
     case tabCreate
     case tabSelect
     case tabClose

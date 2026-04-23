@@ -6,6 +6,13 @@ import TYProtocol
 import TYServer
 import TYTerminal
 
+// MARK: - Helper Functions
+
+/// Check if a string is a valid UUID
+func isValidUUID(_ string: String) -> Bool {
+    return UUID(uuidString: string) != nil
+}
+
 // MARK: - Argument Parsing
 
 enum Command {
@@ -42,6 +49,7 @@ enum Command {
     case appFloatPaneMove(ref: String, x: Double, y: Double, width: Double, height: Double, json: Bool)
     case appWindowFocus(json: Bool)
     case appSSH(targets: [String], open: Bool, profile: String?, overrides: [String], json: Bool)
+    case appNotify(ref: String?, title: String, body: String?, json: Bool)
 
     case help
 }
@@ -147,6 +155,27 @@ func parseAppArgs(_ args: [String]) -> Command {
             exit(1)
         }
         return .appKey(ref: rest[0], key: rest[1], json: json)
+    case "notify":
+        // Parse: [ref] title [body]
+        // If first arg looks like a ref (contains '/' or is a UUID), treat as ref.
+        // Otherwise use TONGYOU_PANE_ID from environment.
+        if rest.isEmpty {
+            fputs("tongyou: app notify requires at least a title\n", stderr)
+            exit(1)
+        }
+        let ref: String?
+        let title: String
+        let body: String?
+        if rest.count >= 2 && (rest[0].contains("/") || isValidUUID(rest[0])) {
+            ref = rest[0]
+            title = rest[1]
+            body = rest.count >= 3 ? rest.dropFirst(2).joined(separator: " ") : nil
+        } else {
+            ref = nil
+            title = rest[0]
+            body = rest.count >= 2 ? rest.dropFirst().joined(separator: " ") : nil
+        }
+        return .appNotify(ref: ref, title: title, body: body, json: json)
     case "new-tab":
         return parseAppNewTab(rest, json: json)
     case "select-tab":
@@ -576,6 +605,9 @@ func printAppUsage() {
       detach <ref>                         Detach the session identified by ref (stops rendering / receiving input).
       send <ref> <text>                    Send raw UTF-8 text to the target pane (no trailing newline).
       key <ref> <key>                      Send a key event (e.g. Enter, Ctrl+C, Alt+Left) to the target pane.
+      notify [<ref>] <title> [<body>]      Send a notification from the target pane.
+                                             If <ref> is omitted, uses TONGYOU_PANE_ID from environment
+                                             (requires running inside a TongYou pane).
       new-tab <session-ref> [--focus] [--profile <name>] [--set key=value ...]
                                            Create a new tab. --focus switches to the new tab.
                                            --profile picks a profile for the tab's root pane;
@@ -661,6 +693,9 @@ func printUsage() {
       app detach <ref>               Detach a session by ref (stop rendering / receiving input)
       app send <ref> <text>          Send text to the target pane (no trailing newline)
       app key <ref> <key>            Send a key event (Enter, Ctrl+C, …) to the target pane
+      app notify [<ref>] <title> [<body>]
+                                     Send a notification from the target pane.
+                                     Omit <ref> to use current pane (inside TongYou only).
       app new-tab <session-ref> [--focus] [--profile <name>] [--set k=v ...]
                                      Create a new tab; --profile/--set layer profile + inline overrides
       app select-tab <ref> <index>   Select a tab by 0-based position
@@ -1151,6 +1186,23 @@ func appKey(ref: String, key: String, json: Bool) {
     if json { printJSONResult("null") }
 }
 
+func appNotify(ref: String?, title: String, body: String?, json: Bool) {
+    let effectiveRef: String
+    if let ref = ref {
+        effectiveRef = ref
+    } else if let paneID = ProcessInfo.processInfo.environment["TONGYOU_PANE_ID"] {
+        effectiveRef = paneID
+    } else {
+        fputs("tongyou: notify requires a ref when not running inside a TongYou pane\n", stderr)
+        exit(1)
+    }
+    
+    let client = connectToGUIOrExit()
+    handleCommandResult({
+        try client.notify(ref: effectiveRef, title: title, body: body)
+    }, json: json, verb: "notify")
+}
+
 private func handleCommandResult(
     _ action: () throws -> Void,
     json: Bool,
@@ -1458,6 +1510,8 @@ case .appSend(let ref, let text, let json):
     appSend(ref: ref, text: text, json: json)
 case .appKey(let ref, let key, let json):
     appKey(ref: ref, key: key, json: json)
+case .appNotify(let ref, let title, let body, let json):
+    appNotify(ref: ref, title: title, body: body, json: json)
 case .appNewTab(let sessionRef, let focus, let profile, let overrides, let json):
     appNewTab(sessionRef: sessionRef, focus: focus, profile: profile, overrides: overrides, json: json)
 case .appSelectTab(let sessionRef, let index, let json):

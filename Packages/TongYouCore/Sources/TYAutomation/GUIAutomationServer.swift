@@ -58,6 +58,9 @@ public final class GUIAutomationServer: @unchecked Sendable {
         /// Sends a parsed key input (already run through `AutomationKeySpec`)
         /// to the pane resolved from `ref`. Not focus-whitelisted.
         public let handlePaneSendKey: (@Sendable (String, KeyEncoder.KeyInput) -> Result<Void, AutomationError>)?
+        /// Displays a system notification from the pane resolved from `ref`.
+        /// Not focus-whitelisted — must not activate the window.
+        public let handlePaneNotify: (@Sendable (String, String, String?) -> Result<Void, AutomationError>)?
         /// Creates a new tab in the session resolved from `ref`. Returns the
         /// newly allocated tab ref. Not focus-whitelisted at the app level;
         /// the second `Bool` parameter is the caller's view-focus preference
@@ -128,6 +131,7 @@ public final class GUIAutomationServer: @unchecked Sendable {
             handleSessionDetach: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
             handlePaneSendText: (@Sendable (String, String) -> Result<Void, AutomationError>)? = nil,
             handlePaneSendKey: (@Sendable (String, KeyEncoder.KeyInput) -> Result<Void, AutomationError>)? = nil,
+            handlePaneNotify: (@Sendable (String, String, String?) -> Result<Void, AutomationError>)? = nil,
             handleTabCreate: (@Sendable (String, Bool, String?, [String]?) -> Result<TabCreateResponse, AutomationError>)? = nil,
             handleTabSelect: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
             handleTabClose: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
@@ -155,6 +159,7 @@ public final class GUIAutomationServer: @unchecked Sendable {
             self.handleSessionDetach = handleSessionDetach
             self.handlePaneSendText = handlePaneSendText
             self.handlePaneSendKey = handlePaneSendKey
+            self.handlePaneNotify = handlePaneNotify
             self.handleTabCreate = handleTabCreate
             self.handleTabSelect = handleTabSelect
             self.handleTabClose = handleTabClose
@@ -399,6 +404,8 @@ public final class GUIAutomationServer: @unchecked Sendable {
             return handlePaneSendTextCommand(request: request, config: config)
         case "pane.sendKey":
             return handlePaneSendKeyCommand(request: request, config: config)
+        case "pane.notify":
+            return handlePaneNotifyCommand(request: request, config: config)
         case "tab.create":
             return handleTabCreateCommand(request: request, config: config)
         case "tab.select":
@@ -578,6 +585,28 @@ public final class GUIAutomationServer: @unchecked Sendable {
             return .error(code: "INVALID_PARAMS", message: "failed to parse key: \(error)")
         }
         switch handler(ref, input) {
+        case .success:
+            return .success(.null)
+        case .failure(let error):
+            return .error(code: error.code, message: error.message)
+        }
+    }
+
+    private static func handlePaneNotifyCommand(
+        request: ParsedRequest,
+        config: Configuration
+    ) -> JSONResponse {
+        guard let handler = config.handlePaneNotify else {
+            return .error(code: "INTERNAL_ERROR", message: "pane.notify not wired")
+        }
+        guard let ref = request.params["ref"] as? String, !ref.isEmpty else {
+            return .error(code: "INVALID_PARAMS", message: "`ref` is required")
+        }
+        guard let title = request.params["title"] as? String, !title.isEmpty else {
+            return .error(code: "INVALID_PARAMS", message: "`title` is required")
+        }
+        let body = request.params["body"] as? String
+        switch handler(ref, title, body) {
         case .success:
             return .success(.null)
         case .failure(let error):

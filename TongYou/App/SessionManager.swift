@@ -1456,10 +1456,42 @@ final class SessionManager {
 
         localControllers[paneID]?.stop()
         let controller = TerminalController(columns: 80, rows: 24)
-        controller.start(snapshot: pane.startupSnapshot)
+        
+        // Build environment variables for pane identification
+        let envVars = buildPaneEnvironmentVars(paneID: paneID)
+        controller.start(snapshot: pane.startupSnapshot, extraEnv: envVars)
+        
         localControllers[paneID] = controller
         armBroadcastDispatcher(forPane: paneID)
         return controller
+    }
+    
+    /// Build environment variables to identify a pane for CLI notifications.
+    /// Returns TONGYOU_SESSION_ID, TONGYOU_TAB_ID, and TONGYOU_PANE_ID.
+    func buildPaneEnvironmentVars(paneID: UUID) -> [(String, String)] {
+        guard let session = sessions.first(where: { $0.hasPane(id: paneID) }) else {
+            return []
+        }
+        
+        let tabID: UUID?
+        if let tab = session.tabs.first(where: { $0.paneTree.findPane(id: paneID) != nil }) {
+            tabID = tab.id
+        } else if let tab = session.tabs.first(where: { 
+            $0.floatingPanes.contains(where: { $0.pane.id == paneID })
+        }) {
+            tabID = tab.id
+        } else {
+            tabID = nil
+        }
+        
+        var env: [(String, String)] = [
+            ("TONGYOU_SESSION_ID", session.id.uuidString),
+            ("TONGYOU_PANE_ID", paneID.uuidString)
+        ]
+        if let tabID = tabID {
+            env.append(("TONGYOU_TAB_ID", tabID.uuidString))
+        }
+        return env
     }
 
     /// Find a `TerminalPane` by id across every session (tree + floating).
@@ -2718,7 +2750,11 @@ final class SessionManager {
             snapshot.cwd = pane?.initialWorkingDirectory
         }
         let controller = TerminalController(columns: 80, rows: 24)
-        controller.start(snapshot: snapshot)
+        
+        // Build environment variables for pane identification
+        let envVars = buildPaneEnvironmentVars(paneID: paneID)
+        controller.start(snapshot: snapshot, extraEnv: envVars)
+        
         localControllers[paneID] = controller
         // Wire activity tracking directly on the controller so it fires even when
         // the view is off-screen (background tabs).
@@ -2871,7 +2907,10 @@ final class SessionManager {
 
         let dims = active.dimensions
         let controller = TerminalController(columns: dims.columns, rows: dims.rows)
-        controller.start(workingDirectory: active.currentWorkingDirectory, command: wrapped.command, arguments: wrapped.arguments)
+        
+        // Inherit TONGYOU_* environment variables from the active pane
+        let envVars = buildPaneEnvironmentVars(paneID: paneID)
+        controller.start(workingDirectory: active.currentWorkingDirectory, command: wrapped.command, arguments: wrapped.arguments, extraEnv: envVars)
 
         controller.onProcessExited = { [weak self] _ in
             self?.restoreFromInPlace(at: paneID)
@@ -3005,7 +3044,15 @@ final class SessionManager {
         )
 
         let controller = TerminalController(columns: 80, rows: 24)
-        controller.start(workingDirectory: workingDirectory, command: command, arguments: arguments)
+        
+        // Build environment variables for pane identification
+        let tabID = session.tabs[session.activeTabIndex].id
+        let envVars: [(String, String)] = [
+            ("TONGYOU_SESSION_ID", session.id.uuidString),
+            ("TONGYOU_TAB_ID", tabID.uuidString),
+            ("TONGYOU_PANE_ID", pane.id.uuidString)
+        ]
+        controller.start(workingDirectory: workingDirectory, command: command, arguments: arguments, extraEnv: envVars)
         localControllers[pane.id] = controller
         armBroadcastDispatcher(forPane: pane.id)
 

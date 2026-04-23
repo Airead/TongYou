@@ -265,6 +265,17 @@ public final class AppControlClient {
         }
     }
 
+    /// Send `pane.notify` — display a system notification from the pane
+    /// resolved from `ref`. If `body` is nil, uses `title` as both title and body.
+    public func notify(ref: String, title: String, body: String?) throws {
+        var params: [String: Any] = ["ref": ref, "title": title]
+        if let body { params["body"] = body }
+        let response = try sendCommand("pane.notify", params: params)
+        if case .error(let code, let message) = response {
+            throw AppControlError.serverError(code: code, message: message)
+        }
+    }
+
     /// Send `tab.create` — create a new tab in the session resolved from
     /// `ref` and return the newly allocated tab ref. When `focus` is true,
     /// the new tab becomes the active tab (Phase 7 view-focus opt-in).

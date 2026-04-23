@@ -796,7 +796,10 @@ struct TerminalWindowView: View {
                         sessionManager.exitedTreePanes[paneID] != nil
                     },
                     paneSelectionManager: paneSelectionManager,
-                    tabID: activeTab.id
+                    tabID: activeTab.id,
+                    onRequestEnvironmentVars: { paneID in
+                        sessionManager.buildPaneEnvironmentVars(paneID: paneID)
+                    }
                 )
             }
 
@@ -836,7 +839,10 @@ struct TerminalWindowView: View {
                 },
                 paneSelectionManager: paneSelectionManager,
                 tabID: activeTab.id,
-                toastPresenter: toastPresenter
+                toastPresenter: toastPresenter,
+                onRequestEnvironmentVars: { paneID in
+                    sessionManager.buildPaneEnvironmentVars(paneID: paneID)
+                }
             )
         }
     }
@@ -881,6 +887,9 @@ struct TerminalWindowView: View {
                 } else {
                     searchActivePaneIDs.remove(pane.id)
                 }
+            },
+            onRequestEnvironmentVars: {
+                sessionManager.buildPaneEnvironmentVars(paneID: pane.id)
             }
         )
         .id(pane.id)

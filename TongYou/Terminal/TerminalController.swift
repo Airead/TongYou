@@ -283,13 +283,13 @@ final class TerminalController: TerminalControlling {
     /// Start the PTY using a profile-resolved `StartupSnapshot`. A nil /
     /// empty `snapshot.command` selects the user's default login shell; a
     /// non-empty command runs that executable with `snapshot.args`.
-    func start(snapshot: StartupSnapshot) {
+    func start(snapshot: StartupSnapshot, extraEnv: [(String, String)] = []) {
         let commandOrNil = snapshot.command.flatMap { $0.isEmpty ? nil : $0 }
         start(
             workingDirectory: snapshot.cwd,
             command: commandOrNil,
             arguments: snapshot.args,
-            extraEnv: snapshot.envTuples
+            extraEnv: snapshot.envTuples + extraEnv
         )
     }
 

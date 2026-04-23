@@ -143,6 +143,8 @@ struct PaneSplitView: View {
     let paneSelectionManager: PaneSelectionManager
     /// ID of the tab this tree belongs to. Used as the selection-bucket key.
     let tabID: UUID
+    /// Called when MetalView needs TONGYOU_* environment variables for a new controller.
+    let onRequestEnvironmentVars: ((UUID) -> [(String, String)])?
 
     var body: some View {
         switch node {
@@ -165,7 +167,8 @@ struct PaneSplitView: View {
                 onPaneActivity: onPaneActivity,
                 isTreePaneExited: isTreePaneExited,
                 paneSelectionManager: paneSelectionManager,
-                tabID: tabID
+                tabID: tabID,
+                onRequestEnvironmentVars: onRequestEnvironmentVars
             )
         }
     }
@@ -195,7 +198,10 @@ struct PaneSplitView: View {
             onToggleSelection: {
                 paneSelectionManager.togglePane(pane.id, inTab: tabID)
             },
-            isProcessExited: { isTreePaneExited(pane.id) }
+            isProcessExited: { isTreePaneExited(pane.id) },
+            onRequestEnvironmentVars: {
+                onRequestEnvironmentVars?(pane.id) ?? []
+            }
         )
         .id(pane.id)
         .overlay(
@@ -267,6 +273,8 @@ private struct ContainerView: View {
     let isTreePaneExited: (UUID) -> Bool
     let paneSelectionManager: PaneSelectionManager
     let tabID: UUID
+    /// Called when MetalView needs TONGYOU_* environment variables for a new controller.
+    let onRequestEnvironmentVars: ((UUID) -> [(String, String)])?
 
     /// Local weights used during a divider drag. Nil when not dragging.
     @State private var liveWeights: [CGFloat]?
@@ -457,7 +465,8 @@ private struct ContainerView: View {
             onPaneActivity: onPaneActivity,
             isTreePaneExited: isTreePaneExited,
             paneSelectionManager: paneSelectionManager,
-            tabID: tabID
+            tabID: tabID,
+            onRequestEnvironmentVars: onRequestEnvironmentVars
         )
     }
 
