@@ -45,6 +45,12 @@ public final class PTYProcess {
     private let readQueue: DispatchQueue
     private let writeQueue: DispatchQueue
 
+    /// Dispatch-specific keys to detect when we are running on readQueue or
+    /// writeQueue. Used by cleanup() to avoid deadlocking when deinit runs
+    /// on one of these queues.
+    private let readQueueKey = DispatchSpecificKey<Int>()
+    private let writeQueueKey = DispatchSpecificKey<Int>()
+
     private static let readBufSize = 65536
     /// Time budget per event handler invocation (milliseconds).
     /// Balances throughput vs. main-thread responsiveness.
@@ -63,6 +69,8 @@ public final class PTYProcess {
             label: "io.github.airead.tongyou.pty.write",
             qos: .userInitiated
         )
+        readQueue.setSpecific(key: readQueueKey, value: 1)
+        writeQueue.setSpecific(key: writeQueueKey, value: 1)
     }
 
     deinit {
@@ -266,14 +274,23 @@ public final class PTYProcess {
         // before we cancel the source and deallocate its buffer. This prevents
         // use-after-free if the handler is still using the buffer when cancel()
         // triggers the deallocation in the cancel handler.
-        readQueue.sync {}
+        //
+        // Skip the drain if cleanup() is already running on readQueue (e.g.
+        // deinit triggered by the last [weak self] reference in the handler),
+        // because sync-ing to the current queue would deadlock.
+        if DispatchQueue.getSpecific(key: readQueueKey) == nil {
+            readQueue.sync {}
+        }
 
         readSrc?.cancel()
         processSrc?.cancel()
 
         // Drain pending writes before closing the fd so in-flight data
         // (e.g. the bracketed-paste end sequence) is not lost.
-        writeQueue.sync {}
+        // Skip if already on writeQueue to avoid deadlock.
+        if DispatchQueue.getSpecific(key: writeQueueKey) == nil {
+            writeQueue.sync {}
+        }
 
         if pid > 0 {
             kill(pid, SIGHUP)

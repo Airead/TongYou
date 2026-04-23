@@ -365,6 +365,13 @@ public final class TerminalCore: @unchecked Sendable {
     }
 
     public func stop() {
+        // Clear callbacks synchronously on ptyQueue before tearing down the
+        // PTY process. This prevents any in-flight handler from invoking
+        // closures that capture resources we are about to release.
+        ptyQueue.sync {
+            clearStreamHandlerCallbacks()
+        }
+
         ptyProcess?.stop()
         ptyProcess = nil
     }
@@ -663,29 +670,36 @@ public final class TerminalCore: @unchecked Sendable {
     }
 
     deinit {
-        // Invalidate all callbacks so that any in-flight ptyQueue work that
-        // outlives us does not invoke closures captured from the owner.
-        // Clearing the streamHandler callbacks severs the back-edge from the
-        // VTParser/StreamHandler back to TerminalCore.
-        ptyQueue.sync {
-            streamHandler.onWriteBack = nil
-            streamHandler.onTitleChanged = nil
-            streamHandler.onBell = nil
-            streamHandler.onClipboardSet = nil
-            streamHandler.onRunningCommandChanged = nil
-            streamHandler.onPaneNotification = nil
-            streamHandler.onFocusReportingChanged = nil
-            streamHandler.onBlinkingCursorChanged = nil
-            streamHandler.onColorSchemeReportingChanged = nil
-            streamHandler.onColorSchemeQuery = nil
-            streamHandler.onUnhandledSequence = nil
-            streamHandler.onWindowPixelSizeRequest = nil
-            streamHandler.onDynamicColorQuery = nil
-            streamHandler.onDynamicColorSet = nil
-            streamHandler.onDynamicColorReset = nil
-            streamHandler.onPointerShapeChanged = nil
-            streamHandler.onPaletteColorQuery = nil
-            streamHandler.onPaletteColorSet = nil
-        }
+        // Callbacks should have been cleared by stop(). Calling ptyQueue.sync
+        // here is unsafe because deinit may be running on ptyQueue (if the
+        // last strong reference was released by an event handler), which
+        // would cause a deadlock. Instead, we simply clear the callbacks
+        // directly since deinit is nonisolated and this is the last chance
+        // to sever the back-edge. All queue-confined access during normal
+        // operation has already stopped because ptyProcess is nil.
+        clearStreamHandlerCallbacks()
+    }
+
+    /// Clear all streamHandler callbacks. Must only be called when no further
+    /// ptyQueue work is expected (after stop() or in deinit).
+    private func clearStreamHandlerCallbacks() {
+        streamHandler.onWriteBack = nil
+        streamHandler.onTitleChanged = nil
+        streamHandler.onBell = nil
+        streamHandler.onClipboardSet = nil
+        streamHandler.onRunningCommandChanged = nil
+        streamHandler.onPaneNotification = nil
+        streamHandler.onFocusReportingChanged = nil
+        streamHandler.onBlinkingCursorChanged = nil
+        streamHandler.onColorSchemeReportingChanged = nil
+        streamHandler.onColorSchemeQuery = nil
+        streamHandler.onUnhandledSequence = nil
+        streamHandler.onWindowPixelSizeRequest = nil
+        streamHandler.onDynamicColorQuery = nil
+        streamHandler.onDynamicColorSet = nil
+        streamHandler.onDynamicColorReset = nil
+        streamHandler.onPointerShapeChanged = nil
+        streamHandler.onPaletteColorQuery = nil
+        streamHandler.onPaletteColorSet = nil
     }
 }
