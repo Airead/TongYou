@@ -466,7 +466,11 @@ public final class SocketServer: @unchecked Sendable {
             // (e.g. user scrolled up while new output arrives at the bottom),
             // skip sending entirely.
             let paneShort = key.paneID.uuid.uuidString.prefix(8)
-            if let prev = lastSentState[key.paneID] {
+            if snapshot.dirtyRegion.fullRebuild {
+                // Full rebuild means client state may have been reset (e.g.
+                // overlay exit). Force re-send by clearing the dedup state.
+                lastSentState.removeValue(forKey: key.paneID)
+            } else if let prev = lastSentState[key.paneID] {
                 if prev.matches(snapshot) {
                     Log.debug(
                         "Suppressed duplicate for pane \(paneShort)"
