@@ -1616,7 +1616,7 @@ extension GUIAutomationServerTests {
         try server.start()
         defer { server.stop() }
 
-        let token = try GUIAutomationAuth.read(tokenPath: config.tokenPath)!
+        let token = GUIAutomationAuth.read(tokenPath: config.tokenPath)!
         let socket = try TYSocket.connect(path: config.socketPath)
         defer { socket.closeSocket() }
 
@@ -1654,13 +1654,12 @@ extension GUIAutomationServerTests {
         try server.start()
         defer { server.stop() }
 
-        let token = try GUIAutomationAuth.read(tokenPath: config.tokenPath)!
+        let token = GUIAutomationAuth.read(tokenPath: config.tokenPath)!
         let socket = try TYSocket.connect(path: config.socketPath)
         defer { socket.closeSocket() }
 
         // Handshake
-        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
-        _ = try Self.readLine(socket)
+        try Self.sendLine(socket, #{"cmd":"handshake","token":"\#(token)"}#)
 
         // Request list
         try Self.sendLine(socket, #"{"cmd":"ssh.list"}"#)
@@ -1728,7 +1727,7 @@ extension GUIAutomationServerTests {
         try server.start()
         defer { server.stop() }
 
-        let token = try GUIAutomationAuth.read(tokenPath: config.tokenPath)!
+        let token = GUIAutomationAuth.read(tokenPath: config.tokenPath)!
         let socket = try TYSocket.connect(path: config.socketPath)
         defer { socket.closeSocket() }
 
@@ -1800,12 +1799,12 @@ extension GUIAutomationServerTests {
         try server.start()
         defer { server.stop() }
 
-        let token = try GUIAutomationAuth.read(tokenPath: config.tokenPath)!
+        let token = GUIAutomationAuth.read(tokenPath: config.tokenPath)!
         let socket = try TYSocket.connect(path: config.socketPath)
         defer { socket.closeSocket() }
 
         // Handshake
-        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        try Self.sendLine(socket, #{"cmd":"handshake","token":"\#(token)"}#)
         _ = try Self.readLine(socket)
 
         // Request batch
