@@ -267,9 +267,12 @@ public final class AppControlClient {
 
     /// Send `pane.notify` — display a system notification from the pane
     /// resolved from `ref`. If `body` is nil, uses `title` as both title and body.
-    public func notify(ref: String, title: String, body: String?) throws {
+    /// When `noSystemNotification` is true, skips the macOS notification if the
+    /// target pane's tab is currently visible.
+    public func notify(ref: String, title: String, body: String?, noSystemNotification: Bool = false) throws {
         var params: [String: Any] = ["ref": ref, "title": title]
         if let body { params["body"] = body }
+        if noSystemNotification { params["noSystemNotification"] = true }
         let response = try sendCommand("pane.notify", params: params)
         if case .error(let code, let message) = response {
             throw AppControlError.serverError(code: code, message: message)

@@ -60,7 +60,10 @@ public final class GUIAutomationServer: @unchecked Sendable {
         public let handlePaneSendKey: (@Sendable (String, KeyEncoder.KeyInput) -> Result<Void, AutomationError>)?
         /// Displays a system notification from the pane resolved from `ref`.
         /// Not focus-whitelisted — must not activate the window.
-        public let handlePaneNotify: (@Sendable (String, String, String?) -> Result<Void, AutomationError>)?
+        /// The fourth parameter is `noSystemNotification`: when true, the
+        /// implementation should skip the macOS notification if the target
+        /// pane's tab is currently visible.
+        public let handlePaneNotify: (@Sendable (String, String, String?, Bool) -> Result<Void, AutomationError>)?
         /// Creates a new tab in the session resolved from `ref`. Returns the
         /// newly allocated tab ref. Not focus-whitelisted at the app level;
         /// the second `Bool` parameter is the caller's view-focus preference
@@ -131,7 +134,7 @@ public final class GUIAutomationServer: @unchecked Sendable {
             handleSessionDetach: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
             handlePaneSendText: (@Sendable (String, String) -> Result<Void, AutomationError>)? = nil,
             handlePaneSendKey: (@Sendable (String, KeyEncoder.KeyInput) -> Result<Void, AutomationError>)? = nil,
-            handlePaneNotify: (@Sendable (String, String, String?) -> Result<Void, AutomationError>)? = nil,
+            handlePaneNotify: (@Sendable (String, String, String?, Bool) -> Result<Void, AutomationError>)? = nil,
             handleTabCreate: (@Sendable (String, Bool, String?, [String]?) -> Result<TabCreateResponse, AutomationError>)? = nil,
             handleTabSelect: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
             handleTabClose: (@Sendable (String) -> Result<Void, AutomationError>)? = nil,
@@ -606,7 +609,8 @@ public final class GUIAutomationServer: @unchecked Sendable {
             return .error(code: "INVALID_PARAMS", message: "`title` is required")
         }
         let body = request.params["body"] as? String
-        switch handler(ref, title, body) {
+        let noSystemNotification = request.params["noSystemNotification"] as? Bool ?? false
+        switch handler(ref, title, body, noSystemNotification) {
         case .success:
             return .success(.null)
         case .failure(let error):
