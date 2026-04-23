@@ -525,11 +525,22 @@ final class GUIAutomationService {
 
     @MainActor
     private func buildSSHList() -> Result<GUIAutomationServer.SSHListResponse, AutomationError> {
-        let launcher = createSSHLauncher()
-        Task { @MainActor in
-            await launcher.reload(historyCandidates: [])
+        // Synchronously load ssh_config without history
+        let configHosts: [SSHConfigHost]
+        do {
+            configHosts = try SSHConfigHosts.load(from: SSHConfigHosts.defaultURL).hosts
+        } catch {
+            configHosts = []
         }
-        let candidates = launcher.candidates
+        
+        let candidates = configHosts.map { host in
+            SSHCandidate(
+                target: host.alias,
+                hostname: host.hostname,
+                isAdHoc: false
+            )
+        }
+        
         let response = GUIAutomationServer.SSHListResponse(
             candidates: candidates.map { c in
                 GUIAutomationServer.SSHListCandidate(
@@ -555,9 +566,12 @@ final class GUIAutomationService {
         queries: [String],
         profile: String?
     ) -> Result<GUIAutomationServer.SSHSearchResponse, AutomationError> {
-        let launcher = createSSHLauncher()
-        Task { @MainActor in
-            await launcher.reload(historyCandidates: [])
+        // Synchronously load ssh_config without history
+        let configHosts: [SSHConfigHost]
+        do {
+            configHosts = try SSHConfigHosts.load(from: SSHConfigHosts.defaultURL).hosts
+        } catch {
+            configHosts = []
         }
 
         // Check if any query contains glob meta characters
@@ -568,7 +582,8 @@ final class GUIAutomationService {
             matchedCandidates = []
             for query in queries {
                 guard let patterns = SSHGlobMatcher.parse(query) else { continue }
-                for candidate in launcher.candidates {
+                for host in configHosts {
+                    let candidate = SSHCandidate(target: host.alias, hostname: host.hostname, isAdHoc: false)
                     if SSHGlobMatcher.match(text: candidate.target, patterns: patterns) != nil {
                         if !matchedCandidates.contains(where: { $0.target == candidate.target }) {
                             matchedCandidates.append(candidate)
@@ -577,17 +592,19 @@ final class GUIAutomationService {
                 }
             }
         } else {
-            // Exact match or ad-hoc
+            // Exact match
             matchedCandidates = []
             for query in queries {
-                if let exact = launcher.candidates.first(where: { $0.target == query }) {
-                    if !matchedCandidates.contains(where: { $0.target == exact.target }) {
-                        matchedCandidates.append(exact)
+                if let host = configHosts.first(where: { $0.alias == query }) {
+                    let candidate = SSHCandidate(target: host.alias, hostname: host.hostname, isAdHoc: false)
+                    if !matchedCandidates.contains(where: { $0.target == candidate.target }) {
+                        matchedCandidates.append(candidate)
                     }
                 }
             }
         }
 
+        let launcher = createSSHLauncher(sshConfigHosts: configHosts)
         let matches = matchedCandidates.map { candidate in
             let resolution = launcher.resolve(candidate: candidate)
             let template = profile ?? resolution.templateID
@@ -617,17 +634,22 @@ final class GUIAutomationService {
         profile: String?,
         overrides: [String]?
     ) -> Result<GUIAutomationServer.SSHBatchResponse, AutomationError> {
-        let launcher = createSSHLauncher()
-        Task { @MainActor in
-            await launcher.reload(historyCandidates: [])
+        // Synchronously load ssh_config without history
+        let configHosts: [SSHConfigHost]
+        do {
+            configHosts = try SSHConfigHosts.load(from: SSHConfigHosts.defaultURL).hosts
+        } catch {
+            configHosts = []
         }
+
+        let launcher = createSSHLauncher(sshConfigHosts: configHosts)
 
         // Resolve all targets
         var resolutions: [SSHResolution] = []
         for target in targets {
             let candidate: SSHCandidate
-            if let exact = launcher.candidates.first(where: { $0.target == target }) {
-                candidate = exact
+            if let host = configHosts.first(where: { $0.alias == target }) {
+                candidate = SSHCandidate(target: host.alias, hostname: host.hostname, isAdHoc: false)
             } else {
                 candidate = SSHCandidate(target: target, hostname: nil, isAdHoc: true)
             }
@@ -678,8 +700,16 @@ final class GUIAutomationService {
     }
 
     @MainActor
-    private func createSSHLauncher() -> SSHLauncher {
-        SSHLauncher(
+    private func createSSHLauncher(sshConfigHosts: [SSHConfigHost] = []) -> SSHLauncher {
+        let matcher: SSHRuleMatcher
+        do {
+            matcher = try SSHRuleMatcher.load(from: ConfigLoader.sshRulesPath())
+        } catch {
+            matcher = SSHRuleMatcher()
+        }
+        return SSHLauncher(
+            matcher: matcher,
+            sshConfigHosts: sshConfigHosts,
             validateProfile: { [weak self] id, variables in
                 guard let self else { return }
                 guard let manager = SessionManagerRegistry.shared.primaryManager else { return }
