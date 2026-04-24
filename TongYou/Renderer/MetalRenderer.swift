@@ -1218,6 +1218,17 @@ final class MetalRenderer {
         let searchMatchBg = SIMD4<UInt8>(180, 150, 40, 255)
         let searchFocusBg = SIMD4<UInt8>(220, 120, 20, 255)
 
+        // Preedit cells force bg = defaultBg so the preedit text stays readable
+        // over cells with reverse-video SGR (e.g. TUI apps that draw their own
+        // cursor block as a reverse-video character).
+        let overlayCells: (row: Int, range: Range<Int>)? = markedTextOverlay.map { ov in
+            var w = 0
+            for ch in ov.text {
+                w += Int(GraphemeCluster(ch).firstScalar?.terminalWidth ?? 1)
+            }
+            return (ov.row, ov.col..<(ov.col + w))
+        }
+
         for row in 0..<rows {
             if !dirtyRegion.fullRebuild && !dirtyRegion.isDirty(row: row) { continue }
             var idx = row * cols
@@ -1262,6 +1273,11 @@ final class MetalRenderer {
                         bg = cursorBgColor
                     }
 
+                    // IME preedit: override bg so preedit glyphs stay readable.
+                    if let oc = overlayCells, oc.row == row, oc.range.contains(col) {
+                        bg = defaultBg
+                    }
+
                     ptr[idx] = CellBgInstance(
                         gridPos: SIMD2<UInt16>(UInt16(col), UInt16(row)),
                         color: bg
@@ -1273,6 +1289,9 @@ final class MetalRenderer {
                     var bg = reversedDefaultBg
                     if let b = selBounds, Selection.contains(ordered: b, line: absLine, col: col) {
                         bg = selBgColor
+                    }
+                    if let oc = overlayCells, oc.row == row, oc.range.contains(col) {
+                        bg = defaultBg
                     }
                     ptr[idx] = CellBgInstance(
                         gridPos: SIMD2<UInt16>(UInt16(col), UInt16(row)),
@@ -1290,6 +1309,9 @@ final class MetalRenderer {
                     if showCursor && cursorShape == .block
                         && row == cursorRow && col == cursorCol {
                         bg = cursorBgColor
+                    }
+                    if let oc = overlayCells, oc.row == row, oc.range.contains(col) {
+                        bg = defaultBg
                     }
                     ptr[idx] = CellBgInstance(
                         gridPos: SIMD2<UInt16>(UInt16(col), UInt16(row)),
