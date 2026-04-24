@@ -1659,7 +1659,8 @@ extension GUIAutomationServerTests {
         defer { socket.closeSocket() }
 
         // Handshake
-        try Self.sendLine(socket, #{"cmd":"handshake","token":"\#(token)"}#)
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
+        _ = try Self.readLine(socket)
 
         // Request list
         try Self.sendLine(socket, #"{"cmd":"ssh.list"}"#)
@@ -1804,7 +1805,7 @@ extension GUIAutomationServerTests {
         defer { socket.closeSocket() }
 
         // Handshake
-        try Self.sendLine(socket, #{"cmd":"handshake","token":"\#(token)"}#)
+        try Self.sendLine(socket, #"{"cmd":"handshake","token":"\#(token)"}"#)
         _ = try Self.readLine(socket)
 
         // Request batch
