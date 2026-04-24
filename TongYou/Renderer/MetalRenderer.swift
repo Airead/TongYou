@@ -134,6 +134,24 @@ final class MetalRenderer {
         }
     }
 
+    /// IME in-progress composition string (e.g. Chinese pinyin preedit).
+    /// When non-nil the renderer draws `text` inline starting at (row, col),
+    /// with an underline to visually mark it as uncommitted.
+    struct MarkedTextOverlay: Equatable {
+        var text: String
+        var row: Int
+        var col: Int
+    }
+
+    var markedTextOverlay: MarkedTextOverlay? {
+        didSet {
+            if markedTextOverlay != oldValue {
+                pendingDirtyRegion.markFull()
+                markAllFramesDirty()
+            }
+        }
+    }
+
     /// A search match range on a single line, used for per-cell highlight lookups.
     struct SearchMatchRange {
         let startCol: Int
@@ -1180,7 +1198,10 @@ final class MetalRenderer {
         let cursorCol = snapshot?.cursorCol ?? -1
         let cursorRow = snapshot?.cursorRow ?? -1
         let cursorShape = snapshot?.cursorShape ?? .block
-        let showCursor = cursorVisible && cursorBlinkOn
+        // Hide the cursor while an IME composition is in progress — the preedit
+        // underline already indicates where input is going, and the cursor block
+        // would otherwise overdraw the first preedit character.
+        let showCursor = cursorVisible && cursorBlinkOn && markedTextOverlay == nil
 
         // Precompute ordered selection bounds once (not per-cell)
         let selBounds: (start: SelectionPoint, end: SelectionPoint)?
@@ -1330,6 +1351,30 @@ final class MetalRenderer {
             }
         }
 
+        // IME preedit underline (appended to underline instances).
+        // Computed from overlay.text's terminal widths, clamped to grid columns.
+        if let overlay = markedTextOverlay, overlay.row >= 0, overlay.row < rows,
+           overlay.col >= 0, overlay.col < cols {
+            let fg = colorPalette.defaultFg
+            var gridCol = overlay.col
+            let row = UInt16(clamping: overlay.row)
+            for ch in overlay.text {
+                if gridCol >= cols { break }
+                let cluster = GraphemeCluster(ch)
+                let w = Int(cluster.firstScalar?.terminalWidth ?? 1)
+                // Underline each grid column the preedit covers.
+                for i in 0..<w {
+                    let c = gridCol + i
+                    if c >= cols { break }
+                    underlineInstances.append(CellBgInstance(
+                        gridPos: SIMD2<UInt16>(UInt16(c), row),
+                        color: fg
+                    ))
+                }
+                gridCol += w
+            }
+        }
+
         // URL hover underline (appended to underline instances)
         if let url {
             let maxCol = cols - 1
@@ -1441,7 +1486,7 @@ final class MetalRenderer {
         return TextColorState(
             palette: colorPalette,
             selBounds: snapshot.selection?.ordered,
-            showCursor: snapshot.cursorVisible && cursorBlinkOn,
+            showCursor: snapshot.cursorVisible && cursorBlinkOn && markedTextOverlay == nil,
             cursorShape: snapshot.cursorShape,
             cursorRow: snapshot.cursorRow,
             cursorCol: snapshot.cursorCol,
@@ -1754,7 +1799,73 @@ final class MetalRenderer {
             }
         }
 
+        if let overlay = markedTextOverlay, overlay.row == row {
+            appendMarkedTextInstances(
+                overlay, into: &rowInstances, row: row, snapCols: snapCols,
+                shaper: shaper, hScale: hScale, vScale: vScale
+            )
+        }
+
         return rowInstances
+    }
+
+    /// Emit IME preedit glyphs at `overlay.row`, starting from `overlay.col`.
+    /// Each grapheme cluster is shaped individually (preedit is short; this avoids
+    /// grouping complexity and bypasses the per-row shape cache, which is keyed on
+    /// backing-store cells and would never hit for transient IME text).
+    private func appendMarkedTextInstances(
+        _ overlay: MarkedTextOverlay,
+        into rowInstances: inout RowTextInstances,
+        row: Int,
+        snapCols: Int,
+        shaper: CoreTextShaper,
+        hScale: Float,
+        vScale: Float
+    ) {
+        guard overlay.col >= 0, overlay.col < snapCols else { return }
+        let preeditColor = colorPalette.defaultFg
+        var gridCol = overlay.col
+
+        for ch in overlay.text {
+            if gridCol >= snapCols { break } // truncate: don't wrap
+            let cluster = GraphemeCluster(ch)
+            let charWidth = Int(cluster.firstScalar?.terminalWidth ?? 1)
+            let cellWidth: CellWidth = charWidth == 2 ? .wide : .normal
+            let attrs = CellAttributes.default
+            let cell = Cell(content: cluster, attributes: attrs, width: cellWidth)
+            let font = fontSystem.font(for: cluster, attributes: attrs)
+            let run = TextRun(cells: [cell], startCol: gridCol, font: font, attributes: attrs)
+            let glyphs = shaper.shape(run)
+
+            for glyph in glyphs {
+                guard let glyphInfo = glyphAtlas.getOrRasterize(
+                    glyph: glyph.glyph, font: glyph.font, fontSystem: fontSystem
+                ), glyphInfo.width > 0 && glyphInfo.height > 0 else { continue }
+
+                let glyphCol = run.startCol + glyph.cellIndex
+                guard glyphCol < snapCols else { continue }
+
+                var glyphSize = SIMD2<UInt32>(glyphInfo.width, glyphInfo.height)
+                var bearings = SIMD2<Int16>(glyphInfo.bearingX, glyphInfo.bearingY)
+                if hScale != 1.0 || vScale != 1.0 {
+                    glyphSize.x = UInt32(Float(glyphInfo.width) * hScale)
+                    glyphSize.y = UInt32(Float(glyphInfo.height) * vScale)
+                    bearings.x = Int16(Float(glyphInfo.bearingX) * hScale)
+                    bearings.y = Int16(Float(glyphInfo.bearingY) * vScale)
+                }
+
+                rowInstances.text.append(CellTextInstance(
+                    glyphPos: SIMD2<UInt32>(glyphInfo.atlasX, glyphInfo.atlasY),
+                    glyphSize: glyphSize,
+                    bearings: bearings,
+                    gridPos: SIMD2<UInt16>(UInt16(glyphCol), UInt16(row)),
+                    color: preeditColor,
+                    offset: SIMD2<Int16>(0, 0)
+                ))
+            }
+
+            gridCol += charWidth
+        }
     }
 
 

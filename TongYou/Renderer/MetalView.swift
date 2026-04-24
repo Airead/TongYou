@@ -1434,10 +1434,30 @@ extension MetalView: NSTextInputClient {
         default:
             break
         }
+        syncIMEOverlayToRenderer()
     }
 
     func unmarkText() {
         markedText.mutableString.setString("")
+        syncIMEOverlayToRenderer()
+    }
+
+    /// Push the current `markedText` state to the renderer as an overlay so
+    /// preedit glyphs render inline at the cursor position. Called from
+    /// NSTextInputClient callbacks on every marked-text change.
+    private func syncIMEOverlayToRenderer() {
+        guard let renderer else { return }
+        if markedText.length == 0 {
+            renderer.markedTextOverlay = nil
+        } else {
+            let snap = renderer.currentSnapshot
+            renderer.markedTextOverlay = MetalRenderer.MarkedTextOverlay(
+                text: markedText.string,
+                row: snap?.cursorRow ?? 0,
+                col: snap?.cursorCol ?? 0
+            )
+        }
+        wakeDisplayLink()
     }
 
     func validAttributesForMarkedText() -> [NSAttributedString.Key] {
