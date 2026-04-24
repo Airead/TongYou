@@ -124,7 +124,9 @@ final class TerminalController: TerminalControlling {
             self?.handleScreenDirty()
         }
         core.onActivity = { [weak self] in
-            self?.onActivity?()
+            DispatchQueue.main.async {
+                self?.onActivity?()
+            }
         }
         core.onTitleChanged = { [weak self] title in
             guard let self else { return }
@@ -142,10 +144,14 @@ final class TerminalController: TerminalControlling {
             }
         }
         core.onProcessExited = { [weak self] exitCode in
-            self?.onProcessExited?(exitCode)
+            DispatchQueue.main.async {
+                self?.onProcessExited?(exitCode)
+            }
         }
         core.onRunningCommandChanged = { [weak self] cmd in
-            self?.runningCommand = cmd
+            DispatchQueue.main.async {
+                self?.runningCommand = cmd
+            }
         }
         core.onPaneNotification = { [weak self] title, body in
             DispatchQueue.main.async { [weak self] in
